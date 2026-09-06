@@ -1,147 +1,64 @@
-# BotMusicaDj
+# MusiFlix
 
-Motor de recomendación musical para DJs: analiza cada track (BPM, tonalidad Camelot, energía,
-embedding de timbre) y arma sets tipo "radio" priorizando que los temas **se puedan mezclar**,
-no solo que suenen parecido.
+Buscador/descargador de música multi-plataforma para DJs: busca un tema en varias fuentes
+(YouTube, SoundCloud, Spotify + sitios de MP3), **compara la calidad real** de cada versión
+(nota A–F por análisis espectral), lo **descarga con tags** (BPM, key/Camelot, género,
+carátula), y arma **crates** ("Mis Playlists") exportables a `.m3u8` (iTunes/Rekordbox/Serato).
 
-> Spotify y SoundCloud recomiendan para escuchar. Esto recomienda para mezclar.
+Es la capa de **adquisición** del proyecto **DJ Radio** (herramienta propia para DJs). El
+contexto, las reglas y el roadmap están en [`claude/`](claude/) y en Notion — arrancá por
+[`CLAUDE.md`](CLAUDE.md) y [`claude/spec-dj-radio.md`](claude/spec-dj-radio.md).
 
-**Estado:** prototipo funcional (CLI). Ver [Roadmap](#roadmap).
+## Stack
+- **Backend:** Python + FastAPI (`server.py`), SQLAlchemy + SQLite (`db.py`), yt-dlp, librosa, ffmpeg.
+- **Frontend:** React 19 + Vite (`frontend/`), design system "Nocturne".
+- **Infra:** Docker (multi-stage) + `docker-compose` con **web + worker + Redis** (cola de trabajos RQ).
 
----
+## Cómo correrlo
 
-## Cómo funciona
-
-Tres capas:
-
-1. **Features por track** (offline, una vez por archivo)
-   - BPM con refinamiento por autocorrelación de la envolvente de onsets (±0.3 BPM;
-     `librosa.beat_track` solo queda cuantizado por la grilla de frames y erra ~3 BPM a 150).
-   - Tonalidad → rueda Camelot (perfiles Krumhansl-Schmuckler sobre chroma).
-   - Energía percibida: RMS + onsets/seg + ratio percusivo (HPSS).
-   - Embedding de timbre (MFCC / chroma relativo / tonnetz / contraste espectral).
-
-2. **Búsqueda vectorial** — z-score por dimensión sobre la biblioteca, después L2 por fila,
-   producto punto = coseno. Hoy SQLite + numpy; a futuro Postgres + pgvector.
-
-3. **Re-ranking de DJ**
-
-   ```
-   score = encaje_musical × mezclabilidad
-   ```
-
-   Es un **producto, no una suma**: multiplicando, la mezclabilidad funciona como compuerta y
-   un track que suena parecidísimo pero está fuera de tempo no entra igual.
-   `mezclabilidad = bpm_score^1.0 × key_score^0.6` (un choque de tonalidad se disimula con EQ;
-   uno de tempo no).
-
-   Además: curva de energía del set, MMR contra la redundancia, gap mínimo entre tracks del
-   mismo artista y soporte de half/double time.
-
----
-
-## Requisitos
-
-- Python 3.11+
-- `ffmpeg` en el PATH (decodificación de audio)
-
+### Opción A — Docker (recomendada, reproducible)
+Requiere **Docker Desktop encendido**.
 ```bash
-# Debian/Ubuntu
-sudo apt install ffmpeg
-# macOS
-brew install ffmpeg
-# Windows
-winget install Gyan.FFmpeg
+docker compose up -d --build      # → http://localhost:8000
+docker compose logs -f worker     # ver el worker procesando descargas/análisis
+docker compose down               # frenar
 ```
+Levanta 3 servicios: `web` (API + UI), `worker` (descargas/análisis en cola aparte) y
+`cache` (Redis). Los datos (DB + descargas) viven en el volumen `musiflix-data`.
 
-> **No hace falta Node/npm.** El proyecto es Python puro. `npm` solo va a entrar si más
-> adelante se suma un frontend con build propio (React/Vite), y viviría aislado en `web/`.
-
-## Instalación
-
+### Opción B — Local (sin Docker)
 ```bash
-git clone https://github.com/AgustinTomasMolina/BotMusicaDj.git
-cd BotMusicaDj
-
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
-pip install -e ".[dev]"          # instala el paquete en modo editable + tooling
+pip install -r requirements.txt
+# Requiere ffmpeg en el PATH. Node solo para buildear el front:
+cd frontend && npm install && npm run build && cd ..
+py server.py                      # → http://localhost:8000
 ```
+Sin Redis, todo corre en proceso (la cola es opcional: `queue_disponible()=False`).
 
-En modo editable (`-e`) los cambios en `src/` se toman sin reinstalar nada.
+## Configuración
+Copiá `.env.example` a `.env` y completá lo que uses (credenciales de Spotify son opcionales;
+sin ellas, Spotify se resuelve buscando el equivalente en YouTube).
 
-## Uso
-
-```bash
-# 1. Analizar una carpeta de audio (cachea en SQLite; ~5 s por track)
-djradio scan ~/Music/crate --db djradio.sqlite
-
-# 2. Ver qué hay en la biblioteca
-djradio list
-djradio info "track.mp3"          # BPM, Camelot, energía
-
-# 3. Tracks similares a uno dado
-djradio similar "track.mp3" -n 10
-
-# 4. Armar un set y exportarlo a Rekordbox/Traktor
-djradio radio --seed "track.mp3" --len 20 --curve peak -o set.m3u8
-```
-
-Opciones útiles de `radio`:
-
-| Flag | Qué hace |
-|---|---|
-| `--curve peak\|flat\|warmup` | forma de la curva de energía del set |
-| `--bpm-tol 3` | tolerancia de BPM entre temas consecutivos |
-| `--allow-double-time` | permite saltos de mitad/doble tempo |
-| `--artist-gap 4` | mínimo de tracks entre temas del mismo artista |
+Variables útiles (con defaults que replican el modo local):
+- `MUSIFLIX_DATA_DIR` — dónde vive la DB SQLite (default: raíz del repo).
+- `MUSIFLIX_DOWNLOADS` — carpeta de descargas (default: `./downloads`).
+- `REDIS_URL` — si está, encola el trabajo pesado en el worker; si no, corre local.
 
 ## Estructura
-
 ```
-BotMusicaDj/
-├── pyproject.toml          # dependencias y entry point de la CLI
-├── src/djradio/
-│   ├── cli.py              # comandos scan / list / info / similar / radio
-│   ├── features.py         # BPM, tonalidad, energía
-│   ├── embeddings.py       # vector de timbre por track
-│   ├── store.py            # caché SQLite + búsqueda vectorial
-│   ├── radio.py            # re-ranking y armado del set
-│   └── export.py           # M3U8 para Rekordbox / Traktor
-├── tests/                  # incluye ground truth con audio sintético
-└── scripts/
+server.py              API FastAPI (search, download, calidad, spectro, playlists…)
+db.py                  SQLite: historial + "Mis Playlists" (crates)
+jobs.py tasks.py worker.py   Cola de trabajos (Redis + RQ) — worker separado
+similares.py           "Parecidas" (Deezer + Camelot/BPM)
+analizar_calidad.py    Nota de calidad A–F (corte espectral)
+analisis_audio.py      BPM + tonalidad (librosa)
+tagger.py              Tags ID3/FLAC/MP4
+search_agent.py scrapers.py   Fuentes de búsqueda
+frontend/              React + Vite (UI)
+claude/                Spec, docs y auditoría del proyecto DJ Radio
+Dockerfile docker-compose.yml   Contenerización (web + worker + redis)
 ```
-
-## Desarrollo
-
-```bash
-pytest                 # tests (los de audio sintético verifican BPM/tonalidad)
-ruff check . && ruff format .
-```
-
-La suite genera audio sintético con BPM y tonalidad conocidos, así que los errores de
-detección se miden en vez de estimarse a ojo.
-
-## Roadmap
-
-- [x] Prototipo del motor con CLI y export a M3U8
-- [ ] Correr contra una biblioteca real y ajustar pesos escuchando los sets
-- [ ] Reemplazar el embedding hand-crafted por **CLAP** (habilita búsqueda por texto:
-      *"techno hipnótico con bajo rodante"*) o Discogs-EffNet
-- [ ] Migrar el store a **Postgres + pgvector** (HNSW)
-- [ ] API en FastAPI/Django + análisis en cola (Celery/arq); `/radio?seed=X` responde desde
-      embeddings precalculados
-- [ ] Ingesta de fuentes libres (Free Music Archive, Jamendo, netlabels) con licencia y URL
-      de origen obligatorias por track
-- [ ] Señales implícitas (skip, descarga, add-to-crate) para la capa colaborativa
 
 ## Nota legal
-
-El proyecto no distribuye música comercial. Todo track ingestado lleva **licencia y URL de
-origen obligatorias** (`CC-BY`, `CC-BY-SA`, `CC0`, `free-download-artista`) y la atribución se
-muestra en la ficha y en la playlist exportada. Hay flujo de claim/takedown previsto.
-
-## Licencia
-
-MIT — ver [LICENSE](LICENSE).
+Herramienta de uso personal. Descargar contenido con copyright puede violar los ToS de las
+plataformas y la ley de tu país. Usá material libre o con licencia cuando corresponda.

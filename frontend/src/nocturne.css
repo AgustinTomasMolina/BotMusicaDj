@@ -1,0 +1,798 @@
+/* Nocturne — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --color-bg: #161826;
+  --color-surface: #232532;
+  --color-text: #e9e9ed;
+  --color-accent: #9184d9; /* review round 7 (Barron): the accent moves to
+     the product's blurple — OKLCH hue 289.2, the hue of the app's own Pro
+     accent (#9a8fe0, --om-accent-pro) — at the same lightness the steel
+     accent held (L 0.660, so the documented ratios survive) and chroma
+     in the product blurple's own range (its token sits at C 0.118; the
+     accent takes 0.125, from the old steel's 0.030):
+     the accent now reads as an accent rather than another neutral. */
+  --color-accent-2: #a7a1db; /* the machine-derived stand-in follows: same
+     hue, same L 0.734, chroma at the same 2:3 proportion it held */
+  --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+
+  /* Two extra grounds the product layer needs for density: a recessed well
+     (inputs, thumbnails, metadata pills) and a raised step (hover, menus).
+     bg → well → surface → raise is the whole elevation vocabulary. */
+  --color-well: #1b1d2b;
+  --color-raise: #2c2f3e;
+
+  /* Brand blue — the MusiFlix mark only. It is deliberately NOT the accent:
+     the accent (blurple) owns focus, selection and active toggles, so the
+     mark can never be confused with an interactive state. Same L as the
+     accent (0.66), hue 258, so the two sit at equal visual weight. */
+  --color-brand: #4b90f7;
+  --color-brand-300: #a9c8ff;
+  --color-brand-400: #7dabfa;
+  --color-brand-500: #4b90f7;
+  --color-brand-600: #3a72c9;
+  --color-brand-700: #2c5697;
+  --color-brand-800: #223c66;
+  --color-brand-900: #1a2740;
+
+  /* Audio-quality grades — the product's differentiator, so the only place
+     full chroma is allowed. One continuous hue sweep (green 158 → red 22) at
+     a shared L 0.80, which clears AA on every tint the .grade classes mix. */
+  --color-grade-a:  #4ade9a;
+  --color-grade-am: #8fe07d;
+  --color-grade-b:  #c9dc63;
+  --color-grade-c:  #ffcc4d;
+  --color-grade-d:  #ff9d5c;
+  --color-grade-f:  #f2555f;
+  /* Semantic aliases — same values, read by feedback components. */
+  --color-ok: var(--color-grade-a);
+  --color-warn: var(--color-grade-c);
+  --color-danger: var(--color-grade-f);
+  --color-info: #38d6c0;
+
+  /* Platform identity — held one chroma step below the grades on purpose:
+     version chips are tinted, grades are saturated, so a red chip never
+     reads as an F. Always paired with the source's number and icon. */
+  --color-pf-yt: #e5646d;
+  --color-pf-sc: #f5893f;
+  --color-pf-sp: #43c98a;
+  --color-pf-m1: #3fb9d6;
+  --color-pf-m2: #8b8ff0;
+
+  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
+     same step of any role matches the others in visual value. */
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
+
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
+
+  --color-accent-2-100: #f5f4ff;
+  --color-accent-2-200: #e7e5fe;
+  --color-accent-2-300: #d2cefd;
+  --color-accent-2-400: #b5afe8;
+  --color-accent-2-500: #9690c9;
+  --color-accent-2-600: #7972a9;
+  --color-accent-2-700: #5c5783;
+  --color-accent-2-800: #423e5d;
+  --color-accent-2-900: #2b293a;
+
+  /* Deck section-divider ground — review round 3: saturation as presence.
+     Dividers take a saturated deep indigo (hue 277, the neutral ramp's own
+     family; C 0.094 — written when the accent held C 0.030, before the
+     round-7 blurple raised it past the ground's) with a lighter bloom and
+     a ghost tint of the same hue, while the slide grounds stay
+     desaturated. Deck-scale fills only — not interface colors. */
+  --color-section: #262a60;
+  --color-section-glow: #353b80;
+  --color-section-ghost: #4c5397;
+
+  --font-heading: "Inter", system-ui, sans-serif;
+  --font-heading-weight: 500;
+  --font-body: "Inter", system-ui, sans-serif;
+  /* Every number a DJ compares — BPM, bitrate, key, duration, log timestamps
+     — is set in this stack so digits align in a column. System faces only:
+     the product ships self-contained and the webfont above is optional. */
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* 4px scale — snapped to integers for the product layer (was 0.7× before;
+     a dense tool needs whole pixels so 44px hit targets stay 44px). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* One transition curve for the whole system. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1); /* @kind other */
+
+  /* Two local roles with global defaults: the platform color a version chip
+     paints with (overridden by .pf-*) and the grade color a badge paints with
+     (overridden by .grade-*). Declared here so both always resolve. */
+  --pf: #9397ab;
+  --grade-c: #9397ab;
+  /* Result-list geometry — the seven column carriers and the row height. */
+  --trk-cols: 30px 44px minmax(180px,1.6fr) minmax(140px,0.9fr) 52px minmax(160px,1fr) 128px /* @kind other */;
+  --trk-h: 64px;
+
+  /* Elevation — derived from the ground: soft ink-tinted shadows on a
+     light theme, a hairline edge + ambient darkness on a dark one. */
+  --shadow-sm: 0 0 0 1px #3f424d;
+  --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
+  --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+h1, h2, h3, h4 { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
+
+.lighten{mix-blend-mode:lighten;background-color:transparent}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Components — built with the tokens above. Plain CSS
+   on plain HTML: no JavaScript, no build step. Each class is documented in
+   readme.md and demonstrated in foundations/ and components/.
+   ══════════════════════════════════════════════════════════════════════ */
+
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-size: 15px; line-height: 1.55; font-weight: 400; }
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
+}
+h1 { font-size: 42px; }
+h2 { font-size: 32px; }
+h3 { font-size: 25px; }
+h4 { font-size: 20px; }
+h5 { font-size: 16px; }
+h6 { font-size: 13px; }
+h6 { letter-spacing: 0.08em; text-transform: uppercase; }
+p { margin: 0 0 var(--space-3); }
+a { color: var(--color-accent); text-underline-offset: 3px; }
+img { display: block; max-width: 100%; }
+figure { margin: 0; }
+figcaption {
+  font-size: 11px; margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+.text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+/* — rules — */
+/* Rules fade to transparent at both ends instead of stopping cleanly — a
+   Nocturne signature. The ramp is 48px an end (one deck baseline unit),
+   painted from the same divider token. Freestanding rules fade; box
+   outlines, in-control separators, and short accent marks stay solid. */
+.hr {
+  height: 1px; border: 0; margin: var(--space-4) 0;
+  background: linear-gradient(to right,
+    transparent, var(--color-divider) 48px,
+    var(--color-divider) calc(100% - 48px), transparent);
+}
+
+/* — buttons — */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer; text-decoration: none;
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 14px; line-height: 1.2; color: var(--color-text); /* matches the .input's 14px —
+     the pair sits side by side in sign-up rows */
+  background: transparent; border: 1px solid transparent;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius-md);
+}
+.btn svg { display: block; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { color: var(--color-accent); border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.btn-primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+.btn-secondary { border-color: var(--color-divider); }
+.btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+.btn-ghost { color: var(--color-accent); padding-inline: var(--space-1); }
+.btn-ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.btn-ghost:active { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.btn-icon { width: 36px; height: 36px; padding: 0; }
+.btn-block { width: 100%; margin-top: var(--space-2); }
+
+/* — forms — */
+.field > label {
+  display: block; font-size: 12px; margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+.input {
+  width: 100%; min-height: 36px; padding: 6px 10px; font: inherit;
+  font-size: 14px; color: var(--color-text); caret-color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.input:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+.input:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+textarea.input { min-height: 90px; resize: vertical; }
+.radio { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.radio input, .seg-opt input {
+  position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;
+}
+.radio .dot {
+  width: 16px; height: 16px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--color-divider);
+}
+.radio:hover .dot { border-color: var(--color-accent); }
+.radio input:checked + .dot {
+  border-color: var(--color-accent); background: var(--color-accent);
+  box-shadow: inset 0 0 0 4px var(--color-bg);
+}
+.radio input:focus-visible + .dot { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.seg {
+  display: inline-flex; overflow: hidden;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.seg-opt {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; font-size: 13px; cursor: pointer;
+}
+.seg-opt + .seg-opt { border-left: 1px solid var(--color-divider); }
+.seg-opt:has(input:checked) { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+
+/* — cards — */
+.card {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface);
+}
+.card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
+.card-title {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 17px; line-height: 1.2;
+}
+.card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
+.card-meta {
+  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+.elev-sm { box-shadow: var(--shadow-sm); }
+.elev-md { box-shadow: var(--shadow-md); }
+.elev-lg { box-shadow: var(--shadow-lg); }
+
+/* — tags — */
+.tag {
+  display: inline-flex; align-items: center; font-size: 11px;
+  letter-spacing: 0.02em; padding: 3px 10px;
+  border-radius: calc(var(--radius-md) * 0.75);
+}
+.tag-accent { background: var(--color-accent-800); color: var(--color-accent-100); }
+.tag-accent-2 { background: var(--color-accent-2-800); color: var(--color-accent-2-100); }
+.tag-neutral { background: var(--color-neutral-800); color: var(--color-neutral-100); }
+.tag-outline { border: 1px solid var(--color-accent); color: var(--color-accent); }
+
+/* — navigation — */
+.nav {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: none;
+}
+.nav-brand {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 18px; margin-right: auto;
+}
+.nav a { color: inherit; text-decoration: none; font-size: 14px; }
+.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
+
+/* — tables — */
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table th {
+  text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  padding: var(--space-2); border-bottom: 1px solid transparent; /* keeps layout; the row paints the fading rule */
+}
+.table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid transparent;
+}
+/* Row rules as row-level strips so the end-fade spans the row, not each cell. */
+.table thead tr {
+  background: linear-gradient(to right,
+    transparent, var(--color-divider) 48px,
+    var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+.table tbody tr {
+  background: linear-gradient(to right,
+    transparent, color-mix(in srgb, var(--color-text) 8%, transparent) 48px,
+    color-mix(in srgb, var(--color-text) 8%, transparent) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+.table tbody tr:hover {
+  /* the hover tint layers over the row rule, which keeps painting */
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-text) 4%, transparent),
+                    color-mix(in srgb, var(--color-text) 4%, transparent)) no-repeat 0 0 / 100% 100%,
+    linear-gradient(to right,
+      transparent, color-mix(in srgb, var(--color-text) 8%, transparent) 48px,
+      color-mix(in srgb, var(--color-text) 8%, transparent) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+
+/* — dialog — */
+.dialog-backdrop {
+  position: fixed; inset: 0; display: grid; place-items: center;
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+}
+.dialog {
+  width: min(440px, 100%); display: flex; flex-direction: column; gap: var(--space-3);
+  padding: var(--space-4); border-radius: var(--radius-lg);
+  background: var(--color-surface); box-shadow: var(--shadow-lg);
+}
+.dialog-title {
+  font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 20px;
+}
+.dialog-body { font-size: 14px; opacity: 0.85; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PRODUCT LAYER — MusiFlix
+   The classes a DJ tool needs on top of the base system: app shell, topbar,
+   the one-row-per-track result list, the A–F quality grade, per-platform
+   version chips, the side-by-side comparator, drawers and states. Same
+   tokens, no new colors invented below this line. Documented in readme.md.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* — utilities the product layer leans on — */
+.cluster{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.cluster-tight{display:flex;align-items:center;gap:var(--space-1)}
+.push{margin-left:auto}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
+.eyebrow{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-500)}
+.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* A fading rule as a pseudo-element — the Nocturne signature, reused by the
+   topbar, row separators and drawer headers instead of hard 1px borders. */
+.rule-b{position:relative}
+.rule-b::after{content:'';position:absolute;left:0;right:0;bottom:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,var(--color-divider) 48px,var(--color-divider) calc(100% - 48px),transparent)}
+*{scrollbar-width:thin;scrollbar-color:var(--color-neutral-800) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--color-neutral-800);border:3px solid transparent;background-clip:padding-box;border-radius:var(--radius-pill)}
+::-webkit-scrollbar-thumb:hover{background:var(--color-neutral-700);background-clip:padding-box}
+
+/* — app shell — */
+.app{min-height:100vh;display:flex;flex-direction:column;background:var(--color-bg);overflow-x:hidden}
+.app-main{flex:1;min-width:0;padding:var(--space-4) var(--space-4) var(--space-8)}
+.app-wrap{max-width:1400px;margin:0 auto;min-width:0}
+
+/* — topbar — */
+.topbar{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:var(--space-3);height:60px;padding:0 var(--space-4);background:color-mix(in srgb,var(--color-bg) 86%,transparent);backdrop-filter:blur(16px)}
+.brand{display:flex;align-items:center;gap:var(--space-2);text-decoration:none;color:var(--color-text);font-family:var(--font-heading);font-size:16px;font-weight:600;letter-spacing:-0.015em;white-space:nowrap}
+.brand-mark{width:26px;height:26px;flex:none;border-radius:7px;display:grid;place-items:center;color:var(--color-brand-900);background:linear-gradient(155deg,var(--color-brand-400),var(--color-brand-600));box-shadow:0 0 0 1px color-mix(in srgb,var(--color-brand) 45%,transparent),0 4px 16px color-mix(in srgb,var(--color-brand) 26%,transparent)}
+.brand em{font-style:normal;color:var(--color-brand-300)}
+
+.search{position:relative;flex:1;min-width:0;max-width:600px;margin-inline:auto}
+.search>.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--color-neutral-500);pointer-events:none}
+.search .input{height:38px;min-height:38px;padding:0 62px 0 34px;border-radius:10px;background:var(--color-well);font-size:14px}
+.search .input::placeholder{color:var(--color-neutral-600)}
+.search .input:focus-visible{border-color:var(--color-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 16%,transparent)}
+.search .kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none}
+.kbd{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:5px;font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-500);background:color-mix(in srgb,var(--color-text) 6%,transparent);box-shadow:inset 0 0 0 1px var(--color-divider)}
+
+/* — chips: genre presets and other toggles — */
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:var(--radius-pill);border:1px solid var(--color-divider);background:transparent;color:var(--color-neutral-300);font:inherit;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease)}
+.chip:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent);color:var(--color-text)}
+.chip[aria-pressed=true]{color:var(--color-accent-200);border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 16%,transparent)}
+.chip-count{font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-500)}
+
+/* — menu (the Genre dropdown, row overflow) — */
+.menu{min-width:200px;padding:var(--space-1);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-md);display:flex;flex-direction:column;gap:1px}
+.menu-label{padding:var(--space-2) var(--space-2) var(--space-1)}
+.menu-item{display:flex;align-items:center;gap:var(--space-2);width:100%;padding:7px var(--space-2);border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-text);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.menu-item:hover{background:color-mix(in srgb,var(--color-text) 8%,transparent)}
+.menu-item[aria-checked=true]{color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 14%,transparent)}
+
+/* — quality grade A–F — the product's headline signal.
+   Tinted plate + a solid 3px edge in the grade's own hue + the letter.
+   .grade-lg is the comparator size; .grade-sm sits inline in lists. — */
+.grade{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:42px;height:30px;padding:0 8px 0 11px;border-radius:6px;overflow:hidden;font-family:var(--font-heading);font-size:14px;font-weight:700;letter-spacing:0.01em;color:var(--grade-c,var(--color-neutral-300));background:color-mix(in srgb,var(--grade-c,var(--color-neutral-500)) 15%,var(--color-well));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--grade-c,var(--color-neutral-500)) 26%,transparent)}
+.grade::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--grade-c,var(--color-neutral-500))}
+.grade-sm{min-width:32px;height:22px;padding:0 6px 0 9px;font-size:11.5px;border-radius:5px}
+.grade-sm::before{width:2px}
+.grade-lg{min-width:76px;height:60px;padding:0 16px 0 20px;font-size:32px;border-radius:10px;letter-spacing:-0.02em}
+.grade-lg::before{width:5px}
+.grade-a{--grade-c:var(--color-grade-a)}
+.grade-am{--grade-c:var(--color-grade-am)}
+.grade-b{--grade-c:var(--color-grade-b)}
+.grade-c{--grade-c:var(--color-grade-c)}
+.grade-d{--grade-c:var(--color-grade-d)}
+.grade-f{--grade-c:var(--color-grade-f)}
+/* Optional confidence bar under a grade — how sure the analysis is. */
+.grade-bar{width:100%;height:3px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-text) 10%,transparent);overflow:hidden}
+.grade-bar>i{display:block;height:100%;border-radius:inherit;background:var(--grade-c,var(--color-neutral-500))}
+
+/* — metadata pills: BPM, key/Camelot, format, duration — */
+.mb{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 7px;border-radius:5px;font-size:11px;white-space:nowrap;color:var(--color-neutral-300);background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 7%,transparent)}
+.mb b{font-family:var(--font-mono);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-0.01em;color:var(--color-text)}
+.mb-label{color:var(--color-neutral-500);font-size:10px;letter-spacing:0.04em;text-transform:uppercase}
+.mb-key{color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 30%,transparent)}
+.mb-key b{color:var(--color-accent-200)}
+.mb-lossless{color:var(--color-info);background:color-mix(in srgb,var(--color-info) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-info) 28%,transparent)}
+.mb-lossless b{color:var(--color-info)}
+
+/* — version chips, one per platform — */
+.vchips{display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap}
+.vchip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:0;border-radius:6px;font:inherit;font-size:11px;font-weight:500;line-height:1;cursor:pointer;white-space:nowrap;color:color-mix(in srgb,var(--pf,var(--color-neutral-400)) 72%,var(--color-neutral-100));background:color-mix(in srgb,var(--pf,var(--color-neutral-500)) 13%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pf,var(--color-neutral-500)) 28%,transparent);transition:background .14s var(--ease)}
+.vchip:hover{background:color-mix(in srgb,var(--pf,var(--color-neutral-500)) 24%,transparent)}
+.vchip[aria-pressed=true]{color:var(--color-neutral-100);background:color-mix(in srgb,var(--pf,var(--color-neutral-500)) 30%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pf,var(--color-neutral-500)) 70%,transparent)}
+.vchip>.n{font-family:var(--font-mono);font-size:10px;opacity:0.62}
+.vchip>.dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--pf,var(--color-neutral-500))}
+.vchip:disabled{opacity:0.4;cursor:not-allowed}
+.pf-yt{--pf:var(--color-pf-yt)}
+.pf-sc{--pf:var(--color-pf-sc)}
+.pf-sp{--pf:var(--color-pf-sp)}
+.pf-m1{--pf:var(--color-pf-m1)}
+.pf-m2{--pf:var(--color-pf-m2)}
+
+/* — result list: one row per track — */
+.results{display:flex;flex-direction:column}
+.results-head,.trk{display:grid;grid-template-columns:var(--trk-cols);align-items:center;gap:var(--space-3);padding:0 var(--space-3)}
+.results-head{position:sticky;top:60px;z-index:20;height:34px;background:color-mix(in srgb,var(--color-bg) 92%,transparent);backdrop-filter:blur(10px);font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-500)}
+.results-head>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trk{position:relative;min-height:var(--trk-h);border-radius:var(--radius-md);transition:background .14s var(--ease)}
+.trk::after{content:'';position:absolute;left:var(--space-3);right:var(--space-3);bottom:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 9%,transparent) 48px,color-mix(in srgb,var(--color-text) 9%,transparent) calc(100% - 48px),transparent)}
+.trk:last-child::after,.trk:hover::after{opacity:0}
+.trk:hover{background:color-mix(in srgb,var(--color-text) 5%,transparent)}
+.trk[aria-selected=true]{background:color-mix(in srgb,var(--color-accent) 12%,transparent);box-shadow:inset 2px 0 0 var(--color-accent)}
+.trk-idx{font-family:var(--font-mono);font-size:12px;font-variant-numeric:tabular-nums;text-align:right;color:var(--color-neutral-600)}
+.trk-id{min-width:0}
+.trk-title{font-size:14.5px;font-weight:500;line-height:1.25;letter-spacing:-0.006em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trk-artist{display:flex;align-items:center;gap:6px;font-size:12px;line-height:1.4;color:var(--color-neutral-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trk-artist .sep{opacity:0.5}
+.trk-meta{display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden}
+.trk-acts{display:flex;align-items:center;gap:2px;justify-content:flex-end;opacity:0.55;transition:opacity .15s var(--ease)}
+.trk:hover .trk-acts,.trk:focus-within .trk-acts,.trk[aria-selected=true] .trk-acts{opacity:1}
+
+/* Density and separator variants — set on .results, so a whole list changes
+   with one class instead of per-row overrides. */
+.results-compact{--trk-h:48px}
+.results-wide{--trk-h:80px}
+.results-zebra .trk::after{opacity:0}
+.results-zebra .trk:nth-child(even){background:color-mix(in srgb,var(--color-text) 3%,transparent)}
+.results-flat .trk::after{opacity:0}
+/* Platform color off — chips fall back to neutral, color stays for grades only. */
+.results-plain .vchip{color:var(--color-neutral-200);background:color-mix(in srgb,var(--color-text) 8%,transparent);box-shadow:inset 0 0 0 1px var(--color-divider)}
+.results-plain .vchip:hover{background:color-mix(in srgb,var(--color-text) 14%,transparent)}
+.results-plain .vchip>.dot{background:var(--color-neutral-500)}
+
+/* — thumbnail with hover play — */
+.thumb{position:relative;width:44px;height:44px;flex:none;border-radius:6px;overflow:hidden;background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.thumb img{width:100%;height:100%;object-fit:cover}
+.thumb-play{position:absolute;inset:0;display:grid;place-items:center;border:0;padding:0;cursor:pointer;color:var(--color-text);background:color-mix(in srgb,#05060c 58%,transparent);opacity:0;transition:opacity .15s var(--ease)}
+.trk:hover .thumb-play,.thumb-play:focus-visible{opacity:1}
+/* Placeholder art when no artwork has loaded — the striped fallback. */
+.thumb-ph{width:100%;height:100%;background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--color-text) 7%,transparent) 0 3px,transparent 3px 7px)}
+
+/* — icon button sized for a dense row — */
+.btn-icon-sm{width:30px;height:30px;padding:0;border-radius:7px;color:var(--color-neutral-300)}
+.btn-icon-sm:hover{background:color-mix(in srgb,var(--color-text) 10%,transparent);color:var(--color-text)}
+.btn-icon-sm:active{background:color-mix(in srgb,var(--color-text) 16%,transparent)}
+.btn-dl{color:var(--color-accent);border-color:color-mix(in srgb,var(--color-accent) 45%,transparent)}
+.btn-dl:hover{background:color-mix(in srgb,var(--color-accent) 14%,transparent);border-color:var(--color-accent)}
+
+/* — spectrogram figure — */
+.spectro{position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.spectro img{width:100%;display:block}
+.spectro-ph{height:112px;background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--color-text) 9%,transparent) 0 2px,transparent 2px 5px)}
+/* The cutoff marker: where a lossy encode stops carrying high frequencies —
+   the single thing a DJ reads a spectrogram for. */
+.spectro-cut{position:absolute;left:0;right:0;border-top:1px dashed color-mix(in srgb,var(--color-warn) 80%,transparent)}
+.spectro-cut>span{position:absolute;right:6px;top:-8px;padding:0 5px;border-radius:4px;font-family:var(--font-mono);font-size:9.5px;color:var(--color-warn);background:color-mix(in srgb,var(--color-bg) 82%,transparent)}
+.spectro-axis{position:absolute;left:6px;top:6px;bottom:6px;display:flex;flex-direction:column;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:color-mix(in srgb,var(--color-text) 45%,transparent)}
+
+/* — wide sheet (the comparator) — */
+.sheet{width:min(1080px,100%);max-height:calc(100vh - var(--space-8));display:flex;flex-direction:column;border-radius:var(--radius-lg);background:var(--color-surface);box-shadow:var(--shadow-lg);overflow:hidden}
+.sheet-head{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4)}
+.sheet-body{padding:var(--space-4);overflow:auto}
+.sheet-foot{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-4)}
+.sheet-foot.rule-t{position:relative}
+.sheet-foot.rule-t::before{content:'';position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(to right,transparent,var(--color-divider) 48px,var(--color-divider) calc(100% - 48px),transparent)}
+
+/* — comparator columns — */
+.cmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:var(--space-3)}
+.cmp-col{position:relative;display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.cmp-col.is-best{background:color-mix(in srgb,var(--color-grade-a) 7%,var(--color-well));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-grade-a) 42%,transparent)}
+.cmp-src{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500}
+.cmp-best-flag{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:var(--radius-pill);font-size:10px;letter-spacing:0.04em;text-transform:uppercase;color:var(--color-grade-a);background:color-mix(in srgb,var(--color-grade-a) 16%,transparent)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px var(--space-3);font-size:12px;margin:0}
+.kv dt{color:var(--color-neutral-500)}
+.kv dd{margin:0;text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--color-text)}
+
+/* — drawers — */
+.scrim{position:fixed;inset:0;z-index:50;background:color-mix(in srgb,#05060c 62%,transparent);backdrop-filter:blur(2px)}
+.drawer{position:fixed;top:0;bottom:0;z-index:60;width:min(360px,88vw);display:flex;flex-direction:column;background:var(--color-surface);box-shadow:var(--shadow-lg);transition:transform .26s var(--ease)}
+.drawer-left{left:0;transform:translateX(-101%)}
+.drawer-right{right:0;transform:translateX(101%)}
+.drawer.is-open{transform:none}
+.drawer-head{display:flex;align-items:center;gap:var(--space-2);flex:none;height:56px;padding:0 var(--space-3)}
+.drawer-body{flex:1;min-height:0;overflow:auto;padding:var(--space-3)}
+.navlist{display:flex;flex-direction:column;gap:2px}
+.navitem{display:flex;align-items:center;gap:var(--space-3);width:100%;min-height:40px;padding:0 var(--space-3);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.navitem:hover{background:color-mix(in srgb,var(--color-text) 8%,transparent);color:var(--color-text)}
+.navitem[aria-current=page]{color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 15%,transparent);box-shadow:inset 2px 0 0 var(--color-accent)}
+.navitem svg{flex:none;color:currentColor}
+.hist{display:flex;flex-direction:column;gap:1px}
+.hist-item{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-sm);font-size:13px;cursor:pointer}
+.hist-item:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+.hist-time{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-600)}
+.log{margin:0;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word}
+.log-line{display:flex;gap:var(--space-2)}
+.log-t{flex:none;color:var(--color-neutral-600)}
+.log-ok{color:var(--color-ok)}
+.log-warn{color:var(--color-warn)}
+.log-err{color:var(--color-danger)}
+
+/* — states: empty, loading, error — */
+.empty{display:grid;justify-items:center;gap:var(--space-3);padding:var(--space-8) var(--space-4);text-align:center}
+.empty-art{width:56px;height:56px;display:grid;place-items:center;border-radius:var(--radius-lg);color:var(--color-accent-300);background:color-mix(in srgb,var(--color-accent) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 26%,transparent)}
+.empty h3{margin:0}
+.empty p{max-width:44ch;margin:0;font-size:13.5px;color:var(--color-neutral-400)}
+.spinner{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid color-mix(in srgb,var(--color-text) 14%,transparent);border-top-color:var(--color-accent);animation:mf-spin .7s linear infinite}
+.spinner-lg{width:26px;height:26px;border-width:2.5px}
+@keyframes mf-spin{to{transform:rotate(360deg)}}
+.skel{border-radius:var(--radius-sm);background:linear-gradient(90deg,color-mix(in srgb,var(--color-text) 6%,transparent) 25%,color-mix(in srgb,var(--color-text) 12%,transparent) 37%,color-mix(in srgb,var(--color-text) 6%,transparent) 63%);background-size:400% 100%;animation:mf-shimmer 1.4s ease-in-out infinite}
+@keyframes mf-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+.progress{height:2px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-text) 10%,transparent);overflow:hidden}
+.progress>i{display:block;height:100%;width:40%;border-radius:inherit;background:var(--color-accent);animation:mf-indet 1.4s var(--ease) infinite}
+@keyframes mf-indet{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+.alert{display:flex;align-items:flex-start;gap:var(--space-3);padding:var(--space-3);border-radius:var(--radius-md);font-size:13px;background:color-mix(in srgb,var(--color-danger) 10%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-danger) 32%,transparent)}
+.alert>svg{flex:none;margin-top:1px;color:var(--color-danger)}
+.alert-title{font-weight:500;margin-bottom:2px}
+.alert p{margin:0;color:var(--color-neutral-400)}
+.alert-warn{background:color-mix(in srgb,var(--color-warn) 10%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 32%,transparent)}
+.alert-warn>svg{color:var(--color-warn)}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   EXTENSION LAYER — the working parts a DJ tool needs beyond the list:
+   sorting and filtering, harmonic mixing, quality caveats, the download
+   lifecycle, toasts, the player and its hover preview, list mode. Same
+   tokens, no new colors, no new spacing values.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* — the 28px control scale the filter bar and inline actions run on — */
+.btn-sm{height:28px;padding:0 10px;gap:5px;font-size:12px;border-radius:7px}
+
+/* — tooltip: the only way a dense row can explain itself — */
+.tip{position:relative;display:inline-flex}
+.tip>.tip-body{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:30;width:max-content;max-width:240px;padding:6px 9px;border-radius:6px;font-size:11.5px;line-height:1.45;text-align:left;color:var(--color-neutral-200);background:var(--color-raise);box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
+.tip:hover>.tip-body,.tip:focus-within>.tip-body{opacity:1}
+
+/* — popover: a filter's own panel, anchored to its button — */
+.pop{z-index:45;min-width:236px;display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-md)}
+.pop-title{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-neutral-500)}
+
+/* — sort + filter bar above the list — */
+.filterbar{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-well)}
+.filterbar>.sep{width:1px;height:18px;flex:none;background:var(--color-divider)}
+/* Active filters read back as removable chips — a filter you cannot see is a
+   filter you forget you set. */
+.fchip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 5px 0 10px;border:0;border-radius:var(--radius-pill);font:inherit;font-size:11.5px;color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 34%,transparent)}
+.fchip b{font-family:var(--font-mono);font-weight:600;font-variant-numeric:tabular-nums}
+.fchip-x{display:grid;place-items:center;width:16px;height:16px;flex:none;padding:0;border:0;border-radius:50%;color:inherit;background:transparent;cursor:pointer}
+.fchip-x:hover{background:color-mix(in srgb,var(--color-accent) 30%,transparent)}
+/* Minimum-grade picker: the grades themselves, lit from the threshold up. */
+.gradepick{display:flex;gap:4px}
+.gradepick .grade{cursor:pointer;opacity:0.32;transition:opacity .12s var(--ease)}
+.gradepick .grade:hover{opacity:0.7}
+.gradepick .grade.is-on{opacity:1}
+
+/* — Camelot: 12 minor over 12 major, compatibility lit in the accent — */
+.keygrid{display:grid;grid-template-columns:14px repeat(12,minmax(0,1fr));gap:3px;align-items:center}
+.keygrid>.keyrow-label{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.keycell{display:grid;place-items:center;height:26px;padding:0;border:0;border-radius:5px;font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--color-neutral-500);background:color-mix(in srgb,var(--color-text) 5%,transparent);cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease)}
+.keycell:hover{color:var(--color-text);background:color-mix(in srgb,var(--color-text) 12%,transparent)}
+.keycell.is-compat{color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 15%,transparent)}
+.keycell.is-sel{color:var(--color-bg);background:var(--color-accent);font-weight:600}
+
+/* — quality caveats: a grade that needs an asterisk —
+   The grade answers "how good is this file"; the caveat answers "and can a
+   container hide that". Warn hue, never the grade hue, so the letter keeps
+   meaning exactly one thing. */
+.qwarn{display:inline-grid;place-items:center;width:18px;height:18px;flex:none;border-radius:5px;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 16%,transparent);cursor:help}
+.trk.is-caveat .grade{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 45%,transparent)}
+.note-warn{display:flex;align-items:center;gap:6px;font-size:11.5px;line-height:1.4;color:var(--color-warn)}
+.note-warn>svg{flex:none}
+
+/* — download lifecycle: idle → busy → done → failed —
+   One button, four states, same footprint, so the row never reflows. */
+.ring{--p:0; /* @kind other */width:15px;height:15px;flex:none;border-radius:50%;background:conic-gradient(currentColor calc(var(--p) * 1%),color-mix(in srgb,currentColor 22%,transparent) 0);-webkit-mask:radial-gradient(circle,transparent 4.4px,#000 4.9px);mask:radial-gradient(circle,transparent 4.4px,#000 4.9px)}
+.btn-dl[data-state=busy]{color:var(--color-accent);border-color:color-mix(in srgb,var(--color-accent) 45%,transparent)}
+.btn-dl[data-state=done]{color:var(--color-grade-a);border-color:color-mix(in srgb,var(--color-grade-a) 45%,transparent);background:color-mix(in srgb,var(--color-grade-a) 9%,transparent)}
+.btn-dl[data-state=fail]{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 45%,transparent);background:color-mix(in srgb,var(--color-danger) 9%,transparent)}
+.btn-dl[data-state=fail]:hover{background:color-mix(in srgb,var(--color-danger) 16%,transparent)}
+/* The receipt: what was written into the file, in the mono stack. */
+.kv-sm{font-size:11px;gap:3px var(--space-2)}
+/* Already in the library — teal, never a grade color, so it cannot be read
+   as quality. */
+.owned{display:inline-grid;place-items:center;width:16px;height:16px;flex:none;border-radius:4px;color:var(--color-info);background:color-mix(in srgb,var(--color-info) 15%,transparent)}
+.mb-owned{color:var(--color-info);background:color-mix(in srgb,var(--color-info) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-info) 28%,transparent)}
+.mb-owned b{color:var(--color-info)}
+
+/* — toasts: the app's only interruption, bottom-right, self-dismissing — */
+.toasts{position:fixed;right:var(--space-4);bottom:var(--space-4);z-index:80;display:flex;flex-direction:column;gap:var(--space-2);width:min(360px,calc(100vw - var(--space-6)));pointer-events:none}
+.toast{--tc:var(--color-accent);position:relative;display:flex;gap:var(--space-2);padding:var(--space-3);padding-left:calc(var(--space-3) + 3px);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-md);overflow:hidden;pointer-events:auto;animation:mf-toast .28s var(--ease) both}
+.toast::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tc)}
+.toast>svg:first-child{flex:none;margin-top:1px;color:var(--tc)}
+.toast-title{font-size:13px;font-weight:500;line-height:1.35;margin-bottom:2px}
+.toast-body{margin:0;font-size:12px;line-height:1.5;color:var(--color-neutral-400)}
+.toast-life{position:absolute;left:0;right:0;bottom:0;height:2px;background:color-mix(in srgb,var(--tc) 22%,transparent)}
+.toast-life>i{display:block;height:100%;background:var(--tc);animation:mf-life 5s linear forwards}
+.toast-ok{--tc:var(--color-ok)}
+.toast-warn{--tc:var(--color-warn)}
+.toast-danger{--tc:var(--color-danger)}
+.toast-info{--tc:var(--color-info)}
+@keyframes mf-toast{from{opacity:0;transform:translateY(10px) scale(.98)}}
+@keyframes mf-life{from{width:100%}to{width:0}}
+
+/* — player: one modal, two shapes (16:9 embed, compact audio bar) — */
+.player{width:min(880px,100%)}
+.player-frame{position:relative;aspect-ratio:16/9;border-radius:var(--radius-md);overflow:hidden;background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.player-frame>iframe,.player-frame>video{position:absolute;inset:0;width:100%;height:100%;border:0}
+.player-ph{position:absolute;inset:0;display:grid;place-items:center;gap:var(--space-2);align-content:center;font-family:var(--font-mono);font-size:11px;color:var(--color-neutral-600);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--color-text) 6%,transparent) 0 4px,transparent 4px 9px)}
+.player-audio{display:flex;align-items:center;gap:var(--space-3);height:56px;padding:0 var(--space-3);border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.pl-play{display:grid;place-items:center;width:36px;height:36px;flex:none;padding:0;border:0;border-radius:50%;cursor:pointer;color:var(--color-bg);background:var(--color-accent)}
+.pl-play:hover{background:var(--color-accent-400)}
+.pl-time{font-family:var(--font-mono);font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--color-neutral-500)}
+.seek{position:relative;flex:1;min-width:0;height:4px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-text) 12%,transparent);cursor:pointer}
+.seek>i{position:absolute;left:0;top:0;bottom:0;border-radius:inherit;background:var(--color-accent)}
+.seek>i::after{content:'';position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:var(--color-accent-200);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 25%,transparent)}
+
+/* — hover preview: autoplay over the artwork after a 0.4s dwell —
+   The dwell is CSS (transition-delay), so a passing cursor never triggers it;
+   the script only has to start the media when .is-preview lands. */
+.thumb-prev{position:absolute;inset:0;opacity:0;transition:opacity .18s var(--ease)}
+.thumb-prev>video,.thumb-prev>img{width:100%;height:100%;object-fit:cover}
+.thumb:hover .thumb-prev,.thumb.is-preview .thumb-prev{opacity:1;transition-delay:.4s}
+.thumb:hover .thumb-play{transition-delay:.4s}
+.thumb.is-preview .thumb-play,.thumb.is-playing .thumb-play{opacity:0}
+.thumb.is-playing{box-shadow:inset 0 0 0 1.5px var(--color-accent)}
+.now{position:absolute;left:3px;bottom:3px;display:inline-flex;align-items:center;gap:4px;height:14px;padding:0 5px;border-radius:4px;font-size:8.5px;font-weight:600;letter-spacing:0.07em;color:var(--color-accent-100);background:color-mix(in srgb,#05060c 72%,transparent)}
+.now-dot{width:5px;height:5px;flex:none;border-radius:50%;background:var(--color-accent);animation:mf-pulse 1.5s var(--ease) infinite}
+@keyframes mf-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.65)}}
+/* The playing version chip swaps its dot for a level meter. */
+.eq{display:inline-flex;align-items:flex-end;gap:1.5px;height:11px;flex:none}
+.eq>i{width:2px;height:3px;border-radius:1px;background:currentColor;animation:mf-eq .9s var(--ease) infinite}
+.eq>i:nth-child(2){animation-delay:.15s}
+.eq>i:nth-child(3){animation-delay:.3s}
+@keyframes mf-eq{0%,100%{height:3px}50%{height:11px}}
+.vchip.is-playing{color:var(--color-neutral-100);background:color-mix(in srgb,var(--pf,var(--color-neutral-500)) 32%,transparent);box-shadow:inset 0 0 0 1px var(--pf,var(--color-neutral-500))}
+
+/* — seed banner: the list is not a search, it is a neighbourhood — */
+.seedbar{position:relative;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);padding-left:calc(var(--space-3) + 3px);border-radius:var(--radius-md);background:var(--color-well);overflow:hidden}
+.seedbar::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--color-accent)}
+.seedbar h4{margin:0;font-size:15px}
+
+/* — list mode: paste a set, search it, download it — */
+.paste{display:grid;grid-template-columns:44px 1fr;border-radius:var(--radius-md);overflow:hidden;background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+.paste:focus-within{box-shadow:inset 0 0 0 1px var(--color-accent),0 0 0 3px color-mix(in srgb,var(--color-accent) 16%,transparent)}
+.paste-nums{padding:10px 8px 10px 0;text-align:right;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;color:var(--color-neutral-700);background:color-mix(in srgb,var(--color-text) 3%,transparent);user-select:none;white-space:pre}
+.paste textarea{min-height:190px;padding:10px 12px;border:0;background:transparent;resize:vertical;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;color:var(--color-text);caret-color:var(--color-accent)}
+.paste textarea:focus-visible{outline:none}
+.paste-foot{display:flex;align-items:center;gap:var(--space-2);margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-500)}
+/* Bulk download: one determinate bar for the whole set. */
+.bulkbar{position:sticky;top:94px;z-index:22;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-sm)}
+.progress-det>i{width:var(--p,0%);animation:none;transition:width .3s var(--ease)}
+
+/* — the row's mobile overflow button, hidden until the row collapses — */
+.trk-more{display:none}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CRATES — Mis Playlists
+   A crate is a set in progress: you pick an active one, downloads land in
+   it, and when it holds together you export it. Same tokens, and the row
+   inside a crate is the same .trk with two carriers swapped.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* — the two-column view — */
+.crates{display:grid;grid-template-columns:264px minmax(0,1fr);gap:var(--space-4);align-items:start}
+.crates>*{min-width:0}
+.crate-actions{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);flex-wrap:wrap}
+.crates-aside{position:sticky;top:94px;display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
+.cratelist{display:flex;flex-direction:column;gap:2px}
+.crate-item{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:46px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);font:inherit;text-align:left;cursor:pointer;transition:background .14s var(--ease)}
+.crate-item:hover{color:var(--color-text);background:color-mix(in srgb,var(--color-text) 8%,transparent)}
+.crate-item[aria-current=true]{color:var(--color-text);background:color-mix(in srgb,var(--color-accent) 15%,transparent);box-shadow:inset 2px 0 0 var(--color-accent)}
+.crate-name{display:block;font-size:13.5px;font-weight:500;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crate-sub{display:block;font-family:var(--font-mono);font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--color-neutral-600);margin-top:1px}
+
+/* — the crate header: a name you can type into, and the numbers that say
+   whether the set holds together — */
+.crate-head{display:flex;flex-direction:column;gap:var(--space-3)}
+.crate-top{display:flex;align-items:flex-start;gap:var(--space-2);flex-wrap:wrap}
+.name-edit{width:100%;max-width:520px;margin-left:-9px;padding:2px 8px;border:1px solid transparent;border-radius:var(--radius-md);font-family:var(--font-heading);font-size:25px;font-weight:var(--font-heading-weight);line-height:1.15;letter-spacing:-0.015em;color:var(--color-text);background:transparent}
+.name-edit:hover{border-color:var(--color-divider)}
+.name-edit:focus-visible{border-color:var(--color-accent);background:var(--color-well);outline:none}
+.metrics{display:flex;gap:var(--space-6);flex-wrap:wrap;align-items:flex-end}
+.metric{display:flex;flex-direction:column;gap:3px}
+.metric>b{font-family:var(--font-mono);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;line-height:1}
+.metric>span{font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-600)}
+/* Key spread — a set that mixes is a set whose keys cluster. */
+.keyspread{display:flex;align-items:flex-end;gap:3px;height:30px}
+.keyspread>i{width:10px;min-height:3px;border-radius:2px;background:color-mix(in srgb,var(--color-accent) 28%,transparent)}
+.keyspread>i.is-peak{background:var(--color-accent)}
+
+/* — the crate row: .trk with a drag handle and a have/need state — */
+.results-crate{--trk-cols:26px 44px minmax(170px,1.5fr) minmax(140px,0.8fr) 52px 112px 72px /* @kind other */}
+.drag{display:grid;place-items:center;color:var(--color-neutral-700);cursor:grab;touch-action:none}
+.trk:hover .drag{color:var(--color-neutral-400)}
+.drag:active{cursor:grabbing}
+.trk.is-dragging{opacity:0.55;background:var(--color-raise);box-shadow:var(--shadow-md)}
+.trk.is-dragging::after{opacity:0}
+.trk.is-dropzone{box-shadow:inset 0 2px 0 var(--color-accent)}
+.status{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:var(--radius-pill);font-size:11px;white-space:nowrap}
+.status-have{color:var(--color-info);background:color-mix(in srgb,var(--color-info) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-info) 28%,transparent)}
+.status-need{color:var(--color-neutral-400);background:color-mix(in srgb,var(--color-text) 7%,transparent);box-shadow:inset 0 0 0 1px var(--color-divider)}
+
+/* — the active crate: everything you download lands here — */
+.activecrate{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 10px;border:0;border-radius:var(--radius-pill);font:inherit;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 32%,transparent)}
+.activecrate:hover{background:color-mix(in srgb,var(--color-accent) 22%,transparent)}
+.activecrate>.n{font-family:var(--font-mono);font-size:10.5px;opacity:0.72}
+.activecrate.is-none{color:var(--color-neutral-400);background:transparent;box-shadow:inset 0 0 0 1px var(--color-divider)}
+.activecrate.is-none:hover{color:var(--color-text);background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+
+/* — export destinations — */
+.destpick{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:var(--space-2)}
+.dest{display:flex;flex-direction:column;gap:5px;padding:var(--space-3);border:1px solid var(--color-divider);border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer;transition:background .14s var(--ease),border-color .14s var(--ease)}
+.dest:hover{background:color-mix(in srgb,var(--color-text) 6%,transparent)}
+.dest[aria-pressed=true]{border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 12%,transparent)}
+.dest b{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500}
+.dest span{font-size:11.5px;line-height:1.45;color:var(--color-neutral-500)}
+
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+@media (max-width:1100px){.results{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+/* The crate view drops to one column before its row runs out of room. */
+@media (max-width:1000px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
+/* Below 760 the seven columns collapse to a two-line card: artwork, title,
+   grade and the two actions a DJ still needs on a phone (download, more);
+   the version chips move to their own line, metadata and the index go. */
+@media (max-width:760px){
+.results-head{display:none}
+.trk{grid-template-columns:44px minmax(0,1fr) 52px 76px;grid-template-areas:'art id grade acts' 'art vers vers vers';row-gap:6px;padding:var(--space-2) var(--space-3)}
+.trk>.trk-idx,.trk>.trk-meta{display:none}
+.trk>.thumb{grid-area:art;align-self:start}
+.trk>.trk-id{grid-area:id}
+.trk>.trk-grade{grid-area:grade}
+.trk>.trk-acts{grid-area:acts}
+.trk>.trk-vers{grid-area:vers}
+.trk-acts>.btn-icon-sm{display:none}
+.trk-acts>.trk-more{display:grid}
+.trk-acts{opacity:1}
+.filterbar{flex-wrap:nowrap;overflow-x:auto}
+.cmp{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:80%;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:var(--space-2)}
+.cmp-col{scroll-snap-align:start}
+.results-crate .trk{grid-template-columns:44px minmax(0,1fr) 52px 40px;grid-template-areas:'art id grade acts' 'art st st st'}
+.results-crate .drag{display:none}
+.trk>.trk-status{grid-area:st}
+.toasts{left:var(--space-3);right:var(--space-3);bottom:var(--space-3);width:auto}
+.topbar{flex-wrap:wrap;height:auto;padding:var(--space-2) var(--space-3);row-gap:var(--space-2)}
+.search{order:3;flex-basis:100%;max-width:none}
+}
+

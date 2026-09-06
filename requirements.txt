@@ -1,0 +1,19 @@
+# Core dependencies - ESSENTIAL ONLY
+python-dotenv>=1.0.0
+requests>=2.31.0
+fastapi>=0.104.1
+uvicorn>=0.24.0
+sqlalchemy>=2.0.23
+pydantic>=2.5.0
+
+# Music/Download APIs
+spotipy>=2.23.0
+yt-dlp>=2023.12.30
+beautifulsoup4>=4.12.0
+
+# Async & Background tasks
+aiohttp>=3.9.1
+
+# Utils
+colorama>=0.4.6
+tqdm>=4.66.1

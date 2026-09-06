@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🎵 MusiFlix — Bot de Música</title>
+<style>
+  :root{
+    --bg:#0a0a0e; --bg2:#101017; --panel:#16161f; --panel2:#1d1d28; --border:#2a2a36;
+    --text:#f3f3f7; --muted:#9a9aac; --accent:#e50914; --accent2:#7c5cff; --teal:#00d3a7;
+    --green:#3ddc84; --red:#ff5c5c; --yellow:#ffcc4d;
+    --shadow:0 18px 40px rgba(0,0,0,.55);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 600px at 80% -10%, #1a0e1e 0%, transparent 60%),
+               radial-gradient(900px 500px at 0% 0%, #0e1326 0%, transparent 55%),
+               var(--bg);
+    color:var(--text);font-family:"Segoe UI",Roboto,Arial,sans-serif;
+    display:flex;flex-direction:column;height:100vh;overflow:hidden;
+  }
+
+  /* ---------- Topbar (glass) ---------- */
+  header.topbar{
+    position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:12px 22px;border-bottom:1px solid var(--border);
+    background:rgba(10,10,14,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  }
+  .brand{font-size:22px;font-weight:800;letter-spacing:.5px;white-space:nowrap;cursor:pointer}
+  .brand span{color:var(--accent);text-shadow:0 0 18px rgba(229,9,20,.55)}
+  form.search{display:flex;flex:1;min-width:240px;gap:8px}
+  form.search input{
+    flex:1;padding:11px 18px;border-radius:24px;border:1px solid var(--border);
+    background:var(--panel2);color:var(--text);font-size:15px;outline:none;transition:.18s;
+  }
+  form.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(229,9,20,.18)}
+  .tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .btn{padding:10px 18px;border-radius:24px;border:none;cursor:pointer;font-weight:700;font-size:14px;
+    transition:.18s cubic-bezier(.2,.7,.3,1)}
+  .btn:active{transform:scale(.96)}
+  /* CTA principal: rojo de marca con degradado + glow */
+  .btn-primary{background:linear-gradient(135deg,#ff2d43,var(--accent));color:#fff;
+    box-shadow:0 6px 18px rgba(229,9,20,.35)}
+  .btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px);box-shadow:0 10px 26px rgba(229,9,20,.5)}
+  .btn-primary:disabled{opacity:.6;cursor:wait;box-shadow:none;transform:none}
+  /* Secundarios / toggles: glass teñido neutro, violeta cuando está ON */
+  .ghost{--c:150,150,170;background:rgba(var(--c),.10);color:var(--text);
+    border:1px solid rgba(var(--c),.28)}
+  .ghost:hover{background:rgba(var(--c),.20);border-color:rgba(var(--c),.55);
+    transform:translateY(-1px);box-shadow:0 6px 16px rgba(var(--c),.18);color:#fff}
+  .ghost.active{--c:124,92,255;background:rgba(var(--c),.18);border-color:rgba(var(--c),.7);color:#fff;
+    box-shadow:0 0 0 1px rgba(var(--c),.35),0 6px 18px rgba(var(--c),.30)}
+  /* ---------- Selector de formato (custom, combina con el tema oscuro) ---------- */
+  .fmt-picker{position:relative}
+  .fmt-native{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+  .fmt-trigger{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:22px;line-height:1}
+  .fmt-trigger .fmt-ico{font-size:15px}
+  .fmt-trigger .fmt-cur{font-weight:800;letter-spacing:.4px;font-size:14px}
+  .fmt-trigger .fmt-cur-sub{font-size:10px;color:var(--muted);font-weight:700;
+    text-transform:uppercase;letter-spacing:.6px;padding:2px 6px;border-radius:20px;
+    background:rgba(var(--c),.14)}
+  .fmt-trigger .fmt-caret{margin-left:1px;transition:.2s;opacity:.75;font-size:12px}
+  .fmt-trigger[aria-expanded="true"]{--c:124,92,255;background:rgba(var(--c),.18);
+    border-color:rgba(var(--c),.7);color:#fff;box-shadow:0 0 0 1px rgba(var(--c),.35),0 6px 18px rgba(var(--c),.30)}
+  .fmt-trigger[aria-expanded="true"] .fmt-caret{transform:rotate(180deg);opacity:1}
+
+  .fmt-menu{position:absolute;top:calc(100% + 8px);right:0;min-width:230px;z-index:60;
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    box-shadow:var(--shadow);padding:6px;
+    opacity:0;transform:translateY(-6px) scale(.98);pointer-events:none;
+    transition:.16s cubic-bezier(.2,.7,.3,1)}
+  .fmt-menu.open{opacity:1;transform:none;pointer-events:auto}
+  .fmt-opt{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
+    text-align:left;padding:9px 12px;border:none;border-radius:10px;background:transparent;
+    color:var(--text);cursor:pointer;transition:.13s}
+  .fmt-opt-main{display:flex;flex-direction:column;gap:2px}
+  .fmt-opt-main b{font-size:14px;font-weight:800;letter-spacing:.3px}
+  .fmt-opt-main span{font-size:11.5px;color:var(--muted)}
+  .fmt-opt:hover{background:rgba(124,92,255,.14)}
+  .fmt-opt.sel{background:rgba(124,92,255,.20);box-shadow:inset 0 0 0 1px rgba(124,92,255,.5)}
+  .fmt-opt.sel .fmt-opt-main b{color:#fff}
+  .fmt-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;
+    padding:3px 8px;border-radius:20px;white-space:nowrap}
+  .fmt-tag.lossy{background:rgba(255,204,77,.16);color:var(--yellow)}
+  .fmt-tag.lossless{background:rgba(61,220,132,.16);color:var(--green)}
+
+  /* ---------- Content ---------- */
+  /* --pad: margen lateral responsive; las filas lo usan para sangrar de borde a borde */
+  .content{flex:1;overflow-y:auto;overflow-x:hidden;--pad:clamp(18px,3.5vw,60px);
+    padding:22px var(--pad) 64px;scroll-behavior:smooth}
+  .hero{
+    text-align:center;margin:8vh auto;max-width:620px;color:var(--muted);font-size:17px;line-height:1.7;
+    animation:fade .5s ease both;
+  }
+  .hero .big{font-size:40px;font-weight:800;color:var(--text);margin-bottom:10px}
+  .hero .big span{color:var(--accent)}
+  .hero b{color:var(--text)}
+  .count{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .results-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:2px 0 14px}
+  .results-title{margin:0;font-size:clamp(22px,2.2vw,30px);font-weight:800;letter-spacing:.3px;
+    display:flex;align-items:center;gap:12px}
+  .results-title::before{content:"";width:5px;height:1.05em;border-radius:3px;
+    background:linear-gradient(180deg,#ff2d43,var(--accent));box-shadow:0 0 14px rgba(229,9,20,.5)}
+
+  /* ---------- Filas tipo Netflix ---------- */
+  .row{position:relative;margin:0 0 clamp(20px,2.6vw,38px)}
+  .row-title{font-size:clamp(15px,1.4vw,20px);font-weight:800;margin:0 0 2px;
+    display:flex;align-items:center;gap:10px;letter-spacing:.3px}
+  /* Barra vertical del color de la plataforma, para que cada fila se distinga de un vistazo */
+  .row-title::before{content:"";width:4px;height:1.05em;border-radius:3px;flex:none;
+    background:var(--src,#9a9aac);
+    box-shadow:0 0 12px color-mix(in srgb, var(--src,#9a9aac) 55%, transparent)}
+  .row-title .pill{font-size:11px;font-weight:700;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--border);border-radius:20px;padding:2px 10px}
+  /* Full-bleed: la fila sangra hasta el borde de la pantalla y la última card "asoma" */
+  .row-scroll{display:flex;gap:clamp(12px,1.1vw,20px);overflow-x:auto;overflow-y:hidden;
+    margin-inline:calc(-1 * var(--pad));padding:32px var(--pad) 24px;
+    scroll-snap-type:x proximity;scroll-padding-left:var(--pad);scrollbar-width:thin}
+  .row-scroll::-webkit-scrollbar{height:8px}
+  .row-scroll::-webkit-scrollbar-thumb{background:transparent;border-radius:6px;transition:background .2s}
+  .row-scroll:hover::-webkit-scrollbar-thumb{background:#33333d}
+  .row-scroll:hover::-webkit-scrollbar-thumb:hover{background:#4a4a57}
+  /* Degradé en el borde derecho: sugiere que hay más y disimula el corte del scroll */
+  .row::after{content:"";position:absolute;right:calc(-1 * var(--pad));top:0;bottom:0;
+    width:clamp(24px,3vw,64px);pointer-events:none;z-index:2;
+    background:linear-gradient(90deg,transparent,var(--bg))}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(clamp(185px,14.5vw,235px),1fr));
+    gap:clamp(14px,1.2vw,22px);padding-top:18px}
+
+  /* ---------- Poster card ---------- */
+  .poster{
+    position:relative;
+    width:clamp(196px,15.5vw,278px);flex:0 0 auto;scroll-snap-align:start;background:var(--panel);
+    border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:default;
+    transition:transform .22s cubic-bezier(.2,.7,.3,1), box-shadow .22s, border-color .22s;
+    will-change:transform;
+  }
+  .grid .poster{width:auto}
+  .poster:hover{transform:translateY(-10px) scale(1.06);border-color:var(--accent);box-shadow:var(--shadow);z-index:3}
+  /* Portada de fondo tenue al pasar el mouse (blur = lavado de color, no destaca) */
+  .poster::before{
+    content:"";position:absolute;inset:0;z-index:0;border-radius:14px;pointer-events:none;
+    background:linear-gradient(180deg,rgba(14,14,20,.5),rgba(14,14,20,.72)),var(--cover) center/cover no-repeat;
+    opacity:0;filter:blur(9px) saturate(1.3);transform:scale(1.12);
+    transition:opacity .4s ease;
+  }
+  .poster:hover::before{opacity:1}
+  .pthumb,.pbody{position:relative;z-index:1}
+
+  /* Capa de preview (autoplay al pasar el mouse) */
+  .preview-layer{position:absolute;inset:0;z-index:4;overflow:hidden}
+  .preview-layer.iframe{background:#000}
+  .preview-layer.audio{background:transparent}
+  .preview-layer iframe{width:100%;height:100%;border:0}
+  .preview-layer audio{display:none}
+  .preview-badge{position:absolute;left:6px;top:6px;z-index:5;background:rgba(229,9,20,.92);color:#fff;
+    font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:10px;display:flex;gap:5px;align-items:center}
+  .preview-badge .pulse{width:7px;height:7px;border-radius:50%;background:#fff;animation:pulse 1s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .pthumb{position:relative;width:100%;aspect-ratio:16/10;cursor:pointer;overflow:hidden;
+    background:radial-gradient(130% 130% at 50% 0%,#241320 0%,#15151d 48%,#0d0d12 100%)}
+  /* Placeholder cuando no hay portada: "M" de MusiFlix difusa, para que no quede el negro plano */
+  .pthumb::before{content:"M";position:absolute;inset:0;z-index:-1;display:flex;
+    align-items:center;justify-content:center;pointer-events:none;
+    font:900 clamp(46px,7vw,74px)/1 "Segoe UI",Arial,sans-serif;letter-spacing:1px;
+    color:rgba(255,255,255,.06);text-shadow:0 0 34px rgba(229,9,20,.20);filter:blur(.6px)}
+  .pthumb img{width:100%;height:100%;object-fit:cover;transition:.3s}
+  .poster:hover .pthumb img{transform:scale(1.08);filter:brightness(1.05)}
+  .pgrad{position:absolute;inset:0;background:linear-gradient(180deg,transparent 45%,rgba(0,0,0,.75) 100%)}
+  .pdur{position:absolute;right:7px;bottom:7px;background:rgba(0,0,0,.82);font-size:11px;
+    padding:1px 6px;border-radius:5px;z-index:2}
+  .pplay{position:absolute;inset:0;margin:auto;width:54px;height:54px;border-radius:50%;border:none;
+    background:rgba(229,9,20,.92);color:#fff;font-size:22px;cursor:pointer;opacity:0;transform:scale(.7);
+    transition:.2s;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+  .pthumb:hover .pplay{opacity:1;transform:scale(1)}
+  .pplay.sm{width:38px;height:38px;font-size:15px;position:static;opacity:1;transform:none}
+  .pbody{padding:11px 12px 12px}
+  .ptitle{font-weight:700;font-size:14px;line-height:1.25;margin-bottom:3px;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:35px}
+  .partist{color:var(--muted);font-size:12.5px;margin-bottom:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pbadges{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .pactions{display:flex;gap:7px;margin-top:11px}
+  /* ---- Botones de acción tonales (glass teñido, color por función) ---- */
+  .pactions button, .tactions button{
+    --c:150,150,170;                                   /* color propio del botón (RGB) */
+    border:1px solid rgba(var(--c),.35);
+    background:rgba(var(--c),.12);color:rgb(var(--c));
+    border-radius:9px;cursor:pointer;font-weight:700;transition:.16s;
+  }
+  .pactions button:hover, .tactions button:hover{
+    background:rgba(var(--c),.22);border-color:rgba(var(--c),.65);
+    box-shadow:0 6px 18px rgba(var(--c),.25);transform:translateY(-1px);color:#fff;
+  }
+  .pactions button:active, .tactions button:active{transform:scale(.97)}
+  .act-play{--c:0,211,167}     /* teal  → reproducir */
+  .act-dl{--c:61,220,132}      /* verde → descargar */
+  .act-spek{--c:124,92,255}    /* violeta → análisis Spek */
+  .act-sim{--c:244,63,94}      /* rosa  → similares (marca) */
+  .dl[data-state="ok"]{--c:61,220,132;color:#fff}
+  .dl[data-state="err"]{--c:255,92,92;color:#fff}
+  .dl[data-state="busy"]{opacity:.7;cursor:wait}
+  .pactions button{flex:1;padding:7px 0;font-size:14px}
+
+  /* ---------- Badges ---------- */
+  .badge{font-size:10.5px;padding:2px 8px;border-radius:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}
+  .badge-cal{background:#ffffff14;color:#e8e8e8;text-transform:none}
+  .badge-bpm{background:#7c4dff33;color:#b39dff;text-transform:none}
+  .badge-fmt{background:#00bcd433;color:#5fd6e6;text-transform:none}
+  .badge-gen{background:#ffab0033;color:#ffc955;text-transform:none}
+  .badge-key{background:#4caf5033;color:#7fd789;text-transform:none}
+  .src-spotify{background:#1db95433;color:#1ed760}
+  .src-youtube{background:#e5091433;color:#ff6b6b}
+  .src-soundcloud{background:#ff550033;color:#ff8a3d}
+  .src-deezer{background:#a238ff33;color:#c98bff}
+  .src-ligaudio{background:#3d7dff33;color:#6fa8ff}
+  .src-hitplayer{background:#00b3a433;color:#27d3c4}
+
+  .seed-banner{background:linear-gradient(90deg,#e5091422,#7c4dff22);border:1px solid #7c4dff44;
+    border-radius:14px;padding:14px 18px;margin-bottom:18px;font-size:16px}
+  .seed-banner .seed-info{display:block;margin-top:5px;color:var(--muted);font-size:13px}
+
+  /* ---------- Modo Lista (DJ) ---------- */
+  .lista-form{max-width:780px;margin:14px auto;animation:fade .35s ease both}
+  .lista-form h2{font-size:24px;margin:0 0 6px}
+  .lista-form h2 span{color:var(--accent)}
+  .lista-form textarea{
+    width:100%;min-height:240px;resize:vertical;padding:15px 17px;margin:12px 0;
+    border-radius:14px;border:1px solid var(--border);background:var(--panel2);
+    color:var(--text);font-family:"Consolas",monospace;font-size:14px;line-height:1.75;outline:none;transition:.18s;
+  }
+  .lista-form textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(229,9,20,.16)}
+  .lista-form .row-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .lista-bar{position:sticky;top:-1px;z-index:6;display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+    background:rgba(16,16,23,.92);backdrop-filter:blur(10px);border:1px solid var(--accent);
+    border-radius:14px;padding:13px 18px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .lista-bar .grow{flex:1;min-width:160px;font-size:14px}
+  .lista-bar .grow b{color:#fff}
+  .no-encontradas{background:#ff5c5c14;border:1px solid #ff5c5c44;border-radius:12px;
+    padding:11px 16px;margin-bottom:16px;font-size:13px;color:#ffb3b3}
+  .no-encontradas b{color:#fff}
+
+  .track{position:relative;overflow:hidden;display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--border);
+    border-radius:14px;padding:10px 14px;margin-bottom:11px;transition:transform .18s,border-color .18s,box-shadow .18s;animation:fade-up .4s ease both}
+  .track:hover{border-color:var(--accent);box-shadow:0 10px 26px rgba(0,0,0,.4);transform:scale(1.012)}
+  .track::before{
+    content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+    background:linear-gradient(90deg,rgba(14,14,20,.68),rgba(14,14,20,.84)),var(--cover) center/cover no-repeat;
+    opacity:0;filter:blur(12px) saturate(1.25);transform:scale(1.15);transition:opacity .4s ease;
+  }
+  .track:hover::before{opacity:1}
+  .track > *{position:relative;z-index:1}
+  .tnum{font-size:15px;font-weight:800;color:var(--muted);width:26px;text-align:center;flex:none}
+  .tthumb{position:relative;width:118px;height:68px;flex:none;border-radius:9px;overflow:hidden;cursor:pointer;
+    isolation:isolate;background:radial-gradient(130% 130% at 50% 0%,#241320 0%,#14141c 55%,#0d0d12 100%)}
+  .tthumb::before{content:"M";position:absolute;inset:0;z-index:-1;display:flex;
+    align-items:center;justify-content:center;pointer-events:none;
+    font:900 30px/1 "Segoe UI",Arial,sans-serif;color:rgba(255,255,255,.06);
+    text-shadow:0 0 18px rgba(229,9,20,.18);filter:blur(.5px)}
+  .tthumb img{width:100%;height:100%;object-fit:cover}
+  .tthumb .pplay{position:absolute;inset:0;margin:auto}
+  .tthumb:hover .pplay{opacity:1;transform:scale(1)}
+  .tmain{flex:1;min-width:0}
+  .tq{font-size:11.5px;color:var(--teal);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ttitle{font-weight:700;font-size:15px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tartist{color:var(--muted);font-size:12.5px;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tmain .pbadges{margin-top:2px}
+  .topts{display:flex;flex-direction:column;gap:5px;flex:none;max-width:170px}
+  .opt-chip{display:block;text-align:left;border:1px solid var(--border);background:var(--panel2);color:var(--muted);
+    border-radius:8px;padding:4px 9px;font-size:11.5px;cursor:pointer;transition:.14s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+  .opt-chip:hover{border-color:var(--accent2);color:#fff}
+  .opt-chip.active{background:var(--accent2);border-color:var(--accent2);color:#fff;font-weight:700}
+  .opt-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px;
+    box-shadow:0 0 0 2px rgba(255,255,255,.08)}
+  .opt-chip.playing{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal)}
+  .tactions{display:flex;flex-direction:column;gap:7px;flex:none}
+  .tactions button{padding:7px 13px;font-size:13px;white-space:nowrap}
+
+  /* ---------- Modal reproductor ---------- */
+  .modal{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,.66);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:20px}
+  .modal.open{display:flex;animation:fade .2s ease both}
+  .modal-box{width:min(820px,94vw);background:var(--panel);border:1px solid var(--border);border-radius:16px;
+    padding:18px;box-shadow:var(--shadow);position:relative;animation:pop .24s cubic-bezier(.2,.8,.3,1.1) both}
+  .modal-title{font-weight:700;font-size:16px;margin:2px 40px 12px 4px;line-height:1.3}
+  .modal-close{position:absolute;top:12px;right:12px;width:34px;height:34px;border-radius:50%;border:none;
+    background:var(--panel2);color:var(--text);font-size:16px;cursor:pointer;transition:.15s}
+  .modal-close:hover{background:var(--accent);color:#fff}
+  .modal-body .player{width:100%;aspect-ratio:16/9;border-radius:10px;border:none}
+  .modal-body audio{width:100%}
+  .modal-body a{color:var(--teal)}
+  .spek-load{padding:46px 10px;text-align:center;color:var(--muted)}
+  .spek-img{width:100%;border-radius:10px;display:block;background:#000}
+  .spek-help{color:var(--muted);font-size:13px;line-height:1.6;margin:12px 2px 2px}
+  .spek-help b{color:var(--text)}
+  .spek-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:6px;padding:0 2px}
+
+  /* ---------- Consola drawer ---------- */
+  .console-drawer{position:fixed;top:0;right:0;z-index:30;height:100vh;width:min(430px,90vw);
+    background:#08080c;border-left:1px solid var(--border);display:flex;flex-direction:column;
+    transform:translateX(100%);transition:transform .28s cubic-bezier(.2,.7,.3,1);box-shadow:-20px 0 50px rgba(0,0,0,.5)}
+  .console-drawer.open{transform:translateX(0)}
+  .console-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px;
+    font-weight:700;font-size:14px}
+  .console-head .drawer-close{margin-left:auto;background:transparent;border:none;color:var(--muted);font-size:17px;cursor:pointer}
+  .console-head .drawer-close:hover{color:#fff}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--red)}
+  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  #console{flex:1;overflow-y:auto;padding:12px 14px;font-family:"Consolas",monospace;font-size:12.5px;line-height:1.55}
+  #console .line{white-space:pre-wrap;word-break:break-word;padding:1px 0}
+  .lvl-INFO{color:#cdd3e0}.lvl-WARNING{color:var(--yellow)}.lvl-ERROR{color:var(--red)}.lvl-SYS{color:var(--teal)}
+
+  /* ---------- Animaciones / utilidades ---------- */
+  .fade-up{animation:fade-up .45s ease both}
+  @keyframes fade-up{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes pop{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff5;border-top-color:#fff;
+    border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#33333d;border-radius:6px}
+  ::-webkit-scrollbar-thumb:hover{background:#44444f}
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" onclick="irInicio()">🎵 Musi<span>Flix</span></div>
+    <form class="search" id="searchForm">
+      <input id="q" type="text" placeholder="Buscá una canción, artista o género…" autocomplete="off" />
+      <button type="submit" class="btn btn-primary" id="btnBuscar">Buscar</button>
+    </form>
+    <div class="tools">
+      <div class="fmt-picker" id="fmtPicker">
+        <!-- select oculto: guarda el valor y lo leen las llamadas a la API -->
+        <select class="fmt-native" id="formato" title="Formato de descarga" tabindex="-1" aria-hidden="true">
+          <option value="mp3">MP3</option>
+          <option value="wav">WAV</option>
+          <option value="flac">FLAC</option>
+          <option value="aiff">AIFF</option>
+        </select>
+        <button type="button" class="fmt-trigger ghost" id="fmtTrigger"
+                aria-haspopup="listbox" aria-expanded="false" title="Formato de descarga">
+          <span class="fmt-ico">🎧</span>
+          <span class="fmt-cur">MP3</span>
+          <span class="fmt-cur-sub">lossy</span>
+          <span class="fmt-caret">▾</span>
+        </button>
+        <div class="fmt-menu" id="fmtMenu" role="listbox" aria-label="Formato de descarga">
+          <button type="button" class="fmt-opt" data-val="mp3" role="option">
+            <span class="fmt-opt-main"><b>MP3</b><span>Comprimido · liviano</span></span>
+            <span class="fmt-tag lossy">lossy</span></button>
+          <button type="button" class="fmt-opt" data-val="wav" role="option">
+            <span class="fmt-opt-main"><b>WAV</b><span>Sin pérdida · sin comprimir</span></span>
+            <span class="fmt-tag lossless">lossless</span></button>
+          <button type="button" class="fmt-opt" data-val="flac" role="option">
+            <span class="fmt-opt-main"><b>FLAC</b><span>Sin pérdida · comprimido</span></span>
+            <span class="fmt-tag lossless">lossless</span></button>
+          <button type="button" class="fmt-opt" data-val="aiff" role="option">
+            <span class="fmt-opt-main"><b>AIFF</b><span>Sin pérdida · Apple</span></span>
+            <span class="fmt-tag lossless">lossless</span></button>
+        </div>
+      </div>
+      <button type="button" class="btn ghost active" id="btnPreview" title="Reproducir al pasar el mouse (estilo Netflix)">👆 Preview</button>
+      <button type="button" class="btn ghost" id="btnModoLista" title="Pegar una lista de canciones (modo DJ)">📋 Lista</button>
+      <button type="button" class="btn ghost" id="btnConsola" title="Ver la consola del bot">🖥️ Consola</button>
+    </div>
+  </header>
+
+  <main class="content" id="playlist">
+    <div class="hero">
+      <div class="big">🎶 Musi<span>Flix</span></div>
+      Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.<br>
+      Mirá cómo trabaja el bot con el botón <b>🖥️ Consola</b>.
+    </div>
+  </main>
+
+  <aside class="console-drawer" id="consoleDrawer">
+    <div class="console-head">
+      <span class="dot" id="wsDot"></span> Consola del bot
+      <button class="drawer-close" onclick="toggleConsola(false)" title="Cerrar">✕</button>
+    </div>
+    <div id="console"></div>
+  </aside>
+
+  <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal-box">
+      <button class="modal-close" onclick="closeModal()" title="Cerrar">✕</button>
+      <div class="modal-title" id="modalTitle"></div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+<script>
+const fmtDur = s => { s = parseInt(s)||0; const m = Math.floor(s/60), x = s%60; return m + ":" + String(x).padStart(2,"0"); };
+const esc = t => (t||"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtActual = () => (document.getElementById("formato").value||"mp3").toUpperCase();
+const playlist = document.getElementById("playlist");
+
+/* ---------- Consola en vivo (WebSocket) ---------- */
+const consoleEl = document.getElementById("console");
+const wsDot = document.getElementById("wsDot");
+function logLine(msg, level="SYS"){
+  const div = document.createElement("div");
+  div.className = "line lvl-" + (level||"INFO");
+  div.textContent = msg;
+  consoleEl.appendChild(div);
+  consoleEl.scrollTop = consoleEl.scrollHeight;
+  while(consoleEl.children.length > 500) consoleEl.removeChild(consoleEl.firstChild);
+}
+function connectWS(){
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/console`);
+  ws.onopen = () => wsDot.classList.add("on");
+  ws.onclose = () => { wsDot.classList.remove("on"); logLine("🔴 Consola desconectada, reintentando…","WARNING"); setTimeout(connectWS, 1500); };
+  ws.onmessage = e => { const d = JSON.parse(e.data); logLine(d.msg, d.level); };
+}
+connectWS();
+
+function toggleConsola(force){
+  const d = document.getElementById("consoleDrawer");
+  const open = (typeof force === "boolean") ? force : !d.classList.contains("open");
+  d.classList.toggle("open", open);
+  document.getElementById("btnConsola").classList.toggle("active", open);
+}
+document.getElementById("btnConsola").addEventListener("click", () => toggleConsola());
+
+function irInicio(){
+  closeModal();
+  playlist.innerHTML = `<div class="hero"><div class="big">🎶 Musi<span>Flix</span></div>
+    Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.<br>
+    Mirá cómo trabaja el bot con el botón <b>🖥️ Consola</b>.</div>`;
+}
+
+/* ---------- Búsqueda ---------- */
+const form = document.getElementById("searchForm");
+const btn = document.getElementById("btnBuscar");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = document.getElementById("q").value.trim();
+  if(!q) return;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  playlist.innerHTML = '<div class="hero"><span class="spinner"></span> Buscando "'+esc(q)+'"…</div>';
+  try{
+    const r = await fetch("/api/buscar?q=" + encodeURIComponent(q) + "&limite=28");
+    render(await r.json());
+  }catch(err){
+    playlist.innerHTML = '<div class="hero">⚠️ Error al conectar con el servidor.</div>';
+  }finally{
+    btn.disabled = false; btn.textContent = "Buscar";
+  }
+});
+
+// Al cambiar el formato, refrescar los badges/labels que dependen del formato
+document.getElementById("formato").addEventListener("change", () => {
+  const v = fmtActual();
+  document.querySelectorAll(".badge-fmt[data-fixed='0']").forEach(b => b.textContent = "📄 "+v);
+  document.querySelectorAll(".fmt-label").forEach(e => e.textContent = v);
+});
+
+/* ---------- Dropdown de formato (custom, sincroniza el <select> oculto) ---------- */
+(function(){
+  const picker  = document.getElementById("fmtPicker");
+  const sel     = document.getElementById("formato");
+  const trigger = document.getElementById("fmtTrigger");
+  const menu    = document.getElementById("fmtMenu");
+  const curEl   = trigger.querySelector(".fmt-cur");
+  const subEl   = trigger.querySelector(".fmt-cur-sub");
+  const SUB = { mp3:"lossy", wav:"lossless", flac:"lossless", aiff:"lossless" };
+  const open  = () => { menu.classList.add("open");  trigger.setAttribute("aria-expanded","true");  };
+  const close = () => { menu.classList.remove("open"); trigger.setAttribute("aria-expanded","false"); };
+  function sync(){
+    const v = sel.value;
+    curEl.textContent = v.toUpperCase();
+    subEl.textContent = SUB[v] || "";
+    menu.querySelectorAll(".fmt-opt").forEach(b => b.classList.toggle("sel", b.dataset.val === v));
+  }
+  trigger.addEventListener("click", e => {
+    e.stopPropagation();
+    menu.classList.contains("open") ? close() : open();
+  });
+  menu.querySelectorAll(".fmt-opt").forEach(b => b.addEventListener("click", () => {
+    if(sel.value !== b.dataset.val){
+      sel.value = b.dataset.val;
+      sync();
+      sel.dispatchEvent(new Event("change", {bubbles:true}));  // refresca badges/labels
+    }
+    close();
+  }));
+  document.addEventListener("click", e => { if(!picker.contains(e.target)) close(); });
+  document.addEventListener("keydown", e => { if(e.key === "Escape") close(); });
+  sync();
+})();
+
+/* ---------- Badges compartidos (con BPM/género lazy) ---------- */
+function badgesHTML(c){
+  const src = (c.fuente||"").toLowerCase();
+  const bk = encodeURIComponent((c.titulo||'')+''+(c.artista||''));
+  const bpm = c.bpm
+    ? `<span class="badge badge-bpm" title="BPM">🥁 ${c.bpm}</span>`
+    : `<span class="badge badge-bpm meta-load" data-metakey="${bk}" data-kind="bpm" title="Calculando BPM…">🥁 …</span>`;
+  const gen = c.genero
+    ? `<span class="badge badge-gen" title="Género">🎚️ ${esc(c.genero)}</span>`
+    : `<span class="badge badge-gen meta-load" data-metakey="${bk}" data-kind="gen" title="Buscando género…">🎚️ …</span>`;
+  const key = c.camelot
+    ? `<span class="badge badge-key" title="Key — compatibilidad de mezcla">🎹 ${esc(c.camelot)}${c.compat?(' '+c.compat):''}</span>`
+    : '';
+  const fijoMp3 = (src==="ligaudio"||src==="hitplayer");
+  const fmtVal = fijoMp3 ? "MP3" : fmtActual();
+  const fmt = `<span class="badge badge-fmt" data-fixed="${fijoMp3?1:0}" title="${fijoMp3?'Esta fuente baja siempre en MP3':'Formato que se va a descargar'}">📄 ${fmtVal}</span>`;
+  return `<span class="badge src-${src}">${esc(c.fuente)}</span>${fmt}${bpm}${key}${gen}`;
+}
+
+function _resolverBadges(enc, kind, valor, prefijo, titulo){
+  document.querySelectorAll(`.meta-load[data-kind="${kind}"][data-metakey="${enc}"]`).forEach(b => {
+    b.classList.remove('meta-load');
+    if(valor){ b.textContent = prefijo+valor; b.title = titulo; }
+    else { b.remove(); }
+  });
+}
+async function cargarMeta(){
+  const songs = window.__songs || [];
+  const faltan = {};
+  songs.forEach(c => { if(c && (!c.bpm || !c.genero)){ const k=(c.titulo||'')+''+(c.artista||''); faltan[k]=c; } });
+  const keys = Object.keys(faltan);
+  let idx = 0;
+  const worker = async () => {
+    while(idx < keys.length){
+      const c = faltan[keys[idx++]];
+      const enc = encodeURIComponent((c.titulo||'')+''+(c.artista||''));
+      let d = {bpm:null, genero:null};
+      try{
+        const r = await fetch(`/api/meta?titulo=${encodeURIComponent(c.titulo)}&artista=${encodeURIComponent(c.artista||'')}`);
+        d = await r.json();
+      }catch(e){}
+      c.bpm = d.bpm || c.bpm || null;
+      c.genero = d.genero || c.genero || null;
+      _resolverBadges(enc, 'bpm', d.bpm, '🥁 ', 'BPM');
+      _resolverBadges(enc, 'gen', d.genero, '🎚️ ', 'Género');
+    }
+  };
+  await Promise.all(Array.from({length:8}, worker));
+}
+
+/* ---------- Render de búsqueda (filas por fuente) ---------- */
+const FUENTE_NOMBRES = {
+  youtube:"▶ YouTube", soundcloud:"☁ SoundCloud", ligaudio:"⬇ MP3 directo · Ligaudio",
+  hitplayer:"⬇ MP3 directo · HitPlayer", spotify:"♫ Spotify", deezer:"♫ Deezer"
+};
+const FUENTE_ORDEN = ["youtube","soundcloud","ligaudio","hitplayer","spotify","deezer"];
+// Nombre corto y color de cada plataforma (para los chips de opciones en la lista)
+const FUENTE_CORTO = {
+  youtube:"YouTube", soundcloud:"SoundCloud", ligaudio:"MP3 directo",
+  hitplayer:"MP3 directo", spotify:"Spotify", deezer:"Deezer"
+};
+const SRC_COLOR = {
+  youtube:"#ff5c5c", soundcloud:"#ff8a3d", ligaudio:"#6fa8ff",
+  hitplayer:"#27d3c4", spotify:"#1ed760", deezer:"#c98bff"
+};
+
+function render(data){
+  closeModal();
+  if(!data.exito || !data.canciones || !data.canciones.length){
+    playlist.innerHTML = '<div class="hero">😕 ' + esc(data.mensaje || "Sin resultados") + '</div>';
+    return;
+  }
+  window.__songs = data.canciones;
+  let html = "";
+
+  if(data.seed){
+    const s = data.seed;
+    const tono = s.tono ? ` · 🎹 ${esc(s.tono)} (${esc(s.camelot)})` : "";
+    html += `<div class="seed-banner">🎵 Parecidas a <b>${esc(s.titulo)}</b> — ${esc(s.artista)}`
+          + `<span class="seed-info">${s.bpm?('🥁 '+s.bpm+' BPM'):''}${tono}</span></div>`;
+    html += '<p class="count">'+data.canciones.length+' canciones parecidas</p>';
+    html += '<div class="grid">';
+    data.canciones.forEach((c,i) => html += poster(c,i));
+    html += '</div>';
+    playlist.innerHTML = html;
+    cargarMeta();
+    return;
+  }
+
+  // Búsqueda normal: agrupar por fuente en filas tipo Netflix
+  html += `<div class="results-head"><h2 class="results-title">Resultados</h2>`
+        + `<span class="count">${data.canciones.length} canciones de varias fuentes</span></div>`;
+  const grupos = {};
+  data.canciones.forEach((c,i) => {
+    const f = (c.fuente||"otros").toLowerCase();
+    (grupos[f] = grupos[f] || []).push(i);
+  });
+  const presentes = Object.keys(grupos).sort((a,b) => {
+    const ia = FUENTE_ORDEN.indexOf(a), ib = FUENTE_ORDEN.indexOf(b);
+    return (ia<0?99:ia) - (ib<0?99:ib);
+  });
+  presentes.forEach(f => {
+    html += `<section class="row"><h3 class="row-title" style="--src:${SRC_COLOR[f]||'#9a9aac'}">${FUENTE_NOMBRES[f] || ("🎵 "+f)}`
+          + `<span class="pill">${grupos[f].length}</span></h3><div class="row-scroll">`;
+    grupos[f].forEach(i => html += poster(data.canciones[i], i));
+    html += `</div></section>`;
+  });
+  playlist.innerHTML = html;
+  attachWheel();
+  cargarMeta();
+}
+
+function poster(c,i){
+  const thumb = c.thumbnail
+    ? `<img src="${esc(c.thumbnail)}" loading="lazy" onerror="this.style.display='none'">`
+    : '';
+  const delay = Math.min(i,14)*45;
+  const cover = c.thumbnail ? `;--cover:url('${esc(c.thumbnail)}')` : '';
+  return `
+  <article class="poster fade-up" id="card-${i}" style="animation-delay:${delay}ms${cover}">
+    <div class="pthumb" onclick="play(${i})">
+      ${thumb}<div class="pgrad"></div>
+      <button class="pplay">▶</button>
+      <span class="pdur">${fmtDur(c.duracion)}</span>
+    </div>
+    <div class="pbody">
+      <div class="ptitle" title="${esc(c.titulo)}">${esc(c.titulo)}</div>
+      <div class="partist">${esc(c.artista)}</div>
+      <div class="pbadges">${badgesHTML(c)}</div>
+      <div class="pactions">
+        <button class="act-play" onclick="play(${i})" title="Reproducir">▶</button>
+        <button class="dl act-dl" onclick="descargar(${i},this)" title="Descargar">⬇</button>
+        <button class="act-spek" onclick="verSpek(${i})" title="Ver espectrograma (Spek): mirá dónde corta el audio">📊</button>
+        <button class="act-sim" onclick="parecidas(${i},this)" title="Temas parecidos — 3 opciones por tema para comparar el Spek y elegir la mejor">🎵</button>
+      </div>
+    </div>
+  </article>`;
+}
+
+// Scroll horizontal con la rueda del mouse en las filas Netflix
+function attachWheel(){
+  document.querySelectorAll(".row-scroll").forEach(el => {
+    if(el.__wheel) return;
+    el.__wheel = true;
+    el.addEventListener("wheel", e => {
+      // Solo mover la fila en horizontal si el gesto YA es horizontal (trackpad) o
+      // se mantiene Shift. La rueda vertical normal debe scrollear la PÁGINA, no la fila
+      // (si no, como las filas ocupan todo el ancho, la página no baja).
+      if(e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)){
+        el.scrollLeft += (e.deltaX || e.deltaY);
+        e.preventDefault();
+      }
+    }, {passive:false});
+  });
+}
+
+/* ---------- Reproductor en modal ---------- */
+function playerMarkup(c){
+  if(c.fuente === "youtube" && c.video_id)
+    return `<iframe class="player" data-yt="1" src="https://www.youtube.com/embed/${c.video_id}?autoplay=1&enablejsapi=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+  if(c.fuente === "spotify" && c.id)
+    return `<iframe class="player" style="aspect-ratio:auto;height:152px" src="https://open.spotify.com/embed/track/${c.id}"></iframe>`;
+  if(c.fuente === "soundcloud" && c.video_id){
+    const tk = encodeURIComponent("https://api.soundcloud.com/tracks/"+c.video_id);
+    return `<iframe class="player" data-sc="1" style="aspect-ratio:auto;height:166px" src="https://w.soundcloud.com/player/?url=${tk}&auto_play=true&hide_related=true&color=%23ff5500"></iframe>`;
+  }
+  if(c.stream_url)  return `<audio controls autoplay src="${esc(c.stream_url)}"></audio>`;
+  if(c.preview_url) return `<audio controls autoplay src="${esc(c.preview_url)}"></audio>`;
+  return `<p>▶ <a href="${esc(c.url)}" target="_blank">Abrir en ${esc(c.fuente)}</a></p>`;
+}
+function play(i){
+  const c = window.__songs[i];
+  if(!c) return;
+  cancelPreviewSoon(); stopPreview();   // que no quede sonando el preview por detrás
+  const modal = document.getElementById("modal");
+  document.getElementById("modalTitle").innerHTML = `${esc(c.titulo)} <span style="color:var(--muted)">— ${esc(c.artista)}</span>`;
+  const body = document.getElementById("modalBody");
+  body.innerHTML = playerMarkup(c);
+  modal.classList.add("open");
+
+  const audio = body.querySelector('audio');
+  if(audio){ audio.volume = 0.5; }
+  const yt = body.querySelector('iframe[data-yt]');
+  if(yt){ yt.addEventListener('load', () => { try{ yt.contentWindow.postMessage('{"event":"command","func":"setVolume","args":[50]}','*'); }catch(e){} }); }
+  const sc = body.querySelector('iframe[data-sc]');
+  if(sc){ sc.addEventListener('load', () => { try{ sc.contentWindow.postMessage(JSON.stringify({method:"setVolume",value:50}),'*'); }catch(e){} }); }
+}
+function closeModal(){
+  const modal = document.getElementById("modal");
+  modal.classList.remove("open");
+  document.getElementById("modalBody").innerHTML = "";  // frena el audio/iframe
+}
+
+/* ---------- Mini-Spek: espectrograma del audio real ---------- */
+function verSpek(i){
+  const c = window.__songs[i];
+  if(!c) return;
+  cancelPreviewSoon(); stopPreview();
+  document.getElementById("modalTitle").innerHTML = `📊 Spek — ${esc(c.titulo)} <span style="color:var(--muted)">— ${esc(c.artista)}</span>`;
+  const body = document.getElementById("modalBody");
+  const q = `titulo=${encodeURIComponent(c.titulo)}&artista=${encodeURIComponent(c.artista||'')}`
+          + `&fuente=${encodeURIComponent(c.fuente||'')}&url=${encodeURIComponent(c.url||'')}`;
+  body.innerHTML = `
+    <div class="spek-load"><span class="spinner"></span> Analizando el audio real… (puede tardar unos segundos)</div>
+    <img class="spek-img" style="display:none" src="/api/spectro?${q}"
+         onload="this.style.display='block';this.parentNode.querySelector('.spek-load').style.display='none'"
+         onerror="const l=this.parentNode.querySelector('.spek-load'); if(l) l.innerHTML='⚠️ No pude generar el espectrograma de este tema.';">
+    <div class="spek-scale"><span>↑ agudos (≈20 kHz)</span><span>graves/medios ↓</span></div>
+    <p class="spek-help">El eje vertical es la frecuencia. Fijate <b>hasta qué altura llega el color</b>:
+      si la energía <b>corta abajo de ~16 kHz</b> es un MP3 pobre o un rip de YouTube;
+      si llega <b>limpio y parejo hasta ~19-20 kHz</b>, es buena calidad para tocar.</p>`;
+  document.getElementById("modal").classList.add("open");
+}
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeModal(); });
+
+/* ---------- Preview al pasar el mouse (estilo Netflix) ---------- */
+const PREVIEW_DELAY = 450;          // ms de espera antes de arrancar (evita disparos al pasar de largo)
+let previewEnabled = true;
+let previewTimer = null;
+let hoverCard = null;
+
+function idxOf(el){ const m = (el.id||"").match(/-(\d+)$/); return m ? parseInt(m[1]) : -1; }
+
+function startPreviewSoon(i){
+  if(!previewEnabled || i < 0) return;
+  if(document.getElementById("modal").classList.contains("open")) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => startPreview(i), PREVIEW_DELAY);
+}
+function cancelPreviewSoon(){ clearTimeout(previewTimer); }
+
+// Construye y arranca la capa de preview de UNA canción concreta sobre un thumbnail.
+// Devuelve true si logró reproducir algo. No toca window.__previewIdx (lo hace quien llama).
+function _renderPreview(c, thumb){
+  if(!c || !thumb) return false;
+  stopPreview();
+
+  let html = "", tipo = "audio";
+  if(c.fuente === "youtube" && c.video_id){
+    tipo = "iframe";
+    html = `<iframe data-yt="1" src="https://www.youtube.com/embed/${c.video_id}?autoplay=1&controls=0&modestbranding=1&rel=0&enablejsapi=1" allow="autoplay"></iframe>`;
+  } else if(c.fuente === "soundcloud" && c.video_id){
+    tipo = "iframe";
+    const tk = encodeURIComponent("https://api.soundcloud.com/tracks/"+c.video_id);
+    html = `<iframe data-sc="1" src="https://w.soundcloud.com/player/?url=${tk}&auto_play=true&visual=false&hide_related=true&buying=false&sharing=false&download=false&show_comments=false" allow="autoplay"></iframe>`;
+  } else if(c.stream_url){
+    html = `<audio autoplay src="${esc(c.stream_url)}"></audio>`;
+  } else if(c.preview_url){
+    html = `<audio autoplay src="${esc(c.preview_url)}"></audio>`;
+  } else {
+    return false;  // Spotify / sin audio reproducible: solo queda el zoom
+  }
+
+  const layer = document.createElement("div");
+  layer.className = "preview-layer " + tipo;
+  layer.innerHTML = `<span class="preview-badge"><span class="pulse"></span>SONANDO</span>` + html;
+  thumb.appendChild(layer);
+
+  const audio = layer.querySelector("audio");
+  if(audio){ audio.volume = 0.55; }
+  const yt = layer.querySelector("iframe[data-yt]");
+  if(yt){ yt.addEventListener("load", () => { try{ yt.contentWindow.postMessage('{"event":"command","func":"setVolume","args":[55]}','*'); }catch(e){} }); }
+  const sc = layer.querySelector("iframe[data-sc]");
+  if(sc){ sc.addEventListener("load", () => { try{ sc.contentWindow.postMessage(JSON.stringify({method:"setVolume",value:55}),'*'); }catch(e){} }); }
+  return true;
+}
+
+function startPreview(i){
+  if(window.__previewIdx === i) return;
+  const c = (window.__songs||[])[i];
+  const thumb = document.querySelector(`#card-${i} .pthumb, #track-${i} .tthumb`);
+  if(_renderPreview(c, thumb)) window.__previewIdx = i;
+}
+
+// Preview de una OPCIÓN concreta (chip 1/2/3) sobre el thumbnail de su fila.
+// Permite escuchar cada plataforma sin tener que seleccionarla primero.
+function previewOpcion(i, k){
+  if(!previewEnabled) return;
+  if(document.getElementById("modal").classList.contains("open")) return;
+  const g = (window.__grupos||[])[i];
+  const thumb = document.querySelector(`#track-${i} .tthumb`);
+  if(!g || !g.opciones[k] || !thumb) return;
+  const clave = `${i}:${k}`;
+  if(window.__previewIdx === clave) return;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    if(_renderPreview(g.opciones[k], thumb)){
+      window.__previewIdx = clave;
+      document.querySelectorAll(`#track-${i} .opt-chip`).forEach(b =>
+        b.classList.toggle("playing", b.dataset.opt === clave));
+    }
+  }, PREVIEW_DELAY);
+}
+function stopPreview(){
+  document.querySelectorAll(".preview-layer").forEach(l => l.remove());
+  document.querySelectorAll(".opt-chip.playing").forEach(b => b.classList.remove("playing"));
+  window.__previewIdx = null;
+}
+
+// Delegación: funciona aunque las tarjetas se generen dinámicamente
+playlist.addEventListener("mouseover", e => {
+  if(e.target.closest(".opt-chip")) return;   // los chips manejan su propio preview por opción
+  const card = e.target.closest(".poster, .track");
+  if(!card || card === hoverCard) return;
+  hoverCard = card;
+  startPreviewSoon(idxOf(card));
+});
+playlist.addEventListener("mouseout", e => {
+  const card = e.target.closest(".poster, .track");
+  if(!card) return;
+  const to = (e.relatedTarget && e.relatedTarget.closest) ? e.relatedTarget.closest(".poster, .track") : null;
+  if(to === card) return;            // sigo dentro de la misma tarjeta (p. ej. entré al iframe)
+  if(!to){ hoverCard = null; cancelPreviewSoon(); stopPreview(); }  // salí a un lugar sin tarjeta
+});
+
+const btnPreview = document.getElementById("btnPreview");
+btnPreview.addEventListener("click", () => {
+  previewEnabled = !previewEnabled;
+  btnPreview.classList.toggle("active", previewEnabled);
+  if(!previewEnabled){ cancelPreviewSoon(); stopPreview(); }
+});
+
+/* ---------- Descargar ---------- */
+async function descargar(i, el){
+  const c = window.__songs[i];
+  if(!c) return;
+  const restaurar = el.innerHTML;
+  el.dataset.state = "busy"; el.innerHTML = '<span class="spinner"></span>';
+  try{
+    const r = await fetch("/api/descargar", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ titulo:c.titulo, artista:c.artista, fuente:c.fuente, url:c.url,
+        formato: document.getElementById("formato").value })
+    });
+    const d = await r.json();
+    if(d.exito){
+      el.dataset.state="ok"; el.textContent="✓";
+      if(d.calidad){
+        const cont = document.querySelector(`#card-${i} .pbadges, #track-${i} .pbadges`);
+        if(cont && !cont.querySelector(".badge-cal")){
+          const b = document.createElement("span");
+          b.className = "badge badge-cal";
+          b.textContent = `${d.calidad.badge} ${d.calidad.calidad}`;
+          b.title = `Calidad real — ${d.calidad.metodo}`;
+          cont.appendChild(b);
+        }
+      }
+    } else { el.dataset.state="err"; el.textContent="✗"; el.title=d.mensaje||""; }
+  }catch(err){ el.dataset.state="err"; el.textContent="✗"; }
+}
+
+/* ---------- Playlist de parecidas ---------- */
+async function parecidas(i, el){
+  const c = window.__songs[i];
+  el.disabled = true; el.innerHTML = '<span class="spinner"></span>';
+  playlist.innerHTML = '<div class="hero"><span class="spinner"></span> Buscando temas parecidos y sus opciones por plataforma… puede tardar unos segundos.</div>';
+  try{
+    const fmt = document.getElementById("formato").value;
+    const q = `titulo=${encodeURIComponent(c.titulo)}&artista=${encodeURIComponent(c.artista||"")}`
+            + `&formato=${encodeURIComponent(fmt)}`;
+    const r = await fetch(`/api/parecidas_lista?${q}`);
+    const d = await r.json();
+    if(d.exito){ renderLista(d); playlist.scrollTo({top:0,behavior:"smooth"}); }
+    else { playlist.innerHTML = '<div class="hero">😕 ' + esc(d.mensaje||"No se pudo armar la playlist de parecidas.") + '</div>'; }
+  }catch(err){ playlist.innerHTML = '<div class="hero">⚠️ Error al armar la playlist de parecidas.</div>'; }
+}
+
+/* ====================================================================
+   MODO LISTA (DJ) — pegar muchas canciones, 3 opciones por track
+   ==================================================================== */
+document.getElementById("btnModoLista").addEventListener("click", abrirModoLista);
+
+function abrirModoLista(){
+  closeModal();
+  playlist.innerHTML = `
+    <div class="lista-form">
+      <h2>📋 Lista de tracks <span>(modo DJ)</span></h2>
+      <p class="count">Pegá <b>una canción por línea</b> (ej. <i>artista - título</i>). Te traigo hasta
+        <b>3 opciones</b> de cada una y elegís cuál con un clic. Quedan listas para descargar en
+        <b class="fmt-label">${fmtActual()}</b> (cambiá el formato arriba) y podés bajarlas todas juntas.</p>
+      <textarea id="listaText" placeholder="Skrillex - Bangarang
+Daft Punk - One More Time
+Fisher - Losing It
+..."></textarea>
+      <div class="row-actions">
+        <button class="btn btn-primary" id="btnBuscarLista">🔎 Buscar lista</button>
+        <button class="btn ghost" id="btnCancelarLista">Cancelar</button>
+        <span class="count" id="listaContador"></span>
+      </div>
+    </div>`;
+  const ta = document.getElementById("listaText");
+  const cont = document.getElementById("listaContador");
+  const actualizar = () => {
+    const n = ta.value.split("\n").map(s=>s.trim()).filter(Boolean).length;
+    cont.textContent = n ? `${n} tema${n!==1?"s":""} en la lista` : "";
+  };
+  ta.addEventListener("input", actualizar);
+  ta.focus();
+  document.getElementById("btnCancelarLista").onclick = irInicio;
+  document.getElementById("btnBuscarLista").onclick = buscarLista;
+}
+
+async function buscarLista(){
+  const ta = document.getElementById("listaText");
+  const lista = (ta?.value||"").trim();
+  const lineas = lista.split("\n").map(s=>s.trim()).filter(Boolean);
+  if(!lineas.length){ ta.focus(); return; }
+  const b = document.getElementById("btnBuscarLista");
+  b.disabled = true; b.innerHTML = '<span class="spinner"></span> Buscando…';
+  playlist.innerHTML = '<div class="hero"><span class="spinner"></span> Buscando '+lineas.length+' temas (hasta 3 opciones c/u)… puede tardar unos segundos.</div>';
+  try{
+    const r = await fetch("/api/buscar_lista", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ lista, formato: document.getElementById("formato").value })
+    });
+    renderLista(await r.json());
+  }catch(err){
+    playlist.innerHTML = '<div class="hero">⚠️ Error al conectar con el servidor.</div>';
+  }
+}
+
+function renderLista(data){
+  closeModal();
+  if(!data.exito || !data.grupos || !data.grupos.length){
+    playlist.innerHTML = '<div class="hero">😕 ' + esc((data && data.mensaje) || "No encontré ninguna de la lista.") + '</div>';
+    return;
+  }
+  window.__grupos = data.grupos.map(g => ({consulta:g.consulta, opciones:g.opciones, sel:0}));
+  window.__songs = window.__grupos.map(g => g.opciones[0]);
+
+  let html = "";
+  if(data.seed){
+    const s = data.seed;
+    const tono = s.tono ? ` · 🎹 ${esc(s.tono)} (${esc(s.camelot)})` : "";
+    html += `<div class="seed-banner">🎵 Parecidas a <b>${esc(s.titulo)}</b> — ${esc(s.artista)}`
+          + `<span class="seed-info">${s.bpm?('🥁 '+s.bpm+' BPM'):''}${tono}</span></div>`;
+  }
+  html += `<div class="lista-bar">
+      <span class="grow">📋 <b>${data.encontradas}/${data.total}</b> encontradas — la opción 1 es la de mejor fuente para <b class="fmt-label">${fmtActual()}</b></span>
+      <button class="btn ghost" onclick="abrirModoLista()">✏️ Editar lista</button>
+      <button class="btn btn-primary" id="btnDescargarTodas" onclick="descargarTodas(this)">⬇ Descargar todas (<span class="fmt-label">${fmtActual()}</span>)</button>
+    </div>`;
+  if(data.no_encontradas && data.no_encontradas.length){
+    html += `<div class="no-encontradas">⚠️ Sin resultado (${data.no_encontradas.length}): `
+          + data.no_encontradas.map(esc).join(" · ") + `</div>`;
+  }
+  html += `<div id="lista-tracks"></div>`;
+  playlist.innerHTML = html;
+
+  // Aparición 1 x 1 (cascada). Ajustá REVEAL_MS para la velocidad.
+  const REVEAL_MS = 90;
+  const cont = document.getElementById("lista-tracks");
+  window.__grupos.forEach((g,i) => {
+    setTimeout(() => {
+      cont.insertAdjacentHTML("beforeend", trackRow(i));
+      const el = cont.lastElementChild;
+      if(el) el.style.animationDelay = "0ms";  // que la fade arranque al insertarse
+    }, i * REVEAL_MS);
+  });
+  // Los badges (BPM/género) se cargan cuando ya están todas las filas en el DOM
+  setTimeout(cargarMeta, window.__grupos.length * REVEAL_MS + 60);
+}
+
+function trackRow(i){
+  const g = window.__grupos[i];
+  const c = g.opciones[g.sel];
+  window.__songs[i] = c;
+  const thumb = c.thumbnail
+    ? `<img src="${esc(c.thumbnail)}" loading="lazy" onerror="this.style.display='none'">`
+    : '';
+  const chips = g.opciones.map((o,k) => {
+    const f = (o.fuente||"").toLowerCase();
+    const nom = FUENTE_CORTO[f] || o.fuente || "?";
+    const dot = `<span class="opt-dot" style="background:${SRC_COLOR[f]||'#9a9aac'}"></span>`;
+    return `<button class="opt-chip${k===g.sel?' active':''}" data-opt="${i}:${k}"
+      onmouseenter="previewOpcion(${i},${k})" onmouseleave="cancelPreviewSoon()"
+      onclick="seleccionarOpcion(${i},${k})"
+      title="Opción ${k+1} · ${esc(o.fuente)} — ${esc(o.titulo)} — ${esc(o.artista)} (pasá el mouse para escucharla)">${dot}${k+1}. ${esc(nom)}</button>`;
+  }).join("");
+  const cover = c.thumbnail ? `;--cover:url('${esc(c.thumbnail)}')` : '';
+  return `
+  <div class="track" id="track-${i}" style="animation-delay:${Math.min(i,14)*40}ms${cover}">
+    <div class="tnum">${String(i+1).padStart(2,"0")}</div>
+    <div class="tthumb" onclick="play(${i})">${thumb}<button class="pplay sm">▶</button></div>
+    <div class="tmain">
+      <div class="tq" title="${esc(g.consulta)}">📋 ${esc(g.consulta)}</div>
+      <div class="ttitle" title="${esc(c.titulo)}">${esc(c.titulo)}</div>
+      <div class="tartist">${esc(c.artista)}</div>
+      <div class="pbadges">${badgesHTML(c)}</div>
+    </div>
+    <div class="topts">${chips}</div>
+    <div class="tactions">
+      <button class="act-play" onclick="play(${i})" title="Reproducir">▶</button>
+      <button class="act-spek" onclick="verSpek(${i})" title="Ver espectrograma (Spek)">📊 Spek</button>
+      <button class="dl act-dl" onclick="descargar(${i},this)" title="Descargar">⬇ <span class="fmt-label">${fmtActual()}</span></button>
+    </div>
+  </div>`;
+}
+
+function seleccionarOpcion(i, k){
+  const g = window.__grupos[i];
+  if(!g || g.sel === k) return;
+  cancelPreviewSoon(); stopPreview();
+  g.sel = k;
+  const row = document.getElementById(`track-${i}`);
+  if(row){
+    row.style.animation = "none";
+    row.outerHTML = trackRow(i);
+  }
+  cargarMeta();  // completa BPM/género de la nueva opción
+}
+
+async function descargarTodas(btn){
+  const total = (window.__songs||[]).length;
+  if(!total) return;
+  btn.disabled = true;
+  let ok = 0;
+  for(let i=0; i<total; i++){
+    const dl = document.querySelector(`#track-${i} .dl`);
+    if(!dl){ continue; }
+    if(dl.dataset.state === "ok"){ ok++; continue; }
+    btn.innerHTML = `<span class="spinner"></span> Bajando ${i+1}/${total}…`;
+    try{ await descargar(i, dl); }catch(e){}
+    if(dl.dataset.state === "ok") ok++;
+  }
+  btn.disabled = false;
+  btn.innerHTML = `✓ ${ok}/${total} descargadas`;
+}
+</script>
+</body>
+</html>
