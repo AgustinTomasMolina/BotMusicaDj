@@ -5,6 +5,8 @@
 
 # === Datos locales / generados ===
 downloads/
+ground_truth/out/        # CSVs derivados del XML de Rekordbox (rutas personales)
+*.xml                    # el export de Rekordbox no va al repo
 *.db
 *.sqlite
 *.sqlite3
