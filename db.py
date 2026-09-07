@@ -7,6 +7,7 @@ envueltas en try/except: si la DB falla, la búsqueda/descarga NO se rompe.
 """
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 logger = logging.getLogger("bot_web")
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "musiflix.db"
+# Rutas de datos configurables por entorno (para montar un volumen en Docker).
+# Por defecto = comportamiento local de siempre (la raíz del proyecto).
+DATA_DIR = Path(os.getenv("MUSIFLIX_DATA_DIR", str(BASE_DIR)))
+DOWNLOADS_DIR = Path(os.getenv("MUSIFLIX_DOWNLOADS", str(BASE_DIR / "downloads")))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "musiflix.db"
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
@@ -449,7 +455,7 @@ def marcar_descargado(pid: int, track: dict, archivo, ruta, formato=None, grade=
 def armar_m3u8(pid: int) -> dict | None:
     """Escribe un .m3u8 con los items que tienen archivo local. Devuelve el recibo."""
     try:
-        downloads = BASE_DIR / "downloads"
+        downloads = DOWNLOADS_DIR
         with SessionLocal() as s:
             p = s.get(MiPlaylist, pid)
             if not p:

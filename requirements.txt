@@ -14,6 +14,15 @@ beautifulsoup4>=4.12.0
 # Async & Background tasks
 aiohttp>=3.9.1
 
+# Cola de trabajos (worker separado) — opcional: si no hay Redis, corre local
+redis>=5.0.0
+rq>=1.16.0
+
+# Análisis de audio (BPM/tonalidad, calidad espectral) — el código ya los importa
+librosa>=0.10.2
+numpy>=1.26,<2.1        # numba (dep de librosa) aún no soporta numpy 2.1+
+mutagen>=1.47.0         # tags ID3/FLAC/MP4 al descargar
+
 # Utils
 colorama>=0.4.6
 tqdm>=4.66.1

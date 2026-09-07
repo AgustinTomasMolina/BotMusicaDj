@@ -1,0 +1,43 @@
+# Contexto de build mínimo: fuera todo lo que no necesita la imagen.
+# Secretos y datos
+.env
+.env.*
+*.db
+*.sqlite*
+*.m3u8
+downloads/
+.cache
+
+# Node / frontend (el dist se genera dentro del build, no se copia del host)
+**/node_modules
+frontend/dist
+
+# Python
+**/__pycache__
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Git / editor / OS / Claude
+.git
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/
+.mcp.json
+
+# Docs y material que no corre en runtime
+claude/
+web/legacy*
+*.md
+!requirements.txt
+
+# Los propios archivos de docker/infra
+Dockerfile
+.dockerignore
+docker-compose*.yml
+recompilar-frontend.bat
+*.bat

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { songKey, metaKey } from './utils'
-import { buscar, buscarLista, parecidasLista, descargar, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva } from './api'
+import { buscar, buscarLista, parecidasLista, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
@@ -116,11 +116,16 @@ export default function App() {
     try {
       // Mandamos los metadatos que ya tenemos (para taggear el archivo: BPM/key/género/carátula).
       const m = metaMap[metaKey(c)] || {}
-      const d = await descargar({
+      const enviado = await descargar({
         titulo: c.titulo, artista: c.artista, fuente: c.fuente, url: c.url, formato,
         bpm: c.bpm || m.bpm, genero: c.genero || m.genero, camelot: c.camelot,
         thumbnail: c.thumbnail, duracion: c.duracion,
       })
+      // Con worker: la descarga se encola → seguimos el job hasta que termina.
+      // Sin worker (local): la respuesta ya es el resultado final.
+      const d = (enviado && enviado.encolado && enviado.job_id)
+        ? await esperarJob(enviado.job_id)
+        : enviado
       if (d.exito) {
         setDl((p) => ({ ...p, [key]: { state: 'ok', calidad: d.calidad, title: '' } }))
         const g = d.calidad?.grade

@@ -41,6 +41,24 @@ export async function descargar(payload) {
   return json(r)
 }
 
+// Estado de un trabajo encolado en el worker.
+export const estadoJob = (jobId) => fetch(`/api/jobs/${jobId}`).then(json)
+
+// Poolea un job hasta que termina. Devuelve el resultado (mismo shape que la
+// descarga local: {exito, archivo, calidad} o {exito:false, mensaje}).
+export async function esperarJob(jobId, { intervalo = 1500, timeout = 180000 } = {}) {
+  const fin = Date.now() + timeout
+  while (Date.now() < fin) {
+    let s
+    try { s = await estadoJob(jobId) } catch { return { exito: false, mensaje: 'Se perdió la conexión con el trabajo' } }
+    if (s.estado === 'finished') return s.resultado || { exito: false, mensaje: 'El trabajo no devolvió resultado' }
+    if (s.estado === 'failed') return { exito: false, mensaje: s.error || 'El trabajo falló' }
+    if (s.estado === 'unknown') return { exito: false, mensaje: 'No encontré el trabajo' }
+    await new Promise((r) => setTimeout(r, intervalo))
+  }
+  return { exito: false, mensaje: 'La descarga tardó demasiado' }
+}
+
 export const spectroUrl = (c) =>
   `/api/spectro?titulo=${encodeURIComponent(c.titulo)}&artista=${encodeURIComponent(c.artista || '')}` +
   `&fuente=${encodeURIComponent(c.fuente || '')}&url=${encodeURIComponent(c.url || '')}`

@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import db
+import jobs
 from search_agent import SearchAgent
 from recommendation_agent import RecommendationAgent
 from scrapers import FUENTES_SCRAPER
@@ -42,8 +43,8 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"               # frontend viejo (vanilla), queda en /legacy
 DIST_DIR = BASE_DIR / "frontend" / "dist"  # build de React (Vite), se sirve en /
-DOWNLOADS_DIR = BASE_DIR / "downloads"
-DOWNLOADS_DIR.mkdir(exist_ok=True)
+DOWNLOADS_DIR = Path(os.getenv("MUSIFLIX_DOWNLOADS", str(BASE_DIR / "downloads")))
+DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
@@ -424,10 +425,14 @@ async def buscar(q: str = "", limite: int = 24, formato: str = "mp3", genero: st
 
 @app.get("/api/meta")
 async def meta(titulo: str, artista: str = ""):
-    """BPM + género de un tema (Deezer + fallback librosa). Cacheado. Carga lazy."""
+    """BPM + género de un tema (Deezer + fallback librosa). Cacheado. Carga lazy.
+    Con cola: el cómputo corre en el worker; el endpoint espera y devuelve igual."""
+    if jobs.queue_disponible():
+        import tasks
+        job = jobs.encolar(tasks.meta_job, titulo, artista, timeout=120)
+        return await asyncio.to_thread(jobs.esperar_resultado, job, 90)
     import similares
-    info = await asyncio.to_thread(similares.meta_de, titulo, artista, True)
-    return info
+    return await asyncio.to_thread(similares.meta_de, titulo, artista, True)
 
 
 @app.get("/api/parecidas")
@@ -725,32 +730,32 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
                              cal.get("grade"), cal.get("color"))
 
 
-@app.post("/api/descargar")
-async def descargar(payload: dict):
-    """Descarga una canción. Si es de Spotify, la busca en YouTube primero."""
+def procesar_descarga(payload: dict) -> dict:
+    """TODO el flujo de descarga, SÍNCRONO (sin async): bajar → calidad → tags →
+    historial/crate. Lo llaman el worker (vía tasks.descargar_job) y el server en
+    modo local. Si es de Spotify/Deezer, busca el equivalente en YouTube."""
     titulo = payload.get("titulo") or "cancion"
     artista = payload.get("artista") or ""
     fuente = payload.get("fuente") or ""
     url = payload.get("url") or ""
     formato = (payload.get("formato") or "mp3").lower()
 
-    logger.info(f"📥 Pedido de descarga: {titulo} — {artista} [{fuente}] como {formato.upper()}")
+    logger.info(f"📥 Descargando: {titulo} — {artista} [{fuente}] como {formato.upper()}")
 
     # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg)
     if fuente in ("ligaudio", "hitplayer") and url:
         try:
-            res = await asyncio.to_thread(_descargar_directo, url, f"{titulo} - {artista}")
+            res = _descargar_directo(url, f"{titulo} - {artista}")
         except Exception as e:
             logger.error(f"❌ Error en descarga directa: {e}")
             return {"exito": False, "mensaje": str(e)}
         if res["ok"]:
             logger.info(f"✅ Descargado: {res['archivo']}")
-            # MP3 de scraper: origen desconocido → análisis espectral
-            calidad = await asyncio.to_thread(_calidad_espectral, DOWNLOADS_DIR / res["archivo"])
+            calidad = _calidad_espectral(DOWNLOADS_DIR / res["archivo"])
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
-            await asyncio.to_thread(_taggear_descarga, res["archivo"], titulo, artista, payload, calidad)
-            await asyncio.to_thread(_hist_descarga, res, titulo, artista, fuente, url, formato, payload, calidad)
+            _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
+            _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad)
             return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                     "archivo": res["archivo"], "calidad": calidad}
         logger.error("❌ La descarga directa no generó archivo.")
@@ -760,14 +765,14 @@ async def descargar(payload: dict):
     if fuente in ("spotify", "deezer") or not url:
         consulta = f"{titulo} {artista}".strip()
         logger.info(f"🔁 Fuente sin audio descargable, buscando en YouTube: '{consulta}'")
-        yt = await asyncio.to_thread(search_agent.buscar_en_youtube, consulta, 1)
+        yt = search_agent.buscar_en_youtube(consulta, 1)
         if not yt:
             logger.error("❌ No encontré una versión descargable.")
             return {"exito": False, "mensaje": "No se pudo encontrar audio descargable."}
         url = yt[0]["url"]
 
     try:
-        res = await asyncio.to_thread(_descargar_sync, url, f"{titulo} - {artista}", formato)
+        res = _descargar_sync(url, f"{titulo} - {artista}", formato)
     except Exception as e:
         logger.error(f"❌ Error en descarga: {e}")
         msg = str(e)
@@ -781,12 +786,28 @@ async def descargar(payload: dict):
         if calidad:
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
-        await asyncio.to_thread(_taggear_descarga, res["archivo"], titulo, artista, payload, calidad)
-        await asyncio.to_thread(_hist_descarga, res, titulo, artista, fuente, url, formato, payload, calidad)
+        _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
+        _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad)
         return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                 "archivo": res["archivo"], "calidad": calidad}
     logger.error("❌ La descarga no generó archivo.")
     return {"exito": False, "mensaje": "La descarga falló."}
+
+
+@app.post("/api/descargar")
+async def descargar(payload: dict):
+    """Encola la descarga en el worker (si hay Redis) o la corre local (fallback)."""
+    if jobs.queue_disponible():
+        import tasks
+        job = jobs.encolar(tasks.descargar_job, payload)
+        return {"encolado": True, "job_id": job.id}
+    return await asyncio.to_thread(procesar_descarga, payload)
+
+
+@app.get("/api/jobs/{job_id}")
+async def job_estado(job_id: str):
+    """Estado de un trabajo encolado: queued | started | finished | failed."""
+    return await asyncio.to_thread(jobs.estado_job, job_id)
 
 
 _SPEK_CACHE: dict = {}
@@ -885,7 +906,12 @@ async def spectro(titulo: str, artista: str = "", fuente: str = "", url: str = "
     png = _SPEK_CACHE.get(clave)
     if png is None:
         logger.info(f"📊 Generando espectrograma (Spek) de: {titulo} — {artista}")
-        png = await asyncio.to_thread(_spectrograma, titulo, artista, fuente, url)
+        if jobs.queue_disponible():
+            import tasks
+            job = jobs.encolar(tasks.spectro_job, titulo, artista, fuente, url, timeout=120)
+            png = await asyncio.to_thread(jobs.esperar_resultado, job, 90)
+        else:
+            png = await asyncio.to_thread(_spectrograma, titulo, artista, fuente, url)
         if png:
             _SPEK_CACHE[clave] = png
     if not png:
@@ -952,7 +978,12 @@ async def calidad(titulo: str, artista: str = "", fuente: str = "", url: str = "
     clave = f"{fuente}|{url}|{titulo}|{artista}"
     cal = _CALIDAD_CACHE.get(clave)
     if cal is None:
-        cal = await asyncio.to_thread(_calidad_preview, titulo, artista, fuente, url)
+        if jobs.queue_disponible():
+            import tasks
+            job = jobs.encolar(tasks.calidad_job, titulo, artista, fuente, url, timeout=120)
+            cal = await asyncio.to_thread(jobs.esperar_resultado, job, 90)
+        else:
+            cal = await asyncio.to_thread(_calidad_preview, titulo, artista, fuente, url)
         if cal:
             _CALIDAD_CACHE[clave] = cal
     if not cal:

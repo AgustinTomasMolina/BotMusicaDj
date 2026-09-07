@@ -1,0 +1,92 @@
+# MusiFlix — stack local con worker + cola.
+#  web    → API/UI (encola el trabajo pesado)
+#  worker → procesa la cola (descargas, análisis, espectrogramas)
+#  cache  → Redis (la cola)
+# (Postgres queda para F4 / web pública — placeholder comentado al final.)
+name: musiflix
+
+services:
+  web:
+    build:
+      context: .
+    image: musiflix:local
+    ports:
+      - "8000:8000"          # API REST + WebSocket /ws/console + front
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MUSIFLIX_DATA_DIR: /data
+      MUSIFLIX_DOWNLOADS: /data/downloads
+      REDIS_URL: redis://cache:6379/0
+    volumes:
+      - musiflix-data:/data
+    depends_on:
+      cache:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/',timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    restart: unless-stopped
+    networks: [musiflix]
+
+  worker:
+    build:
+      context: .
+    image: musiflix:local     # misma imagen que web, distinto comando
+    command: ["python", "-m", "worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MUSIFLIX_DATA_DIR: /data
+      MUSIFLIX_DOWNLOADS: /data/downloads
+      REDIS_URL: redis://cache:6379/0
+    volumes:
+      - musiflix-data:/data   # comparte descargas + DB con web
+    depends_on:
+      cache:
+        condition: service_healthy
+    healthcheck:
+      disable: true           # el worker no sirve HTTP; no aplica el check de la imagen
+    restart: unless-stopped
+    networks: [musiflix]
+
+  cache:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks: [musiflix]
+
+  # db:  # Postgres (+pgvector) — solo si el proyecto va a web pública (F4)
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_USER: musiflix
+  #     POSTGRES_PASSWORD: musiflix
+  #     POSTGRES_DB: musiflix
+  #   volumes: [pgdata:/var/lib/postgresql/data]
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U musiflix -d musiflix"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks: [musiflix]
+
+volumes:
+  musiflix-data:
+  redisdata:
+  # pgdata:
+
+networks:
+  musiflix:
+    driver: bridge
