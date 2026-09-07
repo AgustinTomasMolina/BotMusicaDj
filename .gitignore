@@ -1,0 +1,91 @@
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# Builds y distribución
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Tests y cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Linters / type checkers
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+
+# ---- Datos del proyecto -----------------------------------------------------
+# La caché de análisis se regenera con `djradio scan`, no va al repo
+*.sqlite
+*.sqlite3
+*.db
+djradio.sqlite*
+
+# Modelos y embeddings descargados (CLAP, Discogs-EffNet): pesan cientos de MB
+models/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.npy
+*.npz
+
+# Playlists exportadas
+*.m3u
+*.m3u8
+!tests/**/*.m3u8
+
+# ---- Audio ------------------------------------------------------------------
+# Nunca commitear música: peso y licencias.
+# El audio sintético de los tests se genera en runtime, no se versiona.
+*.mp3
+*.wav
+*.flac
+*.aiff
+*.aif
+*.m4a
+*.ogg
+*.opus
+*.wma
+audio/
+tracks/
+crate/
+library/
+
+# ---- Entorno y secretos -----------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+secrets.toml
+
+# ---- Editores y sistema operativo -------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Notebooks --------------------------------------------------------------
+.ipynb_checkpoints/
