@@ -14,10 +14,12 @@ TOLERANCIA_BPM = 0.08   # ±8% (spec §4: 0% de transiciones fuera de esta banda
 
 
 def _dist_bpm_relativa(a: float, b: float) -> float:
-    """Distancia de BPM relativa, tolerante a medio/doble tiempo (75 ↔ 150)."""
-    if not a or not b:
+    """Distancia de BPM relativa, tolerante a medio/doble tiempo (75 ↔ 150).
+    Divide por max(a, b) para que sea SIMÉTRICA: 'fuera de ±8%' no puede depender de
+    cuál track va primero (auditoría Fable I3)."""
+    if not (a > 0 and b > 0):
         return 1.0
-    return min(abs(a - b), abs(a - 2 * b), abs(a - b / 2)) / a
+    return min(abs(a - b), abs(a - 2 * b), abs(a - b / 2)) / max(a, b)
 
 
 def bpm_score(a: float, b: float, tol: float = TOLERANCIA_BPM) -> float:

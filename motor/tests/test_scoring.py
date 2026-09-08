@@ -14,6 +14,15 @@ def test_bpm_es_compuerta():
     assert bpm_score(150, 75) == 1.0                # half-time se considera mezclable
 
 
+def test_bpm_score_es_simetrico():
+    # 'Fuera de ±8%' no puede depender de cuál track va primero (Fable I3).
+    assert bpm_score(150, 160) == bpm_score(160, 150)
+    assert bpm_score(150, 138) == bpm_score(138, 150)
+    # NaN / BPM inválido no evade la compuerta.
+    assert bpm_score(float("nan"), 150) == 0.0
+    assert bpm_score(0, 150) == 0.0
+
+
 def test_mezclabilidad():
     assert mezclabilidad(150, 150, "8A", "8A") == 1.0        # perfecto
     assert mezclabilidad(150, 200, "8A", "8A") == 0.0        # BPM fuera → 0 aunque la key sea perfecta
@@ -30,6 +39,7 @@ def test_scoring_es_multiplicativo():
 
 if __name__ == "__main__":
     test_bpm_es_compuerta()
+    test_bpm_score_es_simetrico()
     test_mezclabilidad()
     test_scoring_es_multiplicativo()
     print("OK — tests de scoring pasaron")

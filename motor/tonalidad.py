@@ -25,9 +25,20 @@ _CAMELOT = {
 }
 
 
+# Se analiza la ventana central: la tonalidad de un track de techno no cambia, y HPSS+CQT
+# sobre el tema completo rompe el umbral de tiempo (§4 ≤10 s/track: 41 s medidos → 4.7 s
+# con 90 s, mismo resultado — auditoría Fable C1).
+_VENTANA_S = 90
+
+
 def tono(y: np.ndarray, sr: int, hpss: bool = True) -> dict:
     """Devuelve {nota, modo, camelot, confianza}. `confianza` = correlación del mejor
-    perfil (0..1); baja confianza → mostrar atenuado o con '?' en la UI (spec §6)."""
+    perfil (0..1); baja confianza → mostrar atenuado o con '?' en la UI (spec §6).
+    Sin señal armónica (silencio) devuelve nota/modo None y camelot '?'."""
+    win = int(_VENTANA_S * sr)
+    if len(y) > win:
+        mid = len(y) // 2
+        y = y[mid - win // 2: mid + win // 2]
     if hpss:
         y = librosa.effects.harmonic(y)  # separa lo armónico del percusivo (kick)
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr).mean(axis=1)
@@ -36,8 +47,11 @@ def tono(y: np.ndarray, sr: int, hpss: bool = True) -> dict:
     for i in range(12):
         for perfil, modo in ((_MAJ, "maj"), (_MIN, "min")):
             corr = float(np.corrcoef(np.roll(perfil, i), chroma)[0, 1])
-            if mejor is None or corr > mejor[0]:
+            if np.isfinite(corr) and (mejor is None or corr > mejor[0]):
                 mejor = (corr, NOTAS[i], modo)
+
+    if mejor is None:  # chroma constante (silencio) → corrcoef NaN para todo
+        return {"nota": None, "modo": None, "camelot": "?", "confianza": 0.0}
 
     corr, nota, modo = mejor
     return {"nota": nota, "modo": modo,
@@ -49,15 +63,18 @@ def _parse_camelot(c: str):
     if not c or c == "?":
         return None
     try:
-        return int(c[:-1]), c[-1].upper()   # (número 1..12, lado 'A'/'B')
+        n, lado = int(c[:-1]), c[-1].upper()   # (número 1..12, lado 'A'/'B')
     except (ValueError, IndexError):
         return None
+    if not (1 <= n <= 12 and lado in ("A", "B")):
+        return None                            # "8C", "13A", "0A" → basura, no key
+    return n, lado
 
 
 def compat_camelot(a: str, b: str) -> float:
     """Compatibilidad armónica de dos keys Camelot, 0..1.
     misma = 1.0 · vecina (±1 mismo lado) o relativo (mismo n°, otro lado) = 0.8 ·
-    ±2 = 0.5 · resto = 0.2 (piso: un choque de key se tapa con EQ, NO anula la mezcla —
+    ±2 mismo lado = 0.5 · resto = 0.2 (piso: un choque de key se tapa con EQ, NO anula la mezcla —
     por eso la key nunca es compuerta; la compuerta dura es el BPM). Key desconocida = 0.5
     (neutro: no penalizamos por falta de dato — 'un dato que miente es peor que ausente')."""
     pa, pb = _parse_camelot(a), _parse_camelot(b)
@@ -72,6 +89,6 @@ def compat_camelot(a: str, b: str) -> float:
         return 0.8                                # vecina, mismo lado
     if na == nb and la != lb:
         return 0.8                                # relativo mayor/menor
-    if dist == 2:
-        return 0.5
-    return 0.2
+    if la == lb and dist == 2:
+        return 0.5                                # ±2 en el mismo lado
+    return 0.2                                    # resto (incluye cruces de lado y diagonal) → piso
