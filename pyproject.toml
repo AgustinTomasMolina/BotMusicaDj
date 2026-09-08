@@ -18,14 +18,11 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
+# Dependencias del MOTOR únicamente (motor/, benchmark/, ground_truth/).
+# Las del bot MusiFlix (fastapi, yt-dlp, spotipy, ...) viven en requirements.txt.
 dependencies = [
-    "librosa>=0.10.1",      # análisis de audio: onsets, chroma, HPSS
-    "numpy>=1.26",
-    "scipy>=1.11",
-    "soundfile>=0.12",      # I/O de audio (wav/flac); mp3 vía ffmpeg
-    "mutagen>=1.47",        # lectura de tags (artista, título, álbum)
-    "typer>=0.12",          # CLI
-    "rich>=13.7",           # tablas y salida en consola
+    "librosa>=0.10.2",
+    "numpy>=1.26,<2.1",     # numba (dep de librosa) aún no soporta numpy 2.1+
 ]
 
 [project.optional-dependencies]
@@ -34,40 +31,32 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
 ]
-# Embeddings de producción — pesados, se instalan aparte:
-#   pip install -e ".[ml]"
-ml = [
-    "torch>=2.2",
-    "laion-clap>=1.1.6",
-]
-
-[project.scripts]
-djradio = "djradio.cli:app"
 
 [project.urls]
 Repository = "https://github.com/AgustinTomasMolina/BotMusicaDj"
 
+# Layout plano: los paquetes del motor están en la raíz del repo, no en src/.
 [tool.hatch.build.targets.wheel]
-packages = ["src/djradio"]
+packages = ["motor", "benchmark", "ground_truth"]
 
 # ---------------------------------------------------------------------------
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["motor", "benchmark", "ground_truth"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]  # el formatter ya se encarga del largo de línea
 
 [tool.ruff.lint.isort]
-known-first-party = ["djradio"]
+known-first-party = ["motor", "benchmark", "ground_truth"]
 
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["motor/tests"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: tests que analizan audio real (se saltean con -m 'not slow')",
