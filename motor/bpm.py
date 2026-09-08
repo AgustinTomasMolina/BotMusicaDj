@@ -48,5 +48,50 @@ def bpm_refinado(y: np.ndarray, sr: int, hop: int = HOP, hop_ac: int = HOP_AC) -
     denom = a - 2 * b + c
     offset = 0.5 * (a - c) / denom if denom < 0 else 0.0
     lag_ref = lag + float(np.clip(offset, -1.0, 1.0))
+    bpm_ref = 60.0 / (lag_ref * hop_ac / sr)
 
-    return 60.0 / (lag_ref * hop_ac / sr)
+    # Resolver el NIVEL MÉTRICO por evidencia (arregla la confusión de tresillo, ratio 2/3:
+    # a un tema de 170 BPM beat_track a veces le pega 113 = 170×2/3). Se elige el múltiplo
+    # cuyo "peine" de autocorrelación (el período y sus múltiplos) tiene más soporte: el
+    # tempo real alinea con la energía del beat y del compás; el 2/3 falso no. NO es ampliar
+    # la tolerancia — un choque de tresillo en la mezcla es real; acá se corrige la detección.
+    return _resolver_metrica(ac, lag_ref, bpm_ref)
+
+
+# Niveles métricos a considerar. Medido sobre el ground truth real: TODOS los fallos de
+# beat_track eran del tipo "lento" (detecta 2/3 del tempo real, ej. 170→113 por el tresillo).
+# Por eso el único candidato es ×3/2 (acelerar). Incluir 2/3, 4/3 o la octava rompía tracks
+# ya correctos sin arreglar ninguno nuevo (la octava, además, la tolera la métrica §4).
+_MULTIPLOS = (1.0, 3 / 2)
+
+# El ×3/2 solo se aplica si su evidencia supera a la del tempo detectado por este margen
+# (evita flips por ruido de la autocorrelación en tracks que ya estaban bien).
+_MARGEN = 1.03
+
+
+def _peine(ac: np.ndarray, lag: float, k: int = 4) -> float:
+    """Suma la autocorrelación en `lag` y sus primeros `k` múltiplos (energía del beat
+    y del compás). Mide cuánta evidencia hay de que ESE período sea el real."""
+    s = 0.0
+    for m in range(1, k + 1):
+        idx = int(round(m * lag))
+        if idx < len(ac):
+            s += max(float(ac[idx]), 0.0)
+    return s
+
+
+def _resolver_metrica(ac: np.ndarray, lag_ref: float, bpm_ref: float,
+                      margen: float = _MARGEN) -> float:
+    """Devuelve bpm_ref reinterpretado en el nivel métrico con más soporte de
+    autocorrelación (dentro de un rango de baile). Solo overridea el tempo detectado si
+    otro nivel lo supera por `margen` — así una ventaja marginal por ruido no lo mueve."""
+    base = _peine(ac, lag_ref)
+    mejor_bpm, mejor_score = bpm_ref, base
+    for mult in _MULTIPLOS[1:]:
+        bpm_c = bpm_ref * mult
+        if not (60.0 <= bpm_c <= 210.0):     # fuera de rango de baile → descartar
+            continue
+        score = _peine(ac, lag_ref / mult)
+        if score > mejor_score and score > base * margen:
+            mejor_bpm, mejor_score = bpm_c, score
+    return mejor_bpm
