@@ -1,0 +1,1 @@
+"""Tests del ground truth."""

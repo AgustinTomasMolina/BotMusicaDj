@@ -56,7 +56,7 @@ known-first-party = ["motor", "benchmark", "ground_truth"]
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-testpaths = ["motor/tests", "benchmark/tests"]
+testpaths = ["motor/tests", "benchmark/tests", "ground_truth/tests"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: tests que analizan audio real (se saltean con -m 'not slow')",

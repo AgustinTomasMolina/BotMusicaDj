@@ -26,7 +26,7 @@ import numpy as np
 from benchmark.clasificacion import OCTAVA, TRESILLO, clasificar, resumen
 from benchmark.umbrales import evaluar
 from ground_truth.rekordbox import parsear
-from ground_truth.resolver import construir_indice, resolver
+from ground_truth.resolver import AMBIGUO, NO_ENCONTRADO, construir_indice, resolver
 from motor.bpm import bpm_refinado
 from motor.tonalidad import compat_camelot, tono
 
@@ -100,13 +100,21 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
     indice = construir_indice(raices)
 
     # Solo tracks con audio resoluble y con al menos BPM o Camelot para comparar.
+    # Los ambiguos (varios archivos con el mismo nombre) NO entran: resolver a uno al azar
+    # haría que el motor analice otro audio y el fallo se vería como error de algoritmo.
     candidatos = []
+    ambiguos: list[tuple[str, tuple[str, ...]]] = []
+    no_encontrados = 0
     for t in tracks:
         if t["bpm"] <= 0 and not t["camelot"]:
             continue
-        real = resolver(t["location"], raices, indice)
-        if real:
-            candidatos.append((t, real))
+        r = resolver(t["location"], raices, indice)
+        if r.estado == AMBIGUO:
+            ambiguos.append((Path(t["location"]).name, r.candidatos))
+        elif r.estado == NO_ENCONTRADO:
+            no_encontrados += 1
+        else:
+            candidatos.append((t, r.ruta))
 
     total_resueltos = len(candidatos)
     if limite:
@@ -191,6 +199,7 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
         "n_tracks_analizados": len(tiempos),
         "n_bpm": n_bpm, "n_key": n_key,
         "total_resueltos": total_resueltos, "total_xml": len(tracks),
+        "ambiguos": ambiguos, "no_encontrados": no_encontrados,
         "tiempo_medio_s": float(np.mean(tiempos)) if tiempos else 0.0,
         "tiempo_max_s": float(np.max(tiempos)) if tiempos else 0.0,
         "bpm_error_medio": float(np.mean(err_bpm)) if err_bpm else None,
@@ -204,6 +213,8 @@ def _imprimir(res: dict) -> None:
     print(f"\n{'=' * 64}")
     print(f"Tracks en XML: {res['total_xml']}  ·  con audio resuelto: {res['total_resueltos']}"
           f"  ·  analizados: {res['n_tracks_analizados']}")
+    print(f"Excluidos: {len(res['ambiguos'])} ambiguos (nombre repetido) · "
+          f"{res['no_encontrados']} sin archivo")
     print(f"BPM comparados: {res['n_bpm']}  ·  Key comparadas: {res['n_key']}")
     print(f"Tiempo/track: medio {res['tiempo_medio_s']:.1f}s · máx {res['tiempo_max_s']:.1f}s")
     if res["bpm_error_medio"] is not None:
@@ -243,6 +254,16 @@ def _imprimir(res: dict) -> None:
             print(f"  {r.archivo[:40]:40} est {r.bpm_est:6.1f} ref {r.bpm_ref:6.1f}  "
                   f"crudo {r.err_crudo:6.2f}  octava {r.err_octava:5.2f}  "
                   f"{r.clase_bpm} (x{r.ratio_bpm})")
+
+    if res["ambiguos"]:
+        print(f"{'-' * 64}\nTracks EXCLUIDOS por nombre ambiguo ({len(res['ambiguos'])}) — "
+              f"hay más de un archivo con ese nombre y elegir uno falsearía el resultado:")
+        for nombre, cands in res["ambiguos"][:10]:
+            print(f"  {nombre[:44]:44} {len(cands)} candidatos")
+            for c in cands[:3]:
+                print(f"      · {c}")
+        if len(res["ambiguos"]) > 10:
+            print(f"  … y {len(res['ambiguos']) - 10} más (ver el CSV de la corrida)")
 
     if res["fallos"]:
         print(f"{'-' * 64}\n{len(res['fallos'])} fallo(s) de carga:")
