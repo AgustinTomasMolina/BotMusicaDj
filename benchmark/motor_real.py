@@ -16,6 +16,7 @@ NO modifica los audios: solo los lee (regla del proyecto).
 import argparse
 import csv
 import datetime
+import random
 import sys
 import time
 from dataclasses import asdict, dataclass, fields
@@ -33,6 +34,11 @@ from motor.tonalidad import compat_camelot, tono
 # Umbral de BPM de la spec §4, para el veredicto por track. La tabla canónica vive en
 # benchmark/umbrales.py; acá se referencia el mismo número para no duplicar el contrato.
 _UMBRAL_BPM = 1.0
+
+# Semilla por defecto del muestreo de --limit. Fija a propósito: dos corridas con el mismo
+# XML, las mismas raíces y el mismo --limit tienen que analizar EXACTAMENTE los mismos
+# tracks, o comparar un "antes y después" de un cambio de scoring no significa nada.
+_SEMILLA = 20260908
 
 
 def _error_bpm(est: float, gt: float) -> float:
@@ -93,7 +99,8 @@ def escribir_csv(registros: list[Registro], out_dir: Path) -> Path:
     return destino
 
 
-def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> dict:
+def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050,
+          semilla: int = _SEMILLA) -> dict:
     import librosa  # import perezoso: el parser/umbrales no necesitan audio
 
     tracks = parsear(xml)
@@ -117,11 +124,16 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
             candidatos.append((t, r.ruta))
 
     total_resueltos = len(candidatos)
-    if limite:
-        candidatos = candidatos[:limite]
+    if limite and limite < len(candidatos):
+        # Muestra ALEATORIA con semilla fija, no los primeros N: el orden del XML es el
+        # de la colección (alta, alfabético…) y tomar la cabeza mide ese orden, no la
+        # biblioteca. La semilla mantiene la corrida reproducible (regla de determinismo).
+        candidatos = random.Random(semilla).sample(candidatos, limite)
+        candidatos.sort(key=lambda par: par[0]["track_id"])   # salida estable
 
     registros: list[Registro] = []
-    err_bpm, exactas, compatibles, tiempos = [], [], [], []
+    err_bpm, exactas, compatibles = [], [], []
+    tiempos, tiempos_analisis = [], []
     n_key = n_bpm = 0
     fallos = []
 
@@ -141,7 +153,11 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
         est_bpm = bpm_refinado(y, sr)
         det = tono(y, sr)
         t_analisis = time.time() - t0
-        tiempos.append(t_analisis)
+        # El umbral §4 ("tiempo de análisis") se mide sobre el costo REAL de procesar un
+        # track, y decodificar es parte de eso: antes t0 arrancaba después de librosa.load
+        # y la carga (que promedia ~10 s) quedaba afuera, así que el número mentía a favor.
+        tiempos.append(t_carga + t_analisis)
+        tiempos_analisis.append(t_analisis)
 
         # --- BPM ---
         ec = eo = None
@@ -200,8 +216,13 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
         "n_bpm": n_bpm, "n_key": n_key,
         "total_resueltos": total_resueltos, "total_xml": len(tracks),
         "ambiguos": ambiguos, "no_encontrados": no_encontrados,
+        "muestreado": bool(limite and limite < total_resueltos),
         "tiempo_medio_s": float(np.mean(tiempos)) if tiempos else 0.0,
         "tiempo_max_s": float(np.max(tiempos)) if tiempos else 0.0,
+        "tiempo_analisis_medio_s": float(np.mean(tiempos_analisis)) if tiempos_analisis else 0.0,
+        "tiempo_carga_medio_s": (float(np.mean(tiempos)) - float(np.mean(tiempos_analisis)))
+        if tiempos else 0.0,
+        "semilla": semilla,
         "bpm_error_medio": float(np.mean(err_bpm)) if err_bpm else None,
         "bpm_error_max": float(np.max(err_bpm)) if err_bpm else None,
         "fallos": fallos,
@@ -216,7 +237,13 @@ def _imprimir(res: dict) -> None:
     print(f"Excluidos: {len(res['ambiguos'])} ambiguos (nombre repetido) · "
           f"{res['no_encontrados']} sin archivo")
     print(f"BPM comparados: {res['n_bpm']}  ·  Key comparadas: {res['n_key']}")
-    print(f"Tiempo/track: medio {res['tiempo_medio_s']:.1f}s · máx {res['tiempo_max_s']:.1f}s")
+    print(f"Tiempo/track (carga + análisis): medio {res['tiempo_medio_s']:.1f}s · "
+          f"máx {res['tiempo_max_s']:.1f}s")
+    print(f"  desglose: carga {res['tiempo_carga_medio_s']:.1f}s + "
+          f"análisis {res['tiempo_analisis_medio_s']:.1f}s")
+    if res.get("muestreado"):
+        print(f"Muestra aleatoria de {res['n_tracks_analizados']} sobre "
+              f"{res['total_resueltos']} resueltos (semilla {res['semilla']})")
     if res["bpm_error_medio"] is not None:
         print(f"Error BPM: medio {res['bpm_error_medio']:.2f} · máx {res['bpm_error_max']:.2f}")
     print(f"{'-' * 64}")
@@ -282,12 +309,15 @@ def main(argv=None) -> int:
     ap.add_argument("--xml", required=True, type=Path)
     ap.add_argument("--roots", nargs="+", required=True,
                     help="Carpetas donde buscar los audios (ej. D:\\).")
-    ap.add_argument("--limit", type=int, default=None, help="Analizar solo los primeros N.")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="Analizar solo N tracks, tomados como muestra aleatoria (no los primeros).")
+    ap.add_argument("--seed", type=int, default=_SEMILLA,
+                    help=f"Semilla del muestreo de --limit (default {_SEMILLA}, para que la corrida sea reproducible).")
     ap.add_argument("--out", type=Path, default=Path("benchmark/out"),
                     help="Carpeta donde dejar el CSV por track.")
     args = ap.parse_args(argv)
 
-    res = medir(args.xml, args.roots, args.limit)
+    res = medir(args.xml, args.roots, args.limit, semilla=args.seed)
     _imprimir(res)
     if res["registros"]:
         destino = escribir_csv(res["registros"], args.out)
