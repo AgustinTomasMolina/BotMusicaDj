@@ -23,6 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
+from benchmark.clasificacion import OCTAVA, TRESILLO, clasificar, resumen
 from benchmark.umbrales import evaluar
 from ground_truth.rekordbox import parsear
 from ground_truth.resolver import construir_indice, resolver
@@ -63,6 +64,8 @@ class Registro:
     err_crudo: float | None
     err_octava: float | None      # el tolerante a octava — es el del umbral §4
     veredicto_bpm: str            # OK | ROTO | sin-referencia
+    clase_bpm: str                # exacto | octava | tresillo | otro-multiplo-racional | error-genuino
+    ratio_bpm: float | None       # ratio est/ref del múltiplo detectado (2.0, 1.5, …)
     # Tonalidad
     key_est: str
     key_ref: str
@@ -135,6 +138,7 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
         # --- BPM ---
         ec = eo = None
         veredicto = "sin-referencia"
+        cls = clasificar(est_bpm, t["bpm"], umbral=_UMBRAL_BPM)
         if t["bpm"] > 0:
             n_bpm += 1
             eo = _error_bpm(est_bpm, t["bpm"])
@@ -160,7 +164,8 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050) -> 
             bpm_est=round(est_bpm, 2), bpm_ref=round(t["bpm"], 2),
             err_crudo=None if ec is None else round(ec, 2),
             err_octava=None if eo is None else round(eo, 2),
-            veredicto_bpm=veredicto,
+            veredicto_bpm=veredicto, clase_bpm=cls.clase, ratio_bpm=(
+                None if cls.ratio is None else round(cls.ratio, 4)),
             key_est=est_cam or "?", key_ref=t["camelot"] or "?",
             confianza=det["confianza"], key_exacta=exacta, key_compatible=compatible,
             t_carga_s=round(t_carga, 2), t_analisis_s=round(t_analisis, 2),
@@ -214,12 +219,30 @@ def _imprimir(res: dict) -> None:
         print(f"  {f.umbral.nombre:34} {val:>12}  (límite {f.umbral.op} "
               f"{f.umbral.limite:g}{f.umbral.unidad})  {estado}")
 
+    con_ref = [r for r in res["registros"] if r.veredicto_bpm != "sin-referencia"]
+    if con_ref:
+        print(f"{'-' * 64}\nDesacuerdos de BPM por clase ({len(con_ref)} tracks con referencia):")
+        for clase, n in resumen([r.clase_bpm for r in con_ref]).items():
+            print(f"  {clase:26} {n:4}")
+
     rotos = [r for r in res["registros"] if r.veredicto_bpm == "ROTO"]
     if rotos:
-        print(f"{'-' * 64}\nTracks fuera del umbral de BPM ({len(rotos)}):")
+        print(f"{'-' * 64}\nTracks FUERA del umbral de BPM ({len(rotos)}):")
         for r in sorted(rotos, key=lambda r: -(r.err_octava or 0)):
-            print(f"  {r.archivo[:44]:44} est {r.bpm_est:6.1f} ref {r.bpm_ref:6.1f}  "
-                  f"crudo {r.err_crudo:6.2f}  octava {r.err_octava:5.2f}")
+            print(f"  {r.archivo[:40]:40} est {r.bpm_est:6.1f} ref {r.bpm_ref:6.1f}  "
+                  f"crudo {r.err_crudo:6.2f}  octava {r.err_octava:5.2f}  {r.clase_bpm}")
+
+    # Los que el umbral tolera a propósito (§4) pero SON un desacuerdo de nivel métrico.
+    # Sin esta sección quedan invisibles: puntúan 0.00 en el p95.
+    tolerados = [r for r in res["registros"]
+                 if r.veredicto_bpm == "OK" and r.clase_bpm in (OCTAVA, TRESILLO)]
+    if tolerados:
+        print(f"{'-' * 64}\nDesacuerdos que el umbral TOLERA ({len(tolerados)}) — "
+              f"pasan §4 pero motor y referencia no están en el mismo nivel métrico:")
+        for r in sorted(tolerados, key=lambda r: -(r.err_crudo or 0)):
+            print(f"  {r.archivo[:40]:40} est {r.bpm_est:6.1f} ref {r.bpm_ref:6.1f}  "
+                  f"crudo {r.err_crudo:6.2f}  octava {r.err_octava:5.2f}  "
+                  f"{r.clase_bpm} (x{r.ratio_bpm})")
 
     if res["fallos"]:
         print(f"{'-' * 64}\n{len(res['fallos'])} fallo(s) de carga:")
