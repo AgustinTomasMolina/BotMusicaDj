@@ -191,7 +191,7 @@ def informe(meds: list[Medicion]) -> None:
     print(f"\n{'-' * 78}\nEstabilidad por tercil de margen:")
     ms = sorted(marg)
     cortes = [ms[0], ms[len(ms) // 3], ms[2 * len(ms) // 3], ms[-1] + 1e-9]
-    for lo, hi in zip(cortes, cortes[1:]):
+    for lo, hi in zip(cortes, cortes[1:], strict=False):   # cortes[1:] es 1 más corto
         g = [m for m in utiles if lo <= m.margen < hi]
         if g:
             e = 100 * statistics.mean([m.estabilidad for m in g])
