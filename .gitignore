@@ -7,6 +7,7 @@
 downloads/
 ground_truth/out/        # CSVs derivados del XML de Rekordbox (rutas personales)
 benchmark/out/          # CSVs por corrida del benchmark (rutas personales)
+calidad/out/            # CSVs de la revision de calidad (rutas personales)
 *.xml                    # el export de Rekordbox no va al repo
 *.db
 *.sqlite
