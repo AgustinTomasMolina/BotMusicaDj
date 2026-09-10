@@ -29,7 +29,7 @@ from benchmark.umbrales import evaluar
 from ground_truth.rekordbox import parsear
 from ground_truth.resolver import AMBIGUO, NO_ENCONTRADO, construir_indice, resolver
 from motor.bpm import bpm_refinado
-from motor.tonalidad import compat_camelot, tono
+from motor.tonalidad import compat_camelot, tono, tono_consenso
 
 # Umbral de BPM de la spec §4, para el veredicto por track. La tabla canónica vive en
 # benchmark/umbrales.py; acá se referencia el mismo número para no duplicar el contrato.
@@ -100,7 +100,7 @@ def escribir_csv(registros: list[Registro], out_dir: Path) -> Path:
 
 
 def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050,
-          semilla: int = _SEMILLA) -> dict:
+          semilla: int = _SEMILLA, consenso: bool = False) -> dict:
     import librosa  # import perezoso: el parser/umbrales no necesitan audio
 
     tracks = parsear(xml)
@@ -151,7 +151,7 @@ def medir(xml: Path, raices: list[str], limite: int | None, sr: int = 22050,
 
         t0 = time.time()
         est_bpm = bpm_refinado(y, sr)
-        det = tono(y, sr)
+        det = tono_consenso(y, sr) if consenso else tono(y, sr)
         t_analisis = time.time() - t0
         # El umbral §4 ("tiempo de análisis") se mide sobre el costo REAL de procesar un
         # track, y decodificar es parte de eso: antes t0 arrancaba después de librosa.load
@@ -315,9 +315,13 @@ def main(argv=None) -> int:
                     help=f"Semilla del muestreo de --limit (default {_SEMILLA}, para que la corrida sea reproducible).")
     ap.add_argument("--out", type=Path, default=Path("benchmark/out"),
                     help="Carpeta donde dejar el CSV por track.")
+    ap.add_argument("--consenso", action="store_true",
+                    help="Usar tono_consenso() (voto entre 3 tramos) en vez de tono(). "
+                         "Corré la misma semilla con y sin este flag para el antes/después "
+                         "de tonalidad exacta que pide la spec §5.")
     args = ap.parse_args(argv)
 
-    res = medir(args.xml, args.roots, args.limit, semilla=args.seed)
+    res = medir(args.xml, args.roots, args.limit, semilla=args.seed, consenso=args.consenso)
     _imprimir(res)
     if res["registros"]:
         destino = escribir_csv(res["registros"], args.out)

@@ -29,15 +29,14 @@ from pathlib import Path
 
 import numpy as np
 
-# Se leen los perfiles y la ventana del PROPIO motor para que no puedan divergir: si mañana
-# se cambian ahí, esta calibración mide los nuevos. Son privados porque nadie más debería
-# usarlos; esta es una herramienta de análisis del mismo repo, no un consumidor externo.
-from motor.tonalidad import _CAMELOT, _MAJ, _MIN, _VENTANA_S, NOTAS, tono
+# Se usa el cálculo del PROPIO motor (`ranking`), no una copia: si se duplicara, tarde o
+# temprano esta herramienta mediría algo distinto de lo que hace el motor.
+from motor.tonalidad import _CAMELOT, _VENTANA_S, ranking, tono, ventana_central
 
 EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg")
 
-# Ventana de cada tramo de prueba. Más corta que la del motor a propósito: son 3 tramos por
-# track y el costo lo domina el HPSS, que escala con la duración.
+# Ventana de cada tramo de prueba. Más corta que la del motor a propósito: son 3 tramos
+# por track y el chroma escala con la duración.
 _VENTANA_TRAMO_S = 45
 
 
@@ -52,36 +51,15 @@ class Medicion:
     estabilidad: float      # fracción de tramos que coinciden con la key modal
 
 
-def _ventana(y: np.ndarray, sr: int, segundos: int) -> np.ndarray:
-    """Recorte central de `segundos`, igual que hace `tono()` (motor/tonalidad.py:38-41)."""
-    win = int(segundos * sr)
-    if len(y) <= win:
-        return y
-    mid = len(y) // 2
-    return y[mid - win // 2: mid + win // 2]
-
-
 def _correlaciones(y_ventana: np.ndarray, sr: int) -> list[tuple[float, str, str]]:
-    """Las 24 correlaciones Krumhansl, de mejor a peor, sobre un array YA RECORTADO.
+    """Las 24 correlaciones sobre un array YA RECORTADO — delega en `motor.tonalidad.ranking`.
 
-    Réplica exacta del cálculo de `tono()` (mismo chroma_cqt, mismos perfiles, SIN HPSS —
-    se sacó porque medido no ayudaba; ver motor/tonalidad.py). Recibe la ventana ya hecha
-    a propósito: hacer el análisis sobre el track entero cuesta bastante más que sobre la
-    ventana central que el motor realmente usa.
+    Antes esto era una copia del cálculo del motor. Ahora que `ranking` está expuesto se
+    llama al original, así no pueden divergir.
     """
-    import librosa
-
     if y_ventana.size < sr:
         return []
-    chroma = librosa.feature.chroma_cqt(y=y_ventana, sr=sr).mean(axis=1)
-    out = []
-    for i in range(12):
-        for perfil, modo in ((_MAJ, "maj"), (_MIN, "min")):
-            c = float(np.corrcoef(np.roll(perfil, i), chroma)[0, 1])
-            if np.isfinite(c):
-                out.append((c, NOTAS[i], modo))
-    out.sort(key=lambda t: -t[0])
-    return out
+    return ranking(y_ventana, sr)
 
 
 def _camelot_de(corr: list[tuple[float, str, str]]) -> str:
@@ -103,7 +81,7 @@ def medir_archivo(ruta: str, sr: int = 22050, n_tramos: int = 3,
         return None
 
     # La respuesta del motor: misma ventana que usa `tono()`.
-    corr = _correlaciones(_ventana(y, sr, _VENTANA_S), sr)
+    corr = _correlaciones(ventana_central(y, sr, _VENTANA_S), sr)
     if not corr:
         return None
     camelot = _camelot_de(corr)
@@ -145,7 +123,7 @@ def verificar_replica(ruta: str, sr: int = 22050) -> tuple[str, str, float, floa
     except Exception:  # noqa: BLE001
         return None
     oficial = tono(y, sr)
-    corr = _correlaciones(_ventana(y, sr, _VENTANA_S), sr)
+    corr = _correlaciones(ventana_central(y, sr, _VENTANA_S), sr)
     if not corr:
         return None
     return (oficial["camelot"], _camelot_de(corr),

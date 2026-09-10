@@ -10,6 +10,8 @@ tramos 73.5%→76.5%, y 11× más rápido (p95 6.99 s→0.82 s, clave para el §
 chroma sobre 90 s ya promedia el kick; el `harmonic()` remueve transitorios tonales que
 ayudaban. Queda como opción (`hpss=True`) pero apagado por defecto.
 """
+from collections import Counter
+
 import librosa
 import numpy as np
 
@@ -36,33 +38,137 @@ _CAMELOT = {
 _VENTANA_S = 90
 
 
-def tono(y: np.ndarray, sr: int, hpss: bool = False) -> dict:
-    """Devuelve {nota, modo, camelot, confianza}. `confianza` = correlación del mejor
-    perfil (0..1); baja confianza → mostrar atenuado o con '?' en la UI (spec §6).
-    Sin señal armónica (silencio) devuelve nota/modo None y camelot '?'.
-    `hpss=True` reactiva la separación armónica (medido: no ayuda; ver docstring del módulo)."""
-    win = int(_VENTANA_S * sr)
-    if len(y) > win:
-        mid = len(y) // 2
-        y = y[mid - win // 2: mid + win // 2]
+def ventana_central(y: np.ndarray, sr: int, segundos: int = _VENTANA_S) -> np.ndarray:
+    """Recorte central de `segundos`. Si el audio es más corto, lo devuelve entero."""
+    win = int(segundos * sr)
+    if len(y) <= win:
+        return y
+    mid = len(y) // 2
+    return y[mid - win // 2: mid + win // 2]
+
+
+def ranking(y: np.ndarray, sr: int, hpss: bool = False) -> list[tuple[float, str, str]]:
+    """Las 24 correlaciones Krumhansl `(corr, nota, modo)`, de mejor a peor.
+
+    Recibe el audio YA RECORTADO — no ventanea. Es el cálculo crudo que usan tanto `tono`
+    como `tono_consenso`; está expuesto para que las herramientas de análisis no tengan que
+    duplicarlo (si se duplica, tarde o temprano mide algo distinto del motor).
+    Lista vacía si el chroma es constante (silencio): ahí corrcoef da NaN para todo.
+    """
     if hpss:
         y = librosa.effects.harmonic(y)  # separa lo armónico del percusivo (kick)
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr).mean(axis=1)
 
-    mejor = None  # (corr, nota, modo)
+    out = []
     for i in range(12):
         for perfil, modo in ((_MAJ, "maj"), (_MIN, "min")):
             corr = float(np.corrcoef(np.roll(perfil, i), chroma)[0, 1])
-            if np.isfinite(corr) and (mejor is None or corr > mejor[0]):
-                mejor = (corr, NOTAS[i], modo)
+            if np.isfinite(corr):
+                out.append((corr, NOTAS[i], modo))
+    out.sort(key=lambda t: -t[0])
+    return out
 
-    if mejor is None:  # chroma constante (silencio) → corrcoef NaN para todo
+
+def tono(y: np.ndarray, sr: int, hpss: bool = False) -> dict:
+    """Devuelve {nota, modo, camelot, confianza}. `confianza` = correlación del mejor
+    perfil (0..1); baja confianza → mostrar atenuado o con '?' en la UI (spec §6).
+    Sin señal armónica (silencio) devuelve nota/modo None y camelot '?'.
+    `hpss=True` reactiva la separación armónica (medido: no ayuda; ver docstring del módulo).
+
+    OJO con `confianza`: medida contra la estabilidad entre tramos NO predice nada
+    (Pearson +0.02). Ver `tono_consenso`, cuya confianza sí es interpretable.
+    """
+    orden = ranking(ventana_central(y, sr), sr, hpss=hpss)
+    if not orden:  # chroma constante (silencio)
         return {"nota": None, "modo": None, "camelot": "?", "confianza": 0.0}
 
-    corr, nota, modo = mejor
+    corr, nota, modo = orden[0]
     return {"nota": nota, "modo": modo,
             "camelot": _CAMELOT.get((nota, modo), "?"),
             "confianza": round(max(0.0, corr), 3)}
+
+
+# Tramos del consenso. 3 × 45 s ≈ 1.6 s/track medidos, cómodo dentro del §4 (≤10 s).
+# Con HPSS prendido esto costaba ~20 s y era inviable; por eso el consenso se pudo recién
+# después de sacarlo.
+_N_TRAMOS = 3
+_VENTANA_TRAMO_S = 45
+
+
+def _tramos_disjuntos(y: np.ndarray, sr: int, n: int, ventana_s: int) -> list[np.ndarray]:
+    """Parte el audio en `n` bloques iguales y devuelve la ventana centrada de cada uno.
+
+    Disjuntos a propósito: si se solaparan compartirían audio y el acuerdo entre tramos
+    saldría inflado — y ese acuerdo es justamente la confianza que se reporta.
+    Devuelve [] si el audio no da para `n` ventanas sin pisarse.
+    """
+    win = int(ventana_s * sr)
+    if y.size <= win * n:
+        return []
+    bloque = y.size // n
+    tramos = []
+    for k in range(n):
+        ini_bloque = k * bloque
+        centro = ini_bloque + bloque // 2
+        ini = min(max(ini_bloque, centro - win // 2), ini_bloque + bloque - win)
+        tramos.append(y[ini:ini + win])
+    return tramos
+
+
+def tono_consenso(y: np.ndarray, sr: int, n_tramos: int = _N_TRAMOS,
+                  ventana_s: int = _VENTANA_TRAMO_S, hpss: bool = False) -> dict:
+    """Tonalidad por consenso entre tramos disjuntos del track.
+
+    Por qué existe: la `confianza` de `tono` es la correlación del mejor perfil Krumhansl,
+    y medida sobre 43 tracks reales NO predice nada — correlación de Pearson +0.02 contra
+    la estabilidad entre tramos, +0.12 para el margen top1-top2. Un número que no informa
+    es peor que no mostrarlo (spec §6). Acá la confianza es la fracción de tramos que
+    coinciden: 1.0 = los 3 tramos dicen lo mismo, 0.33 = los 3 dicen cosas distintas. Eso
+    sí es interpretable y accionable en la UI.
+
+    Devuelve {nota, modo, camelot, confianza, acuerdo, tramos}. `acuerdo` es
+    "cuántos de cuántos" en crudo; `tramos` las keys de cada tramo, para poder mostrar
+    por qué la confianza es baja.
+
+    Si el track es muy corto para `n_tramos` ventanas disjuntas, cae a `tono()` y marca
+    confianza 0.0 con acuerdo (0, 0): no hay evidencia de consenso, y fingirla sería
+    inventar el dato.
+    """
+    tramos = _tramos_disjuntos(y, sr, n_tramos, ventana_s)
+    if not tramos:
+        base = tono(y, sr, hpss=hpss)
+        return {**base, "confianza": 0.0, "acuerdo": (0, 0), "tramos": []}
+
+    # Voto duro sobre la key de cada tramo; se guarda la correlación para desempatar.
+    votos: list[str] = []
+    soporte: dict[str, float] = {}
+    detalle: dict[str, tuple[str, str]] = {}
+    for tr in tramos:
+        orden = ranking(tr, sr, hpss=hpss)
+        if not orden:
+            votos.append("?")
+            continue
+        corr, nota, modo = orden[0]
+        cam = _CAMELOT.get((nota, modo), "?")
+        votos.append(cam)
+        soporte[cam] = soporte.get(cam, 0.0) + max(0.0, corr)
+        detalle[cam] = (nota, modo)
+
+    reales = [v for v in votos if v != "?"]
+    if not reales:
+        return {"nota": None, "modo": None, "camelot": "?",
+                "confianza": 0.0, "acuerdo": (0, len(votos)), "tramos": votos}
+
+    # Ganador: más votos; empate se rompe por correlación acumulada, no por orden de
+    # aparición (eso haría que el resultado dependiera de cómo se recorre el track).
+    top = max(Counter(reales).values())
+    empatados = [k for k, n in Counter(reales).items() if n == top]
+    ganador = max(empatados, key=lambda k: soporte.get(k, 0.0))
+
+    nota, modo = detalle[ganador]
+    return {"nota": nota, "modo": modo, "camelot": ganador,
+            "confianza": round(top / len(votos), 3),
+            "acuerdo": (top, len(votos)), "tramos": votos}
 
 
 def _parse_camelot(c: str):
