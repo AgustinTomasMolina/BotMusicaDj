@@ -1,9 +1,14 @@
 """Tonalidad (key) + Camelot + compatibilidad armónica.
 
-Krumhansl-Schmuckler: correlación del perfil cromático contra los 24 perfiles de
-tonalidad. Mejora para techno (tareas F1 #9/#10): HPSS previo — saca el kick que
-ensucia el chroma — y chroma CQT. La precisión real se mide contra el ground truth de
-Rekordbox (tarea #9, bloqueada por los archivos); acá está la implementación.
+Krumhansl-Schmuckler: correlación del perfil cromático (chroma CQT sobre la ventana
+central) contra los 24 perfiles de tonalidad.
+
+HPSS: se probó separar lo armónico antes del chroma (la idea era "sacar el kick que
+ensucia el chroma"). Medido contra el ground truth de Rekordbox (45 tracks reales), NO
+ayuda: acuerdo exacto 40.0%→46.7% y compatible 51.1%→60.0% AL SACARLO, estabilidad entre
+tramos 73.5%→76.5%, y 11× más rápido (p95 6.99 s→0.82 s, clave para el §4 ≤10 s). El
+chroma sobre 90 s ya promedia el kick; el `harmonic()` remueve transitorios tonales que
+ayudaban. Queda como opción (`hpss=True`) pero apagado por defecto.
 """
 import librosa
 import numpy as np
@@ -25,16 +30,17 @@ _CAMELOT = {
 }
 
 
-# Se analiza la ventana central: la tonalidad de un track de techno no cambia, y HPSS+CQT
-# sobre el tema completo rompe el umbral de tiempo (§4 ≤10 s/track: 41 s medidos → 4.7 s
-# con 90 s, mismo resultado — auditoría Fable C1).
+# Se analiza la ventana central: la tonalidad de un track de techno no cambia, y el chroma
+# sobre el tema completo rompe el umbral de tiempo (§4 ≤10 s/track); 90 s da el mismo
+# resultado mucho más rápido (auditoría Fable C1).
 _VENTANA_S = 90
 
 
-def tono(y: np.ndarray, sr: int, hpss: bool = True) -> dict:
+def tono(y: np.ndarray, sr: int, hpss: bool = False) -> dict:
     """Devuelve {nota, modo, camelot, confianza}. `confianza` = correlación del mejor
     perfil (0..1); baja confianza → mostrar atenuado o con '?' en la UI (spec §6).
-    Sin señal armónica (silencio) devuelve nota/modo None y camelot '?'."""
+    Sin señal armónica (silencio) devuelve nota/modo None y camelot '?'.
+    `hpss=True` reactiva la separación armónica (medido: no ayuda; ver docstring del módulo)."""
     win = int(_VENTANA_S * sr)
     if len(y) > win:
         mid = len(y) // 2

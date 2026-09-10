@@ -64,16 +64,16 @@ def _ventana(y: np.ndarray, sr: int, segundos: int) -> np.ndarray:
 def _correlaciones(y_ventana: np.ndarray, sr: int) -> list[tuple[float, str, str]]:
     """Las 24 correlaciones Krumhansl, de mejor a peor, sobre un array YA RECORTADO.
 
-    Réplica exacta del cálculo de `tono()` (mismo HPSS, mismo chroma_cqt, mismos perfiles).
-    Recibe la ventana ya hecha a propósito: el HPSS es lo caro y hacerlo sobre el track
-    entero cuesta un orden de magnitud más que sobre la ventana que el motor realmente usa.
+    Réplica exacta del cálculo de `tono()` (mismo chroma_cqt, mismos perfiles, SIN HPSS —
+    se sacó porque medido no ayudaba; ver motor/tonalidad.py). Recibe la ventana ya hecha
+    a propósito: hacer el análisis sobre el track entero cuesta bastante más que sobre la
+    ventana central que el motor realmente usa.
     """
     import librosa
 
     if y_ventana.size < sr:
         return []
-    y_arm = librosa.effects.harmonic(y_ventana)
-    chroma = librosa.feature.chroma_cqt(y=y_arm, sr=sr).mean(axis=1)
+    chroma = librosa.feature.chroma_cqt(y=y_ventana, sr=sr).mean(axis=1)
     out = []
     for i in range(12):
         for perfil, modo in ((_MAJ, "maj"), (_MIN, "min")):
@@ -102,7 +102,7 @@ def medir_archivo(ruta: str, sr: int = 22050, n_tramos: int = 3,
     if y.size < sr * 5:
         return None
 
-    # La respuesta del motor: misma ventana que usa `tono()`, una sola pasada de HPSS.
+    # La respuesta del motor: misma ventana que usa `tono()`.
     corr = _correlaciones(_ventana(y, sr, _VENTANA_S), sr)
     if not corr:
         return None
