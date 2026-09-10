@@ -12,8 +12,12 @@ ayudaban. Queda como opción (`hpss=True`) pero apagado por defecto.
 """
 from collections import Counter
 
-import librosa
 import numpy as np
+
+# librosa se importa DENTRO de `ranking` (lo único que lo usa): así `compat_camelot` y el
+# resto de la lógica de Camelot se pueden importar sin librosa instalado. La etapa B del
+# benchmark (`benchmark.evaluar`) depende de eso para correr en máquinas sin el stack de
+# audio — es CSV contra CSV, no tiene por qué arrastrar numba.
 
 NOTAS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
@@ -55,6 +59,8 @@ def ranking(y: np.ndarray, sr: int, hpss: bool = False) -> list[tuple[float, str
     duplicarlo (si se duplica, tarde o temprano mide algo distinto del motor).
     Lista vacía si el chroma es constante (silencio): ahí corrcoef da NaN para todo.
     """
+    import librosa  # perezoso: ver la nota de los imports del módulo
+
     if hpss:
         y = librosa.effects.harmonic(y)  # separa lo armónico del percusivo (kick)
     chroma = librosa.feature.chroma_cqt(y=y, sr=sr).mean(axis=1)
