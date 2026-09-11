@@ -14,6 +14,12 @@ analiza otro audio y el resultado se ve idéntico a un error de algoritmo. Por e
 el basename tiene más de un candidato, se devuelve estado 'ambiguo' y el track queda FUERA
 del cómputo en vez de resolverse a la suerte.
 
+Un ambiguo puede serlo por dos razones distintas: que sean copias del MISMO audio (da
+igual cuál se use) o versiones DISTINTAS (la ambigüedad es real). Este módulo no las
+separa a propósito — hacerlo requiere decodificar audio y acá no entra ni numpy. Si en
+algún caso hace falta desambiguar, `calidad.duplicados.desambiguar(list(r.candidatos))`
+lo resuelve y explica por qué no se llama desde acá.
+
 NO copia ni modifica los audios (regla del proyecto: los originales no se tocan). Solo lee.
 """
 import os
