@@ -63,8 +63,9 @@ Sin Redis, todo corre en proceso (la cola es opcional: `queue_disponible()=False
 
 ## Tests
 ```bash
-python -m pytest motor/tests      # tests del motor (BPM, tonalidad, energía, scoring)
-python -m pytest                  # idem: pyproject ya apunta testpaths a motor/tests
+pip install -r requirements-dev.txt   # producción + pytest y ruff (pytest NO está en requirements.txt)
+python -m pytest                  # toda la suite: motor, benchmark, ground_truth, calidad, pipeline
+python -m pytest motor/tests      # solo el motor (BPM, tonalidad, energía, scoring)
 python test_bot.py                # chequeos del bot de adquisición
 python -m benchmark               # umbrales de calidad del motor (spec §4)
 ```
@@ -89,7 +90,8 @@ analisis_audio.py      BPM + tonalidad (librosa)
 tagger.py              Tags ID3/FLAC/MP4
 search_agent.py scrapers.py   Fuentes de búsqueda
 motor/                 Motor DJ Radio: bpm, tonalidad, energia, scoring (+ motor/tests)
-ground_truth/          Parser del XML de Rekordbox → CSV (ground truth)
+ground_truth/          Parser del XML de Rekordbox → CSV, y la sesión completa
+                       de ground truth (ver ground_truth/README.md)
 benchmark/             Umbrales de la spec §4 y runner (`python -m benchmark`)
 frontend/              React + Vite (UI)
 scripts/               Lanzadores .bat de Windows
