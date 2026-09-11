@@ -38,7 +38,20 @@ from calidad.tags import EXTS, leer_tags
 # Separador de artista/título. Solo con espacios alrededor: "kylian-dictador" no se parte.
 SEPARADOR = re.compile(r"\s+[-–—]\s+")
 
-# Basura que se saca del TEXTO QUE VA AL TAG. El archivo no se toca ni se renombra.
+# QUÉ SE LIMPIA Y QUÉ NO — la diferencia importa, no la "arregles" por parecer inconsistente
+# ---------------------------------------------------------------------------------------
+# SE SACA: basura de ORIGEN. Dice de dónde salió el archivo, no qué contiene.
+#     "myfreemp3.vip", "(Official Video)", "free download", el "(1)" de copia.
+#
+# SE QUEDA: sufijos TÉCNICOS y de MASTERING. Son lo único que distingue una versión de
+# otra: "masterv1 0dbTP", "44k16b", "(MASTER)", "(never_AWAKE Master)", "V2".
+#     Si se limpiaran, "Paralich - Gasolina masterv1" y un eventual "masterv2" quedarían
+#     con el título IDÉNTICO. Eso no solo pierde información: le da de comer basura a la
+#     detección de duplicados de 5.2, que usa el título para desempatar y pasaría a ver
+#     dos masters distintos como el mismo track.
+#
+# Regla corta: si describe al ARCHIVO (de dónde vino), se saca. Si describe al AUDIO
+# (qué versión es), se queda.
 LIMPIEZA = [
     (re.compile(r"\s*myfreemp3\.vip\s*", re.I), "", "sitio de descarga"),
     (re.compile(r"\s*\(\s*cut\s*\)\s*", re.I), " ", "'(cut)'"),
@@ -70,6 +83,7 @@ class Propuesta:
     limpieza: str             # qué basura se sacó del texto
     motivo: str
     revisar: str              # si | no — casos donde la evidencia es floja
+    grafia_original: str = ""  # si se unificó la grafía, cuál era antes
 
 
 COLUMNAS = [f.name for f in fields(Propuesta)]
@@ -122,6 +136,47 @@ def _clave(nombre: str) -> str:
 def _tokens(clave: str) -> set[str]:
     """Palabras distintivas de un nombre (≥4 letras), para emparentar variantes."""
     return {t for t in clave.split() if len(t) >= 4}
+
+
+def sufijo_version(lado: str) -> str:
+    """El calificador de versión de un lado, normalizado. '' si no tiene.
+
+    Es la segunda señal de orientación: si un mismo sufijo acompaña siempre a nombres
+    invertidos, acompañarlo es evidencia de inversión. Se compara el sufijo EXACTO —
+    '(Original mix)' y '(Extended Mix)' son sufijos distintos y no se mezclan.
+    """
+    _, version = separar_version(lado)
+    return re.sub(r"\s+", " ", version).strip().lower()
+
+
+def canonizar(nombres: list[str]) -> dict[str, str]:
+    """Colapsa grafías distintas del mismo nombre a la más frecuente.
+
+    'Fran Perrotta' y 'fran perrotta' son el mismo artista, pero iTunes los muestra como
+    dos. Se agrupa por el nombre sin mayúsculas ni puntuación y gana la grafía más usada
+    en ESTA biblioteca — conteo, no una lista de artistas.
+
+    Desempate cuando dos grafías empatan (PARALICH vs Paralich): gana la que NO está toda
+    en mayúsculas, porque el ALL CAPS suele ser estilización de un solo archivo; y si aun
+    así empatan, la primera alfabéticamente, para que el resultado sea determinista.
+    """
+    grupos: dict[str, Counter] = {}
+    for n in nombres:
+        if not n:
+            continue
+        clave = re.sub(r"[^\w\s]", "", n).strip().lower()
+        clave = re.sub(r"\s+", " ", clave)
+        grupos.setdefault(clave, Counter())[n] += 1
+
+    mapa = {}
+    for variantes in grupos.values():
+        if len(variantes) < 2:
+            continue
+        ganadora = sorted(variantes, key=lambda v: (-variantes[v], v.isupper(), v))[0]
+        for v in variantes:
+            if v != ganadora:
+                mapa[v] = ganadora
+    return mapa
 
 
 def partir(nombre_base: str) -> tuple[str, str] | None:
@@ -212,7 +267,62 @@ def analizar(rutas: list[str]) -> list[Propuesta]:
             artista_propuesto=artista, titulo_propuesto=titulo,
             orientacion=orient, veces_izq=n_izq, veces_der=n_der,
             limpieza=limpieza, motivo=motivo, revisar=revisar))
+
+    _invertir_por_sufijo(propuestas, partidos)
+    _canonizar_artistas(propuestas)
     return propuestas
+
+
+def _invertir_por_sufijo(props: list[Propuesta], partidos: dict) -> None:
+    """Tercera pasada: invertir por el SUFIJO de versión, cuando el nombre no alcanzó.
+
+    La señal es del mismo tipo que la de frecuencia de nombres, pero sobre otra columna:
+    si un sufijo exacto —'(original mix)'— acompañó SIEMPRE a nombres ya detectados como
+    invertidos, entonces acompañarlo es evidencia de inversión. Es frecuencia observada en
+    esta biblioteca, no una lista de sufijos hardcodeada: '(extended mix)' aparece una vez,
+    en un archivo NO invertido, y por eso no dispara.
+
+    Requiere al menos 2 inversiones previas con ese sufijo: con una sola, la "regla" sería
+    el propio caso que se quiere decidir.
+    """
+    por_ruta = {p.ruta: p for p in props}
+    inversiones = Counter()
+    for p in props:
+        if p.orientacion == INVERTIDA and partidos.get(p.ruta):
+            inversiones[sufijo_version(partidos[p.ruta][1])] += 1
+
+    for p in props:
+        if p.orientacion != DIRECTA or not partidos.get(p.ruta):
+            continue
+        izq, der = partidos[p.ruta]
+        suf = sufijo_version(der)
+        if not suf or inversiones[suf] < 2:
+            continue
+
+        artista_bruto, version = separar_version(der)
+        titulo_bruto = f"{izq} ({version})" if version else izq
+        artista, limp_a = limpiar(artista_bruto)
+        titulo, limp_t = limpiar(titulo_bruto)
+
+        p.artista_propuesto, p.titulo_propuesto = artista, titulo
+        p.orientacion = INVERTIDA
+        p.limpieza = "; ".join(x for x in (limp_a, limp_t) if x)
+        p.motivo = (f"invertido por el sufijo '({suf})': acompaña a {inversiones[suf]} "
+                    f"inversiones ya detectadas por nombre y a ningún directo")
+        # Se invierte, pero queda marcado: la evidencia es indirecta.
+        p.revisar = "si"
+        por_ruta[p.ruta] = p
+
+
+def _canonizar_artistas(props: list[Propuesta]) -> None:
+    """Cuarta pasada: unificar grafías del mismo artista (Fran/fran, PARALICH/Paralich)."""
+    mapa = canonizar([p.artista_propuesto for p in props if p.artista_propuesto])
+    for p in props:
+        canon = mapa.get(p.artista_propuesto)
+        if canon:
+            p.grafia_original = p.artista_propuesto
+            p.artista_propuesto = canon
+            p.motivo += f" · grafía unificada a '{canon}'"
 
 
 def escribir_csv(props: list[Propuesta], out_dir: Path) -> Path:
@@ -257,6 +367,21 @@ def informe(props: list[Propuesta]) -> None:
             print(f"    {p.nombre_base[:50]:50} → '{p.artista_propuesto}' | "
                   f"'{p.titulo_propuesto[:24]}'")
             print(f"        {p.motivo}")
+
+    unificados = [p for p in props if p.grafia_original]
+    print(f"\n  GRAFÍAS UNIFICADAS ({len(unificados)} archivos):")
+    if unificados:
+        por_canon: dict[str, Counter] = {}
+        for p in unificados:
+            por_canon.setdefault(p.artista_propuesto, Counter())[p.grafia_original] += 1
+        # También se cuenta cuántos ya tenían la grafía ganadora, para que se vea el reparto.
+        for canon, variantes in sorted(por_canon.items()):
+            ya = sum(1 for p in props
+                     if p.artista_propuesto == canon and not p.grafia_original)
+            detalle = " + ".join(f"'{v}' ×{c}" for v, c in variantes.most_common())
+            print(f"    {detalle}  →  '{canon}' (que ya tenían {ya})")
+    else:
+        print("    ninguna: cada artista aparece con una sola grafía")
 
     limpiados = [p for p in props if p.limpieza]
     if limpiados:

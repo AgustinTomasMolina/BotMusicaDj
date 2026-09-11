@@ -131,18 +131,36 @@ def test_sin_repeticion_se_asume_izquierda_igual_artista(tmp_path):
         assert p.revisar == "no"
 
 
-def test_marca_variante_de_un_artista_frecuente_sin_invertir(tmp_path):
-    """'Franco Perrotta' contra 'Fran Perrotta': se marca para revisar, NO se invierte solo."""
+def test_invierte_por_el_sufijo_no_por_parecido_de_nombre(tmp_path):
+    """'I Just Landed - Franco Perrotta': se invierte por el SUFIJO, no por parecerse a 'Fran'.
+
+    La señal es que '(Original mix)' acompañó a inversiones ya detectadas por nombre y a
+    ningún directo. Invertir por similitud de nombre sería adivinar; por frecuencia del
+    sufijo es el mismo tipo de evidencia que la orientación por nombre.
+    """
     props = _props([
         "Antu Inan - Fran Perrotta (Original mix).wav",
         "Static Bow - Fran Perrotta (Original mix).wav",
-        "Velvet hours - Fran Perrotta.wav",
+        "I Real - Fran Perrotta (Original mix).wav",
         "I Just Landed - Franco Perrotta (Original mix).wav",
     ], tmp_path)
     p = props["I Just Landed - Franco Perrotta (Original mix)"]
-    assert p.orientacion == DIRECTA          # no se invierte a ciegas
-    assert p.revisar == "si"
-    assert "perrotta" in p.motivo
+    assert p.orientacion == INVERTIDA
+    assert p.artista_propuesto == "Franco Perrotta"   # NO se fusiona con 'Fran Perrotta'
+    assert p.revisar == "si"                          # queda marcado igual
+    assert "sufijo" in p.motivo
+
+
+def test_un_sufijo_que_no_acompana_inversiones_no_invierte(tmp_path):
+    """'(Extended Mix)' aparece en un solo archivo, directo: no alcanza como señal."""
+    props = _props([
+        "Antu Inan - Fran Perrotta (Original mix).wav",
+        "Static Bow - Fran Perrotta (Original mix).wav",
+        "Chris Lake - LA NOCHE (Extended Mix).wav",
+    ], tmp_path)
+    p = props["Chris Lake - LA NOCHE (Extended Mix)"]
+    assert p.orientacion == DIRECTA
+    assert p.artista_propuesto == "Chris Lake"
 
 
 def test_varios_separadores_se_marcan(tmp_path):
@@ -159,3 +177,20 @@ def test_sin_separador_queda_vacio_no_unknown(tmp_path):
     assert p.orientacion == SIN_PARTIR
     assert p.artista_propuesto == "" and p.titulo_propuesto == ""
     assert "unknown" not in (p.artista_propuesto + p.titulo_propuesto).lower()
+
+
+def test_canoniza_a_la_grafia_mas_frecuente():
+    from calidad.normalizar_tags import canonizar
+    mapa = canonizar(["Fran Perrotta"] * 5 + ["fran perrotta"] * 2)
+    assert mapa == {"fran perrotta": "Fran Perrotta"}
+
+
+def test_desempata_contra_el_all_caps():
+    """PARALICH vs Paralich, uno cada uno: gana el que no está todo en mayúsculas."""
+    from calidad.normalizar_tags import canonizar
+    assert canonizar(["PARALICH", "Paralich"]) == {"PARALICH": "Paralich"}
+
+
+def test_una_sola_grafia_no_se_toca():
+    from calidad.normalizar_tags import canonizar
+    assert canonizar(["Skrillex", "Sub Focus"]) == {}
