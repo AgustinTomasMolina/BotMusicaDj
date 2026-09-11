@@ -1,11 +1,31 @@
 """Tarea 5.1 — verificación de calidad real del archivo por corte espectral.
 
-Compara el corte de frecuencia MEDIDO contra el que corresponde al bitrate DECLARADO en
-el tag. Un MP3 320 real llega a ~20 kHz; uno que dice 320 pero se corta en 16 kHz fue
-inflado desde un 128.
-
     python -m calidad.corte_espectral --audio <carpeta>
     python -m calidad.corte_espectral --validar <csv ya marcado a mano>
+
+DOS PREGUNTAS DISTINTAS, UN CRITERIO PARA CADA UNA (tarea 5.15)
+---------------------------------------------------------------
+Mezclarlas fue el error de la primera versión: hacía caer masters propios como
+sospechosos por compararlos contra un bitrate que en un WAV no significa nada.
+
+LOSSY (mp3, m4a, ogg…) → ¿el bitrate declarado está inflado?
+    Se compara el corte MEDIDO contra el que corresponde al bitrate del tag. Un 320 real
+    llega a ~20 kHz; uno que dice 320 y corta en 16 salió de un 128.
+    Dos precisiones que importan:
+      · Cortar POR ARRIBA de lo esperado NO es sospechoso. Un LAME VBR V0 sin lowpass
+        llega a 22 kHz declarando ~255 kbps: es el mejor MP3 posible, no uno dudoso.
+      · La AUSENCIA de muro es evidencia A FAVOR, no un dato neutro. Sin muro no hay
+        firma de codec: la caída gradual es de la música, no del encoder.
+
+LOSSLESS (wav, flac, aiff) → ¿este archivo fue lossy ANTES de envolverse?
+    Acá NO hay bitrate contra el cual comparar: el de un WAV es aritmética del formato
+    (sample rate × bits × canales), no una afirmación sobre la fuente. Por eso el margen
+    queda vacío en el CSV, y se juzga solo por la FORMA: un codec deja un muro angosto y
+    profundo, un master oscuro cae gradual.
+
+El `motivo` del CSV arranca con la etiqueta de la pregunta que se respondió
+([bitrate] / [bitrate inflado] / [forma] / [pudo ser lossy antes]), para que quien lo lee
+no confunda "te vendieron un 128 como 320" con "a tu master le entró un sample lossy".
 
 LA BANDERA NO ES UN VEREDICTO. Marca archivos PARA REVISAR, nada más. Hay masters con el
 corte bajo a propósito, rips de vinilo, grabaciones de campo y material viejo que dan
@@ -66,6 +86,11 @@ ESPERADO_LOSSLESS = 20.0
 # propósito: preferimos no llenar la cola de revisión con falsos positivos.
 TOLERANCIA_KHZ = 1.0
 
+# Para un LOSSLESS no hay bitrate contra el cual comparar. Solo se sospecha si hay muro de
+# codec Y el corte queda por debajo de banda completa: un muro a 20+ kHz es el filtro del
+# propio equipo de grabacion, no un transcode.
+UMBRAL_LOSSLESS_KHZ = 19.0
+
 OK = "ok"
 SOSPECHOSO = "sospechoso"
 SIN_DATOS = "sin-datos"
@@ -88,8 +113,9 @@ class FilaCalidad:
     bitrate_declarado_kbps: int
     sample_rate_hz: int
     corte_medido_khz: float
-    corte_esperado_khz: float
-    margen_khz: float          # medido - esperado. Negativo = corta más bajo de lo que dice
+    criterio: str              # lossy (vs bitrate) | lossless (solo forma)
+    corte_esperado_khz: float | None   # None en lossless: no hay bitrate contra que comparar
+    margen_khz: float | None           # None en lossless: el margen no significaria nada
     muro_db: float             # caída en la transición; muro alto = corte duro de codec
     es_muro: str               # si | no
     bandera: str               # ok | sospechoso | sin-datos
@@ -110,25 +136,80 @@ def corte_esperado_khz(bitrate_kbps: int, lossless: bool) -> float:
     return TABLA_ESPERADO[-1][1]
 
 
-def clasificar(corte_khz: float, esperado_khz: float, es_muro: bool, lossless: bool,
-               tolerancia: float = TOLERANCIA_KHZ) -> tuple[str, str]:
-    """Devuelve (bandera, motivo). Solo mira el margen; el juicio queda para la persona."""
+def bitrate_implicito_kbps(corte_khz: float) -> int:
+    """Bitrate que sugiere un corte medido. Es la tabla al revés.
+
+    Sirve para el mensaje: no es lo mismo decir "corta bajo" que "ese muro es de un 128".
+    """
+    for kbps, esperado in TABLA_ESPERADO:
+        if corte_khz >= esperado - 0.25:
+            return kbps
+    return 0
+
+
+def clasificar_lossy(corte_khz: float, esperado_khz: float, es_muro: bool,
+                     bitrate_kbps: int, tolerancia: float = TOLERANCIA_KHZ) -> tuple[str, str]:
+    """Pregunta que responde: ¿el bitrate declarado está inflado?
+
+    Solo tiene sentido con un bitrate contra el cual comparar. Cortar POR ARRIBA de lo
+    esperado no es sospechoso: un LAME VBR V0 sin lowpass llega a 22 kHz declarando ~255
+    kbps y es el mejor MP3 posible, no uno dudoso.
+    """
     margen = corte_khz - esperado_khz
     if margen >= -tolerancia:
-        return OK, f"corta en {corte_khz:.1f} kHz, dentro de lo esperado ({esperado_khz:.1f})"
+        return OK, (f"[bitrate] corta en {corte_khz:.1f} kHz, a la altura de los "
+                    f"{bitrate_kbps}k declarados (esperado {esperado_khz:.1f})")
 
     falta = abs(margen)
-    if lossless and es_muro:
-        return SOSPECHOSO, (f"sin pérdida pero con muro de codec a {corte_khz:.1f} kHz "
-                            f"({falta:.1f} kHz por debajo) — posible transcode")
-    if lossless:
-        return SOSPECHOSO, (f"sin pérdida y corta en {corte_khz:.1f} kHz, "
-                            f"{falta:.1f} por debajo de {esperado_khz:.1f}")
     if es_muro:
-        return SOSPECHOSO, (f"muro a {corte_khz:.1f} kHz, {falta:.1f} kHz por debajo de "
-                            f"lo que corresponde al bitrate declarado")
-    return SOSPECHOSO, (f"corta en {corte_khz:.1f} kHz sin muro claro, {falta:.1f} kHz "
-                        f"por debajo de {esperado_khz:.1f} — puede ser legítimo")
+        implicito = bitrate_implicito_kbps(corte_khz)
+        # Un corte por debajo del escalón más bajo de la tabla no tiene bitrate asignable:
+        # decir "~0k" sería inventar un número.
+        cual = f"de un ~{implicito}k" if implicito else "más bajo que cualquier escalón de la tabla"
+        return SOSPECHOSO, (f"[bitrate inflado] muro de codec a {corte_khz:.1f} kHz, que es "
+                            f"{cual}, pero declara {bitrate_kbps}k "
+                            f"({falta:.1f} kHz por debajo)")
+
+    # Sin muro no hay firma de codec: la caída gradual es de la música, no del encoder.
+    # La AUSENCIA de muro es evidencia A FAVOR, no un dato neutro.
+    return OK, (f"[bitrate] corta en {corte_khz:.1f} kHz, por debajo de los {bitrate_kbps}k "
+                f"declarados, pero SIN muro: caída gradual, no firma de codec "
+                f"(master oscuro o fuente limitada)")
+
+
+def clasificar_lossless(corte_khz: float, es_muro: bool, muro_db: float,
+                        umbral_khz: float = None) -> tuple[str, str]:
+    """Pregunta que responde: ¿este archivo fue lossy ANTES de envolverse?
+
+    Acá no hay bitrate contra el cual comparar —el de un WAV es aritmética del formato, no
+    una afirmación sobre la fuente— así que el margen no significa nada. Lo único que
+    delata un transcode es la FORMA: un codec deja un muro angosto y profundo; un master
+    oscuro cae gradual.
+    """
+    umbral_khz = UMBRAL_LOSSLESS_KHZ if umbral_khz is None else umbral_khz
+    if es_muro and corte_khz < umbral_khz:
+        return SOSPECHOSO, (f"[pudo ser lossy antes] archivo sin pérdida con muro de codec "
+                            f"de {muro_db:.0f} dB a {corte_khz:.1f} kHz — un master propio "
+                            f"no tiene esa forma")
+    if es_muro:
+        return OK, (f"[forma] muro de {muro_db:.0f} dB pero a {corte_khz:.1f} kHz: banda "
+                    f"completa, probablemente el filtro del propio equipo")
+    return OK, (f"[forma] corta en {corte_khz:.1f} kHz sin muro (caída de {muro_db:.0f} dB): "
+                f"roll-off gradual, sin firma de codec")
+
+
+def clasificar(corte_khz: float, esperado_khz: float, es_muro: bool, lossless: bool,
+               tolerancia: float = TOLERANCIA_KHZ, muro_db: float = 0.0,
+               bitrate_kbps: int = 0) -> tuple[str, str]:
+    """Despacha a la pregunta que corresponde según el formato.
+
+    Son DOS preguntas distintas y mezclarlas fue el error original: en un lossless el
+    margen contra el bitrate no significa nada, y por eso masters propios caían como
+    sospechosos.
+    """
+    if lossless:
+        return clasificar_lossless(corte_khz, es_muro, muro_db)
+    return clasificar_lossy(corte_khz, esperado_khz, es_muro, bitrate_kbps, tolerancia)
 
 
 def _metadatos(ruta: str) -> tuple[str, int]:
@@ -178,21 +259,32 @@ def analizar_uno(ruta: str) -> FilaCalidad:
     y, sr = _cargar_nativo(ruta)
     if y is None or sr <= 0:
         return FilaCalidad(**base, sample_rate_hz=0, corte_medido_khz=0.0,
-                           corte_esperado_khz=0.0, margen_khz=0.0, muro_db=0.0,
+                           criterio="lossless" if lossless else "lossy",
+                           corte_esperado_khz=None, margen_khz=None, muro_db=0.0,
                            es_muro="no", bandera=SIN_DATOS, motivo="no se pudo leer el audio")
 
     freqs, db = _espectro_db(y, sr)
     m = _analizar_espectro(freqs, db, sr)
     corte_khz = m["corte"] / 1000.0
-    es_muro = m["muro_db"] >= MURO_DB
-    esperado = corte_esperado_khz(bitrate, lossless)
-    bandera, motivo = clasificar(corte_khz, esperado, es_muro, lossless)
+    muro_db = m["muro_db"]
+    es_muro = muro_db >= MURO_DB
+
+    if lossless:
+        # Sin bitrate de referencia, esperado y margen quedan en blanco a propósito: poner
+        # un número ahí sería exactamente el error que hacía caer masters propios.
+        esperado = margen = None
+        bandera, motivo = clasificar_lossless(corte_khz, es_muro, muro_db)
+    else:
+        esperado = corte_esperado_khz(bitrate, lossless)
+        margen = round(corte_khz - esperado, 2)
+        esperado = round(esperado, 2)
+        bandera, motivo = clasificar_lossy(corte_khz, esperado, es_muro, bitrate)
 
     return FilaCalidad(**base, sample_rate_hz=sr,
                        corte_medido_khz=round(corte_khz, 2),
-                       corte_esperado_khz=round(esperado, 2),
-                       margen_khz=round(corte_khz - esperado, 2),
-                       muro_db=round(m["muro_db"], 1), es_muro="si" if es_muro else "no",
+                       criterio="lossless" if lossless else "lossy",
+                       corte_esperado_khz=esperado, margen_khz=margen,
+                       muro_db=round(muro_db, 1), es_muro="si" if es_muro else "no",
                        bandera=bandera, motivo=motivo)
 
 
@@ -326,10 +418,11 @@ def main(argv=None) -> int:
         fila = analizar_uno(r)
         filas.append(fila)
         marca = {OK: "  ok", SOSPECHOSO: "SOSPE", SIN_DATOS: "  s/d"}[fila.bandera]
-        print(f"  [{i}/{len(rutas)}] {marca}  {fila.archivo[:40]:40} "
-              f"{fila.bitrate_declarado_kbps:>4}k  corte {fila.corte_medido_khz:5.1f} "
-              f"(esperado {fila.corte_esperado_khz:4.1f}, margen {fila.margen_khz:+5.1f})",
-              flush=True)
+        ref = ("lossless, solo forma" if fila.criterio == "lossless"
+               else f"esperado {fila.corte_esperado_khz:4.1f}, margen {fila.margen_khz:+5.1f}")
+        print(f"  [{i}/{len(rutas)}] {marca}  {fila.archivo[:38]:38} "
+              f"{fila.bitrate_declarado_kbps:>5}k  corte {fila.corte_medido_khz:5.1f}  "
+              f"muro {fila.muro_db:5.1f}  ({ref})", flush=True)
 
     destino = escribir_csv(filas, args.out)
     sospechosos = sum(1 for f in filas if f.bandera == SOSPECHOSO)

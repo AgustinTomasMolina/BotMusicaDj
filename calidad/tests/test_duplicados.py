@@ -149,7 +149,9 @@ def _cal(corte, muro, lossless, bitrate):
     return FilaCalidad(
         archivo="x", ruta="x", formato="x", lossless=lossless,
         bitrate_declarado_kbps=bitrate, sample_rate_hz=44100,
-        corte_medido_khz=corte, corte_esperado_khz=20.0, margen_khz=corte - 20.0,
+        corte_medido_khz=corte, criterio="lossless" if lossless == "si" else "lossy",
+        corte_esperado_khz=None if lossless == "si" else 20.0,
+        margen_khz=None if lossless == "si" else corte - 20.0,
         muro_db=muro, es_muro="si" if muro >= 25 else "no",
         bandera="ok", motivo="", marca_manual="")
 

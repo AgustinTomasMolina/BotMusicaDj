@@ -11,7 +11,10 @@ from calidad.corte_espectral import (
     OK,
     SIN_DATOS,
     SOSPECHOSO,
+    bitrate_implicito_kbps,
     clasificar,
+    clasificar_lossless,
+    clasificar_lossy,
     corte_esperado_khz,
     validar,
 )
@@ -63,16 +66,81 @@ def test_la_tolerancia_evita_marcar_por_un_pelo():
     assert clasificar(18.5, 20.0, es_muro=True, lossless=False)[0] == SOSPECHOSO  # -1.5
 
 
-def test_lossless_con_muro_avisa_transcode():
-    bandera, motivo = clasificar(16.0, 20.0, es_muro=True, lossless=True)
+# --- 5.15: los dos criterios son preguntas distintas --------------------------------------
+
+
+def test_lossless_con_muro_sospecha_que_fue_lossy_antes():
+    bandera, motivo = clasificar_lossless(16.0, es_muro=True, muro_db=60.0)
     assert bandera == SOSPECHOSO
-    assert "transcode" in motivo
+    assert "lossy antes" in motivo
 
 
-def test_sin_muro_el_motivo_admite_que_puede_ser_legitimo():
-    """Rampa suave: puede ser un master oscuro o un rip de vinilo. El texto lo dice."""
-    _, motivo = clasificar(15.0, 20.0, es_muro=False, lossless=False)
-    assert "legítimo" in motivo
+def test_lossless_sin_muro_es_ok_aunque_corte_bajo():
+    """El caso de los 4 WAVs propios: 15 kHz con caída gradual es un master oscuro.
+
+    Antes esto caía sospechoso porque se comparaba contra un 'esperado' derivado del
+    bitrate, que en un WAV es aritmética del formato y no dice nada de la fuente.
+    """
+    bandera, motivo = clasificar_lossless(15.0, es_muro=False, muro_db=5.0)
+    assert bandera == OK
+    assert "sin firma de codec" in motivo
+
+
+def test_lossless_con_muro_pero_banda_completa_es_ok():
+    """Un muro a 20+ kHz es el filtro del propio equipo, no un codec."""
+    assert clasificar_lossless(20.5, es_muro=True, muro_db=40.0)[0] == OK
+
+
+def test_lossy_por_arriba_de_lo_esperado_no_es_sospechoso():
+    """Not.mp3: LAME VBR V0 sin lowpass, 22 kHz declarando 255k. Es el MEJOR mp3, no uno dudoso."""
+    bandera, motivo = clasificar_lossy(22.0, 18.5, es_muro=False, bitrate_kbps=255)
+    assert bandera == OK
+    assert "a la altura" in motivo
+
+
+def test_lossy_sin_muro_es_ok_porque_no_hay_firma_de_codec():
+    """La AUSENCIA de muro es evidencia a favor, no un dato neutro."""
+    bandera, motivo = clasificar_lossy(15.0, 20.0, es_muro=False, bitrate_kbps=320)
+    assert bandera == OK
+    assert "SIN muro" in motivo
+
+
+def test_lossy_con_muro_estima_el_bitrate_real():
+    """No es lo mismo 'corta bajo' que 'ese muro es de un 128 y dice 320'."""
+    bandera, motivo = clasificar_lossy(16.0, 20.0, es_muro=True, bitrate_kbps=320)
+    assert bandera == SOSPECHOSO
+    assert "~128k" in motivo and "320k" in motivo
+
+
+def test_el_motivo_dice_que_pregunta_responde():
+    """Quien lee el CSV tiene que distinguir 'bitrate inflado' de 'pudo ser lossy antes'."""
+    _, m_lossy = clasificar_lossy(16.0, 20.0, es_muro=True, bitrate_kbps=320)
+    _, m_lossless = clasificar_lossless(16.0, es_muro=True, muro_db=60.0)
+    assert m_lossy.startswith("[bitrate inflado]")
+    assert m_lossless.startswith("[pudo ser lossy antes]")
+    assert m_lossy != m_lossless
+
+
+def test_corte_por_debajo_de_la_tabla_no_inventa_un_bitrate():
+    """El WhatsApp corta en 9.7 kHz: decir '~0k' sería inventar un número."""
+    _, motivo = clasificar_lossy(9.7, 20.0, es_muro=True, bitrate_kbps=320)
+    assert "~0k" not in motivo
+    assert "más bajo que cualquier escalón" in motivo
+
+
+def test_bitrate_implicito_invierte_la_tabla():
+    assert bitrate_implicito_kbps(20.0) == 320
+    assert bitrate_implicito_kbps(18.5) == 192
+    assert bitrate_implicito_kbps(16.0) == 128
+    assert bitrate_implicito_kbps(5.0) == 0
+
+
+def test_clasificar_despacha_segun_el_formato():
+    """Mismos números, distinto formato -> distinta pregunta y distinto resultado."""
+    lossy = clasificar(15.0, 20.0, es_muro=True, lossless=False, bitrate_kbps=320)
+    lossless = clasificar(15.0, 20.0, es_muro=True, lossless=True, muro_db=60.0)
+    assert lossy[0] == lossless[0] == SOSPECHOSO
+    assert lossy[1] != lossless[1]
 
 
 # --- Validación contra la marca manual ---------------------------------------------------
