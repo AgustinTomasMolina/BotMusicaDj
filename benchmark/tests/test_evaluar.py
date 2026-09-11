@@ -62,8 +62,24 @@ def test_cruza_por_basename_ignorando_la_ruta():
 
 
 def test_cruce_no_distingue_mayusculas():
-    res = cruzar([_fila_a("Track.WAV", 128.0, "8A")], [_fila_gt(1, "track.wav", 128.0, "8A")])
-    assert len(res["cruces"]) == 1
+    """Que salga UNA fila no dice que sea la correcta: podría haber cruzado cualquier cosa.
+
+    Se usan dos archivos con datos distintos para que un cruce equivocado sea detectable:
+    si 'Track.WAV' se emparejara con la fila del GT que no le toca, los valores cantarían.
+    """
+    a = [_fila_a("Track.WAV", 128.0, "8A"), _fila_a("OTRO.MP3", 150.0, "5A")]
+    g = [_fila_gt(1, "track.wav", 128.0, "8A", artist="Boltcore", name="Try To Make It"),
+         _fila_gt(2, "otro.mp3", 150.0, "5A", artist="JOR", name="SWITCH")]
+    cruces = cruzar(a, g)["cruces"]
+    assert len(cruces) == 2
+
+    por = {c.archivo: c for c in cruces}
+    assert set(por) == {"Track.WAV", "OTRO.MP3"}
+    # Cada uno emparejado con SU fila del ground truth, no con la otra.
+    assert por["Track.WAV"].artista == "Boltcore" and por["Track.WAV"].bpm_ref == 128.0
+    assert por["OTRO.MP3"].artista == "JOR" and por["OTRO.MP3"].bpm_ref == 150.0
+    assert por["Track.WAV"].key_ref == "8A" and por["OTRO.MP3"].key_ref == "5A"
+    assert por["Track.WAV"].err_crudo == 0.0 and por["OTRO.MP3"].err_crudo == 0.0
 
 
 def test_homonimos_quedan_fuera_y_se_cuentan():

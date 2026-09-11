@@ -40,10 +40,21 @@ def test_itunes_configurado_y_existente(monkeypatch, tmp_path):
     assert config.itunes_dir() == d
 
 
-def test_el_staging_si_tiene_default(monkeypatch, tmp_path):
-    """El staging es interno del pipeline: puede tener default y crearse solo."""
-    monkeypatch.setenv(config.VAR_STAGING, str(tmp_path / "stg"))
-    assert config.staging_dir().exists()
+def test_el_staging_usa_la_variable_configurada(monkeypatch, tmp_path):
+    """Que exista un directorio no dice que sea EL configurado: pasaría ignorando la var."""
+    pedido = tmp_path / "stg_elegido"
+    monkeypatch.setenv(config.VAR_STAGING, str(pedido))
+    obtenido = config.staging_dir()
+    assert obtenido == pedido, f"se pidió {pedido} y devolvió {obtenido}"
+    assert obtenido.is_dir()
+
+
+def test_el_staging_tiene_default_si_no_esta_configurado(monkeypatch):
+    """Es interno del pipeline: puede crearse solo, pero dentro del repo, no en el cwd."""
+    monkeypatch.delenv(config.VAR_STAGING, raising=False)
+    d = config.staging_dir()
+    assert d.is_dir()
+    assert config.BASE_DIR in d.parents, f"el default cayó fuera del repo: {d}"
 
 
 # --- Estado por defecto ------------------------------------------------------------------------

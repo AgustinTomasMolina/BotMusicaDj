@@ -32,6 +32,11 @@ Un cambio que rompe cualquiera de estos no entra.
 
 ## Reglas de ingeniería (spec §5 — textuales)
 
+> Cómo se escriben los tests: **`CONTRIBUTING.md`**. Regla corta — un test que solo
+> verifica que algo no explotó no protege de nada (existencia, longitud, `is not None`,
+> "el parser no tiró excepción"), y un test reforzado que no verificaste que falla es
+> otro test ciego.
+
 **Antes de opinar**
 - Leer el código y citar archivo y línea. Nada de "probablemente estés usando".
 - No asumir que librosa o essentia hacen lo que dice la doc. Verificar contra ground truth.

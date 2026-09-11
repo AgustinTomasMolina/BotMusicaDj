@@ -173,10 +173,19 @@ def test_la_copia_lleva_los_tags(tmp_path):
     copia = escribir_en_copia(str(origen), tmp_path / "salida",
                               planificar(_prop(), _cal("sospechoso"), _tags()))
     tags = File(str(copia)).tags
-    claves = {str(k) for k in tags}
-    assert "TPE1" in claves and "TIT2" in claves
-    assert any(k.startswith("TXXX:MusiFlix") for k in claves)
-    assert any(k.startswith("COMM") for k in claves)
+    # Que el frame EXISTA no dice nada: pasaría con el artista equivocado. Se comparan
+    # los valores contra lo que el plan dijo que iba a escribir.
+    assert str(tags["TPE1"]) == "Fran Perrotta"
+    assert str(tags["TIT2"]) == "Static Bow"
+
+    registro = json.loads(str(next(v for k, v in tags.items()
+                                   if str(k).startswith("TXXX:MusiFlix"))))
+    assert registro["corte_khz"] == 20.1 and registro["bandera"] == "sospechoso"
+    assert registro["v"] and registro["fecha"]
+
+    comentario = str(next(v for k, v in tags.items() if str(k).startswith("COMM")))
+    assert comentario.startswith("MusiFlix"), comentario
+    assert "[bitrate] ok" in comentario      # el motivo real de la calidad, no un texto fijo
 
 
 def test_lo_preservado_no_se_reescribe_en_la_copia(tmp_path):
@@ -190,14 +199,54 @@ def test_lo_preservado_no_se_reescribe_en_la_copia(tmp_path):
     assert "TPE1" not in {str(k) for k in tags}
 
 
-@pytest.mark.parametrize("nombre", ["a.wav", "a.mp3", "a.flac"])
-def test_el_destino_recibe_el_archivo(tmp_path, nombre):
+@pytest.mark.parametrize("nombre,contenedor", [("a.wav", "WAVE"), ("a.flac", "FLAC"),
+                                               ("a.ogg", "OggVorbis")])
+def test_la_copia_queda_legible_en_cada_contenedor(tmp_path, nombre, contenedor):
+    """Que el archivo LLEGUE no alcanza: hay que poder ABRIRLO después de taggearlo.
+
+    Esta es exactamente la forma que dejó pasar los 26 WAVs corruptos de #5.3: el test
+    comprobaba `copia.exists()` y el nombre, y un WAV destrozado por un ID3 pelado existe
+    y se llama igual. Acá se abre la copia con mutagen y se exige un objeto del
+    contenedor correcto, no solo "algo".
+    """
     import soundfile as sf
+    from mutagen import File
+
     origen = tmp_path / nombre
-    if nombre.endswith(".mp3"):
-        pytest.skip("no se puede generar un mp3 válido sin encoder")
     rng = np.random.default_rng(0)
-    sf.write(origen, (0.1 * rng.standard_normal(22050)).astype(np.float32), 22050)
+    sf.write(origen, (0.1 * rng.standard_normal(22050 * 2)).astype(np.float32), 22050)
+
     copia = escribir_en_copia(str(origen), tmp_path / "salida",
                               planificar(_prop(), _cal(), _tags()))
     assert copia.exists() and copia.name == nombre
+
+    m = File(str(copia))
+    assert m is not None, f"{nombre}: la copia quedó ilegible después de taggearla"
+    assert type(m).__name__ == contenedor, (
+        f"{nombre}: se esperaba {contenedor} y mutagen leyó {type(m).__name__} — "
+        "el contenedor se corrompió al escribir")
+    # Y que el audio siga ahí: un header sano con el stream roto también engaña.
+    assert m.info.length > 1.0, f"{nombre}: la copia perdió el audio"
+
+
+def test_la_copia_mp3_queda_legible(tmp_path):
+    """El MP3 va aparte porque no se puede generar con soundfile (hace falta un encoder).
+
+    Se arma a mano una tira de frames MPEG-1 Layer III válidos: mutagen necesita varios
+    consecutivos para sincronizar, no alcanza con un header suelto.
+    """
+    from mutagen import File
+
+    # MPEG-1 Layer III, 128 kbps, 44100 Hz, sin padding, mono.
+    # Tamaño de frame = 144 * 128000 / 44100 = 417 bytes.
+    cabecera = b"\xff\xfb\x90\x00"
+    frame = cabecera + b"\x00" * (417 - len(cabecera))
+    origen = tmp_path / "a.mp3"
+    origen.write_bytes(frame * 40)
+
+    copia = escribir_en_copia(str(origen), tmp_path / "salida",
+                              planificar(_prop(), _cal(), _tags()))
+    m = File(str(copia))
+    assert m is not None, "la copia mp3 quedó ilegible después de taggearla"
+    assert type(m).__name__ == "MP3"
+    assert str(m.tags["TPE1"]) == "Fran Perrotta"
