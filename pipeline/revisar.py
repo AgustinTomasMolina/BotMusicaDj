@@ -12,6 +12,7 @@ NO toca los originales: las copias se escriben en el staging (verificado por sha
 tarea 5.3 y sostenido acá).
 """
 import argparse
+import datetime
 import sys
 from pathlib import Path
 
@@ -24,11 +25,23 @@ from calidad.normalizar_tags import analizar as parsear_nombres
 from calidad.tags import leer_tags
 from motor.tonalidad import camelot_a_clasica
 from pipeline import config
-from pipeline.reporte import Fila, estado_por_defecto, generar
+from pipeline.reporte import Fila, estado_por_defecto, generar, motivos_pendiente
 
 
-def procesar(rutas: list[str], staging: Path, progreso: bool = True) -> list[Fila]:
-    """Corre todo el análisis y escribe las copias. Devuelve las filas del reporte."""
+def procesar(rutas: list[str], staging: Path, progreso: bool = True,
+             consenso: bool = False) -> list[Fila]:
+    """Corre todo el análisis y escribe las copias. Devuelve las filas del reporte.
+
+    `consenso` tiene que arrancar en False, igual que `benchmark.analizar` y
+    `benchmark.motor_real`: si el pipeline usara `tono_consenso()` por su cuenta habría DOS
+    tonalidades distintas para el mismo track — una en el tag y en el XML de Rekordbox, y
+    otra la que mide el benchmark y consume el scoring. El consenso sigue detrás del mismo
+    flag en los tres lados hasta que haya el antes/después contra ground truth que pide §5
+    para cambiar el default del motor.
+
+    `pipeline/tests/test_pipeline.py::test_el_pipeline_y_el_benchmark_usan_la_misma_tonalidad`
+    falla si las dos rutas se separan.
+    """
     props = {p.ruta: p for p in parsear_nombres(rutas)}
 
     if progreso:
@@ -50,7 +63,7 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True) -> list[Fil
     filas: list[Fila] = []
     for i, ruta in enumerate(rutas, 1):
         cal = medir_calidad(ruta)
-        motor = analizar_motor(ruta, consenso=True)
+        motor = analizar_motor(ruta, consenso=consenso)
         tags_actuales = leer_tags(ruta)
         plan = planificar(props[ruta], cal, tags_actuales)
         copia = escribir_en_copia(ruta, staging, plan)
@@ -58,10 +71,12 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True) -> list[Fil
         gid = grupo_de.get(ruta, 0)
         # Lo que va a quedar en el tag: lo escrito si se escribe, lo que ya estaba si no.
         valor = {c.campo: (c.despues or c.antes) for c in plan}
+        artista, titulo = valor.get("artista", ""), valor.get("titulo", "")
+        duracion = motor.duracion_s if motor else 0.0
+        motivos = motivos_pendiente(cal.bandera, gid, artista, titulo, duracion)
         filas.append(Fila(
             archivo=Path(ruta).name, ruta_staging=str(copia), ruta_original=ruta,
-            artista=valor.get("artista", ""), titulo=valor.get("titulo", ""),
-            duracion_s=motor.duracion_s if motor else 0.0,
+            artista=artista, titulo=titulo, duracion_s=duracion,
             corte_khz=cal.corte_medido_khz, bandera=cal.bandera, muro_db=cal.muro_db,
             bpm=motor.bpm_est if motor else 0.0,
             camelot=motor.key_est if motor else "?",
@@ -71,7 +86,9 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True) -> list[Fil
             grupo_id=gid, accion_duplicado=accion_dup.get(ruta, ""),
             cambios=[(c.campo, c.antes, c.despues, c.motivo)
                      for c in plan if c.accion == "escribir"],
-            estado=estado_por_defecto(cal.bandera, gid),
+            metodo=motor.metodo if motor else "tono",
+            motivos=motivos,
+            estado=estado_por_defecto(cal.bandera, gid, artista, titulo, duracion),
         ))
         if progreso and i % 10 == 0:
             print(f"  {i}/{len(rutas)}…", flush=True)
@@ -90,7 +107,11 @@ def main(argv=None) -> int:
     ap.add_argument("--staging", type=Path, default=None,
                     help="Dónde dejar las copias procesadas (default: MUSIFLIX_STAGING).")
     ap.add_argument("--reporte", type=Path, default=None,
-                    help="Dónde escribir el HTML (default: dentro del staging).")
+                    help="Dónde escribir el HTML (default: junto al staging, con fecha).")
+    ap.add_argument("--consenso", action="store_true",
+                    help="Usar tono_consenso() para la tonalidad. Es el MISMO flag que "
+                         "benchmark.analizar: si se prende acá hay que prenderlo allá, o "
+                         "el tag y el benchmark quedan con tonalidades distintas.")
     args = ap.parse_args(argv)
 
     rutas = sorted(str(p) for p in args.carpeta.rglob("*") if p.suffix.lower() in EXTS)
@@ -102,18 +123,24 @@ def main(argv=None) -> int:
     staging.mkdir(parents=True, exist_ok=True)
     print(f"Procesando {len(rutas)} archivos → staging: {staging}")
 
-    filas = procesar(rutas, staging)
-    destino = args.reporte or (staging / "revision.html")
+    filas = procesar(rutas, staging, consenso=args.consenso)
+    # El reporte va FUERA del staging y con fecha: el staging se pisa en cada corrida, y
+    # comparar dos tandas es justo lo que hace falta cuando algo cambió.
+    sello = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    destino = args.reporte or (staging.parent / f"revision_{sello}.html")
     generar(filas, staging, destino)
 
-    n = {}
+    n: dict[str, int] = {}
+    por_motivo: dict[str, int] = {}
     for f in filas:
         n[f.estado] = n.get(f.estado, 0) + 1
-    grupos = len({f.grupo_id for f in filas if f.grupo_id})
+        for m in f.motivos:
+            por_motivo[m] = por_motivo.get(m, 0) + 1
     print(f"\n{len(filas)} tracks · aprobados por defecto {n.get('aprobado', 0)} · "
           f"pendientes {n.get('pendiente', 0)}")
-    print(f"  sospechosos: {sum(1 for f in filas if f.bandera == 'sospechoso')} · "
-          f"grupos de duplicados: {grupos}")
+    print("  pendientes por motivo (un archivo puede tener varios):")
+    for m, c in sorted(por_motivo.items(), key=lambda x: -x[1]):
+        print(f"    {m:16} {c:3}")
     print(f"\nAbrí el reporte con doble clic:\n  {destino}")
     print("\nRevisá, marcá qué aprobar, bajá decisiones.json y después:")
     print("  python -m pipeline.aplicar --decisiones decisiones.json")

@@ -154,22 +154,29 @@ def _valores(cambios: list[Cambio]) -> dict[str, str]:
     return {c.campo: c.despues for c in cambios if c.accion == ESCRIBIR}
 
 
+def escribir_campos(ruta: Path, vals: dict) -> None:
+    """Escribe `vals` en el archivo que se le pase, eligiendo el contenedor correcto.
+
+    Se usa tanto al armar la copia del staging como cuando `pipeline.aplicar` vuelca lo
+    que se completó a mano en el reporte. Un WAV NO admite ID3 pelado: ver `_escribir_id3`.
+    """
+    if not vals:
+        return
+    ext = Path(ruta).suffix.lower()
+    if ext in _ID3:
+        _escribir_id3(Path(ruta), vals)
+    elif ext in _VORBIS:
+        _escribir_vorbis(Path(ruta), vals)
+    elif ext in _MP4:
+        _escribir_mp4(Path(ruta), vals)
+
+
 def escribir_en_copia(origen: str, destino_dir: Path, cambios: list[Cambio]) -> Path:
     """Copia el archivo al destino y taggea LA COPIA. El original no se abre para escritura."""
     destino_dir.mkdir(parents=True, exist_ok=True)
     destino = destino_dir / Path(origen).name
     shutil.copy2(origen, destino)          # copy2 preserva mtime; el original solo se lee
-
-    vals = _valores(cambios)
-    if not vals:
-        return destino
-    ext = destino.suffix.lower()
-    if ext in _ID3:
-        _escribir_id3(destino, vals)
-    elif ext in _VORBIS:
-        _escribir_vorbis(destino, vals)
-    elif ext in _MP4:
-        _escribir_mp4(destino, vals)
+    escribir_campos(destino, _valores(cambios))
     return destino
 
 

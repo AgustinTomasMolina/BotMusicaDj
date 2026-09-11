@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from calidad.escribir_tags import escribir_campos
 from pipeline import config
 from pipeline.reporte import APROBADO
 
@@ -102,7 +103,16 @@ def aplicar(decisiones: list[dict], carpeta_itunes: Path, xml_destino: Path,
             faltantes.append(str(origen))
             continue
         if copiar:
-            shutil.copy2(origen, carpeta_itunes / origen.name)
+            final = carpeta_itunes / origen.name
+            shutil.copy2(origen, final)
+            # Lo que se completó a mano en el reporte se escribe sobre la copia final.
+            # Es la razón de ser de los campos editables: sin esto el reporte avisa del
+            # problema pero no lo resuelve, y renombrar 28 archivos ya dentro de iTunes
+            # —sin el contexto de la carpeta de descargas— es el trabajo que se evita.
+            vals = {k: v for k, v in (("artista", (d.get("artista") or "").strip()),
+                                      ("titulo", (d.get("titulo") or "").strip())) if v}
+            if vals and d.get("editado"):
+                escribir_campos(final, vals)
         copiados.append(origen.name)
 
     # El XML se arma solo con lo que efectivamente se copió.

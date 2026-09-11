@@ -69,7 +69,8 @@ def _fila(**kw):
     base = dict(archivo="a.wav", ruta_staging="C:/stg/a.wav", ruta_original="C:/orig/a.wav",
                 artista="Fran Perrotta", titulo="Static Bow", duracion_s=346.0,
                 corte_khz=21.8, bandera="ok", muro_db=4.0, bpm=128.04,
-                camelot="2A", clasica="D#m", confianza=1.0, acuerdo="3/3")
+                camelot="2A", clasica="D#m", confianza=1.0, acuerdo="3/3",
+                metodo="tono_consenso")
     base.update(kw)
     f = Fila(**base)
     f.estado = estado_por_defecto(f.bandera, f.grupo_id)
@@ -264,3 +265,133 @@ def test_el_xml_no_falla_con_titulo_vacio(tmp_path):
         xml, itunes)
     t = parsear(xml)[0]
     assert t["name"] == "sin_titulo" and t["artist"] == ""
+
+
+# --- 5.66: pipeline y motor tienen que usar la MISMA tonalidad ---------------------------
+
+
+def test_el_default_de_consenso_es_el_mismo_en_las_dos_rutas():
+    """Barato y rápido: si alguien cambia un default y no el otro, esto falla.
+
+    Que difieran significa dos tonalidades para el mismo track — una va al tag y al XML de
+    Rekordbox, la otra es la que mide el benchmark y consume el scoring.
+    """
+    import inspect
+
+    from benchmark.analizar import analizar_uno
+    from pipeline.revisar import procesar
+
+    d_bench = inspect.signature(analizar_uno).parameters["consenso"].default
+    d_pipe = inspect.signature(procesar).parameters["consenso"].default
+    assert d_bench == d_pipe, (
+        f"el benchmark usa consenso={d_bench} y el pipeline consenso={d_pipe}: "
+        "habría dos tonalidades distintas para el mismo track")
+    assert d_pipe is False, ("el default tiene que seguir siendo tono(); cambiarlo "
+                             "necesita el A/B contra ground truth que pide §5")
+
+
+def test_pipeline_y_benchmark_dan_la_misma_tonalidad_sobre_el_mismo_audio(tmp_path):
+    """La prueba de verdad: las dos rutas sobre el mismo archivo, mismo resultado."""
+    import numpy as np
+    import soundfile as sf
+
+    from benchmark.analizar import analizar_uno
+    from pipeline.revisar import procesar
+
+    sr = 22050
+    t = np.arange(sr * 100) / sr
+    y = (0.4 * np.sin(2 * np.pi * 110.0 * t) + 0.2 * np.sin(2 * np.pi * 165.0 * t))
+    ruta = tmp_path / "tono.wav"
+    sf.write(ruta, y.astype(np.float32), sr)
+
+    del_bench = analizar_uno(str(ruta))
+    del_pipe = procesar([str(ruta)], tmp_path / "stg", progreso=False)[0]
+
+    assert del_pipe.camelot == del_bench.key_est, (
+        f"el pipeline dice {del_pipe.camelot} y el benchmark {del_bench.key_est}")
+    assert del_pipe.metodo == del_bench.metodo == "tono"
+
+
+# --- 5.65: sin nombre y no-track no pueden auto-aprobarse -------------------------------
+
+
+def test_sin_nombre_no_se_auto_aprueba():
+    """28 archivos entrarían a iTunes como '(sin título)' y habría que renombrarlos a mano."""
+    from pipeline.reporte import MOT_SIN_NOMBRE, motivos_pendiente
+
+    assert estado_por_defecto("ok", 0, "", "", 300.0) == PENDIENTE
+    assert estado_por_defecto("ok", 0, "Artista", "", 300.0) == PENDIENTE
+    assert MOT_SIN_NOMBRE in motivos_pendiente("ok", 0, "", "Titulo", 300.0)
+
+
+def test_con_nombre_completo_si_se_aprueba():
+    assert estado_por_defecto("ok", 0, "Artista", "Titulo", 300.0) == APROBADO
+
+
+def test_lo_que_no_es_track_no_se_auto_aprueba():
+    """El loop de 0:31 no va a iTunes."""
+    from pipeline.reporte import MOT_NO_TRACK, motivos_pendiente
+
+    assert estado_por_defecto("ok", 0, "A", "T", 31.0) == PENDIENTE
+    assert MOT_NO_TRACK in motivos_pendiente("ok", 0, "A", "T", 31.0)
+    assert estado_por_defecto("ok", 0, "A", "T", 96.0) == APROBADO
+
+
+def test_un_archivo_puede_tener_varios_motivos():
+    from pipeline.reporte import (
+        MOT_DUPLICADO,
+        MOT_NO_TRACK,
+        MOT_SIN_NOMBRE,
+        MOT_SOSPECHOSO,
+        motivos_pendiente,
+    )
+
+    m = motivos_pendiente("sospechoso", 2, "", "", 20.0)
+    assert set(m) == {MOT_SOSPECHOSO, MOT_DUPLICADO, MOT_SIN_NOMBRE, MOT_NO_TRACK}
+
+
+def test_el_reporte_da_campos_editables_solo_donde_hacen_falta(tmp_path):
+    from pipeline.reporte import MOT_SIN_NOMBRE
+
+    con = _fila(artista="", titulo="", ruta_original="C:/orig/misterioso.wav")
+    con.motivos = [MOT_SIN_NOMBRE]
+    sin = _fila(artista="A", titulo="T")
+    h = generar([con, sin], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert h.count('class="ed-artista"') == 1
+    assert "misterioso.wav" in h        # el nombre original, que es lo único que hay
+
+
+def test_la_key_no_se_atenua_cuando_el_metodo_no_da_confianza_util(tmp_path):
+    """Con tono() la confianza es la correlación Krumhansl, medida como no predictiva."""
+    f = _fila(confianza=0.30, metodo="tono")
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert "no predice fiabilidad" in h
+    assert 'class="dudoso"' not in h      # la definicion CSS existe igual; lo que importa es el uso
+
+
+def test_la_key_si_se_atenua_con_consenso(tmp_path):
+    f = _fila(confianza=0.33, acuerdo="1/3", metodo="tono_consenso")
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert 'class="dudoso"' in h and "?" in h
+
+
+def test_aplicar_escribe_lo_que_se_completo_a_mano(tmp_path):
+    """Los valores editados en el reporte tienen que llegar al tag de la copia final."""
+    import numpy as np
+    import soundfile as sf
+    from mutagen import File
+
+    stg = tmp_path / "stg"
+    stg.mkdir()
+    p = stg / "misterioso.wav"
+    sf.write(p, np.zeros(22050, dtype=np.float32), 22050)
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+
+    aplicar([{"archivo": p.name, "ruta_staging": str(p), "artista": "Fran Perrotta",
+              "titulo": "Velvet hours", "editado": True, "grupo_id": 0,
+              "estado": APROBADO}], itunes, tmp_path / "rb.xml")
+
+    tags = File(str(itunes / p.name)).tags
+    assert str(tags["TPE1"]) == "Fran Perrotta"
+    assert str(tags["TIT2"]) == "Velvet hours"
