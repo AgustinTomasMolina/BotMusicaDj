@@ -18,10 +18,17 @@ aiohttp>=3.9.1
 redis>=5.0.0
 rq>=1.16.0
 
-# Análisis de audio (BPM/tonalidad, calidad espectral) — el código ya los importa
-librosa>=0.10.2
-numpy>=1.26,<2.1        # numba (dep de librosa) aún no soporta numpy 2.1+
-mutagen>=1.47.0         # tags ID3/FLAC/MP4 al descargar
+# Análisis de audio (BPM/tonalidad, calidad espectral) — el código ya los importa.
+#
+# ESTAS VAN FIJADAS, no con >=. El motor MIDE, y una versión distinta de librosa o de
+# numpy puede devolver otro BPM o otra tonalidad para el mismo archivo. Una sesión de
+# ground truth corrida con otras versiones no es comparable con la anterior, y el
+# "antes/después" que pide §5 deja de significar algo.
+# Versiones verificadas en un venv limpio con toda la suite en verde.
+librosa==0.11.0
+numpy==2.0.2            # numba (dep de librosa) aún no soporta numpy 2.1+
+soundfile==0.14.0       # lo trae librosa, pero se escribe audio directo: explícito
+mutagen==1.48.1         # tags ID3/FLAC/MP4
 
 # Utils
 colorama>=0.4.6
