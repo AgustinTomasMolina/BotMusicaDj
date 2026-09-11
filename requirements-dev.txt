@@ -1,0 +1,12 @@
+# Todo lo de producción, más lo que hace falta para correr la suite y el linter.
+#
+# `-r requirements.txt` va PRIMERO a propósito: así pip resuelve con las versiones
+# fijadas del stack de audio ya puestas sobre la mesa, y ninguna herramienta de
+# desarrollo puede arrastrar otra versión de librosa o de numpy. Si el motor mide
+# distinto en dos máquinas, las mediciones dejan de compararse.
+-r requirements.txt
+
+# Versiones verificadas en un venv limpio con la suite completa en verde (2026-09-11).
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.6
