@@ -177,6 +177,20 @@ def tono_consenso(y: np.ndarray, sr: int, n_tramos: int = _N_TRAMOS,
             "acuerdo": (top, len(votos)), "tramos": votos}
 
 
+# Camelot → notación clásica. Es el mapa de arriba dado vuelta; se arma una sola vez.
+_CLASICA = {cam: f"{nota}{'m' if modo == 'min' else ''}"
+            for (nota, modo), cam in _CAMELOT.items()}
+
+
+def camelot_a_clasica(camelot: str) -> str:
+    """'8A' → 'Am', '11B' → 'A'. Cadena vacía si no es un código Camelot válido.
+
+    La spec §6 pide mostrar las DOS notaciones juntas: Camelot para mezclar y clásica
+    para leerla como músico. Mostrar solo una obliga a traducir de memoria.
+    """
+    return _CLASICA.get((camelot or "").strip().upper(), "")
+
+
 def _parse_camelot(c: str):
     if not c or c == "?":
         return None

@@ -37,26 +37,26 @@ Repository = "https://github.com/AgustinTomasMolina/BotMusicaDj"
 
 # Layout plano: los paquetes del motor están en la raíz del repo, no en src/.
 [tool.hatch.build.targets.wheel]
-packages = ["motor", "benchmark", "ground_truth", "calidad"]
+packages = ["motor", "benchmark", "ground_truth", "calidad", "pipeline"]
 
 # ---------------------------------------------------------------------------
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["motor", "benchmark", "ground_truth", "calidad"]
+src = ["motor", "benchmark", "ground_truth", "calidad", "pipeline"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]  # el formatter ya se encarga del largo de línea
 
 [tool.ruff.lint.isort]
-known-first-party = ["motor", "benchmark", "ground_truth", "calidad"]
+known-first-party = ["motor", "benchmark", "ground_truth", "calidad", "pipeline"]
 
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-testpaths = ["motor/tests", "benchmark/tests", "ground_truth/tests", "calidad/tests"]
+testpaths = ["motor/tests", "benchmark/tests", "ground_truth/tests", "calidad/tests", "pipeline/tests"]
 addopts = "-q --strict-markers"
 markers = [
     "slow: tests que analizan audio real (se saltean con -m 'not slow')",
