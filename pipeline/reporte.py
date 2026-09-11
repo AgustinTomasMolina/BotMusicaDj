@@ -208,6 +208,11 @@ function bajar(){
       titulo:et?et.value.trim():t.dataset.titulo,
       editado:!!(ea||et),grupo_id:+t.dataset.grupo,
       motivos:(t.dataset.motivos||'').split('|').filter(Boolean),
+      // Estos tres viajan para que el XML de Rekordbox los lleve. Sin ellos, importar
+      // obliga a Rekordbox a reanalizar todo, que es el trabajo que el pipeline evita.
+      bpm:parseFloat(t.dataset.bpm)||0,
+      camelot:t.dataset.camelot||'', clasica:t.dataset.clasica||'',
+      duracion_s:parseFloat(t.dataset.duracion)||0,
       estado:r?r.value:'pendiente'});
   });
   const doc={version:1,generado:new Date().toISOString(),
@@ -288,7 +293,9 @@ def _fila_html(f: Fila) -> str:
     return f"""<div class="{clase}" data-archivo="{html.escape(f.archivo)}"
  data-staging="{html.escape(f.ruta_staging)}" data-artista="{html.escape(f.artista)}"
  data-titulo="{html.escape(f.titulo)}" data-grupo="{f.grupo_id}"
- data-motivos="{html.escape('|'.join(f.motivos))}">
+ data-motivos="{html.escape('|'.join(f.motivos))}"
+ data-bpm="{f.bpm:.1f}" data-camelot="{html.escape(f.camelot)}"
+ data-clasica="{html.escape(f.clasica)}" data-duracion="{f.duracion_s:.1f}">
   <div class="cab"><span class="tit">{titulo}</span><span class="art">{artista}</span>
     {badge}{dup}</div>
   <div class="datos">

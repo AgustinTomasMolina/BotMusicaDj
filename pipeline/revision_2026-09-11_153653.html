@@ -1,0 +1,1288 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<title>MusiFlix — revisión</title><style>
+:root{--bg:#14161a;--card:#1d2026;--línea:#2b2f38;--txt:#e8eaee;--suave:#9aa2b1;
+--ok:#4ade80;--sospecha:#fbbf24;--dup:#60a5fa;--mal:#f87171}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--bg);color:var(--txt);
+font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--suave);margin-bottom:20px}
+.resumen{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.chip{background:var(--card);border:1px solid var(--línea);border-radius:999px;
+padding:6px 14px}
+.chip b{font-size:16px}
+section{margin-bottom:28px}
+h2{font-size:15px;margin:0 0 10px;color:var(--suave);text-transform:uppercase;
+letter-spacing:.06em}
+.track{background:var(--card);border:1px solid var(--línea);border-radius:10px;
+padding:12px 14px;margin-bottom:8px}
+.track.sospechoso{border-left:3px solid var(--sospecha)}
+.track.dup{border-left:3px solid var(--dup)}
+.cab{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+.tit{font-weight:600}
+.art{color:var(--suave)}
+.vacio{color:var(--mal);font-style:italic}
+.datos{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;color:var(--suave);
+font-variant-numeric:tabular-nums}
+.datos b{color:var(--txt);font-weight:600}
+.dudoso{opacity:.55}
+.badge{border-radius:4px;padding:1px 7px;font-size:12px}
+.b-ok{background:rgba(74,222,128,.14);color:var(--ok)}
+.b-sos{background:rgba(251,191,36,.14);color:var(--sospecha)}
+.grupo{border:1px dashed var(--dup);border-radius:10px;padding:10px;margin-bottom:12px}
+.grupo>.et{color:var(--dup);font-size:12px;margin-bottom:8px}
+audio{height:32px;vertical-align:middle}
+details{margin-top:6px}
+summary{cursor:pointer;color:var(--suave);font-size:13px}
+table.diff{border-collapse:collapse;margin-top:6px;font-size:13px;width:100%}
+table.diff td{border-top:1px solid var(--línea);padding:3px 8px;vertical-align:top}
+table.diff td:first-child{color:var(--suave);white-space:nowrap}
+.editar{margin:8px 0;padding:8px;background:rgba(96,165,250,.07);border-radius:6px}
+.editar .orig{color:var(--suave);font-size:12px;margin-bottom:6px}
+.editar code{color:var(--txt)}
+.editar input{background:var(--bg);border:1px solid var(--línea);color:var(--txt);
+border-radius:6px;padding:6px 10px;margin-right:6px;width:240px;font-size:13px}
+.editar input:focus{outline:0;border-color:var(--dup)}
+.acciones{display:flex;gap:4px;margin-top:8px}
+.acciones label{border:1px solid var(--línea);border-radius:6px;padding:4px 12px;
+cursor:pointer;font-size:13px;color:var(--suave)}
+.acciones input{display:none}
+.acciones input:checked+span{color:var(--txt);font-weight:600}
+.acciones label:has(input[value=aprobado]:checked){border-color:var(--ok);
+background:rgba(74,222,128,.1)}
+.acciones label:has(input[value=descartado]:checked){border-color:var(--mal);
+background:rgba(248,113,113,.1)}
+.acciones label:has(input[value=pendiente]:checked){border-color:var(--sospecha);
+background:rgba(251,191,36,.1)}
+.barra{position:sticky;bottom:0;background:var(--card);border:1px solid var(--línea);
+border-radius:10px;padding:12px 16px;display:flex;gap:16px;align-items:center;
+margin-top:20px}
+button{background:var(--ok);color:#0b0d10;border:0;border-radius:8px;padding:9px 18px;
+font-weight:700;cursor:pointer;font-size:14px}
+.nota{color:var(--suave);font-size:13px;border-left:2px solid var(--línea);
+padding-left:10px;margin:16px 0}
+</style></head>
+<body data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging">
+<h1>Revisión antes de mandar a iTunes</h1>
+<div class="sub">57 tracks · las copias procesadas están en
+ <code>C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging</code> · los originales no se tocaron</div>
+<div class="resumen">
+  <span class="chip">aprobados <b id="n-aprobado">23</b></span>
+  <span class="chip">pendientes <b id="n-pendiente">34</b></span>
+  <span class="chip">descartados <b id="n-descartado">0</b></span>
+  <span class="chip">duplicados <b>6</b></span>
+</div>
+<div class="sub" style="margin:-12px 0 8px">pendientes por motivo — un archivo puede
+ tener más de uno:</div>
+<div class="resumen"><span class="chip">sin nombre <b>28</b></span><span class="chip">no es un track <b>8</b></span><span class="chip">duplicado <b>8</b></span><span class="chip">sospechoso <b>6</b></span></div>
+<div class="nota">Los CUE POINTS viajan <b>solo por el XML de Rekordbox</b>. iTunes no los
+transporta: si importás por iTunes, los cues no llegan. Por eso <code>aplicar</code>
+escribe las dos salidas.</div>
+<section><h2>No son tracks (8) — loops, samples y notas de voz. Menos de 90s: NO van a iTunes</h2><div class="track" data-archivo="2026-08-07T21_12_03.636Z.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\2026-08-07T21_12_03.636Z.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>0:13</span>
+    <span>BPM <b>145.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">12A · C#m</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 2 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/2026-08-07T21_12_03.636Z.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>2026-08-07T21_12_03.636Z.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:1.7,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-2026-08-07T21_12_03.636Z.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-2026-08-07T21_12_03.636Z.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-2026-08-07T21_12_03.636Z.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track dup" data-archivo="PURO sample @franprtta B minor 113bpm (1).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\PURO sample @franprtta B minor 113bpm (1).wav" data-artista=""
+ data-titulo="" data-grupo="2"
+ data-motivos="duplicado|sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: conservar</span></div>
+  <div class="datos">
+    <span>0:41</span>
+    <span>BPM <b>86.4</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10A · Bm</span></span>
+    <span>corte <b>7.5 kHz</b></span>
+    <span>muro 15 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/PURO%20sample%20%40franprtta%20B%20minor%20113bpm%20%281%29.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>PURO sample @franprtta B minor 113bpm (1).wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:7.53,&quot;muro_db&quot;:15.0,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm (1).wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm (1).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm (1).wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track dup" data-archivo="PURO sample @franprtta B minor 113bpm.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\PURO sample @franprtta B minor 113bpm.wav" data-artista=""
+ data-titulo="" data-grupo="2"
+ data-motivos="duplicado|sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: descartar</span></div>
+  <div class="datos">
+    <span>0:41</span>
+    <span>BPM <b>86.4</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10A · Bm</span></span>
+    <span>corte <b>7.5 kHz</b></span>
+    <span>muro 15 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/PURO%20sample%20%40franprtta%20B%20minor%20113bpm.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>PURO sample @franprtta B minor 113bpm.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:7.53,&quot;muro_db&quot;:15.0,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-PURO sample @franprtta B minor 113bpm.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="ProyectMoli_08_08_25 (1).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\ProyectMoli_08_08_25 (1).wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>0:11</span>
+    <span>BPM <b>127.5</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">4B · G#</span></span>
+    <span>corte <b>14.2 kHz</b></span>
+    <span>muro 5 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/ProyectMoli_08_08_25%20%281%29.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>ProyectMoli_08_08_25 (1).wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:14.25,&quot;muro_db&quot;:5.1,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-ProyectMoli_08_08_25 (1).wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-ProyectMoli_08_08_25 (1).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-ProyectMoli_08_08_25 (1).wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="ProyectMoli_08_08_25.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\ProyectMoli_08_08_25.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>0:08</span>
+    <span>BPM <b>127.5</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">4B · G#</span></span>
+    <span>corte <b>14.2 kHz</b></span>
+    <span>muro 5 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/ProyectMoli_08_08_25.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>ProyectMoli_08_08_25.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:14.24,&quot;muro_db&quot;:5.2,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-ProyectMoli_08_08_25.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-ProyectMoli_08_08_25.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-ProyectMoli_08_08_25.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="jazzito.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\jazzito.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>0:52</span>
+    <span>BPM <b>120.5</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">7B · F</span></span>
+    <span>corte <b>17.5 kHz</b></span>
+    <span>muro 5 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/jazzito.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>jazzito.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:17.5,&quot;muro_db&quot;:5.3,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-jazzito.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-jazzito.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-jazzito.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track sospechoso" data-archivo="kylian-dictador.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\kylian-dictador.mp3" data-artista=""
+ data-titulo="Video Request #012" data-grupo="0"
+ data-motivos="sospechoso|sin nombre|no es un track">
+  <div class="cab"><span class="tit">Video Request #012</span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-sos">sospechoso</span></div>
+  <div class="datos">
+    <span>0:08</span>
+    <span>BPM <b>85.3</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10A · Bm</span></span>
+    <span>corte <b>16.0 kHz</b></span>
+    <span>muro 58 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/kylian-dictador.mp3"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>kylian-dictador.mp3</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="Video Request #012">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:15.96,&quot;muro_db&quot;:57.9,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-kylian-dictador.mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-kylian-dictador.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-kylian-dictador.mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="looopiiiii.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\looopiiiii.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre|no es un track">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>0:31</span>
+    <span>BPM <b>126.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">1A · G#m</span></span>
+    <span>corte <b>15.0 kHz</b></span>
+    <span>muro 2 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/looopiiiii.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>looopiiiii.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:15.03,&quot;muro_db&quot;:2.5,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-looopiiiii.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-looopiiiii.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-looopiiiii.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div></section><section><h2>Duplicados</h2><div class="grupo"><div class="et">grupo 1 — 2 archivos con el mismo audio</div><div class="track dup" data-archivo="Not.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Not.mp3" data-artista=""
+ data-titulo="" data-grupo="1"
+ data-motivos="duplicado|sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: descartar</span></div>
+  <div class="datos">
+    <span>2:02</span>
+    <span>BPM <b>145.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 2 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Not.mp3"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Not.mp3</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:1.9,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Not.mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Not.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Not.mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track dup" data-archivo="Not.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Not.wav" data-artista=""
+ data-titulo="" data-grupo="1"
+ data-motivos="duplicado|sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: conservar</span></div>
+  <div class="datos">
+    <span>2:02</span>
+    <span>BPM <b>145.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 2 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Not.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Not.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:1.8,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Not.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Not.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Not.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div></div><div class="grupo"><div class="et">grupo 3 — 2 archivos con el mismo audio</div><div class="track dup" data-archivo="Think about me - fran perrotta edit (1).mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Think about me - fran perrotta edit (1).mp3" data-artista="Fran Perrotta"
+ data-titulo="Think about me (edit)" data-grupo="3"
+ data-motivos="duplicado">
+  <div class="cab"><span class="tit">Think about me (edit)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: conservar</span></div>
+  <div class="datos">
+    <span>4:12</span>
+    <span>BPM <b>127.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8B · C</span></span>
+    <span>corte <b>18.7 kHz</b></span>
+    <span>muro 74 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Think%20about%20me%20-%20fran%20perrotta%20edit%20%281%29.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido · grafía unificada a &#x27;Fran Perrotta&#x27;</td></tr><tr><td>titulo</td><td>—</td><td>→ Think about me (edit)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido · grafía unificada a &#x27;Fran Perrotta&#x27;</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:18.68,&quot;muro_db&quot;:74.5,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Think about me - fran perrotta edit (1).mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Think about me - fran perrotta edit (1).mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Think about me - fran perrotta edit (1).mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track dup" data-archivo="Think about me - fran perrotta edit.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Think about me - fran perrotta edit.mp3" data-artista="Fran Perrotta"
+ data-titulo="Think about me (edit)" data-grupo="3"
+ data-motivos="duplicado">
+  <div class="cab"><span class="tit">Think about me (edit)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: descartar</span></div>
+  <div class="datos">
+    <span>4:12</span>
+    <span>BPM <b>127.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">4A · Fm</span></span>
+    <span>corte <b>18.7 kHz</b></span>
+    <span>muro 74 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Think%20about%20me%20-%20fran%20perrotta%20edit.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido · grafía unificada a &#x27;Fran Perrotta&#x27;</td></tr><tr><td>titulo</td><td>—</td><td>→ Think about me (edit)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido · grafía unificada a &#x27;Fran Perrotta&#x27;</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:18.68,&quot;muro_db&quot;:74.5,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Think about me - fran perrotta edit.mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Think about me - fran perrotta edit.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Think about me - fran perrotta edit.mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div></div><div class="grupo"><div class="et">grupo 4 — 2 archivos con el mismo audio</div><div class="track sospechoso dup" data-archivo="WhatsApp Ptt 2025-10-14 at 17.20.49.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\WhatsApp Ptt 2025-10-14 at 17.20.49.mp3" data-artista=""
+ data-titulo="" data-grupo="4"
+ data-motivos="sospechoso|duplicado|sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-sos">sospechoso</span> <span class="badge b-sos">duplicado: conservar</span></div>
+  <div class="datos">
+    <span>4:06</span>
+    <span>BPM <b>104.2</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10B · D</span></span>
+    <span>corte <b>9.7 kHz</b></span>
+    <span>muro 43 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/WhatsApp%20Ptt%202025-10-14%20at%2017.20.49.mp3"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>WhatsApp Ptt 2025-10-14 at 17.20.49.mp3</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>2 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:9.67,&quot;muro_db&quot;:43.4,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr><tr><td>comentario</td><td>—</td><td>→ MusiFlix · revisar · [bitrate inflado] muro de codec a 9.7 kHz, que es más bajo que cualquier escalón de la tabla, pero declara 320k (10.3 kHz por debajo)</td><td style='color:var(--suave)'>sospechoso y comentario vacío</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track dup" data-archivo="WhatsApp Ptt 2025-10-14 at 17.20.49.ogg"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\WhatsApp Ptt 2025-10-14 at 17.20.49.ogg" data-artista=""
+ data-titulo="" data-grupo="4"
+ data-motivos="duplicado|sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span> <span class="badge b-sos">duplicado: descartar</span></div>
+  <div class="datos">
+    <span>4:06</span>
+    <span>BPM <b>105.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10B · D</span></span>
+    <span>corte <b>7.7 kHz</b></span>
+    <span>muro -0 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/WhatsApp%20Ptt%202025-10-14%20at%2017.20.49.ogg"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>WhatsApp Ptt 2025-10-14 at 17.20.49.ogg</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:7.7,&quot;muro_db&quot;:-0.2,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.ogg" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.ogg" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-WhatsApp Ptt 2025-10-14 at 17.20.49.ogg" value="pendiente" checked><span>pendiente</span></label></div>
+</div></div></section><section><h2>Sin nombre (16) — completá artista y título acá, mientras lo escuchás</h2><div class="track" data-archivo="01 REC-2025-12-03.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\01 REC-2025-12-03.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>41:24</span>
+    <span>BPM <b>155.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">7B · F</span></span>
+    <span>corte <b>19.4 kHz</b></span>
+    <span>muro 11 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/01%20REC-2025-12-03.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>01 REC-2025-12-03.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.42,&quot;muro_db&quot;:11.3,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-01 REC-2025-12-03.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-01 REC-2025-12-03.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-01 REC-2025-12-03.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="2026-08-11T20_19_12.264Z.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\2026-08-11T20_19_12.264Z.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>1:45</span>
+    <span>BPM <b>145.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5B · D#</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 1 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/2026-08-11T20_19_12.264Z.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>2026-08-11T20_19_12.264Z.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:1.2,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-2026-08-11T20_19_12.264Z.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-2026-08-11T20_19_12.264Z.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-2026-08-11T20_19_12.264Z.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Angeles prod lucianoandres x fede.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Angeles prod lucianoandres x fede.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:32</span>
+    <span>BPM <b>140.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>21.8 kHz</b></span>
+    <span>muro 1 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Angeles%20prod%20lucianoandres%20x%20fede.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Angeles prod lucianoandres x fede.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.75,&quot;muro_db&quot;:0.9,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Angeles prod lucianoandres x fede.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Angeles prod lucianoandres x fede.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Angeles prod lucianoandres x fede.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Band4Band (Arman John edit).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Band4Band (Arman John edit).wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:03</span>
+    <span>BPM <b>158.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10A · Bm</span></span>
+    <span>corte <b>21.8 kHz</b></span>
+    <span>muro -1 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Band4Band%20%28Arman%20John%20edit%29.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Band4Band (Arman John edit).wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.75,&quot;muro_db&quot;:-1.1,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Band4Band (Arman John edit).wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Band4Band (Arman John edit).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Band4Band (Arman John edit).wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Bikini Mausor edit master 24 bit V2.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Bikini Mausor edit master 24 bit V2.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:18</span>
+    <span>BPM <b>103.3</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>20.2 kHz</b></span>
+    <span>muro 43 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Bikini%20Mausor%20edit%20master%2024%20bit%20V2.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Bikini Mausor edit master 24 bit V2.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.18,&quot;muro_db&quot;:42.6,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Bikini Mausor edit master 24 bit V2.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Bikini Mausor edit master 24 bit V2.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Bikini Mausor edit master 24 bit V2.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:07</span>
+    <span>BPM <b>155.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">9B · G</span></span>
+    <span>corte <b>20.7 kHz</b></span>
+    <span>muro 8 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/DEEP%20DOWN%20LOW%20x%20TRAFFIC%20%20%28DOMASTIC%20EDIT%29.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.74,&quot;muro_db&quot;:8.3,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-DEEP DOWN LOW x TRAFFIC  (DOMASTIC EDIT).wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Destination Calabria 2025.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Destination Calabria 2025.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:51</span>
+    <span>BPM <b>150.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">10B · D</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 11 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Destination%20Calabria%202025.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Destination Calabria 2025.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:10.8,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Destination Calabria 2025.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Destination Calabria 2025.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Destination Calabria 2025.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Solo amor.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Solo amor.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>2:33</span>
+    <span>BPM <b>89.3</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">11A · F#m</span></span>
+    <span>corte <b>19.5 kHz</b></span>
+    <span>muro 17 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Solo%20amor.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Solo amor.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.52,&quot;muro_db&quot;:17.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Solo amor.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Solo amor.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Solo amor.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="TURRO X DEPORTE  OJOSFINOS.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\TURRO X DEPORTE  OJOSFINOS.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>2:37</span>
+    <span>BPM <b>136.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8B · C</span></span>
+    <span>corte <b>19.1 kHz</b></span>
+    <span>muro 23 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/TURRO%20X%20DEPORTE%20%20OJOSFINOS.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>TURRO X DEPORTE  OJOSFINOS.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.12,&quot;muro_db&quot;:22.8,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-TURRO X DEPORTE  OJOSFINOS.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-TURRO X DEPORTE  OJOSFINOS.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-TURRO X DEPORTE  OJOSFINOS.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Victory Lap (t e s t p r e s s Remix) (1).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Victory Lap (t e s t p r e s s Remix) (1).wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:48</span>
+    <span>BPM <b>155.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5B · D#</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 13 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Victory%20Lap%20%28t%20e%20s%20t%20p%20r%20e%20s%20s%20Remix%29%20%281%29.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>Victory Lap (t e s t p r e s s Remix) (1).wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:12.7,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Victory Lap (t e s t p r e s s Remix) (1).wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Victory Lap (t e s t p r e s s Remix) (1).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Victory Lap (t e s t p r e s s Remix) (1).wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="boombap_22_11_24_@franprtta.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\boombap_22_11_24_@franprtta.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:57</span>
+    <span>BPM <b>89.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>14.6 kHz</b></span>
+    <span>muro 9 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/boombap_22_11_24_%40franprtta.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>boombap_22_11_24_@franprtta.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:14.57,&quot;muro_db&quot;:9.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-boombap_22_11_24_@franprtta.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-boombap_22_11_24_@franprtta.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-boombap_22_11_24_@franprtta.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="charli.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\charli.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:01</span>
+    <span>BPM <b>130.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">2A · D#m</span></span>
+    <span>corte <b>21.4 kHz</b></span>
+    <span>muro 10 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/charli.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>charli.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.38,&quot;muro_db&quot;:9.9,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-charli.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-charli.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-charli.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="flauteeeeeeeeee nasi.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\flauteeeeeeeeee nasi.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:35</span>
+    <span>BPM <b>107.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">1A · G#m</span></span>
+    <span>corte <b>15.2 kHz</b></span>
+    <span>muro 5 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/flauteeeeeeeeee%20nasi.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>flauteeeeeeeeee nasi.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:15.2,&quot;muro_db&quot;:4.6,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-flauteeeeeeeeee nasi.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-flauteeeeeeeeee nasi.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-flauteeeeeeeeee nasi.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="moliniski.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\moliniski.mp3" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>2:09</span>
+    <span>BPM <b>89.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>18.7 kHz</b></span>
+    <span>muro 79 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/moliniski.mp3"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>moliniski.mp3</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:18.69,&quot;muro_db&quot;:78.7,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-moliniski.mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-moliniski.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-moliniski.mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="moriskrs.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\moriskrs.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:00</span>
+    <span>BPM <b>153.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">11A · F#m</span></span>
+    <span>corte <b>20.3 kHz</b></span>
+    <span>muro 20 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/moriskrs.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>moriskrs.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.33,&quot;muro_db&quot;:19.5,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-moriskrs.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-moriskrs.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-moriskrs.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="nuevayol Master 2.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\nuevayol Master 2.wav" data-artista=""
+ data-titulo="" data-grupo="0"
+ data-motivos="sin nombre">
+  <div class="cab"><span class="tit"><span class="vacio">(sin título)</span></span><span class="art"><span class="vacio">(sin artista)</span></span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:08</span>
+    <span>BPM <b>155.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>15.8 kHz</b></span>
+    <span>muro 5 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/nuevayol%20Master%202.wav"></audio>
+  
+  <div class="editar">
+    <div class="orig">nombre original: <code>nuevayol Master 2.wav</code></div>
+    <input type="text" class="ed-artista" placeholder="artista"
+           value="">
+    <input type="text" class="ed-titulo" placeholder="título"
+           value="">
+  </div>
+  <details><summary>1 cambios en los tags</summary><table class='diff'><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:15.85,&quot;muro_db&quot;:5.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-nuevayol Master 2.wav" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-nuevayol Master 2.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-nuevayol Master 2.wav" value="pendiente" checked><span>pendiente</span></label></div>
+</div></section><section><h2>Sospechosos — calidad para revisar</h2><div class="track sospechoso" data-archivo="Champion x Four Tet x Skrillex x Naisha - Talk To Me VIP (cut) myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Champion x Four Tet x Skrillex x Naisha - Talk To Me VIP (cut) myfreemp3.vip .mp3" data-artista="Champion x Four Tet x Skrillex x Naisha"
+ data-titulo="Talk To Me VIP" data-grupo="0"
+ data-motivos="sospechoso">
+  <div class="cab"><span class="tit">Talk To Me VIP</span><span class="art">Champion x Four Tet x Skrillex x Naisha</span>
+    <span class="badge b-sos">sospechoso</span></div>
+  <div class="datos">
+    <span>3:03</span>
+    <span>BPM <b>130.6</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">9A · Em</span></span>
+    <span>corte <b>16.0 kHz</b></span>
+    <span>muro 66 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Champion%20x%20Four%20Tet%20x%20Skrillex%20x%20Naisha%20-%20Talk%20To%20Me%20VIP%20%28cut%29%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>4 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Champion x Four Tet x Skrillex x Naisha</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Talk To Me VIP</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:16.04,&quot;muro_db&quot;:66.5,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr><tr><td>comentario</td><td>—</td><td>→ MusiFlix · revisar · [bitrate inflado] muro de codec a 16.0 kHz, que es de un ~128k, pero declara 320k (4.0 kHz por debajo)</td><td style='color:var(--suave)'>sospechoso y comentario vacío</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Champion x Four Tet x Skrillex x Naisha - Talk To Me VIP (cut) myfreemp3.vip .mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Champion x Four Tet x Skrillex x Naisha - Talk To Me VIP (cut) myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Champion x Four Tet x Skrillex x Naisha - Talk To Me VIP (cut) myfreemp3.vip .mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track sospechoso" data-archivo="Skrillex &amp; Joyryde - Talk To Em myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Skrillex &amp; Joyryde - Talk To Em myfreemp3.vip .mp3" data-artista="Skrillex &amp; Joyryde"
+ data-titulo="Talk To Em" data-grupo="0"
+ data-motivos="sospechoso">
+  <div class="cab"><span class="tit">Talk To Em</span><span class="art">Skrillex &amp; Joyryde</span>
+    <span class="badge b-sos">sospechoso</span></div>
+  <div class="datos">
+    <span>3:57</span>
+    <span>BPM <b>146.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">11B · A</span></span>
+    <span>corte <b>16.2 kHz</b></span>
+    <span>muro 43 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Skrillex%20%26%20Joyryde%20-%20Talk%20To%20Em%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>4 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Skrillex &amp; Joyryde</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Talk To Em</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:16.25,&quot;muro_db&quot;:43.2,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr><tr><td>comentario</td><td>—</td><td>→ MusiFlix · revisar · [bitrate inflado] muro de codec a 16.3 kHz, que es de un ~160k, pero declara 192k (2.2 kHz por debajo)</td><td style='color:var(--suave)'>sospechoso y comentario vacío</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Skrillex &amp; Joyryde - Talk To Em myfreemp3.vip .mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Skrillex &amp; Joyryde - Talk To Em myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Skrillex &amp; Joyryde - Talk To Em myfreemp3.vip .mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track sospechoso" data-archivo="Skrillex - Kyoto (Virtual Riot Edit) myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Skrillex - Kyoto (Virtual Riot Edit) myfreemp3.vip .mp3" data-artista="Skrillex"
+ data-titulo="Kyoto (Virtual Riot Edit)" data-grupo="0"
+ data-motivos="sospechoso">
+  <div class="cab"><span class="tit">Kyoto (Virtual Riot Edit)</span><span class="art">Skrillex</span>
+    <span class="badge b-sos">sospechoso</span></div>
+  <div class="datos">
+    <span>3:26</span>
+    <span>BPM <b>116.5</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">11A · F#m</span></span>
+    <span>corte <b>16.1 kHz</b></span>
+    <span>muro 60 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Skrillex%20-%20Kyoto%20%28Virtual%20Riot%20Edit%29%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>4 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Skrillex</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Kyoto (Virtual Riot Edit)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:16.05,&quot;muro_db&quot;:60.2,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr><tr><td>comentario</td><td>—</td><td>→ MusiFlix · revisar · [bitrate inflado] muro de codec a 16.1 kHz, que es de un ~128k, pero declara 192k (2.4 kHz por debajo)</td><td style='color:var(--suave)'>sospechoso y comentario vacío</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Skrillex - Kyoto (Virtual Riot Edit) myfreemp3.vip .mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Skrillex - Kyoto (Virtual Riot Edit) myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Skrillex - Kyoto (Virtual Riot Edit) myfreemp3.vip .mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div><div class="track sospechoso" data-archivo="Sub Focus - Siren (Blanke Remix) myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Sub Focus - Siren (Blanke Remix) myfreemp3.vip .mp3" data-artista="Sub Focus"
+ data-titulo="Siren (Blanke Remix)" data-grupo="0"
+ data-motivos="sospechoso">
+  <div class="cab"><span class="tit">Siren (Blanke Remix)</span><span class="art">Sub Focus</span>
+    <span class="badge b-sos">sospechoso</span></div>
+  <div class="datos">
+    <span>3:03</span>
+    <span>BPM <b>94.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5B · D#</span></span>
+    <span>corte <b>16.7 kHz</b></span>
+    <span>muro 79 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Sub%20Focus%20-%20Siren%20%28Blanke%20Remix%29%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>4 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Sub Focus</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Siren (Blanke Remix)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:16.67,&quot;muro_db&quot;:79.4,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;sospechoso&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr><tr><td>comentario</td><td>—</td><td>→ MusiFlix · revisar · [bitrate inflado] muro de codec a 16.7 kHz, que es de un ~160k, pero declara 320k (3.3 kHz por debajo)</td><td style='color:var(--suave)'>sospechoso y comentario vacío</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Sub Focus - Siren (Blanke Remix) myfreemp3.vip .mp3" value="aprobado"><span>aprobar</span></label><label><input type="radio" name="e-Sub Focus - Siren (Blanke Remix) myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Sub Focus - Siren (Blanke Remix) myfreemp3.vip .mp3" value="pendiente" checked><span>pendiente</span></label></div>
+</div></section><section><details><summary><h2 style='display:inline'>Sin novedad (23)</h2></summary><div class="track" data-archivo="4000Hz - Real Love (ONYX002).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\4000Hz - Real Love (ONYX002).wav" data-artista="4000Hz"
+ data-titulo="Real Love (ONYX002)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Real Love (ONYX002)</span><span class="art">4000Hz</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:13</span>
+    <span>BPM <b>159.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">7B · F</span></span>
+    <span>corte <b>19.9 kHz</b></span>
+    <span>muro 10 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/4000Hz%20-%20Real%20Love%20%28ONYX002%29.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ 4000Hz</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Real Love (ONYX002)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.92,&quot;muro_db&quot;:10.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-4000Hz - Real Love (ONYX002).wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-4000Hz - Real Love (ONYX002).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-4000Hz - Real Love (ONYX002).wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Antü Inan - Fran Perrotta (Original mix).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Antü Inan - Fran Perrotta (Original mix).wav" data-artista="Fran Perrotta"
+ data-titulo="Antü Inan (Original mix)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Antü Inan (Original mix)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:53</span>
+    <span>BPM <b>128.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>17.8 kHz</b></span>
+    <span>muro 7 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Ant%C3%BC%20Inan%20-%20Fran%20Perrotta%20%28Original%20mix%29.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>titulo</td><td>—</td><td>→ Antü Inan (Original mix)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:17.83,&quot;muro_db&quot;:6.8,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Antü Inan - Fran Perrotta (Original mix).wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Antü Inan - Fran Perrotta (Original mix).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Antü Inan - Fran Perrotta (Original mix).wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="BabaBass3000, Pueblo Gelb - Loose my Mind .wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\BabaBass3000, Pueblo Gelb - Loose my Mind .wav" data-artista="BabaBass3000, Pueblo Gelb"
+ data-titulo="BabaBass3000, Pueblo Gelb - Loose my Mind KMA" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">BabaBass3000, Pueblo Gelb - Loose my Mind KMA</span><span class="art">BabaBass3000, Pueblo Gelb</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:31</span>
+    <span>BPM <b>154.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">1A · G#m</span></span>
+    <span>corte <b>19.9 kHz</b></span>
+    <span>muro 8 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/BabaBass3000%2C%20Pueblo%20Gelb%20-%20Loose%20my%20Mind%20.wav"></audio>
+  
+  <details><summary>2 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ BabaBass3000, Pueblo Gelb</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.89,&quot;muro_db&quot;:8.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-BabaBass3000, Pueblo Gelb - Loose my Mind .wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-BabaBass3000, Pueblo Gelb - Loose my Mind .wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-BabaBass3000, Pueblo Gelb - Loose my Mind .wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Boltcore - Try To Make It - JFM.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Boltcore - Try To Make It - JFM.wav" data-artista="Boltcore"
+ data-titulo="Boltcore - Try To Make It - JFM" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Boltcore - Try To Make It - JFM</span><span class="art">Boltcore</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:38</span>
+    <span>BPM <b>155.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>20.2 kHz</b></span>
+    <span>muro 29 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Boltcore%20-%20Try%20To%20Make%20It%20-%20JFM.wav"></audio>
+  
+  <details><summary>2 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Boltcore</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista · hay más de un separador: el resto puede ser título o sello</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.22,&quot;muro_db&quot;:29.0,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Boltcore - Try To Make It - JFM.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Boltcore - Try To Make It - JFM.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Boltcore - Try To Make It - JFM.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Chris Lake, Skrillex, ANITA B QUEEN - LA NOCHE (Extended Mix) myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Chris Lake, Skrillex, ANITA B QUEEN - LA NOCHE (Extended Mix) myfreemp3.vip .mp3" data-artista="Chris Lake, Skrillex, ANITA B QUEEN"
+ data-titulo="LA NOCHE (Extended Mix)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">LA NOCHE (Extended Mix)</span><span class="art">Chris Lake, Skrillex, ANITA B QUEEN</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:17</span>
+    <span>BPM <b>127.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">4B · G#</span></span>
+    <span>corte <b>20.0 kHz</b></span>
+    <span>muro 71 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Chris%20Lake%2C%20Skrillex%2C%20ANITA%20B%20QUEEN%20-%20LA%20NOCHE%20%28Extended%20Mix%29%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Chris Lake, Skrillex, ANITA B QUEEN</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ LA NOCHE (Extended Mix)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.04,&quot;muro_db&quot;:71.2,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Chris Lake, Skrillex, ANITA B QUEEN - LA NOCHE (Extended Mix) myfreemp3.vip .mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Chris Lake, Skrillex, ANITA B QUEEN - LA NOCHE (Extended Mix) myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Chris Lake, Skrillex, ANITA B QUEEN - LA NOCHE (Extended Mix) myfreemp3.vip .mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Fvck you ! - Fran Perrotta (Original mix) preview.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Fvck you ! - Fran Perrotta (Original mix) preview.mp3" data-artista="Fran Perrotta"
+ data-titulo="Fvck you ! (Original mix preview)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Fvck you ! (Original mix preview)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>1:36</span>
+    <span>BPM <b>128.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">1A · G#m</span></span>
+    <span>corte <b>18.5 kHz</b></span>
+    <span>muro 68 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Fvck%20you%20%21%20-%20Fran%20Perrotta%20%28Original%20mix%29%20preview.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>titulo</td><td>—</td><td>→ Fvck you ! (Original mix preview)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:18.5,&quot;muro_db&quot;:68.3,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Fvck you ! - Fran Perrotta (Original mix) preview.mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Fvck you ! - Fran Perrotta (Original mix) preview.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Fvck you ! - Fran Perrotta (Original mix) preview.mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="I Just Landed - Franco Perrotta (Original mix).mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\I Just Landed - Franco Perrotta (Original mix).mp3" data-artista="Franco Perrotta"
+ data-titulo="I Just Landed (Original mix)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">I Just Landed (Original mix)</span><span class="art">Franco Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:01</span>
+    <span>BPM <b>128.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">1A · G#m</span></span>
+    <span>corte <b>18.5 kHz</b></span>
+    <span>muro 66 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/I%20Just%20Landed%20-%20Franco%20Perrotta%20%28Original%20mix%29.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Franco Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · invertido por el sufijo &#x27;(original mix)&#x27;: acompaña a 3 inversiones ya detectadas por nombre y a ningún directo</td></tr><tr><td>titulo</td><td>—</td><td>→ I Just Landed (Original mix)</td><td style='color:var(--suave)'>del nombre de archivo · invertido por el sufijo &#x27;(original mix)&#x27;: acompaña a 3 inversiones ya detectadas por nombre y a ningún directo</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:18.53,&quot;muro_db&quot;:65.9,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-I Just Landed - Franco Perrotta (Original mix).mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-I Just Landed - Franco Perrotta (Original mix).mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-I Just Landed - Franco Perrotta (Original mix).mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="I Real - Fran Perrotta (Original mix).flac"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\I Real - Fran Perrotta (Original mix).flac" data-artista="Fran Perrotta"
+ data-titulo="I Real (Original mix)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">I Real (Original mix)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>5:50</span>
+    <span>BPM <b>126.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>21.8 kHz</b></span>
+    <span>muro -1 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/I%20Real%20-%20Fran%20Perrotta%20%28Original%20mix%29.flac"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>titulo</td><td>—</td><td>→ I Real (Original mix)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.75,&quot;muro_db&quot;:-1.3,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-I Real - Fran Perrotta (Original mix).flac" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-I Real - Fran Perrotta (Original mix).flac" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-I Real - Fran Perrotta (Original mix).flac" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="JOR - SWITCH.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\JOR - SWITCH.wav" data-artista="JOR"
+ data-titulo="JØR - SWITCH (68 Audio Master_V2)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">JØR - SWITCH (68 Audio Master_V2)</span><span class="art">JOR</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>5:16</span>
+    <span>BPM <b>152.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>20.8 kHz</b></span>
+    <span>muro 12 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/JOR%20-%20SWITCH.wav"></audio>
+  
+  <details><summary>2 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ JOR</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.84,&quot;muro_db&quot;:11.5,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-JOR - SWITCH.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-JOR - SWITCH.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-JOR - SWITCH.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Jimmy Peel - Drop that (MASTER).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Jimmy Peel - Drop that (MASTER).wav" data-artista="Jimmy Peel"
+ data-titulo="Drop that (MASTER)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Drop that (MASTER)</span><span class="art">Jimmy Peel</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:58</span>
+    <span>BPM <b>154.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>21.8 kHz</b></span>
+    <span>muro 4 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Jimmy%20Peel%20-%20Drop%20that%20%28MASTER%29.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Jimmy Peel</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Drop that (MASTER)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.75,&quot;muro_db&quot;:3.5,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Jimmy Peel - Drop that (MASTER).wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Jimmy Peel - Drop that (MASTER).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Jimmy Peel - Drop that (MASTER).wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="METAKICK - Favela Bounce (never_AWAKE Master).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\METAKICK - Favela Bounce (never_AWAKE Master).wav" data-artista="METAKICK"
+ data-titulo="Favela Bounce (never_AWAKE Master)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Favela Bounce (never_AWAKE Master)</span><span class="art">METAKICK</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:30</span>
+    <span>BPM <b>164.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>20.2 kHz</b></span>
+    <span>muro 10 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/METAKICK%20-%20Favela%20Bounce%20%28never_AWAKE%20Master%29.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ METAKICK</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Favela Bounce (never_AWAKE Master)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.16,&quot;muro_db&quot;:9.5,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-METAKICK - Favela Bounce (never_AWAKE Master).wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-METAKICK - Favela Bounce (never_AWAKE Master).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-METAKICK - Favela Bounce (never_AWAKE Master).wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="PARALICH - P__sy is a Whip44k16b.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\PARALICH - P__sy is a Whip44k16b.wav" data-artista="Paralich"
+ data-titulo="P__sy is a Whip44k16b" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">P__sy is a Whip44k16b</span><span class="art">Paralich</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:34</span>
+    <span>BPM <b>154.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">7B · F</span></span>
+    <span>corte <b>20.2 kHz</b></span>
+    <span>muro 22 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/PARALICH%20-%20P__sy%20is%20a%20Whip44k16b.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Paralich</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista · grafía unificada a &#x27;Paralich&#x27;</td></tr><tr><td>titulo</td><td>—</td><td>→ P__sy is a Whip44k16b</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista · grafía unificada a &#x27;Paralich&#x27;</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.2,&quot;muro_db&quot;:22.2,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-PARALICH - P__sy is a Whip44k16b.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-PARALICH - P__sy is a Whip44k16b.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-PARALICH - P__sy is a Whip44k16b.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="PETERBLUE - Sufrieno Por Ella.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\PETERBLUE - Sufrieno Por Ella.wav" data-artista="PETERBLUE"
+ data-titulo="Sufrieno Por Ella" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Sufrieno Por Ella</span><span class="art">PETERBLUE</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:01</span>
+    <span>BPM <b>145.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>19.3 kHz</b></span>
+    <span>muro 17 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/PETERBLUE%20-%20Sufrieno%20Por%20Ella.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ PETERBLUE</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Sufrieno Por Ella</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:19.31,&quot;muro_db&quot;:17.2,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-PETERBLUE - Sufrieno Por Ella.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-PETERBLUE - Sufrieno Por Ella.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-PETERBLUE - Sufrieno Por Ella.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Paralich - Gasolina masterv1 0dbTP.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Paralich - Gasolina masterv1 0dbTP.wav" data-artista="Paralich"
+ data-titulo="Gasolina masterv1 0dbTP" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Gasolina masterv1 0dbTP</span><span class="art">Paralich</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:21</span>
+    <span>BPM <b>160.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">11A · F#m</span></span>
+    <span>corte <b>20.3 kHz</b></span>
+    <span>muro 8 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Paralich%20-%20Gasolina%20masterv1%200dbTP.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Paralich</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Gasolina masterv1 0dbTP</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.32,&quot;muro_db&quot;:8.4,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Paralich - Gasolina masterv1 0dbTP.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Paralich - Gasolina masterv1 0dbTP.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Paralich - Gasolina masterv1 0dbTP.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="SMBG - BODY (Master).wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\SMBG - BODY (Master).wav" data-artista="SMBG"
+ data-titulo="BODY (Master)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">BODY (Master)</span><span class="art">SMBG</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:58</span>
+    <span>BPM <b>160.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>21.2 kHz</b></span>
+    <span>muro 7 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/SMBG%20-%20BODY%20%28Master%29.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ SMBG</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ BODY (Master)</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.16,&quot;muro_db&quot;:7.1,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-SMBG - BODY (Master).wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-SMBG - BODY (Master).wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-SMBG - BODY (Master).wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Scythe x Oksy - Sick Bitch.mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Scythe x Oksy - Sick Bitch.mp3" data-artista="Scythe x Oksy"
+ data-titulo="Sick Bitch" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Sick Bitch</span><span class="art">Scythe x Oksy</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:12</span>
+    <span>BPM <b>76.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">6A · Gm</span></span>
+    <span>corte <b>20.0 kHz</b></span>
+    <span>muro 72 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Scythe%20x%20Oksy%20-%20Sick%20Bitch.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Scythe x Oksy</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Sick Bitch</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.04,&quot;muro_db&quot;:71.6,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Scythe x Oksy - Sick Bitch.mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Scythe x Oksy - Sick Bitch.mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Scythe x Oksy - Sick Bitch.mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Serafin X Paul Mile - Hit Repeat.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Serafin X Paul Mile - Hit Repeat.wav" data-artista="Serafin X Paul Mile"
+ data-titulo="Hit Repeat" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Hit Repeat</span><span class="art">Serafin X Paul Mile</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:15</span>
+    <span>BPM <b>155.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">8A · Am</span></span>
+    <span>corte <b>21.1 kHz</b></span>
+    <span>muro 70 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Serafin%20X%20Paul%20Mile%20-%20Hit%20Repeat.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Serafin X Paul Mile</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Hit Repeat</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.13,&quot;muro_db&quot;:69.8,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Serafin X Paul Mile - Hit Repeat.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Serafin X Paul Mile - Hit Repeat.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Serafin X Paul Mile - Hit Repeat.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Skrillex &amp; Bobby Raps - Leave Me Like This myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Skrillex &amp; Bobby Raps - Leave Me Like This myfreemp3.vip .mp3" data-artista="Skrillex &amp; Bobby Raps"
+ data-titulo="Leave Me Like This" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Leave Me Like This</span><span class="art">Skrillex &amp; Bobby Raps</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:03</span>
+    <span>BPM <b>128.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">7A · Dm</span></span>
+    <span>corte <b>20.3 kHz</b></span>
+    <span>muro 67 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Skrillex%20%26%20Bobby%20Raps%20-%20Leave%20Me%20Like%20This%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Skrillex &amp; Bobby Raps</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ Leave Me Like This</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.3,&quot;muro_db&quot;:66.9,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Skrillex &amp; Bobby Raps - Leave Me Like This myfreemp3.vip .mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Skrillex &amp; Bobby Raps - Leave Me Like This myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Skrillex &amp; Bobby Raps - Leave Me Like This myfreemp3.vip .mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Skrillex, Virtual Riot, Nakeesha - while you were sleeping myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Skrillex, Virtual Riot, Nakeesha - while you were sleeping myfreemp3.vip .mp3" data-artista="Skrillex, Virtual Riot, Nakeesha"
+ data-titulo="while you were sleeping" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">while you were sleeping</span><span class="art">Skrillex, Virtual Riot, Nakeesha</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>4:05</span>
+    <span>BPM <b>150.3</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">2A · D#m</span></span>
+    <span>corte <b>20.0 kHz</b></span>
+    <span>muro 69 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Skrillex%2C%20Virtual%20Riot%2C%20Nakeesha%20-%20while%20you%20were%20sleeping%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Skrillex, Virtual Riot, Nakeesha</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ while you were sleeping</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.02,&quot;muro_db&quot;:69.0,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Skrillex, Virtual Riot, Nakeesha - while you were sleeping myfreemp3.vip .mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Skrillex, Virtual Riot, Nakeesha - while you were sleeping myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Skrillex, Virtual Riot, Nakeesha - while you were sleeping myfreemp3.vip .mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Static Bow - Fran Perrotta (Original mix) .wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Static Bow - Fran Perrotta (Original mix) .wav" data-artista="Fran Perrotta"
+ data-titulo="Static Bow (Original mix)" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Static Bow (Original mix)</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>5:46</span>
+    <span>BPM <b>128.0</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">2A · D#m</span></span>
+    <span>corte <b>21.8 kHz</b></span>
+    <span>muro 4 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Static%20Bow%20-%20Fran%20Perrotta%20%28Original%20mix%29%20.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>titulo</td><td>—</td><td>→ Static Bow (Original mix)</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:21.75,&quot;muro_db&quot;:3.9,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Static Bow - Fran Perrotta (Original mix) .wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Static Bow - Fran Perrotta (Original mix) .wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Static Bow - Fran Perrotta (Original mix) .wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="Velvet hours - Fran Perrotta.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\Velvet hours - Fran Perrotta.wav" data-artista="Fran Perrotta"
+ data-titulo="Velvet hours" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">Velvet hours</span><span class="art">Fran Perrotta</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:23</span>
+    <span>BPM <b>125.1</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">5A · Cm</span></span>
+    <span>corte <b>20.2 kHz</b></span>
+    <span>muro 10 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/Velvet%20hours%20-%20Fran%20Perrotta.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ Fran Perrotta</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>titulo</td><td>—</td><td>→ Velvet hours</td><td style='color:var(--suave)'>del nombre de archivo · &#x27;fran perrotta&#x27; aparece 7 veces a la DERECHA: eso es un artista, no un título — el nombre está invertido</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.18,&quot;muro_db&quot;:10.1,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-Velvet hours - Fran Perrotta.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-Velvet hours - Fran Perrotta.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-Velvet hours - Fran Perrotta.wav" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="WINK &amp; nikko - MERCY myfreemp3.vip .mp3"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\WINK &amp; nikko - MERCY myfreemp3.vip .mp3" data-artista="WINK &amp; nikko"
+ data-titulo="MERCY" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">MERCY</span><span class="art">WINK &amp; nikko</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:57</span>
+    <span>BPM <b>139.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">2A · D#m</span></span>
+    <span>corte <b>20.0 kHz</b></span>
+    <span>muro 67 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/WINK%20%26%20nikko%20-%20MERCY%20myfreemp3.vip%20.mp3"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ WINK &amp; nikko</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ MERCY</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:20.02,&quot;muro_db&quot;:66.9,&quot;es_muro&quot;:&quot;si&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossy&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-WINK &amp; nikko - MERCY myfreemp3.vip .mp3" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-WINK &amp; nikko - MERCY myfreemp3.vip .mp3" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-WINK &amp; nikko - MERCY myfreemp3.vip .mp3" value="pendiente"><span>pendiente</span></label></div>
+</div><div class="track" data-archivo="manu calmet - who let the __.wav"
+ data-staging="C:\Users\agustin.molina\Desktop\BotMusicaDj\pipeline\staging\manu calmet - who let the __.wav" data-artista="manu calmet"
+ data-titulo="who let the" data-grupo="0"
+ data-motivos="">
+  <div class="cab"><span class="tit">who let the</span><span class="art">manu calmet</span>
+    <span class="badge b-ok">ok</span></div>
+  <div class="datos">
+    <span>3:56</span>
+    <span>BPM <b>149.9</b></span>
+    <span><span title="tonalidad por tono(); la confianza de este método no predice fiabilidad — para tener el indicador, correr con --consenso">4A · Fm</span></span>
+    <span>corte <b>22.0 kHz</b></span>
+    <span>muro 4 dB</span>
+  </div>
+  <audio controls preload="none" src="file:///C:/Users/agustin.molina/Desktop/BotMusicaDj/pipeline/staging/manu%20calmet%20-%20who%20let%20the%20__.wav"></audio>
+  
+  <details><summary>3 cambios en los tags</summary><table class='diff'><tr><td>artista</td><td>—</td><td>→ manu calmet</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>titulo</td><td>—</td><td>→ who let the</td><td style='color:var(--suave)'>del nombre de archivo · primer separador: izquierda = artista</td></tr><tr><td>TXXX:MusiFlix</td><td>—</td><td>→ {&quot;v&quot;:&quot;1.0&quot;,&quot;fecha&quot;:&quot;2026-09-11&quot;,&quot;corte_khz&quot;:22.0,&quot;muro_db&quot;:3.9,&quot;es_muro&quot;:&quot;no&quot;,&quot;bandera&quot;:&quot;ok&quot;,&quot;criterio&quot;:&quot;lossless&quot;}</td><td style='color:var(--suave)'>registro del pipeline; no pisa ningún campo de nadie</td></tr></table></details>
+  <div class="acciones"><label><input type="radio" name="e-manu calmet - who let the __.wav" value="aprobado" checked><span>aprobar</span></label><label><input type="radio" name="e-manu calmet - who let the __.wav" value="descartado"><span>descartar</span></label><label><input type="radio" name="e-manu calmet - who let the __.wav" value="pendiente"><span>pendiente</span></label></div>
+</div></details></section>
+<div class="barra">
+  <button onclick="bajar()">Bajar decisiones.json</button>
+  <span class="sub" style="margin:0">Después:
+   <code>python -m pipeline.aplicar --decisiones decisiones.json</code></span>
+</div>
+<script>
+function contar(){
+  const c={aprobado:0,descartado:0,pendiente:0};
+  document.querySelectorAll('input[type=radio]:checked').forEach(r=>c[r.value]++);
+  document.getElementById('n-aprobado').textContent=c.aprobado;
+  document.getElementById('n-descartado').textContent=c.descartado;
+  document.getElementById('n-pendiente').textContent=c.pendiente;
+}
+document.addEventListener('change',e=>{if(e.target.type==='radio')contar()});
+// El <audio> arranca a volumen medio: esto se revisa con auriculares puestos.
+document.addEventListener('play',e=>{
+  e.target.volume=0.5;
+  document.querySelectorAll('audio').forEach(a=>{if(a!==e.target)a.pause()});
+},true);
+function bajar(){
+  const decisiones=[];
+  document.querySelectorAll('.track').forEach(t=>{
+    const r=t.querySelector('input[type=radio]:checked');
+    const ea=t.querySelector('.ed-artista'), et=t.querySelector('.ed-titulo');
+    decisiones.push({archivo:t.dataset.archivo,ruta_staging:t.dataset.staging,
+      artista:ea?ea.value.trim():t.dataset.artista,
+      titulo:et?et.value.trim():t.dataset.titulo,
+      editado:!!(ea||et),grupo_id:+t.dataset.grupo,
+      motivos:(t.dataset.motivos||'').split('|').filter(Boolean),
+      estado:r?r.value:'pendiente'});
+  });
+  const doc={version:1,generado:new Date().toISOString(),
+    staging:document.body.dataset.staging,decisiones:decisiones};
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(doc,null,2)],
+    {type:'application/json'}));
+  a.download='decisiones.json'; a.click(); URL.revokeObjectURL(a.href);
+}
+contar();
+</script>
+</body></html>

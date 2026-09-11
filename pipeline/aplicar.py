@@ -19,6 +19,7 @@ El destino de iTunes sale de `MUSIFLIX_ITUNES`. Si no está configurado o no exi
 falla con un mensaje que dice qué definir; no inventa una carpeta ni escribe en el cwd.
 """
 import argparse
+import datetime
 import json
 import shutil
 import sys
@@ -28,6 +29,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from calidad.escribir_tags import escribir_campos
+from motor.tonalidad import camelot_a_clasica
 from pipeline import config
 from pipeline.reporte import APROBADO
 
@@ -52,28 +54,73 @@ def _ruta_de(d: dict) -> str:
     return d.get("ruta_staging") or d.get("ruta") or ""
 
 
+def _atributos_track(d: dict, i: int, carpeta_itunes: Path) -> dict:
+    """Los atributos de un <TRACK>. Lo que no se pudo determinar NO se escribe.
+
+    Nada de 0 ni de placeholders: acá el que lee es Rekordbox, que no pregunta. Un
+    AverageBpm="0" no es "no sé", es "este track va a 0 BPM", y queda en la biblioteca.
+    """
+    archivo = Path(_ruta_de(d)).name
+    final = carpeta_itunes / archivo
+    attrs = {
+        "TrackID": str(i),
+        "Name": d.get("titulo", "") or Path(archivo).stem,
+        "Kind": Path(archivo).suffix.lstrip(".").upper() + " File",
+        "Location": "file://localhost/" + quote(final.resolve().as_posix(), safe="/:"),
+    }
+    if d.get("artista"):
+        attrs["Artist"] = d["artista"]
+
+    # BPM con decimal. Redondear a entero es mentir (§6) y además rompe el beatgrid:
+    # a 128.4 BPM, un entero desfasa un beat cada ~20 compases.
+    bpm = float(d.get("bpm") or 0)
+    if bpm > 0:
+        attrs["AverageBpm"] = f"{bpm:.1f}"
+
+    # Tonality en NOTACIÓN CLÁSICA ('D#m'), no en Camelot.
+    #
+    # NO se pudo verificar contra un export real de Rekordbox: no hay ninguno en esta
+    # máquina. La evidencia usada es del propio repo: `ground_truth/rekordbox.py:20-29`
+    # mapea clásica → Camelot, o sea que el parser fue escrito esperando que Rekordbox
+    # escriba la clásica (y su docstring aclara que Rekordbox usa una u otra según
+    # configuración). Si algún día se confirma lo contrario, se cambia acá y el test de
+    # ida y vuelta lo valida solo.
+    clasica = (d.get("clasica") or "").strip()
+    if not clasica and d.get("camelot"):
+        clasica = camelot_a_clasica(d["camelot"])
+    if clasica:
+        attrs["Tonality"] = clasica
+
+    dur = float(d.get("duracion_s") or 0)
+    if dur > 0:
+        attrs["TotalTime"] = str(int(round(dur)))
+    return attrs
+
+
 def escribir_xml_rekordbox(decisiones: list[dict], destino: Path,
                            carpeta_itunes: Path) -> Path:
     """XML de colección importable por Rekordbox, apuntando a los archivos ya copiados.
 
-    Es la ÚNICA vía por la que pueden viajar los cue points. El formato es el mismo que
-    lee `ground_truth.rekordbox.parsear`, así que lo que se exporta se puede volver a
-    auditar con el harness sin escribir un parser nuevo.
+    Lleva BPM, tonalidad y duración para que Rekordbox NO tenga que reanalizar: reanalizar
+    es justo el trabajo que este pipeline viene a evitar.
+
+    CUE POINTS (POSITION_MARK): todavía no se escriben porque no se detectan — es la tarea
+    #5.4. El lugar está preparado: van como hijos de cada <TRACK>, con la forma
+        <POSITION_MARK Name="" Type="0" Start="12.345" Num="0"/>
+    y `ground_truth.rekordbox.parsear` ya los lee (devuelve `cues` y `num_cues` por track).
+    NO se inventan marcas: un cue en el lugar equivocado es peor que ninguno, porque se
+    dispara en vivo.
+
+    El formato es el mismo que lee `ground_truth.rekordbox.parsear`, así que lo exportado
+    se puede volver a auditar con el harness sin escribir un parser nuevo.
     """
     root = ET.Element("DJ_PLAYLISTS", {"Version": "1.0.0"})
     ET.SubElement(root, "PRODUCT", {"Name": "MusiFlix", "Version": "1.0",
                                     "Company": "MusiFlix"})
     col = ET.SubElement(root, "COLLECTION", {"Entries": str(len(decisiones))})
     for i, d in enumerate(decisiones, 1):
-        archivo = Path(_ruta_de(d)).name
-        final = carpeta_itunes / archivo
-        ET.SubElement(col, "TRACK", {
-            "TrackID": str(i),
-            "Name": d.get("titulo", "") or Path(archivo).stem,
-            "Artist": d.get("artista", ""),
-            "Kind": Path(archivo).suffix.lstrip(".").upper() + " File",
-            "Location": "file://localhost/" + quote(final.resolve().as_posix(), safe="/:"),
-        })
+        ET.SubElement(col, "TRACK", _atributos_track(d, i, carpeta_itunes))
+        # Acá van los <POSITION_MARK> cuando exista #5.4.
     # Una playlist con todo lo aprobado, para que entre agrupado y no suelto.
     playlists = ET.SubElement(root, "PLAYLISTS")
     nodo = ET.SubElement(playlists, "NODE", {"Type": "0", "Name": "ROOT", "Count": "1"})
@@ -155,7 +202,8 @@ def main(argv=None) -> int:
         print("El JSON no trae decisiones.")
         return 1
 
-    xml_destino = args.xml or config.rekordbox_xml()
+    sello = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    xml_destino = args.xml or config.rekordbox_xml(sello)
     res = aplicar(decisiones, carpeta, xml_destino, copiar=not args.dry_run)
 
     print(f"\n{'DRY-RUN — no se copió nada' if args.dry_run else 'Aplicado'}")

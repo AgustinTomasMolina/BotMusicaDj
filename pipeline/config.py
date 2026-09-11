@@ -64,7 +64,16 @@ def itunes_dir(crear: bool = False) -> Path:
     return ruta
 
 
-def rekordbox_xml() -> Path:
-    """Dónde escribir el XML importable. Default dentro del staging, no en el cwd."""
+def rekordbox_xml(sello: str = "") -> Path:
+    """Dónde escribir el XML importable por Rekordbox.
+
+    NO va dentro del staging. El staging se pisa entero en cada corrida de `revisar`, y
+    este XML es la ÚNICA vía por la que van a viajar los cues (#5.4): dejarlo ahí es
+    guardar lo menos reemplazable en la carpeta más volátil. Va al lado del reporte y con
+    fecha, para poder volver a una tanda anterior.
+    """
     valor = os.getenv(VAR_REKORDBOX, "").strip()
-    return Path(valor) if valor else staging_dir() / "rekordbox_musiflix.xml"
+    if valor:
+        return Path(valor)
+    sufijo = f"_{sello}" if sello else ""
+    return staging_dir().parent / f"rekordbox_musiflix{sufijo}.xml"

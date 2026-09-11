@@ -395,3 +395,112 @@ def test_aplicar_escribe_lo_que_se_completo_a_mano(tmp_path):
     tags = File(str(itunes / p.name)).tags
     assert str(tags["TPE1"]) == "Fran Perrotta"
     assert str(tags["TIT2"]) == "Velvet hours"
+
+
+# --- El XML tiene que llevar el DATO, no solo ser legible ---------------------------------
+
+
+def _decision_completa(tmp_path, **kw):
+    stg = tmp_path / "stg"
+    stg.mkdir(exist_ok=True)
+    p = stg / "track.wav"
+    p.write_bytes(b"RIFF0000WAVE")
+    d = {"archivo": p.name, "ruta_staging": str(p), "artista": "Fran Perrotta",
+         "titulo": "Velvet hours", "grupo_id": 0, "estado": APROBADO,
+         "bpm": 128.4, "camelot": "2A", "clasica": "D#m", "duracion_s": 346.5}
+    d.update(kw)
+    return d
+
+
+def test_ida_y_vuelta_el_bpm_y_la_tonalidad_sobreviven(tmp_path):
+    """El test que faltaba: afirma sobre el CONTENIDO, no sobre que el XML sea legible.
+
+    El anterior comprobaba "el parser devuelve 3 tracks", que pasa igual con un XML que
+    solo tenga nombres. Este falla si falta un atributo.
+    """
+    from ground_truth.rekordbox import parsear
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path)], itunes, xml)
+
+    t = parsear(xml)[0]
+    assert t["bpm"] == 128.4, "el AverageBpm no volvió del XML"
+    assert t["tonality"] == "D#m", "la Tonality no volvió del XML"
+    assert t["camelot"] == "2A", "la Tonality no se convierte de vuelta al Camelot original"
+    assert t["duration_s"] == 346, "el TotalTime no volvió del XML"
+    assert t["artist"] == "Fran Perrotta" and t["name"] == "Velvet hours"
+
+
+def test_el_bpm_no_se_redondea_a_entero(tmp_path):
+    """128.4 tiene que volver 128.4, no 128 (§6)."""
+    from ground_truth.rekordbox import parsear
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path, bpm=128.4)], itunes, xml)
+    assert parsear(xml)[0]["bpm"] == 128.4
+
+
+def test_las_24_tonalidades_hacen_ida_y_vuelta(tmp_path):
+    """El mapa del motor y el del parser de Rekordbox tienen que cerrar en las 24.
+
+    Si alguien toca uno de los dos y no el otro, esto lo agarra.
+    """
+    from ground_truth.rekordbox import a_camelot
+    from motor.tonalidad import camelot_a_clasica
+
+    for n in range(1, 13):
+        for lado in ("A", "B"):
+            cam = f"{n}{lado}"
+            clasica = camelot_a_clasica(cam)
+            assert clasica, f"{cam} no tiene notación clásica"
+            assert a_camelot(clasica) == cam, (
+                f"{cam} → '{clasica}' → {a_camelot(clasica)}: no cierra")
+
+
+def test_un_valor_que_no_se_pudo_determinar_se_OMITE(tmp_path):
+    """Nada de 0 ni placeholders: Rekordbox no pregunta, se queda con lo que le den."""
+    import xml.etree.ElementTree as ET
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path, bpm=0, camelot="", clasica="", duracion_s=0,
+                                artista="")], itunes, xml)
+    track = ET.parse(xml).getroot().find("COLLECTION").find("TRACK")
+    for attr in ("AverageBpm", "Tonality", "TotalTime", "Artist"):
+        assert attr not in track.attrib, f"{attr} se escribió con un valor inventado"
+    assert track.get("Location")          # lo que sí se sabe, se escribe
+
+
+def test_la_tonalidad_se_deriva_del_camelot_si_falta_la_clasica(tmp_path):
+    from ground_truth.rekordbox import parsear
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path, clasica="")], itunes, xml)
+    assert parsear(xml)[0]["camelot"] == "2A"
+
+
+def test_todavia_no_se_inventan_cues(tmp_path):
+    """Los POSITION_MARK llegan con #5.4. Un cue en el lugar equivocado se dispara en vivo."""
+    import xml.etree.ElementTree as ET
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir()
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path)], itunes, xml)
+    assert list(ET.parse(xml).getroot().iter("POSITION_MARK")) == []
+
+
+def test_el_xml_no_vive_en_el_staging(monkeypatch, tmp_path):
+    """Es la única vía de los cues: no puede estar en la carpeta que se pisa cada corrida."""
+    monkeypatch.setenv(config.VAR_STAGING, str(tmp_path / "stg"))
+    monkeypatch.delenv(config.VAR_REKORDBOX, raising=False)
+    destino = config.rekordbox_xml("2026-09-11_120000")
+    assert config.staging_dir() not in destino.parents
+    assert "2026-09-11_120000" in destino.name
