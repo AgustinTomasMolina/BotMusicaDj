@@ -14,21 +14,34 @@ Pensado para DJ: 🟢 solo si hay contenido real llegando a ~20 kHz SIN muro por
 debajo. Un WAV que en realidad es un rip Opus de YouTube da 🟡 con la leyenda
 honesta, no un 🟢 mentiroso.
 """
-import re
+import os
 import subprocess
 from pathlib import Path
 from shutil import which
 
 import numpy as np
 
-# ffmpeg/ffprobe: del PATH, o la ruta de winget como fallback
-_FF_DIR = Path(
-    r"C:\Users\AgusT\AppData\Local\Microsoft\WinGet\Packages"
-    r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
-    r"\ffmpeg-8.1.1-full_build\bin"
-)
-FFMPEG = which("ffmpeg") or (str(_FF_DIR / "ffmpeg.exe") if (_FF_DIR / "ffmpeg.exe").exists() else "ffmpeg")
-FFPROBE = which("ffprobe") or (str(_FF_DIR / "ffprobe.exe") if (_FF_DIR / "ffprobe.exe").exists() else "ffprobe")
+
+# ffmpeg/ffprobe: del PATH, o de MUSIFLIX_FFMPEG_DIR si está instalado fuera del PATH
+# (el instalador de winget, por ejemplo, no siempre lo agrega).
+#
+# Acá había clavada la ruta de winget de OTRA máquina (`C:\Users\AgusT\...`). Eso funciona
+# en una sola computadora y falla en silencio en el resto: `which` devuelve None, el
+# fallback no existe, y el comando termina siendo "ffmpeg" a secas igual. Tarea #5.16.
+def _binario(nombre: str) -> str:
+    en_path = which(nombre)
+    if en_path:
+        return en_path
+    carpeta = os.getenv("MUSIFLIX_FFMPEG_DIR", "").strip()
+    if carpeta:
+        cand = Path(carpeta) / (nombre + (".exe" if os.name == "nt" else ""))
+        if cand.exists():
+            return str(cand)
+    return nombre      # que falle al invocarlo, con el error del sistema
+
+
+FFMPEG = _binario("ffmpeg")
+FFPROBE = _binario("ffprobe")
 
 # Ventana de análisis del tema (segundos)
 SS, DUR = 45, 30

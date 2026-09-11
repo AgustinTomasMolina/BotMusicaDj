@@ -164,6 +164,7 @@ Status: ✅ Listo para usar
 print("\n✅ Archivos listos para usar:\n")
 
 import os
+
 archivos = [
     ("PANEL_CONTROL.bat", "Panel de control gráfico ⭐ RECOMENDADO"),
     ("setup_y_ejecutar.bat", "Instalar todo + pruebas"),
@@ -175,8 +176,12 @@ archivos = [
     ("API_DOCS.md", "Documentación API"),
 ]
 
+_RAIZ = os.path.dirname(os.path.abspath(__file__))
+
 for archivo, descripcion in archivos:
-    path = f"c:\\Users\\AgusT\\OneDrive\\Escritorio\\Bot MUSICA\\{archivo}"
+    # La carpeta del propio repo. Antes estaba clavada la de otra máquina, así que este
+    # listado salía vacío en cualquier computadora que no fuera esa (tarea #5.16).
+    path = os.path.join(_RAIZ, archivo)
     if os.path.exists(path):
         print(f"   ✓ {archivo:30} - {descripcion}")
 
