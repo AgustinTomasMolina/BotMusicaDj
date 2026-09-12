@@ -30,6 +30,16 @@ def _zona(rel: float) -> str:
     return "medio"
 
 
+def _es_memory_sin_nombre(cue: dict) -> bool:
+    """Memory cue anónimo de Rekordbox: Type=4, Num=0 y sin nombre."""
+    return cue["type"] == "4" and cue["num"] == "0" and not cue["name"]
+
+
+def _coincide_con_otro(cue: dict, otros: list[dict], tol_s: float = _TOL_COINCIDE_S) -> bool:
+    """¿Hay OTRO cue del mismo track a menos de `tol_s` de este? (duplicaría un hot cue)."""
+    return any(abs(cue["start"] - o["start"]) <= tol_s for o in otros)
+
+
 def analizar(tracks: list[dict]) -> None:
     con_cues = [t for t in tracks if t["cues"]]
     todos = [(t, c) for t in con_cues for c in t["cues"]]
@@ -75,11 +85,11 @@ def analizar(tracks: list[dict]) -> None:
     coinciden = solos = 0
     total_mem = 0
     for t in con_cues:
-        mem = [c for c in t["cues"] if c["type"] == "4" and c["num"] == "0" and not c["name"]]
-        otros = [c for c in t["cues"] if not (c["type"] == "4" and c["num"] == "0" and not c["name"])]
+        mem = [c for c in t["cues"] if _es_memory_sin_nombre(c)]
+        otros = [c for c in t["cues"] if not _es_memory_sin_nombre(c)]
         for m in mem:
             total_mem += 1
-            if any(abs(m["start"] - o["start"]) <= _TOL_COINCIDE_S for o in otros):
+            if _coincide_con_otro(m, otros):
                 coinciden += 1
             else:
                 solos += 1
