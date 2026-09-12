@@ -10,6 +10,24 @@ from pathlib import Path
 logger = logging.getLogger("bot_web")
 
 
+def _titulo_sin_artista(titulo, artista):
+    """Recorta del título el prefijo del artista para no duplicarlo en iTunes (#5.35).
+
+    Caso: TPE1='BabaBass3000, Pueblo Gelb' y TIT2='BabaBass3000, Pueblo Gelb - Loose my
+    Mind KMA' → iTunes muestra el nombre dos veces. Se recorta SOLO cuando el título arranca
+    LITERALMENTE con el mismo artista que vamos a escribir seguido de ' - '. Si aporta algo
+    distinto (otro artista, otra grafía, un separador sin espacios como 'kylian-dictador'),
+    no matchea y se respeta tal cual. Nunca deja el título vacío."""
+    if not titulo or not artista:
+        return titulo
+    prefijo = f"{artista} - "
+    if titulo.startswith(prefijo):
+        resto = titulo[len(prefijo):].strip()
+        if resto:
+            return resto
+    return titulo
+
+
 def _descargar_cover(url: str, timeout: int = 15):
     """Devuelve (bytes, mime) de la carátula, o (None, None)."""
     if not url:
@@ -114,6 +132,7 @@ def taggear(ruta, *, titulo=None, artista=None, genero=None, bpm=None,
     if not ruta.exists():
         return False
     ext = ruta.suffix.lower().lstrip(".")
+    titulo = _titulo_sin_artista(titulo, artista)   # #5.35: no duplicar el artista en el título
     try:
         cover, cover_mime = _descargar_cover(cover_url)
         if ext == "flac":
