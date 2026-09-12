@@ -175,8 +175,9 @@ archivos = [
     ("API_DOCS.md", "Documentación API"),
 ]
 
+_RAIZ = os.path.dirname(os.path.abspath(__file__))   # el repo, no una máquina concreta (#5.16)
 for archivo, descripcion in archivos:
-    path = f"c:\\Users\\AgusT\\OneDrive\\Escritorio\\Bot MUSICA\\{archivo}"
+    path = os.path.join(_RAIZ, archivo)
     if os.path.exists(path):
         print(f"   ✓ {archivo:30} - {descripcion}")
 
