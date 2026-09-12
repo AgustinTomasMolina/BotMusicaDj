@@ -14,6 +14,7 @@ Pensado para DJ: 🟢 solo si hay contenido real llegando a ~20 kHz SIN muro por
 debajo. Un WAV que en realidad es un rip Opus de YouTube da 🟡 con la leyenda
 honesta, no un 🟢 mentiroso.
 """
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -21,14 +22,29 @@ from shutil import which
 
 import numpy as np
 
-# ffmpeg/ffprobe: del PATH, o la ruta de winget como fallback
-_FF_DIR = Path(
-    r"C:\Users\AgusT\AppData\Local\Microsoft\WinGet\Packages"
-    r"\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe"
-    r"\ffmpeg-8.1.1-full_build\bin"
-)
-FFMPEG = which("ffmpeg") or (str(_FF_DIR / "ffmpeg.exe") if (_FF_DIR / "ffmpeg.exe").exists() else "ffmpeg")
-FFPROBE = which("ffprobe") or (str(_FF_DIR / "ffprobe.exe") if (_FF_DIR / "ffprobe.exe").exists() else "ffprobe")
+
+def _resolver_bin(nombre: str, env_bin: str, env_dir: str) -> str:
+    """Ubica ffmpeg/ffprobe SIN rutas hardcodeadas de una máquina (#5.16). Orden:
+    1) binario explícito por entorno (FFMPEG_BIN / FFPROBE_BIN),
+    2) el PATH (which),
+    3) un directorio por entorno (FFMPEG_DIR, p. ej. la carpeta de winget),
+    4) el nombre pelado (que falle claro al invocarlo si no está)."""
+    exe = os.environ.get(env_bin)
+    if exe and Path(exe).exists():
+        return exe
+    hit = which(nombre)
+    if hit:
+        return hit
+    d = os.environ.get(env_dir)
+    if d:
+        for cand in (Path(d) / f"{nombre}.exe", Path(d) / nombre):
+            if cand.exists():
+                return str(cand)
+    return nombre
+
+
+FFMPEG = _resolver_bin("ffmpeg", "FFMPEG_BIN", "FFMPEG_DIR")
+FFPROBE = _resolver_bin("ffprobe", "FFPROBE_BIN", "FFMPEG_DIR")
 
 # Ventana de análisis del tema (segundos)
 SS, DUR = 45, 30
