@@ -5,6 +5,13 @@ Este módulo lo lee y saca, por track: ruta, BPM, tonalidad (→ Camelot), géne
 duración y cue points. El BPM/tonalidad de Rekordbox es el *baseline* contra el que se
 mide el motor (la spec avisa: Rekordbox se equivoca bastante en tonalidad).
 
+El campo Tonality viene en NOTACIÓN CLÁSICA (Am, Gm, Fm, Abm, …): confirmado contra
+Rekordbox 7.2.16 sobre 193 tracks (Am 31, Gm 31, Fm 23, Abm 19, Bbm 17, F#m 11…). PERO
+unos pocos tracks traen un tag preexistente en otro formato (Camelot '4A', o valores
+sueltos como '11m'/'8m'), todos con AverageBpm="0.00": Rekordbox nunca los analizó y
+copió el tag tal cual. Por eso el formato se detecta POR EL VALOR, no se asume por la
+fuente: solo la notación clásica se mapea a Camelot; lo demás → None y se cuenta aparte.
+
     python -m ground_truth.rekordbox --xml Rekordbox.xml --out ground_truth/out
 """
 import argparse
@@ -29,14 +36,32 @@ _CAMELOT = {
 }
 
 
-def a_camelot(tonality: str) -> str:
-    """Tonalidad de Rekordbox → Camelot. Si ya viene en Camelot (ej '8A'), la deja."""
+_RE_CAMELOT = re.compile(r"\d{1,2}[AB]")
+
+# Formatos posibles del campo Tonality, decididos MIRANDO EL VALOR.
+CLASICA = "clasica"          # Am, Gm, F#, … → mapeable a Camelot
+CAMELOT = "camelot"          # 8A, 4A, … → un tag ajeno; NO es el formato de Rekordbox
+DESCONOCIDA = "desconocida"  # 11m, 8m, basura → no se sabe qué es
+VACIA = "vacia"              # sin tonalidad
+
+
+def formato_tonalidad(tonality: str) -> str:
+    """Clasifica el formato del valor de Tonality por su forma, no por su origen."""
     t = (tonality or "").strip()
     if not t:
-        return ""
-    if re.fullmatch(r"\d{1,2}[AB]", t):
-        return t
-    return _CAMELOT.get(t, "")
+        return VACIA
+    if t in _CAMELOT:            # notación clásica reconocida (Am, F#, Abm…)
+        return CLASICA
+    if _RE_CAMELOT.fullmatch(t):  # '4A', '8A' → Camelot leakeado en un tag ajeno
+        return CAMELOT
+    return DESCONOCIDA           # '11m', '8m', cualquier otra cosa
+
+
+def a_camelot(tonality: str) -> str | None:
+    """Notación clásica de Rekordbox → Camelot. SOLO mapea la notación clásica (el formato
+    confirmado); Camelot leakeado, valores desconocidos o vacío → None. Nunca adivina."""
+    t = (tonality or "").strip()
+    return _CAMELOT.get(t)      # dict.get → None si no es una clásica reconocida
 
 
 def _ruta_local(location: str) -> str:
@@ -65,6 +90,7 @@ def parsear(xml_path: Path) -> list[dict]:
             "bpm": float(tr.get("AverageBpm") or 0),
             "tonality": tr.get("Tonality", ""),
             "camelot": a_camelot(tr.get("Tonality", "")),
+            "tonalidad_formato": formato_tonalidad(tr.get("Tonality", "")),
             "genre": tr.get("Genre", ""),
             "duration_s": int(tr.get("TotalTime") or 0),
             "kind": tr.get("Kind", ""),
@@ -75,7 +101,7 @@ def parsear(xml_path: Path) -> list[dict]:
     return tracks
 
 
-_COLS = ["track_id", "artist", "name", "bpm", "tonality", "camelot",
+_COLS = ["track_id", "artist", "name", "bpm", "tonality", "camelot", "tonalidad_formato",
          "genre", "duration_s", "kind", "num_cues", "location"]
 
 
@@ -111,20 +137,27 @@ def main(argv=None) -> int:
     tracks = parsear(args.xml)
     tcsv, ccsv = escribir_csv(tracks, args.out)
 
+    from collections import Counter
+
     con_bpm = sum(1 for t in tracks if t["bpm"] > 0)
     con_key = sum(1 for t in tracks if t["camelot"])
     con_key_raw = sum(1 for t in tracks if t["tonality"])
     con_cues = sum(1 for t in tracks if t["num_cues"] > 0)
     total_cues = sum(t["num_cues"] for t in tracks)
+    formatos = Counter(t["tonalidad_formato"] for t in tracks)
 
     print(f"✅ {len(tracks)} tracks parseados desde {args.xml.name}")
     print(f"   con BPM (>0):        {con_bpm}")
     print(f"   con tonalidad:       {con_key_raw}  (mapeadas a Camelot: {con_key})")
+    print(f"   formato de Tonality: clásica {formatos[CLASICA]} · camelot {formatos[CAMELOT]} "
+          f"· desconocida {formatos[DESCONOCIDA]} · vacía {formatos[VACIA]}")
+    if formatos[CAMELOT] or formatos[DESCONOCIDA]:
+        raros = [f"{t['name'][:24]}={t['tonality']!r}" for t in tracks
+                 if t["tonalidad_formato"] in (CAMELOT, DESCONOCIDA)]
+        print(f"     no-clásicas (tag ajeno, no mapeadas): {', '.join(raros)}")
     print(f"   con cue points:      {con_cues} tracks · {total_cues} cues en total")
     print(f"   → {tcsv}")
     print(f"   → {ccsv}")
-    if con_key_raw and not con_key:
-        print("   ⚠️  Hay tonalidades que no supe mapear a Camelot — revisá el formato en rekordbox_tracks.csv")
     return 0
 
 
