@@ -38,6 +38,17 @@ def test_deteccion_nota_sintetica():
         assert det["nota"] == nota, f"generé {nota}, detecté {det['nota']}"
 
 
+def test_deteccion_modo_sintetica():
+    """Con la tercera en el sintético, el modo (maj/min) queda CONOCIDO y se detecta
+    (tarea #10.1). Antes el sintético solo tenía fundamental+quinta y el modo era ciego."""
+    for nota in ["C", "A", "G", "F#"]:
+        for modo in ["maj", "min"]:
+            y, sr = click_track(140.0, dur=20, nota=nota, modo=modo)
+            det = tono(y, sr)
+            assert det["nota"] == nota and det["modo"] == modo, \
+                f"generé {nota} {modo}, detecté {det['nota']} {det['modo']}"
+
+
 def test_silencio_no_inventa_key():
     """Sin señal armónica, NO devolver un Camelot concreto (un dato que miente
     es peor que uno ausente, spec §6 / Fable I4)."""
@@ -53,5 +64,6 @@ if __name__ == "__main__":
     test_compat_camelot_consistente_por_distancia()
     test_compat_camelot_ignora_basura()
     test_deteccion_nota_sintetica()
+    test_deteccion_modo_sintetica()
     test_silencio_no_inventa_key()
     print("OK — tests de tonalidad pasaron")
