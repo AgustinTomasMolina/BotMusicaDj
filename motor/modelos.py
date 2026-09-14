@@ -70,9 +70,18 @@ class TrackFeatures:
     embedding: np.ndarray  # vector de timbre, SIN normalizar
 
     # Detalle de la energía, útil para debug y para reajustar pesos.
-    rms: float = 0.0
-    onset_rate: float = 0.0  # onsets por segundo
-    percussive_ratio: float = 0.0  # energía percusiva / total (HPSS)
+    #
+    # Default `None` y no 0.0: `None` es "no se midió". Un 0.0 por defecto se guardaría en
+    # la base como si fuera una medición (spec §6: un dato que miente es peor que uno
+    # ausente) — "ratio percusivo 0" dice "no tiene nada de percusión", que en un track de
+    # techno es exactamente lo contrario de la verdad.
+    #
+    # `percussive_ratio` hoy NUNCA se mide: necesita HPSS, y con HPSS el análisis costaba
+    # ~20 s/track contra los ≤10 s del §4 (medido, ver `motor/tonalidad.py`). Queda el campo
+    # para cuando haya una forma barata de medirlo, pero `motor.analisis` lo deja en None.
+    rms: float | None = None
+    onset_rate: float | None = None  # onsets por segundo
+    percussive_ratio: float | None = None  # energía percusiva / total (HPSS) — no medido
 
     def __post_init__(self) -> None:
         self.embedding = _as_vector(self.embedding, "embedding")

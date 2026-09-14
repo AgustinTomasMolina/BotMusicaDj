@@ -487,3 +487,24 @@ def test_abrir_dos_veces_la_misma_base_no_la_pisa(tmp_path):
     assert otra.needs_analysis(rutas[_catalogo()[0]["nombre"]]) is False, \
         "al reabrir cree que hay que reanalizar todo"
     otra.close()
+
+
+def test_lo_no_medido_vuelve_none_y_no_cero(tmp_path):
+    """Spec §6: un dato que miente es peor que uno ausente. `TrackFeatures` sin rms,
+    onset_rate ni percussive_ratio es "no se midió": en la base queda NULL y vuelve None,
+    no 0.0 (que se leería como "sin percusión", "sin onsets")."""
+    c = _catalogo()[1]
+    ruta = tmp_path / c["nombre"]
+    ruta.write_bytes(b"x")
+    db = tmp_path / "db.sqlite"
+    store = Store(db)
+    store.upsert(ruta, _features(c), duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    got = store.get_features(ruta)
+    store.close()
+
+    assert (got.rms, got.onset_rate, got.percussive_ratio) == (None, None, None), \
+        f"lo no medido volvió como {(got.rms, got.onset_rate, got.percussive_ratio)}"
+    con = sqlite3.connect(str(db))
+    crudo = con.execute("SELECT rms, onset_rate, percussive_ratio FROM tracks").fetchone()
+    con.close()
+    assert crudo == (None, None, None), f"en la base quedó {crudo} en vez de NULL"

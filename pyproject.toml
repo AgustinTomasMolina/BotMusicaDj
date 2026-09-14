@@ -25,6 +25,10 @@ dependencies = [
     "numpy>=1.26,<2.1",     # numba (dep de librosa) aún no soporta numpy 2.1+
 ]
 
+# `djradio scan|list|info|similar|radio` — lo mismo que `python -m motor ...`.
+[project.scripts]
+djradio = "motor.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

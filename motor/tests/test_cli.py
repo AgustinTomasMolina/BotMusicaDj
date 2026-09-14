@@ -1,0 +1,362 @@
+"""Tests de la CLI (`python -m motor`): lo que cada comando DICE y lo que deja en la base.
+
+El audio son clicks sintéticos escritos como WAV en carpetas temporales: el BPM y la
+tonalidad de cada archivo los fija el generador y viajan en el nombre del archivo, así el
+valor esperado no sale del código bajo prueba (spec §5).
+
+La biblioteca compartida se analiza UNA vez por módulo (fixture `biblioteca`); los tests
+que la leen trabajan sobre una copia de la base cuando la podrían modificar.
+"""
+import os
+import re
+import shutil
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+import soundfile as sf  # noqa: E402
+
+from motor.cli import main  # noqa: E402
+from motor.radio import bpm_delta_pct, key_relation  # noqa: E402
+from motor.sintetico import click_track  # noqa: E402
+from motor.store import Store  # noqa: E402
+
+LICENCIA = "CC0-1.0"
+ORIGEN = "motor/sintetico.py"
+
+# (bpm, nota, modo) del generador. La key clásica esperada se escribe a mano: es teoría,
+# no una salida del motor.
+CATALOGO = [
+    (120.0, "A", "min"), (124.0, "A", "min"), (126.0, "C", "maj"), (128.0, "G", "maj"),
+    (130.0, "E", "min"), (134.0, "B", "min"), (170.0, "F#", "min"),
+]
+
+
+def _nombre(bpm, nota, modo):
+    return f"click_{bpm:.0f}_{nota}{modo}.wav"
+
+
+def _clasica(nota, modo):
+    return nota + ("m" if modo == "min" else "")
+
+
+def _escribir(carpeta: Path, bpm, nota, modo, dur=10.0, seed=0, ganancia=1.0) -> Path:
+    y, sr = click_track(bpm, dur=dur, nota=nota, modo=modo, seed=seed)
+    ruta = carpeta / _nombre(bpm, nota, modo)
+    sf.write(str(ruta), (y * ganancia).astype(np.float32), sr, subtype="FLOAT")
+    return ruta
+
+
+def _correr(capsys, *argv) -> tuple[int, str, str]:
+    codigo = main([str(a) for a in argv])
+    salida = capsys.readouterr()
+    return codigo, salida.out, salida.err
+
+
+def _scan(db, carpeta, *extra):
+    return ["--db", db, "scan", carpeta, "--licencia", LICENCIA, "--origen", ORIGEN, *extra]
+
+
+@pytest.fixture(scope="module")
+def biblioteca(tmp_path_factory):
+    """Carpeta con el catálogo + base ya escaneada. Devuelve (carpeta, db, spec por nombre)."""
+    raiz = tmp_path_factory.mktemp("biblio")
+    carpeta = raiz / "crate"
+    carpeta.mkdir()
+    spec = {}
+    for i, (bpm, nota, modo) in enumerate(CATALOGO):
+        # Ganancia distinta por track: la energía no puede empatar en toda la biblioteca.
+        ruta = _escribir(carpeta, bpm, nota, modo, seed=i, ganancia=0.3 + 0.1 * ((i * 3) % 7))
+        spec[ruta.name] = (bpm, nota, modo)
+    db = raiz / "biblio.sqlite"
+    assert main([str(a) for a in _scan(db, carpeta)]) == 0, "el scan de la biblioteca falló"
+    return carpeta.resolve(), db, spec
+
+
+# --- scan ------------------------------------------------------------------------------
+
+
+def _analyzed_at(db) -> dict[str, str]:
+    con = sqlite3.connect(str(db))
+    filas = dict(con.execute("SELECT path, analyzed_at FROM tracks").fetchall())
+    con.close()
+    return {Path(p).name: v for p, v in filas.items()}
+
+
+RESUMEN = re.compile(r"nuevos (\d+) · actualizados (\d+) · sin cambios (\d+) · "
+                     r"borrados (\d+) · fallidos (\d+)")
+
+
+def _resumen(out: str) -> tuple[int, ...]:
+    m = RESUMEN.search(out)
+    assert m, f"el scan no imprimió el resumen:\n{out}"
+    return tuple(int(x) for x in m.groups())
+
+
+def test_scan_punta_a_punta(tmp_path, capsys):
+    """Primera corrida analiza todo; la segunda nada; un archivo cambiado se reanaliza
+    solo; uno borrado sale de la base. Se verifica la DECISIÓN en la base (analyzed_at y el
+    BPM guardado), no solo lo que dice el resumen."""
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    rutas = [_escribir(carpeta, bpm, n, m, dur=6.0, seed=i)
+             for i, (bpm, n, m) in enumerate(CATALOGO[:3])]
+    db = tmp_path / "db.sqlite"
+
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert codigo == 0, out
+    assert _resumen(out) == (3, 0, 0, 0, 0), f"primera corrida:\n{out}"
+    with Store(db) as store:
+        assert sorted(p.name for p in store.paths()) == sorted(r.name for r in rutas)
+        for ruta, (bpm, _, _) in zip(rutas, CATALOGO[:3], strict=True):
+            t = store.get(ruta.resolve())
+            assert abs(t.bpm - bpm) <= 1.0, f"{ruta.name}: {t.bpm} BPM y el generador hizo {bpm}"
+            assert (t.license, t.source_url) == (LICENCIA, ORIGEN), (t.license, t.source_url)
+            assert t.artist is None and t.title is None, \
+                f"{ruta.name} no tiene tags y quedó artista={t.artist!r} título={t.title!r}"
+    antes = _analyzed_at(db)
+
+    time.sleep(0.01)   # analyzed_at tiene resolución de microsegundos; que no empate por azar
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert _resumen(out) == (0, 0, 3, 0, 0), f"segunda corrida sin cambios:\n{out}"
+    assert _analyzed_at(db) == antes, "la segunda corrida reanalizó archivos que no cambiaron"
+
+    # Cambia UNO: otro audio (otro BPM del generador) y otro mtime.
+    cambiado = rutas[1]
+    y, sr = click_track(140.0, dur=6.0, nota="A", modo="min", seed=9)
+    sf.write(str(cambiado), y, sr, subtype="FLOAT")
+    os.utime(cambiado, (1_000_000_000, 1_000_000_000))
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert _resumen(out) == (0, 1, 2, 0, 0), f"tercera corrida, un archivo cambiado:\n{out}"
+    despues = _analyzed_at(db)
+    assert [n for n in antes if despues[n] != antes[n]] == [cambiado.name], \
+        f"se reanalizó otra cosa que {cambiado.name}: {antes} -> {despues}"
+    with Store(db) as store:
+        assert abs(store.get(cambiado.resolve()).bpm - 140.0) <= 1.0, \
+            "el archivo cambiado conservó el análisis viejo"
+
+    # Borra UNO: tiene que desaparecer de la base.
+    borrado = rutas[0]
+    borrado.unlink()
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert _resumen(out) == (0, 0, 2, 1, 0), f"cuarta corrida, un archivo borrado:\n{out}"
+    assert str(borrado.resolve()) in out, "no dijo cuál borró"
+    with Store(db) as store:
+        assert sorted(p.name for p in store.paths()) == sorted(r.name for r in rutas[1:]), \
+            "el archivo borrado sigue en la base"
+
+    # Escanear OTRA carpeta no borra lo de esta (el pendrive que hoy no está enchufado).
+    otra = tmp_path / "otra"
+    otra.mkdir()
+    codigo, out, _ = _correr(capsys, *_scan(db, otra))
+    assert _resumen(out)[3] == 0, f"escanear otra carpeta borró tracks:\n{out}"
+    with Store(db) as store:
+        assert store.count() == 2, f"quedaron {store.count()} tracks"
+
+
+@pytest.mark.parametrize("sin", [("--licencia",), ("--origen",), ("--licencia", "--origen")])
+def test_scan_sin_licencia_u_origen_falla_y_no_escribe(tmp_path, capsys, biblioteca, sin):
+    carpeta_bib, db_bib, _ = biblioteca
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    _escribir(carpeta, *CATALOGO[0], dur=3.0)
+
+    argv = ["scan", str(carpeta)]
+    if "--licencia" not in sin:
+        argv += ["--licencia", LICENCIA]
+    if "--origen" not in sin:
+        argv += ["--origen", ORIGEN]
+
+    # Base nueva: ni siquiera se crea el archivo.
+    db_nueva = tmp_path / "nueva.sqlite"
+    codigo, out, err = _correr(capsys, "--db", db_nueva, *argv)
+    assert codigo == 2, f"salió {codigo}"
+    for flag in sin:
+        assert flag in err, f"el error no nombra {flag}:\n{err}"
+    assert "Ejemplo" in err and "biblioteca personal" in err, f"no explica ni da ejemplo:\n{err}"
+    assert not db_nueva.exists(), "sin licencia/origen igual se creó la base"
+
+    # Base existente: queda exactamente como estaba.
+    db = tmp_path / "copia.sqlite"
+    shutil.copy(db_bib, db)
+    antes = _analyzed_at(db)
+    codigo, _, _ = _correr(capsys, "--db", db, *argv)
+    assert codigo == 2
+    assert _analyzed_at(db) == antes, "sin licencia/origen igual se escribió en la base"
+
+
+def test_scan_licencia_en_blanco_cuenta_como_faltante(tmp_path, capsys):
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    db = tmp_path / "db.sqlite"
+    codigo, _, err = _correr(capsys, "--db", db, "scan", carpeta,
+                             "--licencia", "   ", "--origen", ORIGEN)
+    assert codigo == 2 and "--licencia" in err, err
+    assert not db.exists(), "una licencia en blanco igual abrió la base"
+
+
+# --- list / info -----------------------------------------------------------------------
+
+FILA_LIST = re.compile(r"^\s*(\d+\.\d) BPM\s+(\d{1,2}[AB]|\?)\s+(\S+)\s+(\d+)\s+(\S.*)$")
+
+
+def test_list_muestra_lo_que_hay_en_la_base(capsys, biblioteca):
+    carpeta, db, spec = biblioteca
+    codigo, out, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0, out
+
+    with Store(db) as store:
+        biblio = store.load_library()
+    lineas = [linea for linea in out.splitlines() if linea.rstrip().endswith(
+        tuple(t.label for t in biblio))]
+    assert [linea.rstrip().rsplit(None, 1)[-1] for linea in lineas] == [t.label for t in biblio], \
+        f"list no tiene los tracks de la base en orden de ruta:\n{out}"
+    filas = []
+    for linea in lineas:
+        m = FILA_LIST.match(linea)
+        assert m, f"fila sin el formato BPM con UN decimal · Camelot · clásica · energía: {linea!r}"
+        filas.append(m)
+
+    for m, t in zip(filas, biblio, strict=True):
+        bpm_txt, camelot, clasica, energia, _ = m.groups()
+        bpm_gen, nota, modo = spec[t.path.name]
+        assert bpm_txt == f"{t.bpm:.1f}", f"{t.path.name}: imprimió {bpm_txt} y la base tiene {t.bpm}"
+        assert abs(float(bpm_txt) - bpm_gen) <= 1.0, f"{t.path.name}: {bpm_txt} vs generador {bpm_gen}"
+        assert camelot == t.key, f"{t.path.name}: Camelot {camelot} y la base {t.key}"
+        assert clasica == _clasica(nota, modo), \
+            f"{t.path.name}: clásica {clasica} y el generador hizo {nota} {modo}"
+        assert int(energia) == round(t.energy * 100), \
+            f"{t.path.name}: energía {energia} y el percentil en la base es {t.energy}"
+
+
+def test_info_con_fragmento_ambiguo_no_elige(capsys, biblioteca):
+    carpeta, db, spec = biblioteca
+    esperados = sorted(str(carpeta / n) for n in spec if "click_12" in n)
+    assert len(esperados) > 1, "el catálogo del test tiene que tener homónimos para 'click_12'"
+
+    codigo, out, err = _correr(capsys, "--db", db, "info", "click_12")
+    assert codigo == 2, f"salió {codigo}"
+    listados = sorted(linea.strip() for linea in err.splitlines() if linea.strip().endswith(".wav"))
+    assert listados == esperados, f"candidatos listados {listados} != {esperados}"
+    assert "BPM" not in out, f"eligió uno igual e imprimió su info:\n{out}"
+
+
+def test_info_de_un_track(capsys, biblioteca):
+    carpeta, db, spec = biblioteca
+    codigo, out, _ = _correr(capsys, "--db", db, "info", "134")
+    assert codigo == 0, out
+    with Store(db) as store:
+        t = store.get(carpeta / "click_134_Bmin.wav")
+        f = store.get_features(t.path)
+    campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+    assert campos["archivo"] == str(t.path), campos
+    assert campos["BPM"] == f"{t.bpm:.1f}", campos
+    assert campos["key"] == f"{t.key} (Bm)", campos
+    assert campos["onsets/s"] == f"{f.onset_rate:.2f}", campos
+    assert campos["ratio percusivo"] == "no medido", campos
+    assert (campos["licencia"], campos["origen"]) == (LICENCIA, ORIGEN), campos
+
+
+def test_base_inexistente_no_se_crea(tmp_path, capsys):
+    db = tmp_path / "no_esta.sqlite"
+    codigo, _, err = _correr(capsys, "--db", db, "list")
+    assert codigo == 2 and "No existe la base" in err, err
+    assert not db.exists(), "un list sobre una base inexistente la creó"
+
+
+# --- radio -----------------------------------------------------------------------------
+
+PASO = re.compile(r"^\s*(\d+)\.\s+(\d+\.\d) BPM\s+(\S+)\s+\S+\s+energía\s+\d+\s+(\S.*)$")
+
+
+def _pasos(out: str) -> list[tuple[str, str]]:
+    """(label, motivo) de cada paso impreso: la línea del track y la del └ que la sigue."""
+    lineas = out.splitlines()
+    pasos = []
+    for i, linea in enumerate(lineas):
+        m = PASO.match(linea)
+        if m:
+            motivo = lineas[i + 1].strip()
+            assert motivo.startswith("└ "), f"el paso {m.group(1)} no tiene motivo:\n{out}"
+            pasos.append((m.group(4), motivo[2:]))
+    return pasos
+
+
+def _dist_bpm(a, b):
+    """±8% de §4, escrito acá de nuevo a propósito y no importado de scoring."""
+    return min(abs(a - b), abs(a - 2 * b), abs(a - b / 2)) / max(a, b)
+
+
+def test_radio_punta_a_punta(tmp_path, capsys, biblioteca):
+    """El criterio de hecho de la tarea 1: scan → radio. Transiciones dentro de ±8%, cada
+    motivo corresponde a SUS dos tracks, determinismo con la misma semilla y el M3U8 en el
+    orden del set."""
+    carpeta, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    m3u8 = tmp_path / "set.m3u8"
+
+    # Se piden los 7 del catálogo: el de 170 BPM no mezcla con nada, así que si aparece en el
+    # set es que alguien aflojó la compuerta de ±8%.
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_126", "--largo", 7,
+                             "--m3u8", m3u8)
+    assert codigo == 0, out
+    pasos = _pasos(out)
+    with Store(db) as store:
+        por_label = {t.label: t for t in store.load_library()}
+    tracks = [por_label[label] for label, _ in pasos]
+
+    assert len(tracks) >= 4, f"el set tiene {len(tracks)} tracks, pocas transiciones:\n{out}"
+    assert [t.path for t in tracks] != sorted(t.path for t in tracks), \
+        "el set salió en orden de ruta: así el test no distingue un M3U8 reordenado"
+    assert tracks[0].path.name == "click_126_Cmaj.wav", f"no arrancó por la semilla:\n{out}"
+    assert len({t.path for t in tracks}) == len(tracks), f"un track se repite:\n{out}"
+    assert pasos[0][1] == f"semilla | {tracks[0].key} | {tracks[0].bpm:.1f} BPM", pasos[0]
+
+    for (_, motivo), prev, cur in zip(pasos[1:], tracks[:-1], tracks[1:], strict=True):
+        assert _dist_bpm(prev.bpm, cur.bpm) < 0.08, \
+            f"{prev.label} ({prev.bpm}) → {cur.label} ({cur.bpm}) fuera de ±8% (§4)"
+        pct, _ = bpm_delta_pct(prev.bpm, cur.bpm)
+        esperado = (f"{pct:+.1f}% BPM | {prev.key} → {cur.key} "
+                    f"({key_relation(prev.key, cur.key)})")
+        assert motivo == esperado, f"el motivo no es el de {prev.label} → {cur.label}: {motivo!r}"
+
+    rutas_m3u8 = [linea for linea in m3u8.read_text(encoding="utf-8").splitlines()
+                  if linea and not linea.startswith("#")]
+    assert rutas_m3u8 == [str(t.path) for t in tracks], f"el M3U8 no tiene el set en orden: {rutas_m3u8}"
+    if len(tracks) < 7:
+        assert f"SET CORTO: quedó en {len(tracks)} de 7." in out, \
+            f"el set tiene {len(tracks)} de 7 y no lo dice:\n{out}"
+    else:
+        assert "SET CORTO" not in out, f"llegó al largo pedido y dice que quedó corto:\n{out}"
+
+
+def test_radio_misma_semilla_misma_salida(tmp_path, capsys, biblioteca):
+    """Spec §5, con azar prendido para que la semilla importe de verdad."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    argv = ("--db", db, "radio", "click_124", "--largo", 5, "--randomness", 1, "--semilla", 7)
+    _, primera, _ = _correr(capsys, *argv)
+    _, segunda, _ = _correr(capsys, *argv)
+    assert len(_pasos(primera)) >= 2, f"el set no tiene transiciones que comparar:\n{primera}"
+    assert primera == segunda, f"misma semilla, dos salidas:\n{primera}\n---\n{segunda}"
+
+
+def test_radio_set_corto_dice_por_que(tmp_path, capsys, biblioteca):
+    """170 BPM no tiene nada a ±8% en el catálogo: el set queda en 1 y lo tiene que decir."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_170", "--largo", 5)
+    assert codigo == 0, out
+    assert len(_pasos(out)) == 1, f"con 170 BPM no hay nada mezclable y el set tiene más:\n{out}"
+    m = re.search(r"SET CORTO: quedó en (\d+) de (\d+)\. Motivo \((\w+)\): (.+)", out)
+    assert m, f"el set quedó corto y no lo dijo:\n{out}"
+    assert m.groups()[:3] == ("1", "5", "sin_candidatos_mezclables"), m.groups()
+    assert "170.0 BPM" in m.group(4) and "±8%" in m.group(4), f"el motivo no explica: {m.group(4)}"

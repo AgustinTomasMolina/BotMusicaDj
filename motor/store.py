@@ -45,9 +45,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     key             TEXT NOT NULL,      -- Camelot
     energy_raw      REAL NOT NULL,      -- RMS absoluto; el percentil se calcula al leer
     embedding       BLOB NOT NULL,      -- float32 crudo, sin normalizar
-    rms             REAL NOT NULL,      -- detalle de energía (debug / reajuste de pesos)
-    onset_rate      REAL NOT NULL,
-    percussive_ratio REAL NOT NULL,
+    -- Detalle de energía (debug / reajuste de pesos). NULL = no se midió: un 0 inventado
+    -- se leería como una medición (spec §6). `percussive_ratio` hoy es siempre NULL
+    -- (necesita HPSS, inviable dentro del §4; ver motor/modelos.py).
+    rms             REAL,
+    onset_rate      REAL,
+    percussive_ratio REAL,
     license         TEXT NOT NULL,      -- obligatorio (spec §5)
     source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
     analyzed_at     TEXT NOT NULL
@@ -78,6 +81,12 @@ STATS_DTYPE = np.float64
 _COLUMNAS = ("path", "mtime", "duration", "artist", "title", "bpm", "key", "energy_raw",
              "embedding", "rms", "onset_rate", "percussive_ratio", "license", "source_url",
              "analyzed_at")
+
+
+def _opcional(valor: object) -> float | None:
+    """float, o None si no se midió. `float(None)` revienta y `valor or 0.0` inventaría un
+    cero: los dos caminos obvios están mal para un campo que puede no haberse medido."""
+    return None if valor is None else float(valor)
 
 
 class Store:
@@ -134,8 +143,8 @@ class Store:
         mt = float(mtime) if mtime is not None else Path(path).stat().st_mtime
         valores = (key, mt, float(duration), artist, title, float(features.bpm), features.key,
                    float(features.energy_raw), vec.astype(EMB_DTYPE).tobytes(),
-                   float(features.rms), float(features.onset_rate),
-                   float(features.percussive_ratio), license, source_url,
+                   _opcional(features.rms), _opcional(features.onset_rate),
+                   _opcional(features.percussive_ratio), license, source_url,
                    datetime.now(UTC).isoformat())
         marcas = ", ".join("?" * len(_COLUMNAS))
         self._con.execute(
@@ -166,6 +175,11 @@ class Store:
     def count(self) -> int:
         """Cuántos tracks hay analizados."""
         return int(self._con.execute("SELECT COUNT(*) FROM tracks").fetchone()[0])
+
+    def paths(self) -> list[Path]:
+        """Las rutas de todos los tracks guardados, ordenadas. Sin normalizar nada: es lo
+        que necesita un scan para saber qué hay en la base y qué ya no está en disco."""
+        return [Path(f["path"]) for f in self._rows()]
 
     def needs_analysis(self, path: Path | str) -> bool:
         """True si el track no está en la caché o el archivo cambió desde que se analizó.
@@ -276,9 +290,9 @@ class Store:
     def _features(self, fila: sqlite3.Row) -> TrackFeatures:
         return TrackFeatures(
             bpm=float(fila["bpm"]), key=fila["key"], energy_raw=float(fila["energy_raw"]),
-            embedding=self._embedding(fila), rms=float(fila["rms"]),
-            onset_rate=float(fila["onset_rate"]),
-            percussive_ratio=float(fila["percussive_ratio"]))
+            embedding=self._embedding(fila), rms=_opcional(fila["rms"]),
+            onset_rate=_opcional(fila["onset_rate"]),
+            percussive_ratio=_opcional(fila["percussive_ratio"]))
 
     @staticmethod
     def _track(fila: sqlite3.Row, embedding: np.ndarray, energias: Iterable[float]) -> Track:
