@@ -22,11 +22,12 @@ Un cambio que rompe cualquiera de estos no entra.
 | Métrica | Umbral |
 |---|---|
 | Error de BPM (p95) | ≤ 1.0 BPM, tolerando ambigüedad de octava |
-| Tonalidad exacta | ≥ 85% |
-| Tonalidad compatible (exacta, relativo o vecino) | ≥ 95% |
+| Tonalidad exacta (tracks con acuerdo unánime de `tono_consenso`) | ≥ 85% |
+| Tonalidad compatible (exacta, relativo o vecino; ídem) | ≥ 95% |
 | Transiciones fuera de ±8% de BPM | 0% |
 | Choques armónicos (compatibilidad < 0.4) | ≤ 10% |
-| Curva de energía (Spearman posición vs energía) | ≥ 0.5 |
+| Curva de energía — desvío medio de la curva pedida | a calibrar (tarea 14) |
+| Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
 | Latencia de la radio | < 200 ms con 10k tracks |
 

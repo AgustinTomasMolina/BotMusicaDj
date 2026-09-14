@@ -10,11 +10,14 @@ import pytest
 
 from benchmark.evaluar import (
     UMBRAL_BPM,
+    acuerdo_unanime,
     calibracion,
     cruzar,
+    informe,
     leer_csv,
     metricas,
 )
+from benchmark.umbrales import evaluar as evaluar_umbrales
 
 # --- CSVs de ejemplo -------------------------------------------------------------------
 
@@ -157,6 +160,99 @@ def test_sin_camelot_en_el_gt_no_cuenta_como_fallo():
     cruces = cruzar([_fila_a("t.wav", 128.0, "8A")], [_fila_gt(1, "t.wav", 128.0, "")])["cruces"]
     assert cruces[0].key_exacta == "sin-referencia"
     assert "tonalidad_exacta" not in metricas(cruces)["umbrales"]
+
+
+def _cruces_mezclados():
+    """Seis tracks con referencia + uno sin referencia. Todos contra GT 8A.
+
+    Unánimes (3/3): u1 exacta, u2 exacta, u3 vecina (9A: compatible, no exacta), u4 lejana
+    (3B). No unánimes: n1 "2/3" lejana, n2 "1/3" lejana. Sin referencia: s1 "3/3".
+
+    A mano:
+      contrato (solo unánimes, 4): exacta 2/4 = 50%   compatible 3/4 = 75%
+      global (los 6 con ref)     : exacta 2/6 = 33.3% compatible 3/6 = 50%
+      cobertura                  : 4/6 = 66.7%  (s1 no cuenta: no tiene referencia)
+    """
+    a = [_fila_a("u1.wav", 128.0, "8A", acuerdo="3/3"), _fila_a("u2.wav", 128.0, "8A", acuerdo="3/3"),
+         _fila_a("u3.wav", 128.0, "9A", acuerdo="3/3"), _fila_a("u4.wav", 128.0, "3B", acuerdo="3/3"),
+         _fila_a("n1.wav", 128.0, "3B", acuerdo="2/3"), _fila_a("n2.wav", 128.0, "3B", acuerdo="1/3"),
+         _fila_a("s1.wav", 128.0, "8A", acuerdo="3/3")]
+    g = [_fila_gt(i, f"{n}.wav", 128.0, "8A") for i, n in
+         enumerate(["u1", "u2", "u3", "u4", "n1", "n2"])]
+    g.append(_fila_gt(99, "s1.wav", 128.0, ""))
+    return cruzar(a, g)
+
+
+def test_contrato_de_tonalidad_sale_solo_de_los_unanimes():
+    met = metricas(_cruces_mezclados()["cruces"])
+    m, e = met["umbrales"], met["extra"]
+    assert m["tonalidad_exacta"] == pytest.approx(50.0), "el contrato no salió de los unánimes"
+    assert m["tonalidad_compatible"] == pytest.approx(75.0), "el contrato no salió de los unánimes"
+    assert e["tonalidad_exacta_global"] == pytest.approx(200 / 6)
+    assert e["tonalidad_compatible_global"] == pytest.approx(50.0)
+    assert e["n_key"] == 6 and e["n_key_unanimes"] == 4
+    assert e["cobertura_unanimes"] == pytest.approx(400 / 6)
+
+
+def test_sin_consenso_el_contrato_de_tonalidad_queda_sin_medir():
+    """Análisis con tono() simple: acuerdo vacío en todos. El contrato NO se rellena con la
+    cifra global — queda ausente y umbrales lo marca 'sin medir'. La global sí aparece."""
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo=""), _fila_a("b.wav", 128.0, "3B", acuerdo="")]
+    g = [_fila_gt(1, "a.wav", 128.0, "8A"), _fila_gt(2, "b.wav", 128.0, "8A")]
+    met = metricas(cruzar(a, g)["cruces"])
+    assert "tonalidad_exacta" not in met["umbrales"]
+    assert "tonalidad_compatible" not in met["umbrales"]
+    assert met["extra"]["tonalidad_exacta_global"] == pytest.approx(50.0)
+    assert met["extra"]["hay_consenso"] is False
+    assert met["extra"]["cobertura_unanimes"] is None
+    filas = {f.umbral.clave: f for f in evaluar_umbrales(met["umbrales"])}
+    assert filas["tonalidad_exacta"].ok is None and filas["tonalidad_exacta"].valor is None
+
+
+def test_con_consenso_y_ningun_unanime_la_cobertura_es_cero_y_el_contrato_sin_medir():
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="2/3"), _fila_a("b.wav", 128.0, "8A", acuerdo="")]
+    g = [_fila_gt(1, "a.wav", 128.0, "8A"), _fila_gt(2, "b.wav", 128.0, "8A")]
+    met = metricas(cruzar(a, g)["cruces"])
+    assert "tonalidad_exacta" not in met["umbrales"]
+    assert met["extra"]["hay_consenso"] is True
+    assert met["extra"]["cobertura_unanimes"] == 0.0
+    assert met["extra"]["tonalidad_exacta_global"] == 100.0
+
+
+def test_unanimidad_con_otra_cantidad_de_tramos():
+    """n_tramos es configurable: '5/5' es unánime, '4/5' no. A mano: el unánime (exacto) da
+    100%; si '4/5' (lejano) contara, daría 50%."""
+    assert acuerdo_unanime("5/5") is True
+    assert acuerdo_unanime("4/5") is False
+    assert acuerdo_unanime("3/3") is True
+    assert acuerdo_unanime("0/0") is False
+    assert acuerdo_unanime("") is None
+    with pytest.raises(ValueError, match="formato inesperado"):
+        acuerdo_unanime("3 de 3")
+
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="5/5"), _fila_a("b.wav", 128.0, "3B", acuerdo="4/5")]
+    g = [_fila_gt(1, "a.wav", 128.0, "8A"), _fila_gt(2, "b.wav", 128.0, "8A")]
+    met = metricas(cruzar(a, g)["cruces"])
+    assert met["umbrales"]["tonalidad_exacta"] == 100.0
+    assert met["extra"]["cobertura_unanimes"] == 50.0
+
+
+def test_informe_imprime_la_cobertura_al_lado_del_contrato(capsys):
+    informe(_cruces_mezclados())
+    out = capsys.readouterr().out
+    assert "CONTRATO — solo tracks con acuerdo unánime de tono_consenso: 50.0% exacta · 75.0% compatible" in out, out
+    assert "cobertura del subconjunto: 4/6 (66.7%)" in out, out
+    assert "informativo — global, todos los tracks: 33.3% exacta · 50.0% compatible" in out, out
+    fila = next(linea for linea in out.splitlines() if linea.strip().startswith("Tonalidad exacta (unánimes)"))
+    assert "50.00%" in fila and "[cobertura 4/6]" in fila, fila
+
+
+def test_informe_sin_consenso_dice_que_el_contrato_no_se_midio(capsys):
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="")]
+    informe(cruzar(a, [_fila_gt(1, "a.wav", 128.0, "8A")]))
+    out = capsys.readouterr().out
+    assert "CONTRATO — sin medir: el análisis no se corrió con consenso" in out, out
+    assert "informativo — global, todos los tracks: 100.0% exacta" in out, out
 
 
 # --- Tiempo -----------------------------------------------------------------------------

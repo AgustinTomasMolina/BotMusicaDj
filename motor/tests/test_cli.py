@@ -446,19 +446,47 @@ def test_spearman_de_un_set_chico_se_marca_orientativo(tmp_path, capsys, bibliot
     n = len(_pasos(out))
     assert n >= 2, f"con menos de 2 tracks no hay Spearman que marcar:\n{out}"
     linea = next(linea for linea in out.splitlines() if "Spearman" in linea)
-    assert f"ORIENTATIVO: con {n} tracks" in linea, f"un Spearman de {n} tracks sin aviso: {linea}"
+    # Curva peak (default) con --largo 3: t = 0, 0.5, 1 → solo las posiciones 0 y 1 suben.
+    # Con n = 2 o 3 tracks sonados, el tramo ascendente tiene 2 puntos.
+    assert "ORIENTATIVO: con 2 puntos en el tramo ascendente" in linea, \
+        f"un Spearman de 2 puntos sin aviso: {linea}"
+    assert re.search(r"desvío medio \d\.\d{3} \(umbral a calibrar, tarea 14\)", linea), \
+        f"la radio no imprime el desvío de la curva: {linea}"
 
 
-def test_linea_curva_desde_el_minimo_ya_no_es_orientativa():
-    """El borde de `MIN_TRACKS_SPEARMAN` (12): 11 tracks orientativo, 12 no. Energías que
-    suben de a una, así el Spearman esperado es exactamente +1.00."""
-    from motor.cli import MIN_TRACKS_SPEARMAN, linea_curva
+def test_linea_curva_el_minimo_cuenta_puntos_del_tramo_ascendente():
+    """El borde de `MIN_PUNTOS_SPEARMAN` (12) se mide en PUNTOS del tramo ascendente, no en
+    tracks. Con "warmup" todo el set sube: 11 puntos orientativo, 12 no. Energías que suben
+    de a una → Spearman esperado exactamente +1.00."""
+    from motor.cli import MIN_PUNTOS_SPEARMAN, linea_curva
 
-    assert MIN_TRACKS_SPEARMAN == 12
-    doce = linea_curva([i / 11 for i in range(12)])
-    once = linea_curva([i / 10 for i in range(11)])
+    assert MIN_PUNTOS_SPEARMAN == 12
+    doce = linea_curva([i / 11 for i in range(12)], "warmup")
+    once = linea_curva([i / 10 for i in range(11)], "warmup")
     assert doce.endswith("§4 pide ≥ 0.5): +1.00"), doce
-    assert "ORIENTATIVO: con 11 tracks" in once and "+1.00" in once, once
+    assert "ORIENTATIVO: con 11 puntos" in once and "+1.00" in once, once
+
+
+def test_linea_curva_peak_de_12_tracks_es_orientativa():
+    """Con "peak" un set de 12 tracks aporta 9 puntos ascendentes (t = i/11 ≤ 0.75 ⇔ i ≤ 8):
+    orientativo aunque tenga 12 tracks. Recién con 16 tracks llega a 12 puntos
+    (i/15 ≤ 0.75 ⇔ i ≤ 11). Las energías siguen la curva exacta → desvío 0.000, Spearman 1."""
+    from motor.cli import linea_curva
+    from motor.energia import energy_target
+
+    doce = linea_curva([energy_target(i, 12) for i in range(12)], "peak")
+    assert "ORIENTATIVO: con 9 puntos en el tramo ascendente" in doce and "+1.00" in doce, doce
+    assert "desvío medio 0.000" in doce, doce
+    dieciseis = linea_curva([energy_target(i, 16) for i in range(16)], "peak")
+    assert dieciseis.endswith("§4 pide ≥ 0.5): +1.00"), dieciseis
+
+
+def test_linea_curva_flat_no_inventa_spearman():
+    from motor.cli import linea_curva
+
+    linea = linea_curva([0.5] * 20, "flat")
+    assert linea.endswith("no definido: la curva flat no tiene tramo que suba"), linea
+    assert "desvío medio 0.000" in linea, linea
 
 
 # --- resolver_track ----------------------------------------------------------------------

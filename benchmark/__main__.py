@@ -6,6 +6,8 @@ Uso:
     python -m benchmark --metricas corr.json --guardar   # además guarda la corrida
 
 Exit code: 0 = todo cumple · 1 = se rompió un umbral · 2 = faltan métricas por medir.
+Los umbrales "a calibrar" (límite todavía sin número, ver benchmark/umbrales.py) se
+imprimen con su valor y la marca [~], pero no cuentan para el exit code.
 El JSON de métricas lo produce el motor corriendo sobre el set de referencia
 (ground truth de Rekordbox) — tareas F0 #1 (traer el motor) y #2.5 (ground truth).
 """
@@ -25,13 +27,26 @@ def _valor(f) -> str:
     return f"{f.valor}{u}"
 
 
+def _marca(f) -> str:
+    if f.umbral.a_calibrar:
+        return "~"
+    if f.ok is None:
+        return "·"
+    return "✓" if f.ok else "✗"
+
+
 def _imprimir(filas) -> None:
+    """La tabla del contrato. Marcas: ✓ cumple · ✗ rota · · sin medir · ~ a calibrar.
+
+    Una fila '~' (umbral a calibrar, ver `benchmark/umbrales.py`) muestra su valor medido
+    pero no entra al veredicto: no rompe ni cuenta como 'falta medir'."""
     print("Umbrales de calidad del motor (spec §4) — el contrato\n")
     for f in filas:
-        marca = "·" if f.ok is None else ("✓" if f.ok else "✗")
-        u = f" {f.umbral.unidad}" if f.umbral.unidad else ""
-        objetivo = f"{f.umbral.op} {f.umbral.limite:g}{u}"
-        print(f"  [{marca}] {f.umbral.nombre:<34s} objetivo {objetivo:<14s}  medido: {_valor(f)}")
+        marca = _marca(f)
+        print(f"  [{marca}] {f.umbral.nombre:<34s} objetivo {f.umbral.objetivo():<22s}  "
+              f"medido: {_valor(f)}")
+    if any(f.umbral.a_calibrar for f in filas):
+        print("\n  [~] = umbral a calibrar: se reporta el valor, no decide el veredicto.")
 
 
 def main(argv=None) -> int:

@@ -36,7 +36,12 @@ import time
 from pathlib import Path
 
 from calidad.tags import EXTS
-from motor.energia import CURVES, energy_curve_correlation
+from motor.energia import (
+    CURVES,
+    ascending_positions,
+    ascending_spearman,
+    energy_curve_deviation,
+)
 from motor.modelos import Track, require_text
 from motor.tonalidad import camelot_a_clasica
 
@@ -340,25 +345,46 @@ def cmd_similar(args: argparse.Namespace) -> int:
 # --- radio -----------------------------------------------------------------------------
 
 
-# Por debajo de este largo, el Spearman del set se imprime como ORIENTATIVO. Medido por
-# permutaciones (todas hasta n=8, 200k al azar desde n=9): la probabilidad de que un orden
-# AL AZAR dé Spearman ≥ 0.5 es 50% con n=3, 15% con n=6, 7% con n=10, 6% con n=11 y recién
-# baja de 5% en n=12 (4.9%). O sea: con menos de 12 tracks, "pasó el ≥ 0.5 de §4" no
-# distingue una curva armada de un orden cualquiera.
-MIN_TRACKS_SPEARMAN = 12
+# Por debajo de esta cantidad de PUNTOS, el Spearman se imprime como ORIENTATIVO. Medido
+# por permutaciones (todas hasta n=8, 200k al azar desde n=9), con n = puntos que entran
+# al Spearman: la probabilidad de que un orden AL AZAR dé Spearman ≥ 0.5 es 50% con n=3,
+# 15% con n=6, 7% con n=10, 6% con n=11 y recién baja de 5% en n=12 (4.9%). O sea: con
+# menos de 12 puntos, "pasó el ≥ 0.5 de §4" no distingue una curva armada de un orden
+# cualquiera.
+#
+# El Spearman de §4 ahora es el del TRAMO ASCENDENTE (`ascending_spearman`), así que los
+# puntos son los de ese tramo, no el largo del set: con "peak" entran solo las posiciones
+# hasta el 75% (`ascending_positions`). Un set "peak" de 12 tracks aporta 9 puntos y es
+# orientativo; con "peak" hacen falta 16 tracks para llegar a 12 puntos.
+MIN_PUNTOS_SPEARMAN = 12
 
 
-def linea_curva(energias: list[float]) -> str:
-    """El renglón de la curva de energía del set, honesto sobre cuánto significa (§6)."""
-    corr = energy_curve_correlation(energias)
-    base = "curva de energía (Spearman posición vs energía, §4 pide ≥ 0.5): "
-    if math.isnan(corr):
-        return base + "no calculable con menos de 2 tracks o energía constante"
-    if len(energias) < MIN_TRACKS_SPEARMAN:
-        return (base + f"{corr:+.2f} — ORIENTATIVO: con {len(energias)} tracks un orden al "
-                f"azar también puede pasar 0.5; se compara contra §4 desde "
-                f"{MIN_TRACKS_SPEARMAN} tracks")
-    return base + f"{corr:+.2f}"
+def linea_curva(energias: list[float], curva: str = "peak", largo: int | None = None) -> str:
+    """El renglón de la curva de energía del set, honesto sobre cuánto significa (§6).
+
+    Imprime las dos métricas de §4: el desvío medio de la curva (principal, umbral a
+    calibrar) y el Spearman del tramo ascendente (secundaria, ≥ 0.5). `largo` es el largo
+    PEDIDO del set: si el set quedó corto, la curva contra la que se mide es la que usó
+    `build_set`, no una estirada a lo que sonó.
+    """
+    desvio = energy_curve_deviation(energias, curva, largo)
+    rho = ascending_spearman(energias, curva, largo)
+    n_puntos = len(ascending_positions(len(energias), curva, largo))
+
+    texto = f"curva de energía ({curva}) · desvío medio "
+    texto += ("no calculable sin tracks" if math.isnan(desvio)
+              else f"{desvio:.3f} (umbral a calibrar, tarea 14)")
+    texto += " · Spearman tramo ascendente (§4 pide ≥ 0.5): "
+    if curva == "flat":
+        return texto + "no definido: la curva flat no tiene tramo que suba"
+    if math.isnan(rho):
+        return (texto + f"no calculable ({n_puntos} puntos en el tramo ascendente, o energía "
+                "constante)")
+    if n_puntos < MIN_PUNTOS_SPEARMAN:
+        return (texto + f"{rho:+.2f} — ORIENTATIVO: con {n_puntos} puntos en el tramo "
+                f"ascendente un orden al azar también puede pasar 0.5; se compara contra §4 "
+                f"desde {MIN_PUNTOS_SPEARMAN} puntos")
+    return texto + f"{rho:+.2f}"
 
 
 def cmd_radio(args: argparse.Namespace) -> int:
@@ -382,7 +408,8 @@ def cmd_radio(args: argparse.Namespace) -> int:
         print(f"  {i:>2}. {_fila(paso.track)}")
         print(f"      └ {motivo}")
 
-    print(f"\n{len(rset)} de {config.length} tracks pedidos · {linea_curva(rset.energies)}")
+    print(f"\n{len(rset)} de {config.length} tracks pedidos · "
+          f"{linea_curva(rset.energies, config.curve, config.length)}")
     if not rset.is_complete:
         print(f"SET CORTO: quedó en {len(rset)} de {config.length}. Motivo ({rset.stop}): "
               f"{rset.stop_detail}")

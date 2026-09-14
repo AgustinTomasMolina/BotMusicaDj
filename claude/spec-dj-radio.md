@@ -117,13 +117,34 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
 | Métrica | Umbral |
 |---|---|
 | Error de BPM (p95) | ≤ 1.0 BPM, tolerando ambigüedad de octava |
-| Tonalidad exacta | ≥ 85% |
-| Tonalidad compatible (exacta, relativo o vecino) | ≥ 95% |
+| Tonalidad exacta (tracks con acuerdo unánime de `tono_consenso`) | ≥ 85% |
+| Tonalidad compatible (exacta, relativo o vecino; ídem) | ≥ 95% |
 | Transiciones fuera de ±8% de BPM | 0% |
 | Choques armónicos (compatibilidad < 0.4) | ≤ 10% |
-| Curva de energía (Spearman posición vs energía) | ≥ 0.5 |
+| Curva de energía — desvío medio de la curva pedida | a calibrar (tarea 14) |
+| Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
 | Latencia de la radio | < 200 ms con 10k tracks |
+
+**Cambio de contrato (2026-09-14) — tonalidad y curva de energía.**
+
+- *Tonalidad.* Sobre la biblioteca real la exacta dio 46.2% contando todos los tracks, y
+  los errores se concentran en géneros percusivos (Hardgroove, Industrial, Peak Time) con
+  muy poca información armónica. El acuerdo entre tramos de `tono_consenso` predice el
+  acierto (3/3 → 57% exacta, 2/3 → 36%, 1/3 → 26%); la confianza de `tono()` no predice
+  nada (Pearson +0.02). Por eso el 85% / 95% se exige sobre los tracks con acuerdo
+  unánime, y en el resto la UI muestra `?` (§6). Un contrato sobre un subconjunto se
+  puede "cumplir" achicando el subconjunto: la **cobertura** (qué % y cuántos tracks con
+  referencia tienen acuerdo unánime) se reporta siempre al lado de la métrica, y las
+  cifras globales quedan como informativas. Sin consenso corrido, la tonalidad queda sin
+  medir.
+- *Curva de energía.* Spearman mide monotonía y la curva `peak` sube hasta el 75% del set
+  y baja: un set que la sigue perfecto daba 0.71, y dos sets que la siguen igual de bien
+  (desvío medio 0.123 y 0.126) dieron 0.70 y 0.22. La métrica principal pasa a ser el
+  desvío medio |energía − objetivo de la curva|, con umbral a calibrar escuchando las
+  radios de la tarea 14 (el oído gana). El Spearman queda como secundaria, calculado solo
+  sobre el tramo donde la curva sube (`peak`: hasta el 75%; `warmup`: todo; `flat`: no
+  definido).
 
 **Regla de proceso:** ningún cambio en features o scoring se mergea sin correr el
 benchmark antes y después y pegar los dos números en el commit.

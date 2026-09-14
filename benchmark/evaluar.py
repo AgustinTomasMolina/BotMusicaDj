@@ -168,24 +168,68 @@ def _p95(xs: list[float]) -> float:
     return orden[bajo] + frac * (orden[bajo + 1] - orden[bajo])
 
 
+def acuerdo_unanime(acuerdo: str) -> bool | None:
+    """¿El `acuerdo` de `tono_consenso` ("3/3", "2/3", "5/5"...) es unánime?
+
+    Unánime = todos los tramos votaron la misma key: ganados == total, con total > 0. No
+    se compara contra "3/3" porque `n_tramos` es configurable.
+
+    Devuelve None cuando no hay acuerdo que leer (campo vacío): el análisis se corrió con
+    `tono()` simple, o `tono_consenso` no pudo votar (audio demasiado corto). Un valor que
+    no tiene la forma "g/t" es un CSV roto y levanta ValueError: adivinarlo sería falsear
+    el subconjunto sobre el que se mide el contrato.
+    """
+    texto = (acuerdo or "").strip()
+    if not texto:
+        return None
+    try:
+        ganados, total = (int(p) for p in texto.split("/"))
+    except ValueError as e:
+        raise ValueError(f"acuerdo con formato inesperado: {acuerdo!r} (se espera 'g/t')") from e
+    return total > 0 and ganados == total
+
+
 def metricas(cruces: list[Cruce]) -> dict:
-    """Las métricas de §4 que dependen del análisis por track, más los dos p95 de BPM."""
+    """Las métricas de §4 que dependen del análisis por track, más los dos p95 de BPM.
+
+    Tonalidad (contrato 2026-09-14): `tonalidad_exacta` y `tonalidad_compatible` se miden
+    SOLO sobre los tracks con acuerdo unánime de `tono_consenso`. Si ningún track trae
+    acuerdo (análisis con `tono()` simple) quedan AUSENTES — sin medir — y no se rellenan con
+    la cifra global: eso sería medir otra cosa con el nombre del contrato. La global va a
+    `extra` como informativa, junto con la COBERTURA del subconjunto (cuántos y qué % de
+    los tracks con referencia son unánimes): un contrato sobre un subconjunto se "cumple"
+    achicando el subconjunto, y ese número tiene que verse.
+    """
     eo = [c.err_octava for c in cruces if c.err_octava is not None]
     ec = [c.err_crudo for c in cruces if c.err_crudo is not None]
-    ex = [1.0 if c.key_exacta == "si" else 0.0 for c in cruces if c.key_exacta != "sin-referencia"]
-    co = [1.0 if c.key_compatible == "si" else 0.0 for c in cruces if c.key_compatible != "sin-referencia"]
+    con_ref = [c for c in cruces if c.key_exacta != "sin-referencia"]
+    ex = [1.0 if c.key_exacta == "si" else 0.0 for c in con_ref]
+    co = [1.0 if c.key_compatible == "si" else 0.0 for c in con_ref]
     ts = [c.t_total_s for c in cruces if c.t_total_s > 0]
+
+    unanimidad = [acuerdo_unanime(c.acuerdo) for c in con_ref]
+    hay_consenso = any(u is not None for u in unanimidad)
+    unanimes = [c for c, u in zip(con_ref, unanimidad, strict=True) if u]
 
     m: dict[str, float] = {}
     if eo:
         m["bpm_error_p95"] = _p95(eo)
-    if ex:
-        m["tonalidad_exacta"] = 100.0 * statistics.mean(ex)
-        m["tonalidad_compatible"] = 100.0 * statistics.mean(co)
+    if unanimes:
+        m["tonalidad_exacta"] = 100.0 * statistics.mean(
+            1.0 if c.key_exacta == "si" else 0.0 for c in unanimes)
+        m["tonalidad_compatible"] = 100.0 * statistics.mean(
+            1.0 if c.key_compatible == "si" else 0.0 for c in unanimes)
     if ts:
         m["tiempo_analisis_s"] = _p95(ts)
 
     extra = {
+        "tonalidad_exacta_global": 100.0 * statistics.mean(ex) if ex else None,
+        "tonalidad_compatible_global": 100.0 * statistics.mean(co) if co else None,
+        "hay_consenso": hay_consenso,
+        "n_key_unanimes": len(unanimes),
+        # None sin consenso: la cobertura de un subconjunto que no se pudo formar no es 0%.
+        "cobertura_unanimes": (100.0 * len(unanimes) / len(con_ref)
+                               if con_ref and hay_consenso else None),
         "bpm_p95_crudo": _p95(ec) if ec else None,
         "bpm_p95_tolerante": _p95(eo) if eo else None,
         "bpm_medio_crudo": statistics.mean(ec) if ec else None,
@@ -245,6 +289,10 @@ def escribir_csv(cruces: list[Cruce], out_dir: Path, sufijo: str = "") -> Path:
     return destino
 
 
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v:.1f}%"
+
+
 def informe(res: dict) -> None:
     cruces = res["cruces"]
     print(f"\n{'=' * 72}")
@@ -270,15 +318,35 @@ def informe(res: dict) -> None:
           f"p95 {e['tiempo_p95_s']:.2f} s · sobre {UMBRAL_TIEMPO:g} s: "
           f"{e['sobre_umbral_tiempo']}/{e['n_tiempo']}")
 
+    print(f"{'-' * 72}\nTonalidad (n={e['n_key']} con referencia):")
+    if e["hay_consenso"]:
+        print(f"  CONTRATO — solo tracks con acuerdo unánime de tono_consenso: "
+              f"{_pct(met['umbrales'].get('tonalidad_exacta'))} exacta · "
+              f"{_pct(met['umbrales'].get('tonalidad_compatible'))} compatible")
+        print(f"  cobertura del subconjunto: {e['n_key_unanimes']}/{e['n_key']} "
+              f"({_pct(e['cobertura_unanimes'])})   <- si baja, el contrato mide menos tracks")
+    else:
+        print("  CONTRATO — sin medir: el análisis no se corrió con consenso (--consenso),"
+              " no hay acuerdo entre tramos")
+    print(f"  informativo — global, todos los tracks: "
+          f"{_pct(e['tonalidad_exacta_global'])} exacta · "
+          f"{_pct(e['tonalidad_compatible_global'])} compatible")
+
     print(f"{'-' * 72}\nContra los umbrales de la spec §4:")
     for f in evaluar_umbrales(met["umbrales"]):
         if f.valor is None:
             estado, val = "· sin medir (necesita la radio)", "—"
+            if f.umbral.clave.startswith("tonalidad_"):
+                estado = "· sin medir (necesita análisis con consenso)"
+        elif f.umbral.a_calibrar:
+            estado, val = "~ sin veredicto", f"{f.valor:.2f}{f.umbral.unidad}"
         else:
             estado = "OK ✓" if f.ok else "ROTO ✗"
             val = f"{f.valor:.2f}{f.umbral.unidad}"
-        print(f"  {f.umbral.nombre:34} {val:>12}  (límite {f.umbral.op} "
-              f"{f.umbral.limite:g}{f.umbral.unidad})  {estado}")
+        extra_cob = ""
+        if f.umbral.clave.startswith("tonalidad_") and e["hay_consenso"]:
+            extra_cob = f"  [cobertura {e['n_key_unanimes']}/{e['n_key']}]"
+        print(f"  {f.umbral.nombre:34} {val:>12}  ({f.umbral.objetivo()})  {estado}{extra_cob}")
 
     con_ref = [c for c in cruces if c.veredicto_bpm != "sin-referencia"]
     if con_ref:
