@@ -51,20 +51,42 @@ def ventana_central(y: np.ndarray, sr: int, segundos: int = _VENTANA_S) -> np.nd
     return y[mid - win // 2: mid + win // 2]
 
 
-def ranking(y: np.ndarray, sr: int, hpss: bool = False) -> list[tuple[float, str, str]]:
-    """Las 24 correlaciones Krumhansl `(corr, nota, modo)`, de mejor a peor.
+def cromagrama_temporal(y: np.ndarray, sr: int, hpss: bool = False) -> np.ndarray:
+    """Chroma CQT SIN promediar: matriz (12, n_frames), una columna por frame de análisis.
+    La fila `i` es la pitch class `NOTAS[i]` (fila 0 = C).
 
-    Recibe el audio YA RECORTADO — no ventanea. Es el cálculo crudo que usan tanto `tono`
-    como `tono_consenso`; está expuesto para que las herramientas de análisis no tengan que
-    duplicarlo (si se duplica, tarde o temprano mide algo distinto del motor).
-    Lista vacía si el chroma es constante (silencio): ahí corrcoef da NaN para todo.
+    Es el único lugar del motor donde se llama a librosa por el chroma. `cromagrama` lo
+    promedia para Krumhansl y `motor.embeddings` usa los frames para sacar media y desvío
+    temporal; si cada uno llamara a librosa por su cuenta, tarde o temprano terminarían
+    midiendo cosas distintas (es la misma razón por la que `ranking` está expuesto).
+
+    Recibe el audio YA RECORTADO — no ventanea.
     """
     import librosa  # perezoso: ver la nota de los imports del módulo
 
     if hpss:
         y = librosa.effects.harmonic(y)  # separa lo armónico del percusivo (kick)
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr).mean(axis=1)
+    return librosa.feature.chroma_cqt(y=y, sr=sr)
 
+
+def cromagrama(y: np.ndarray, sr: int, hpss: bool = False) -> np.ndarray:
+    """Perfil cromático del track: vector de 12 con el chroma promediado en el tiempo.
+
+    Es el insumo de Krumhansl (`ranking`) y también del embedding de timbre
+    (`motor.embeddings`), por eso está expuesto en vez de quedar escondido adentro de
+    `ranking`. Recibe el audio YA RECORTADO — no ventanea.
+    """
+    return cromagrama_temporal(y, sr, hpss=hpss).mean(axis=1)
+
+
+def ranking_chroma(chroma: np.ndarray) -> list[tuple[float, str, str]]:
+    """Las 24 correlaciones Krumhansl `(corr, nota, modo)` de un perfil cromático de 12,
+    de mejor a peor.
+
+    Separado de `ranking` para que quien YA tiene el chroma (el embedding, por ejemplo) no
+    lo recalcule: `chroma_cqt` es lo caro del análisis de tonalidad.
+    Lista vacía si el chroma es constante (silencio): ahí corrcoef da NaN para todo.
+    """
     out = []
     for i in range(12):
         for perfil, modo in ((_MAJ, "maj"), (_MIN, "min")):
@@ -73,6 +95,37 @@ def ranking(y: np.ndarray, sr: int, hpss: bool = False) -> list[tuple[float, str
                 out.append((corr, NOTAS[i], modo))
     out.sort(key=lambda t: -t[0])
     return out
+
+
+def ranking(y: np.ndarray, sr: int, hpss: bool = False) -> list[tuple[float, str, str]]:
+    """Las 24 correlaciones Krumhansl `(corr, nota, modo)`, de mejor a peor.
+
+    Recibe el audio YA RECORTADO — no ventanea. Es el cálculo crudo que usan tanto `tono`
+    como `tono_consenso`; está expuesto para que las herramientas de análisis no tengan que
+    duplicarlo (si se duplica, tarde o temprano mide algo distinto del motor).
+    Lista vacía si el chroma es constante (silencio): ahí corrcoef da NaN para todo.
+    """
+    return ranking_chroma(cromagrama(y, sr, hpss=hpss))
+
+
+def chroma_relativo(chroma: np.ndarray, nota: str) -> np.ndarray:
+    """Rota el chroma para que la tónica `nota` quede en el índice 0.
+
+    Para qué: dos tracks con el mismo carácter armónico en tonalidades distintas tienen
+    chromas absolutos completamente distintos (uno tiene el pico en C, el otro en F#) y el
+    motor los vería como lejanos. Rotados a la tónica, los dos quedan con el mismo perfil
+    "tónica - tercera - quinta" y la comparación mide carácter, no key.
+
+    Acepta un vector (12,) o un cromagrama (12, n_frames): rota siempre el eje de las
+    pitch classes. `nota` va en la notación de `NOTAS` ('C', 'C#', ...); cualquier otra
+    cosa es un error, no un silencio que se ignora.
+    """
+    if nota not in NOTAS:
+        raise ValueError(f"nota desconocida: {nota!r} (esperaba una de {NOTAS})")
+    a = np.asarray(chroma)
+    if a.shape[0] != 12:
+        raise ValueError(f"el chroma tiene que tener 12 filas, recibí {a.shape}")
+    return np.roll(a, -NOTAS.index(nota), axis=0)
 
 
 def tono(y: np.ndarray, sr: int, hpss: bool = False) -> dict:
