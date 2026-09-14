@@ -218,7 +218,8 @@ class RadioSet:
 
     @property
     def energies(self) -> list[float]:
-        """Las energías en orden — lo que come `energia.energy_curve_correlation`."""
+        """Las energías en orden — lo que comen `energia.energy_curve_deviation` y
+        `energia.ascending_spearman` (las métricas de la curva en §4)."""
         return [s.track.energy for s in self.steps]
 
     def reasons(self) -> list[str]:

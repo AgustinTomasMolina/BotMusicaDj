@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from motor.energia import energy_curve_correlation, energy_target  # noqa: E402
+from motor.energia import ascending_spearman, energy_target  # noqa: E402
 from motor.modelos import Track  # noqa: E402
 from motor.radio import (  # noqa: E402
     STOP_ARTIST_GAP,
@@ -551,8 +551,8 @@ def test_mmr_saca_al_set_del_racimo():
 # ---------------------------------------------------------------------------
 
 def test_la_curva_de_energia_sube():
-    """§4: correlación de Spearman entre posición y energía ≥ 0.5. Con una biblioteca
-    entera mezclable, lo único que ordena el set es la curva."""
+    """§4: Spearman del tramo ascendente ≥ 0.5 (con "warmup" el tramo ascendente es el set
+    entero). Con una biblioteca entera mezclable, lo único que ordena el set es la curva."""
     rng = np.random.default_rng(21)
     biblio = [
         track(f"e{i:02d}.wav", 150 + (i % 7) * 0.5, "8A", energy=i / 49,
@@ -562,8 +562,8 @@ def test_la_curva_de_energia_sube():
     semilla = track("semilla.wav", 150, "8A", energy=0.05, emb=unit(rng.standard_normal(6)))
     rset = build_set(semilla, biblio, RadioConfig(length=15, curve="warmup", seed=4))
     assert len(rset) == 15, rset.stop_detail
-    r = energy_curve_correlation(rset.energies)
-    assert r >= 0.5, f"la energía no dibuja ninguna curva: Spearman {r:.3f} < 0.5 (§4)"
+    r = ascending_spearman(rset.energies, "warmup", 15)
+    assert r >= 0.5, f"la energía no dibuja ninguna curva: Spearman ascendente {r:.3f} < 0.5 (§4)"
 
 
 def test_bordes_de_la_biblioteca():

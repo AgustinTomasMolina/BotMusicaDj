@@ -8,8 +8,9 @@ Tres capas, de track a set:
 
 1. `energia_rms` — cuánta energía tiene ESTE archivo (valor absoluto).
 2. `percentil` — dónde cae ese valor dentro de la biblioteca (0..100).
-3. `energy_target` / `spearman` — la forma que tiene que dibujar la energía a lo largo
-   del set, y la métrica con la que §4 mide si la dibujó.
+3. `energy_target` — la forma que tiene que dibujar la energía a lo largo del set, y las
+   dos métricas con las que §4 mide si la dibujó: `energy_curve_deviation` (principal) y
+   `ascending_spearman` (secundaria, sobre el tramo donde la curva sube).
 """
 from collections.abc import Sequence
 
@@ -49,7 +50,7 @@ def energy_target(position: int, length: int, curve: str = "peak") -> float:
 
     Es el objetivo, no el resultado: quien arma el set (`build_set`) elige, entre los
     candidatos mezclables, el que más se acerca a este número. El resultado se mide
-    después con `spearman` / `energy_curve_correlation`.
+    después con `energy_curve_deviation` / `ascending_spearman`.
 
     Tres formas:
 
@@ -57,8 +58,8 @@ def energy_target(position: int, length: int, curve: str = "peak") -> float:
       hasta 0.60 en el tramo final. Es el arco clásico: presentar, subir, pegar, bajar.
     - ``"warmup"`` — sube sostenido de 0.30 a 0.80, sin clímax. Para tocar antes que
       otro DJ: el set entrega la pista más arriba de lo que la recibió, y nada más.
-    - ``"flat"``   — 0.5 constante. Sirve de control: con esta curva la correlación de
-      §4 no significa nada, porque no hay nada que correlacionar.
+    - ``"flat"``   — 0.5 constante. Sirve de control: con esta curva el Spearman de §4
+      no está definido (no hay tramo que suba); solo el desvío dice algo.
 
     Todas devuelven un valor dentro de 0..1 **siempre**, incluso con `position` fuera
     de rango: `position` se recorta a [0, length-1] antes de normalizar. Sin ese recorte
@@ -143,10 +144,11 @@ def spearman(x: Sequence[float], y: Sequence[float]) -> float:
 def energy_curve_correlation(energies: Sequence[float]) -> float:
     """Spearman entre la POSICIÓN en el set (0, 1, 2, ...) y la energía de cada track.
 
-    Es la métrica del umbral de §4: **≥ 0.5** entre posición y energía. Mide que la
-    energía suba a lo largo del set, no que siga exactamente la curva pedida — por eso
-    tolera el tramo de bajada de "peak" (el último cuarto tira la correlación abajo, y
-    aun así un arco bien armado queda holgadamente por encima de 0.5).
+    Fue la métrica de §4 hasta el 2026-09-14 y ya NO es la del contrato: mide monotonía, y
+    la curva "peak" baja en su último cuarto, así que un set que la sigue perfecto da 0.72
+    y no 1.0, y dos sets que la siguen igual de bien pueden dar 0.70 y 0.22. El contrato
+    ahora es `energy_curve_deviation` (principal) y `ascending_spearman` (secundaria).
+    Queda como función válida: responde "¿la energía sube a lo largo de TODO el set?".
 
     Se le pasan las energías en el orden en que suenan: `[t.energy for t in set]`. No
     recibe `Track` para no atar este módulo a `motor/modelos.py`; lo único que necesita
@@ -154,3 +156,73 @@ def energy_curve_correlation(energies: Sequence[float]) -> float:
     """
     e = np.asarray(list(energies), dtype=np.float64)
     return spearman(np.arange(e.size, dtype=np.float64), e)
+
+
+def _curve_length(n: int, length: int | None) -> int:
+    """El largo contra el que se evalúa la curva: el del set PEDIDO si se conoce.
+
+    `build_set` calcula el objetivo de cada posición con `config.length`. Si el set quedó
+    corto (se acabaron los candidatos), medirlo contra una curva estirada a su largo real
+    lo compararía con objetivos que nunca se pidieron. Por eso se acepta `length`; sin él,
+    se asume que el set salió completo.
+    """
+    if length is None:
+        return max(n, 1)
+    if length < n:
+        raise ValueError(f"el set pedido ({length}) no puede ser más corto que el sonado ({n})")
+    return length
+
+
+def ascending_positions(n: int, curve: str = "peak", length: int | None = None) -> list[int]:
+    """Las posiciones (de las `n` que sonaron) donde la curva pedida SUBE.
+
+    - ``"peak"``   — las de t ≤ `PEAK_AT` (el mismo corte que usa `energy_target`, así el
+      clímax cuenta como parte de la subida).
+    - ``"warmup"`` — todas.
+    - ``"flat"``   — ninguna: la curva no sube, no hay tramo ascendente.
+
+    Es lo que entra al `ascending_spearman`, y su cantidad es la que decide si ese Spearman
+    es orientativo (`motor/cli.py`).
+    """
+    if curve not in CURVES:
+        raise ValueError(f"curva desconocida {curve!r}; las soportadas son {CURVES}")
+    total = _curve_length(n, length)
+    if curve == "flat":
+        return []
+    if curve == "warmup":
+        return list(range(n))
+    return [i for i in range(n) if i / max(total - 1, 1) <= PEAK_AT]
+
+
+def energy_curve_deviation(energies: Sequence[float], curve: str = "peak",
+                           length: int | None = None) -> float:
+    """Desvío medio de la curva: promedio de |energía_i − energy_target(i, length, curve)|.
+
+    Métrica PRINCIPAL de la curva en §4 (umbral a calibrar, tarea 14). A diferencia del
+    Spearman, mide qué tan cerca pasó el set de la curva pedida, no si subió: 0.0 es
+    seguirla exacto, y la bajada de "peak" no la penaliza.
+
+    `length` es el largo del set pedido (ver `_curve_length`); por defecto, el sonado.
+    `nan` con un set vacío: no hay nada que medir, y un 0.0 se leería como "perfecto".
+    """
+    e = np.asarray(list(energies), dtype=np.float64)
+    if e.size == 0:
+        return float("nan")
+    total = _curve_length(e.size, length)
+    target = np.array([energy_target(i, total, curve) for i in range(e.size)])
+    return float(np.mean(np.abs(e - target)))
+
+
+def ascending_spearman(energies: Sequence[float], curve: str = "peak",
+                       length: int | None = None) -> float:
+    """Spearman posición vs energía SOLO sobre el tramo donde la curva sube.
+
+    Métrica SECUNDARIA de §4 (≥ 0.5). Un set que sigue "peak" perfecto da 1.0 acá (el
+    Spearman sobre el set entero le daba 0.72 por la bajada final).
+
+    `nan` cuando no está definido — nunca 0.0: con "flat" (no hay subida), con menos de
+    dos puntos en el tramo ascendente, o con energía constante en ese tramo.
+    """
+    e = np.asarray(list(energies), dtype=np.float64)
+    pos = ascending_positions(e.size, curve, length)
+    return spearman(np.asarray(pos, dtype=np.float64), e[pos])

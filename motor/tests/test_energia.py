@@ -1,5 +1,5 @@
-"""Tests de energía: RMS, percentil, curva del set y la correlación de Spearman con la
-que §4 mide esa curva.
+"""Tests de energía: RMS, percentil, curva del set y las métricas con las que §4 mide esa
+curva (desvío medio y Spearman del tramo ascendente).
 
 Los valores esperados de la curva y del Spearman están calculados a mano en cada test
 (la fórmula está en el docstring de cada función, no hay nada que adivinar). El Spearman
@@ -19,8 +19,11 @@ import pytest  # noqa: E402
 from motor.energia import (  # noqa: E402
     CURVES,
     PEAK_AT,
+    ascending_positions,
+    ascending_spearman,
     energia_rms,
     energy_curve_correlation,
+    energy_curve_deviation,
     energy_target,
     percentil,
     spearman,
@@ -118,7 +121,7 @@ def test_curva_desconocida_y_length_invalido_son_error():
 
 
 # ---------------------------------------------------------------------------
-# Spearman — la métrica del umbral de §4 (≥ 0.5)
+# Spearman — la base de la métrica secundaria de §4 (sobre el set entero ya no es contrato)
 # ---------------------------------------------------------------------------
 
 def test_spearman_orden_perfecto_y_orden_invertido():
@@ -179,18 +182,81 @@ def test_spearman_exige_series_del_mismo_largo():
         spearman([1, 2, 3], [1, 2])
 
 
-def test_una_curva_peak_bien_seguida_pasa_el_umbral_de_seccion_4():
-    """El umbral de §4 es ≥ 0.5 y la curva 'peak' baja en su último cuarto, así que la
-    pregunta no es retórica: hay que verificar que el arco entero sigue pasando.
+def test_peak_seguida_perfecto_da_1_en_el_tramo_ascendente_y_071_en_el_set_entero():
+    """El caso que motivó el cambio de contrato (spec §4, 2026-09-14).
 
-    El set se arma siguiendo la propia curva (energía = objetivo de cada posición), que
-    es el mejor caso posible del motor.
+    El set sigue la propia curva 'peak' (energía = objetivo de cada posición), el mejor
+    caso posible del motor. El Spearman sobre el set entero le da 0.7188 por la bajada del
+    último cuarto; sobre el tramo ascendente (t ≤ 0.75: posiciones 0..14 de 20, energías
+    estrictamente crecientes) tiene que dar 1.0.
     """
     length = 20
     energias = [energy_target(i, length) for i in range(length)]
-    rho = energy_curve_correlation(energias)
-    assert rho >= 0.5, f"la curva 'peak' ideal no pasa su propio umbral: rho={rho}"
-    assert rho == pytest.approx(0.7187969924812028, abs=1e-9)
+    assert energy_curve_correlation(energias) == pytest.approx(0.7187969924812028, abs=1e-9)
+    assert ascending_spearman(energias, "peak") == pytest.approx(1.0), (
+        "un set que sigue 'peak' perfecto no da 1.0 en el tramo ascendente")
+
+
+# ---------------------------------------------------------------------------
+# Contrato de la curva (§4, 2026-09-14): desvío medio + Spearman ascendente
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("curva", CURVES)
+def test_desvio_cero_si_el_set_sigue_la_curva_exacta(curva):
+    energias = [energy_target(i, 13, curva) for i in range(13)]
+    assert energy_curve_deviation(energias, curva) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_desvio_caso_conocido_a_mano():
+    """'peak' con 5 posiciones: t = 0, .25, .5, .75, 1 → objetivos 0.35, 0.55, 0.75, 0.95,
+    0.60 (subida lineal 0.35→0.95 hasta t=.75, bajada a 0.60 en t=1).
+
+    Energías [0.45, 0.55, 0.65, 0.95, 0.80] → |dif| = 0.10, 0, 0.10, 0, 0.20 → media 0.08.
+    """
+    assert energy_curve_deviation([0.45, 0.55, 0.65, 0.95, 0.80], "peak") == pytest.approx(0.08)
+
+
+def test_desvio_de_un_set_corto_se_mide_contra_la_curva_pedida():
+    """Set pedido de 5 que quedó en 2: los objetivos que usó build_set son los de length=5
+    (0.35, 0.55), no los de una curva de 2 (0.35, 0.60)."""
+    corto = [0.35, 0.55]
+    assert energy_curve_deviation(corto, "peak", length=5) == pytest.approx(0.0, abs=1e-12)
+    assert energy_curve_deviation(corto, "peak") == pytest.approx(0.025)   # |0.55-0.60|/2
+    with pytest.raises(ValueError, match="no puede ser más corto"):
+        energy_curve_deviation([0.1, 0.2, 0.3], "peak", length=2)
+
+
+def test_desvio_de_set_vacio_es_nan():
+    assert math.isnan(energy_curve_deviation([], "peak"))
+
+
+def test_tramo_ascendente_por_curva():
+    # peak, 12 tracks: t = i/11 ≤ 0.75 ⇔ i ≤ 8.25 → posiciones 0..8 (9 puntos).
+    assert ascending_positions(12, "peak") == list(range(9))
+    # peak, 5 tracks: t = 0, .25, .5, .75 entran (el clímax cuenta como subida), t=1 no.
+    assert ascending_positions(5, "peak") == [0, 1, 2, 3]
+    assert ascending_positions(12, "warmup") == list(range(12))
+    assert ascending_positions(12, "flat") == []
+    # set corto de 3 sobre un pedido de 5: las 3 posiciones caen en la subida.
+    assert ascending_positions(3, "peak", length=5) == [0, 1, 2]
+
+
+def test_spearman_ascendente_ignora_la_bajada():
+    """'peak' de 5: el tramo ascendente son las posiciones 0..3. Energías [0.1, 0.3, 0.2,
+    0.4] ahí → un par invertido → 0.8 (mismo cálculo a mano que el caso intermedio de
+    arriba). El último track (0.0, la bajada) no entra; en el set entero sí, y lo tira."""
+    energias = [0.1, 0.3, 0.2, 0.4, 0.0]
+    assert ascending_spearman(energias, "peak") == pytest.approx(0.8)
+    assert energy_curve_correlation(energias) != pytest.approx(0.8), \
+        "si el set entero diera lo mismo, este caso no probaría que la bajada se excluye"
+
+
+def test_spearman_ascendente_indefinido_es_nan():
+    assert math.isnan(ascending_spearman([0.2, 0.5, 0.9], "flat")), "flat no tiene subida"
+    # peak con 2 tracks: t = 0 y 1 → solo la posición 0 sube → 1 punto.
+    assert math.isnan(ascending_spearman([0.2, 0.9], "peak")), "1 punto ascendente"
+    assert math.isnan(ascending_spearman([0.4], "warmup")), "un solo track"
+    assert math.isnan(ascending_spearman([0.5, 0.5, 0.5, 0.1], "peak")), "tramo constante"
 
 
 if __name__ == "__main__":
