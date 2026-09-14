@@ -41,3 +41,6 @@ Thumbs.db
 # === Claude Code (memoria/estado local) ===
 .claude/
 pipeline/staging/
+
+# Salidas de la sesion de ground truth (CSVs con rutas personales, no van al repo)
+gt_out/
