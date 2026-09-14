@@ -8,8 +8,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import numpy as np  # noqa: E402
-from motor.sintetico import click_track  # noqa: E402
+
 from motor.bpm import bpm_beat_track, bpm_refinado  # noqa: E402
+from motor.sintetico import click_track  # noqa: E402
 
 BPMS = [120, 124, 128, 138, 144, 150]
 
