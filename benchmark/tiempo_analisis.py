@@ -26,11 +26,13 @@ from pathlib import Path
 import numpy as np
 
 from benchmark.umbrales import UMBRALES
+
+# Formatos de audio: UNA sola lista para todo el repo (calidad.tags.EXTS). Una copia
+# local hacía que el motor escaneara formatos que el benchmark nunca medía.
+from calidad.tags import EXTS
 from motor.bpm import bpm_refinado
 from motor.sintetico import click_track
 from motor.tonalidad import tono
-
-EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg")
 
 _UMBRAL_S = next(u.limite for u in UMBRALES if u.clave == "tiempo_analisis_s")
 

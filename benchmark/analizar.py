@@ -14,6 +14,7 @@ juntas.
 NO modifica los audios: solo los lee (regla del proyecto).
 """
 import argparse
+import contextlib
 import csv
 import datetime
 import random
@@ -22,10 +23,10 @@ import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
-from motor.bpm import bpm_refinado
-from motor.tonalidad import tono, tono_consenso
-
-EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg")
+# Formatos de audio: UNA sola lista para todo el repo (calidad.tags.EXTS). Una copia
+# local hacía que el motor escaneara formatos que el benchmark nunca medía.
+from calidad.tags import EXTS
+from motor.analisis import cargar, medir_bpm_y_tono
 
 # Semilla por defecto del muestreo de --limit. Fija a propósito: dos corridas con la misma
 # carpeta y el mismo --limit tienen que analizar EXACTAMENTE los mismos tracks, o comparar
@@ -72,21 +73,20 @@ def muestrear(rutas: list[str], limite: int | None, semilla: int = SEMILLA) -> l
 
 
 def analizar_uno(ruta: str, sr: int = 22050, consenso: bool = False) -> FilaAnalisis | None:
-    """Corre el motor sobre un archivo. `None` si no se pudo cargar o es muy corto."""
-    import librosa
+    """Corre el motor sobre un archivo. `None` si no se pudo cargar o es muy corto.
 
+    La carga y la medición NO están copiadas acá: son `motor.analisis.cargar` y
+    `motor.analisis.medir_bpm_y_tono`, las mismas que usa el motor para llenar la biblioteca
+    (tarea 5.66: dos caminos de medición terminaron dando dos keys para el mismo track).
+    """
     t0 = time.perf_counter()
-    try:
-        y, _ = librosa.load(ruta, sr=sr, mono=True)
-    except Exception:  # noqa: BLE001
-        return None
+    y = cargar(ruta, sr)
     t_carga = time.perf_counter() - t0
-    if y.size < sr:  # < 1 s de audio: no sirve
+    if y is None:  # no decodificó, o < 1 s de audio
         return None
 
     t1 = time.perf_counter()
-    bpm = bpm_refinado(y, sr)
-    det = tono_consenso(y, sr) if consenso else tono(y, sr)
+    bpm, det = medir_bpm_y_tono(y, sr, consenso=consenso)
     t_analisis = time.perf_counter() - t1
 
     ganados, total = det.get("acuerdo", (0, 0))
@@ -145,10 +145,8 @@ def escribir_csv(filas: list[FilaAnalisis], out_dir: Path, sufijo: str = "") -> 
 
 
 def main(argv=None) -> int:
-    try:
+    with contextlib.suppress(Exception):
         sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        pass
     ap = argparse.ArgumentParser(
         prog="benchmark.analizar",
         description="Etapa A: corre el motor sobre una carpeta de audio y escribe un CSV.")

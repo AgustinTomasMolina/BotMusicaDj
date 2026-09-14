@@ -34,6 +34,10 @@ import sys
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+# LA lista de formatos de audio del repo. motor.cli, benchmark (analizar, tiempo_analisis,
+# calibracion_confianza), calidad y pipeline la importan de acá: el benchmark tiene que
+# medir exactamente los formatos que el motor escanea. `.opus` entra porque libsndfile
+# 1.2 lo decodifica (verificado con `motor.analisis.cargar`).
 EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg", ".opus")
 
 # Marcador de tag propio (ver docstring). server.py:704.

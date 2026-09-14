@@ -23,7 +23,15 @@ classifiers = [
 dependencies = [
     "librosa>=0.10.2",
     "numpy>=1.26,<2.1",     # numba (dep de librosa) aún no soporta numpy 2.1+
+    # `djradio scan` lee artista y título de los tags (calidad.tags.leer_tags). Misma
+    # versión que requirements.txt: sin esto, `pip install -e .` deja una CLI que se cae
+    # con ModuleNotFoundError en el primer track analizado.
+    "mutagen==1.48.1",
 ]
+
+# `djradio scan|list|info|similar|radio` — lo mismo que `python -m motor ...`.
+[project.scripts]
+djradio = "motor.cli:main"
 
 [project.optional-dependencies]
 dev = [
