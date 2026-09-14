@@ -33,20 +33,28 @@ Tres decisiones que alguien va a querer "arreglar", y por qué no:
    preferencia, no un umbral de §4, así que la decisión es discutible — pero un filtro que
    se afloja solo es un filtro que no se puede razonar desde afuera. El corte dice
    `"artist_gap"`, que es distinto de `"sin_candidatos_mezclables"`, y quien llama puede
-   bajar `artist_gap` a 0 y volver a pedir.
+   bajar `artist_gap` a 0 y volver a pedir. Dice `"artist_gap"` exactamente cuando el gap
+   tapó a algún candidato que SÍ mezclaba (`_motivo_de_corte`): es cuando bajarlo ayuda.
 """
 from __future__ import annotations
 
 import math
 import random
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
 from motor.energia import CURVES, energy_target
 from motor.modelos import Track
-from motor.scoring import TOLERANCIA_BPM, _dist_bpm_relativa, mezclabilidad, score
+from motor.scoring import (
+    FACTORES_OCTAVA,
+    TOLERANCIA_BPM,
+    _dist_bpm_relativa,
+    _distancias_por_lectura,
+    mezclabilidad,
+    score,
+)
 from motor.tonalidad import _parse_camelot, compat_camelot
 
 # Lecturas de octava del BPM. `_dist_bpm_relativa` considera mezclable un 75 contra un 150
@@ -56,6 +64,7 @@ from motor.tonalidad import _parse_camelot, compat_camelot
 MISMO_TIEMPO = "mismo tiempo"
 DOBLE_TIEMPO = "doble tiempo"
 MEDIO_TIEMPO = "medio tiempo"
+_LECTURAS = {1.0: MISMO_TIEMPO, 2.0: DOBLE_TIEMPO, 0.5: MEDIO_TIEMPO}
 
 # Códigos de corte de `RadioSet.stop`. None = el set llegó al largo pedido.
 STOP_BIBLIOTECA_VACIA = "biblioteca_vacia"
@@ -82,17 +91,18 @@ def bpm_delta_pct(a: float, b: float) -> tuple[float, str]:
     if not (a > 0 and b > 0):
         return float("nan"), ""
 
-    # Las tres lecturas que considera `_dist_bpm_relativa`, en ese orden. El empate se
-    # rompe por el índice (o sea: a igualdad de diferencia gana "mismo tiempo"), nunca
-    # por el orden en que numpy o un dict devuelvan las cosas.
-    opciones = ((b, MISMO_TIEMPO), (2 * b, DOBLE_TIEMPO), (b / 2, MEDIO_TIEMPO))
-    idx = min(range(len(opciones)), key=lambda i: (abs(a - opciones[i][0]), i))
-    efectivo, lectura = opciones[idx]
+    # Las tres lecturas que considera `_dist_bpm_relativa`, medidas con SU misma función y
+    # en el mismo orden (`FACTORES_OCTAVA`). La lectura elegida es la de menor distancia
+    # relativa — la misma que hace ganar el `min` de la compuerta —; el empate se rompe por
+    # el índice (a igualdad gana "mismo tiempo"), nunca por el orden de un dict.
+    distancias = _distancias_por_lectura(a, b)
+    idx = min(range(len(distancias)), key=lambda i: (distancias[i], i))
+    efectivo = FACTORES_OCTAVA[idx] * b
+    lectura = _LECTURAS[FACTORES_OCTAVA[idx]]
 
     # La magnitud SALE de la función que usa la compuerta, no de una cuenta paralela: es la
     # única forma de garantizar que el porcentaje que se muestra y el que decide si el track
-    # entra sean el mismo número (el denominador es max(a, b), simétrico). Acá solo se le
-    # agrega el signo, que la distancia no tiene.
+    # entra sean el mismo número. Acá solo se le agrega el signo, que la distancia no tiene.
     pct = math.copysign(_dist_bpm_relativa(a, b) * 100.0, efectivo - a)
     return pct, lectura
 
@@ -266,6 +276,22 @@ class RadioConfig:
                 f"`w_energy` es la proporcion de mezcla entre timbre y energia: "
                 f"va de 0 a 1, "
                 f"recibi {self.w_energy!r}")
+        # w_seed, w_prev y mmr_lambda SÍ son pesos libres (`musical_fit` los pasa por un tanh
+        # que satura, así que un peso grande comprime pero no da vuelta nada). Lo que no
+        # puede pasar es que sean negativos, por el mismo motivo que `w_energy`:
+        # - `w_seed < 0` / `w_prev < 0` premian al candidato que MENOS se parece a la
+        #   semilla / al anterior: el set deja de ser una radio, sin avisar.
+        # - `mmr_lambda < 0` convierte la penalización por redundancia en un PREMIO: el
+        #   greedy vuelve a pegarse al racimo de tracks casi idénticos que MMR viene a romper.
+        # Tienen que ser finitos: con `inf`, `inf * 0.0` es NaN y el orden de los candidatos
+        # queda librado a cómo `max`/`min` tratan un NaN. Cero es válido en los tres (apaga
+        # ese término a propósito; `test_mmr_saca_al_set_del_racimo` usa mmr_lambda=0).
+        for nombre in ("w_seed", "w_prev", "mmr_lambda"):
+            valor = getattr(self, nombre)
+            if not (math.isfinite(valor) and valor >= 0.0):
+                raise ValueError(
+                    f"`{nombre}` es un peso del encaje musical: finito y >= 0 (negativo "
+                    f"invierte lo que premia), recibí {valor!r}")
         if not 0.0 <= self.randomness <= 1.0:
             raise ValueError(f"`randomness` va de 0 a 1, recibí {self.randomness!r}")
         if self.top_k < 1:
@@ -311,12 +337,15 @@ def similar(track: Track, biblioteca: Sequence[Track], n: int = 10) -> list[tupl
 
     Biblioteca vacía, `n <= 0`, o una biblioteca que solo contiene al propio track →
     lista vacía. `n` mayor que la biblioteca devuelve todo lo que hay, sin rellenar.
+
+    Una ruta repetida aparece una sola vez (`_unicos_por_ruta`): dos cargas del mismo
+    archivo no son dos similares. Si las dos cargas DIFIEREN, `ValueError`.
     """
     if n <= 0:
         return []
 
     propia = str(track.path)
-    candidatos = [t for t in biblioteca if str(t.path) != propia]
+    candidatos = _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
     if not candidatos:
         return []
 
@@ -379,23 +408,40 @@ def musical_fit(
     return (1.0 - config.w_energy) * timbre + config.w_energy * energia
 
 
+def _unicos_por_ruta(tracks: Iterable[Track]) -> list[Track]:
+    """Los tracks sin rutas repetidas, ordenados por ruta.
+
+    Deduplicar por ruta y no por objeto: dos cargas del mismo archivo son dos objetos.
+    Si esas dos cargas son IGUALES (`Track.__eq__`: mismos campos y mismo embedding) se
+    queda una. Si DIFIEREN, `ValueError`: elegir una en silencio dependería del orden de
+    entrada — `sorted` es estable, así que ganaría la que vino primero — y el set cambiaría
+    según cómo se armó la lista, no según el contenido (spec §5). Dos análisis distintos del
+    mismo archivo en la misma biblioteca son un error de quien la armó, y se dice.
+    """
+    por_ruta: dict[str, Track] = {}
+    for t in tracks:
+        clave = str(t.path)
+        previo = por_ruta.get(clave)
+        if previo is None:
+            por_ruta[clave] = t
+        elif previo != t:
+            raise ValueError(
+                f"la biblioteca trae dos tracks distintos con la misma ruta {clave!r}: "
+                f"no hay criterio para elegir uno que no dependa del orden de la lista"
+            )
+    return [por_ruta[k] for k in sorted(por_ruta)]
+
+
 def _pool(seed_track: Track, biblioteca: Sequence[Track]) -> list[Track]:
     """Candidatos: la biblioteca sin la semilla y sin rutas repetidas, ordenada por ruta.
 
     Ordenar por ruta acá es lo que hace determinista todo lo de abajo: el desempate de
     scores iguales pasa a ser "el de ruta menor" sin tener que ordenar de nuevo en cada
-    posición. La deduplicación es por ruta y no por objeto por el mismo motivo que en
-    `similar`: dos cargas del mismo archivo son dos objetos.
+    posición. Las rutas repetidas las resuelve `_unicos_por_ruta` (iguales → una; distintas
+    → `ValueError`).
     """
-    vistos = {str(seed_track.path)}
-    unicos: list[Track] = []
-    for t in sorted(biblioteca, key=lambda t: str(t.path)):
-        clave = str(t.path)
-        if clave in vistos:
-            continue
-        vistos.add(clave)
-        unicos.append(t)
-    return unicos
+    propia = str(seed_track.path)
+    return _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
 
 
 def _artist_blocked(candidato: Track, elegidos: list[Track], gap: int) -> bool:
@@ -502,16 +548,19 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
         sim_prev = emb @ np.asarray(anterior.embedding, dtype=np.float64)
 
         libres = 0          # candidatos que pasaron el artist_gap (para distinguir el corte)
+        tapados = 0         # mezclables que quedaron afuera SOLO por artist_gap
         ranked: list[tuple[float, int, float]] = []   # (total, índice en pool, encaje)
         for i, cand in enumerate(pool):
             if i in usados:
                 continue
-            if _artist_blocked(cand, elegidos, config.artist_gap):
-                continue
-            libres += 1
             # Compuerta de §4: fuera de ±8% de BPM la mezclabilidad es 0 y el track no
             # existe para esta posición, por más que suene igual que el anterior.
-            if mezclabilidad(anterior.bpm, cand.bpm, anterior.key, cand.key) <= 0.0:
+            mezcla = mezclabilidad(anterior.bpm, cand.bpm, anterior.key, cand.key)
+            if _artist_blocked(cand, elegidos, config.artist_gap):
+                tapados += mezcla > 0.0
+                continue
+            libres += 1
+            if mezcla <= 0.0:
                 continue
             encaje = musical_fit(float(sim_seed[i]), float(sim_prev[i]), float(redundancy[i]),
                                  cand.energy, goal, config)
@@ -519,21 +568,8 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
             ranked.append((total, i, encaje))
 
         if not ranked:
-            if libres == 0:
-                quedan = len(pool) - len(usados)
-                stop = STOP_BIBLIOTECA_AGOTADA if quedan == 0 else STOP_ARTIST_GAP
-                detalle = (
-                    "no quedan tracks sin usar en la biblioteca" if quedan == 0 else
-                    f"los {quedan} tracks que quedan repiten artista dentro de "
-                    f"artist_gap={config.artist_gap}"
-                )
-            else:
-                stop = STOP_SIN_MEZCLABLES
-                detalle = (
-                    f"ninguno de los {libres} candidatos entra en ±{TOLERANCIA_BPM:.0%} de "
-                    f"{anterior.bpm:.1f} BPM; el set se corta en vez de aflojar la tolerancia "
-                    f"(spec §4: 0% de transiciones fuera de ±{TOLERANCIA_BPM:.0%})"
-                )
+            stop, detalle = _motivo_de_corte(anterior, len(pool) - len(usados), libres,
+                                             tapados, config)
             break
 
         # Orden: mayor score primero; a igual score, el de índice menor en `pool`, que
@@ -548,6 +584,45 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
         redundancy = np.maximum(redundancy, emb @ np.asarray(elegido.embedding, dtype=np.float64))
 
     return RadioSet(tuple(steps), stop, detalle)
+
+
+def _motivo_de_corte(anterior: Track, quedan: int, libres: int, tapados: int,
+                     config: RadioConfig) -> tuple[str, str]:
+    """`(stop, stop_detail)` cuando ninguna posición tiene candidato.
+
+    La pregunta que el corte le contesta al usuario es "¿bajar `artist_gap` ayudaría?":
+
+    - `quedan == 0` → biblioteca agotada, no hay nada que bajar.
+    - `tapados > 0` → había candidatos que MEZCLABAN y el gap los tapó: `artist_gap`.
+      Antes este caso decía "ninguno de los 2 candidatos entra en ±8%" cuando había 3 y el
+      único que mezclaba lo había sacado el gap — el usuario no tenía cómo saber que bajar
+      `artist_gap` destrababa el set.
+    - si no → `sin_candidatos_mezclables`, aunque todos los que quedan estén tapados por el
+      gap: si ninguno mezcla, bajar `artist_gap` no cambia nada y decir "artist_gap" sería
+      mandar al usuario a tocar la perilla equivocada.
+
+    `quedan` son los no usados; `libres`, los que pasaron el gap; `tapados`, los que el gap
+    sacó y que sí mezclaban.
+    """
+    tol = f"±{TOLERANCIA_BPM:.0%}"
+    if quedan == 0:
+        return STOP_BIBLIOTECA_AGOTADA, "no quedan tracks sin usar en la biblioteca"
+    bloqueados_total = quedan - libres
+    if tapados > 0:
+        return STOP_ARTIST_GAP, (
+            f"de los {quedan} candidatos que quedan, los únicos que entran en {tol} de "
+            f"{anterior.bpm:.1f} BPM ({tapados}) repiten artista dentro de "
+            f"artist_gap={config.artist_gap}; bajar artist_gap los habilita"
+        )
+    detalle = (
+        f"ninguno de los {quedan} candidatos que quedan entra en {tol} de "
+        f"{anterior.bpm:.1f} BPM; el set se corta en vez de aflojar la tolerancia "
+        f"(spec §4: 0% de transiciones fuera de {tol})"
+    )
+    if bloqueados_total:
+        detalle += (f"; de esos, {bloqueados_total} además repiten artista dentro de "
+                    f"artist_gap={config.artist_gap} (bajar el gap no ayuda)")
+    return STOP_SIN_MEZCLABLES, detalle
 
 
 def _elegir(ranked: list[tuple[float, int, float]], config: RadioConfig,

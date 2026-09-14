@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from motor.energia import energy_curve_correlation  # noqa: E402
+from motor.energia import energy_curve_correlation, energy_target  # noqa: E402
 from motor.modelos import Track  # noqa: E402
 from motor.radio import (  # noqa: E402
     STOP_ARTIST_GAP,
@@ -28,9 +28,10 @@ from motor.radio import (  # noqa: E402
     bpm_delta_pct,
     build_set,
     key_relation,
+    musical_fit,
     similar,
 )
-from motor.scoring import TOLERANCIA_BPM, bpm_score  # noqa: E402
+from motor.scoring import TOLERANCIA_BPM, bpm_score, mezclabilidad  # noqa: E402
 from motor.tonalidad import compat_camelot  # noqa: E402
 
 CAMELOT = [f"{n}{lado}" for lado in ("A", "B") for n in range(1, 13)]
@@ -62,13 +63,25 @@ def rutas(rset) -> list[str]:
     return [s.track.path.name for s in rset]
 
 
+def pitch_real(a: float, b: float) -> float:
+    """Cuánto hay que estirar el tempo para mezclar `a` con `b`, en la MEJOR de las tres
+    lecturas (mismo, doble y medio tiempo): `1 - lento / rápido` de cada par.
+
+    Escrito ACÁ y de otra forma a propósito. La versión anterior de este helper copiaba la
+    fórmula del motor (`min(|a-b|, |a-2b|, |a-b/2|) / max(a, b)`) y por eso no vio que esa
+    fórmula medía mal el caso de octava: 100 → 220 daba 4.5% cuando el pitch real es 9.1%.
+    Un test que recalcula con la misma cuenta que prueba no prueba nada.
+    """
+    mejor = math.inf
+    for lectura in (b, b * 2, b / 2):
+        lento, rapido = sorted((a, lectura))
+        mejor = min(mejor, 1.0 - lento / rapido)
+    return mejor
+
+
 def fuera_de_tolerancia(a: float, b: float) -> bool:
-    """±8% relativo, tolerando medio y doble tiempo. Recalculado ACÁ a propósito:
-    el umbral de §4 tiene que verificarse contra la definición de la spec, no contra la
-    misma función que el motor usa para decidir (si esa función se rompe, el test que la
-    llama se rompe con ella y no avisa nada)."""
-    d = min(abs(a - b), abs(a - 2 * b), abs(a - b / 2)) / max(a, b)
-    return d >= 0.08
+    """±8% de §4 contra el pitch real (ver `pitch_real`), no contra `scoring`."""
+    return pitch_real(a, b) >= 0.08
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +124,31 @@ def test_similar_excluye_al_propio_track_por_ruta():
     assert [t.path.name for t, _ in out] == ["otro.wav"]
 
 
+def test_similar_no_repite_una_ruta_duplicada():
+    """Dos cargas iguales del mismo archivo son UN similar, no dos."""
+    semilla = track("semilla.wav", 150, emb=(1.0, 0.0))
+    a = track("a.wav", 150, emb=(0.8, 0.6))
+    a_dup = track("a.wav", 150, emb=(0.8, 0.6))       # mismo archivo, otro objeto, igual
+    b = track("b.wav", 150, emb=(0.6, 0.8))
+    out = similar(semilla, [a, a_dup, b], n=5)
+    assert [t.path.name for t, _ in out] == ["a.wav", "b.wav"], (
+        f"la ruta repetida salió dos veces: {[t.path.name for t, _ in out]}"
+    )
+
+
+def test_ruta_duplicada_con_contenido_distinto_es_error():
+    """Dos objetos con la misma ruta y DISTINTO análisis: elegir uno dependería del orden de
+    la lista (§5). Tanto `build_set` como `similar` lo rechazan en vez de elegir callados."""
+    semilla = track("semilla.wav", 150, emb=(1.0, 0.0))
+    viejo = track("a.wav", 150, emb=(0.8, 0.6))
+    nuevo = track("a.wav", 152, emb=(0.6, 0.8))        # misma ruta, otro análisis
+    for orden in ([viejo, nuevo], [nuevo, viejo]):
+        with pytest.raises(ValueError, match="misma ruta"):
+            build_set(semilla, orden, RadioConfig(length=3))
+        with pytest.raises(ValueError, match="misma ruta"):
+            similar(semilla, orden, n=3)
+
+
 def test_similar_bordes():
     t = track("solo.wav", 150, emb=(1.0, 0.0))
     otro = track("otro.wav", 150, emb=(0.6, 0.8))
@@ -137,6 +175,37 @@ def test_bpm_delta_pct_coincide_con_la_compuerta():
             assert (abs(pct) < TOLERANCIA_BPM * 100) is pasa, (
                 f"{a}→{b}: pct={pct:.3f} dice una cosa y la compuerta otra (pasa={pasa})"
             )
+
+
+def test_compuerta_y_motivo_miden_el_pitch_real_en_octava():
+    """La compuerta y el porcentaje mostrado contra una definición INDEPENDIENTE del motor
+    (`pitch_real`), en una grilla que incluye pares de medio/doble tiempo. El test de arriba
+    compara el motor contra sí mismo y no puede ver una fórmula mal; este sí: con el
+    denominador sin transformar, 100→220 entraba mostrando +4.5% sobre un salto de 9.1%."""
+    tempos = (60.0, 72.0, 75.0, 80.0, 87.0, 90.0, 100.0, 110.0, 128.0, 140.0, 150.0, 152.0,
+              160.0, 174.0, 187.0, 200.0, 220.0, 256.0)
+    for a in tempos:
+        for b in tempos:
+            real = pitch_real(a, b)
+            assert (bpm_score(a, b) > 0.0) is (real < TOLERANCIA_BPM), (
+                f"{a}→{b}: pitch real {real:.2%}, la compuerta dice pasa={bpm_score(a, b) > 0}"
+            )
+            pct, _ = bpm_delta_pct(a, b)
+            assert abs(pct) == pytest.approx(real * 100, abs=1e-9), (
+                f"{a}→{b}: el motivo dice {pct:+.2f}% y el salto real es {real:.2%}"
+            )
+
+
+def test_octava_fuera_de_tolerancia_corta_el_set_en_los_dos_sentidos():
+    """El mismo par no puede entrar o no según cuál sea la semilla (§4)."""
+    for semilla_bpm, otro_bpm in ((100.0, 220.0), (220.0, 100.0), (80.0, 174.0), (174.0, 80.0)):
+        semilla = track("semilla.wav", semilla_bpm, emb=(1.0, 0.0))
+        otro = track("otro.wav", otro_bpm, emb=(1.0, 0.0))
+        rset = build_set(semilla, [otro], RadioConfig(length=5))
+        assert rutas(rset) == ["semilla.wav"], (
+            f"{semilla_bpm}→{otro_bpm} entró con pitch real {pitch_real(semilla_bpm, otro_bpm):.2%}"
+        )
+        assert rset.stop == STOP_SIN_MEZCLABLES
 
 
 def test_bpm_delta_pct_tiene_signo_y_lectura_de_octava():
@@ -186,13 +255,17 @@ def test_el_motivo_corresponde_al_track_elegido():
               emb=unit(rng.standard_normal(6)))
         for i in range(30)
     ]
-    rset = build_set(biblio[0], biblio[1:], RadioConfig(length=10, seed=1))
+    cfg = RadioConfig(length=10, seed=1)
+    rset = build_set(biblio[0], biblio[1:], cfg)
     assert len(rset) == 10, rset.stop_detail
 
     assert rset[0].transition.is_seed
     assert rset[0].transition.bpm_delta_pct is None, "la semilla no viene de ninguna transición"
+    assert rset[0].transition.energy_goal == pytest.approx(
+        energy_target(0, cfg.length, cfg.curve), abs=1e-12), "la meta de energía de la semilla"
 
-    for anterior, actual in zip(rset.steps, rset.steps[1:], strict=False):
+    semilla = rset[0].track
+    for pos, (anterior, actual) in enumerate(zip(rset.steps, rset.steps[1:], strict=False), 1):
         tr = actual.transition
         prev, cur = anterior.track, actual.track
         assert tr.from_bpm == prev.bpm and tr.to_bpm == cur.bpm
@@ -204,6 +277,30 @@ def test_el_motivo_corresponde_al_track_elegido():
         assert tr.energy == cur.energy
         # El renglón de §6 tiene que nombrar las DOS keys reales de la transición.
         assert tr.reason().split("|")[1].strip().startswith(f"{prev.key} → {cur.key}")
+
+        # Los NÚMEROS del porqué, recalculados desde afuera sobre los tracks elegidos. Sin
+        # esto, `mixability=encaje` o `energy_goal=0.0` pasaban todos los tests.
+        meta = energy_target(pos, cfg.length, cfg.curve)
+        assert tr.energy_goal == pytest.approx(meta, abs=1e-12), (
+            f"posición {pos}: energy_goal={tr.energy_goal} y la curva pedía {meta}"
+        )
+        mezcla = mezclabilidad(prev.bpm, cur.bpm, prev.key, cur.key)
+        assert tr.mixability == pytest.approx(mezcla, abs=1e-12), (
+            f"posición {pos}: mixability={tr.mixability} y la mezclabilidad real es {mezcla}"
+        )
+        # Redundancia MMR: el mayor coseno contra lo elegido DESPUÉS de la semilla y antes
+        # de esta posición (0 si todavía no hay nada).
+        previos = [s.track for s in rset.steps[1:pos]]
+        redundancia = max((float(cur.embedding @ t.embedding) for t in previos), default=0.0)
+        encaje = musical_fit(float(cur.embedding @ semilla.embedding),
+                             float(cur.embedding @ prev.embedding), redundancia,
+                             cur.energy, meta, cfg)
+        assert tr.musical_fit == pytest.approx(encaje, abs=1e-9), (
+            f"posición {pos}: musical_fit={tr.musical_fit} y el encaje real es {encaje}"
+        )
+        assert tr.total == pytest.approx(encaje * mezcla, abs=1e-9), (
+            f"posición {pos}: total={tr.total} y encaje × mezclabilidad da {encaje * mezcla}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +478,41 @@ def test_artist_gap_corta_el_set_en_vez_de_repetir():
     assert len(build_set(semilla, biblio, RadioConfig(length=6, seed=0, artist_gap=0))) == 6
 
 
+def test_el_corte_dice_artist_gap_cuando_el_gap_tapa_al_que_mezclaba():
+    """Semilla 150 (artista X). Biblioteca: 151 (artista X), 200 y 100. El único que mezcla
+    es el 151, y lo saca el gap. Antes el corte decía `sin_candidatos_mezclables | ninguno de
+    los 2 candidatos entra en ±8%` — había 3, y la perilla que destraba el set es
+    `artist_gap`, que el motivo ni nombraba."""
+    semilla = track("semilla.wav", 150.0, emb=(1.0, 0.0), artist="X")
+    biblio = [track("mismo_artista.wav", 151.0, emb=(1.0, 0.0), artist="X"),
+              track("rapido.wav", 200.0, emb=(1.0, 0.0)),
+              track("lento.wav", 100.0, emb=(1.0, 0.0))]
+    rset = build_set(semilla, biblio, RadioConfig(length=5, artist_gap=4))
+
+    assert rutas(rset) == ["semilla.wav"]
+    assert rset.stop == STOP_ARTIST_GAP, f"stop={rset.stop!r} | {rset.stop_detail}"
+    assert rset.stop_detail == (
+        "de los 3 candidatos que quedan, los únicos que entran en ±8% de 150.0 BPM (1) "
+        "repiten artista dentro de artist_gap=4; bajar artist_gap los habilita"
+    ), rset.stop_detail
+    # Y el motivo dice la verdad: bajando el gap, el que mezclaba entra.
+    sin_gap = build_set(semilla, biblio, RadioConfig(length=5, artist_gap=0))
+    assert rutas(sin_gap)[:2] == ["semilla.wav", "mismo_artista.wav"], rutas(sin_gap)
+
+
+def test_el_corte_no_culpa_al_gap_si_lo_tapado_tampoco_mezcla():
+    """Al revés: si lo que tapa el gap tampoco mezcla, bajar `artist_gap` no cambia nada, y
+    el corte tiene que decir `sin_candidatos_mezclables`, aunque TODOS estén tapados."""
+    semilla = track("semilla.wav", 150.0, emb=(1.0, 0.0), artist="X")
+    biblio = [track("x_rapido.wav", 200.0, emb=(1.0, 0.0), artist="X"),
+              track("x_lento.wav", 100.0, emb=(1.0, 0.0), artist="X")]
+    rset = build_set(semilla, biblio, RadioConfig(length=5, artist_gap=4))
+    assert rset.stop == STOP_SIN_MEZCLABLES, f"stop={rset.stop!r} | {rset.stop_detail}"
+    assert rset.stop_detail.startswith("ninguno de los 2 candidatos que quedan"), rset.stop_detail
+    assert "de esos, 2 además repiten artista dentro de artist_gap=4" in rset.stop_detail
+    assert len(build_set(semilla, biblio, RadioConfig(length=5, artist_gap=0))) == 1
+
+
 def test_mmr_saca_al_set_del_racimo():
     """Sin MMR el greedy se queda pegado al racimo de tracks casi idénticos: el más
     parecido al anterior es también el más parecido al que venía antes. Con MMR, elegir
@@ -494,3 +626,27 @@ def test_w_energy_fuera_de_0_1_se_rechaza():
             RadioConfig(length=20, seed=1, w_energy=malo)
     for bueno in (0.0, 0.35, 1.0):          # los bordes SI son validos
         assert RadioConfig(length=20, seed=1, w_energy=bueno).w_energy == bueno
+
+
+def test_pesos_del_encaje_negativos_o_no_finitos_se_rechazan():
+    """`w_seed`, `w_prev` y `mmr_lambda` son pesos libres (el tanh de `musical_fit` satura),
+    pero negativos invierten lo que premian: `mmr_lambda < 0` premia la redundancia y
+    `w_seed < 0` premia NO parecerse a la semilla, en silencio. NaN/inf tampoco."""
+    for nombre in ("w_seed", "w_prev", "mmr_lambda"):
+        for malo in (-0.1, -1e-9, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match=nombre):
+                RadioConfig(**{nombre: malo})
+        for bueno in (0.0, 0.3, 2.5):       # cero apaga el término; grande satura, no invierte
+            assert getattr(RadioConfig(**{nombre: bueno}), nombre) == bueno
+
+
+def test_mmr_negativo_premiaria_la_redundancia():
+    """Por qué la guarda de arriba no es cosmética: medido sin la guarda, `musical_fit` con
+    `mmr_lambda < 0` puntúa MÁS al candidato redundante que al que no repite nada."""
+    cfg = RadioConfig()
+    cfg.mmr_lambda = -0.3                            # después de __post_init__, a propósito
+    redundante = musical_fit(0.3, 0.3, 0.9, 0.5, 0.5, cfg)
+    fresco = musical_fit(0.3, 0.3, 0.0, 0.5, 0.5, cfg)
+    assert redundante > fresco, "con mmr_lambda < 0 la redundancia tiene que salir premiada"
+    with pytest.raises(ValueError, match="mmr_lambda"):
+        RadioConfig(mmr_lambda=-0.3)

@@ -21,8 +21,10 @@ Tres decisiones del esquema que NO son detalles:
    ubicar un vector suelto en la misma escala que la matriz sin recalcular todo.
 
 Determinismo (spec §5): el orden de todo lo que devuelve el store lo fija Python ordenando
-por ruta, no la collation de SQLite ni el orden de inserción.
+por la clave de la ruta (absoluta + `normcase`), no la collation de SQLite ni el orden de
+inserción.
 """
+import os
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -36,7 +38,8 @@ from motor.modelos import Track, TrackFeatures, require_text
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
-    path            TEXT PRIMARY KEY,
+    path            TEXT PRIMARY KEY,   -- la ruta con la grafía recibida (absoluta), para usarla
+    path_key        TEXT,               -- la CLAVE: absoluta + normcase (índice único, ver abajo)
     mtime           REAL NOT NULL,      -- para invalidar la caché si cambió el archivo
     duration        REAL NOT NULL,
     artist          TEXT,
@@ -58,6 +61,8 @@ CREATE TABLE IF NOT EXISTS tracks (
 
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key);
+-- El índice único de `path_key` NO va acá: en una base anterior a esa columna el CREATE
+-- TABLE no hace nada y el índice fallaría. Lo crea `Store._migrar_path_key`.
 
 -- Estadísticas de normalización de la biblioteca (media y desvío por dimensión).
 -- Se invalidan con cada alta/baja y se recalculan cuando alguien las necesita.
@@ -78,8 +83,8 @@ EMB_DTYPE = np.float32
 # dos escalas difieren en el último bit y la caché de la biblioteca empieza a mentir.
 STATS_DTYPE = np.float64
 
-_COLUMNAS = ("path", "mtime", "duration", "artist", "title", "bpm", "key", "energy_raw",
-             "embedding", "rms", "onset_rate", "percussive_ratio", "license", "source_url",
+_COLUMNAS = ("path", "path_key", "mtime", "duration", "artist", "title", "bpm", "key",
+             "energy_raw", "embedding", "rms", "onset_rate", "percussive_ratio", "license", "source_url",
              "analyzed_at")
 
 
@@ -99,6 +104,7 @@ class Store:
         self._con = sqlite3.connect(str(self.db_path))
         self._con.row_factory = sqlite3.Row
         self._con.executescript(SCHEMA)  # idempotente: CREATE ... IF NOT EXISTS
+        self._migrar_path_key()
         self._con.commit()
 
     # -- ciclo de vida ------------------------------------------------------
@@ -141,8 +147,10 @@ class Store:
 
         key = self._key(path)
         mt = float(mtime) if mtime is not None else Path(path).stat().st_mtime
-        valores = (key, mt, float(duration), artist, title, float(features.bpm), features.key,
-                   float(features.energy_raw), vec.astype(EMB_DTYPE).tobytes(),
+        # INSERT OR REPLACE choca por `path_key` (índice único) aunque la ruta llegue escrita
+        # con otras mayúsculas: la fila vieja se reemplaza y queda la grafía nueva.
+        valores = (self._ruta(path), key, mt, float(duration), artist, title,
+                   float(features.bpm), features.key, float(features.energy_raw), vec.astype(EMB_DTYPE).tobytes(),
                    _opcional(features.rms), _opcional(features.onset_rate),
                    _opcional(features.percussive_ratio), license, source_url,
                    datetime.now(UTC).isoformat())
@@ -154,7 +162,7 @@ class Store:
 
     def delete(self, path: Path | str) -> bool:
         """Saca un track de la caché (para archivos que ya no están). True si había algo."""
-        cur = self._con.execute("DELETE FROM tracks WHERE path = ?", (self._key(path),))
+        cur = self._con.execute("DELETE FROM tracks WHERE path_key = ?", (self._key(path),))
         self._invalidate_norm_stats()
         self._con.commit()
         return cur.rowcount > 0
@@ -188,7 +196,7 @@ class Store:
         vigente, y afirmar que está al día sería inventar. Para esos casos el scan llama a
         `delete`.
         """
-        fila = self._con.execute("SELECT mtime FROM tracks WHERE path = ?",
+        fila = self._con.execute("SELECT mtime FROM tracks WHERE path_key = ?",
                                  (self._key(path),)).fetchone()
         if fila is None:
             return True
@@ -205,7 +213,7 @@ class Store:
         Es la vista de la caché (qué se midió); `get` es la vista del motor (dónde queda
         ese track dentro de la biblioteca).
         """
-        fila = self._con.execute("SELECT * FROM tracks WHERE path = ?",
+        fila = self._con.execute("SELECT * FROM tracks WHERE path_key = ?",
                                  (self._key(path),)).fetchone()
         return None if fila is None else self._features(fila)
 
@@ -216,7 +224,7 @@ class Store:
         El embedding sale por `normalize_one` con las stats guardadas, así que cae
         exactamente en la misma fila que devuelve `matrix()` para esa ruta.
         """
-        fila = self._con.execute("SELECT * FROM tracks WHERE path = ?",
+        fila = self._con.execute("SELECT * FROM tracks WHERE path_key = ?",
                                  (self._key(path),)).fetchone()
         if fila is None:
             return None
@@ -265,16 +273,53 @@ class Store:
     # -- internos -----------------------------------------------------------
 
     @staticmethod
+    def _ruta(path: Path | str) -> str:
+        r"""La ruta que se GUARDA y se devuelve: absoluta y con separadores normalizados
+        (en Windows 'a/b' y 'a\b' son la misma), con la grafía que se recibió — mayúsculas
+        y unicode incluidos. Es la que usan `paths()`, `load_library()` y los labels."""
+        return os.path.abspath(os.fspath(path))
+
+    @staticmethod
     def _key(path: Path | str) -> str:
-        r"""Ruta → clave primaria. `Path` normaliza los separadores (en Windows 'a/b' y
-        'a\b' son la misma ruta); el resto se guarda tal cual, incluido el unicode."""
-        return str(Path(path))
+        r"""Ruta → clave. Absoluta + `os.path.normcase`: en Windows `C:\Musica\a.wav` y
+        `c:\musica\a.wav` son el mismo archivo y tienen que ser la misma fila; antes eran
+        dos, con dos análisis del mismo audio. En Linux/macOS `normcase` no toca nada.
+
+        La clave NO se usa para devolver rutas: pasada por `normcase` queda en minúsculas,
+        y el label de un track sin título diría "señor coconut" en vez de "Señor Coconut"."""
+        return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+    def _migrar_path_key(self) -> None:
+        r"""Bases de antes de `path_key`: agrega la columna, la llena y crea el índice único.
+
+        Si dos filas viejas caen en la misma clave (`C:\a.wav` y `c:\a.wav`), queda la del
+        análisis más reciente y las otras se borran: son dos análisis del mismo archivo, y
+        dejar los dos sería tener el track repetido en la biblioteca. Idempotente."""
+        columnas = {f["name"] for f in self._con.execute("PRAGMA table_info(tracks)")}
+        if "path_key" not in columnas:
+            self._con.execute("ALTER TABLE tracks ADD COLUMN path_key TEXT")
+        filas = self._con.execute(
+            "SELECT path, analyzed_at FROM tracks WHERE path_key IS NULL").fetchall()
+        por_clave: dict[str, list[str]] = {}
+        for f in sorted(filas, key=lambda f: (f["analyzed_at"], f["path"])):
+            por_clave.setdefault(self._key(f["path"]), []).append(f["path"])
+        for clave, rutas in sorted(por_clave.items()):
+            *viejas, vigente = rutas
+            for ruta in viejas:
+                self._con.execute("DELETE FROM tracks WHERE path = ?", (ruta,))
+            self._con.execute("UPDATE tracks SET path_key = ? WHERE path = ?", (clave, vigente))
+        if filas:
+            self._invalidate_norm_stats()
+        self._con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_key ON tracks(path_key)")
 
     def _rows(self) -> list[sqlite3.Row]:
-        """Todas las filas, ORDENADAS POR RUTA EN PYTHON — no por la collation de SQLite,
-        que depende de cómo se compiló. Determinismo: mismo contenido, mismo orden."""
+        """Todas las filas, ORDENADAS POR CLAVE EN PYTHON — no por la collation de SQLite,
+        que depende de cómo se compiló. Determinismo: mismo contenido, mismo orden. Se
+        ordena por la clave y no por la ruta guardada para que el orden no dependa de con
+        qué mayúsculas se escribió cada ruta."""
         filas = self._con.execute("SELECT * FROM tracks").fetchall()
-        return sorted(filas, key=lambda f: f["path"])
+        return sorted(filas, key=lambda f: (f["path_key"], f["path"]))
 
     @staticmethod
     def _embedding(fila: sqlite3.Row) -> np.ndarray:
@@ -326,10 +371,18 @@ class Store:
         self._con.execute("DELETE FROM norm_stats")
 
     def _norm_stats(self) -> tuple[np.ndarray, np.ndarray]:
-        """Media y desvío vigentes, recalculándolos si un alta o una baja los invalidó."""
-        fila = self._con.execute("SELECT mean, std FROM norm_stats WHERE id = 1").fetchone()
-        if fila is None:
+        """Media y desvío vigentes, recalculándolos si un alta o una baja los invalidó.
+
+        Dos señales de que las stats guardadas no valen: que no haya fila (las borró
+        `_invalidate_norm_stats`) o que `count` no coincida con los tracks que hay. La
+        segunda es un cinturón: cubre una escritura que no pasó por `upsert`/`delete` (otra
+        versión del código, un INSERT a mano). No reemplaza a la invalidación — un reanálisis
+        de una ruta que ya estaba cambia las stats sin cambiar la cantidad.
+        """
+        consulta = "SELECT mean, std, count FROM norm_stats WHERE id = 1"
+        fila = self._con.execute(consulta).fetchone()
+        if fila is None or int(fila["count"]) != self.count():
             self.matrix()  # las recalcula y las guarda
-            fila = self._con.execute("SELECT mean, std FROM norm_stats WHERE id = 1").fetchone()
+            fila = self._con.execute(consulta).fetchone()
         return (np.frombuffer(fila["mean"], dtype=STATS_DTYPE).copy(),
                 np.frombuffer(fila["std"], dtype=STATS_DTYPE).copy())

@@ -288,8 +288,12 @@ def _pasos(out: str) -> list[tuple[str, str]]:
 
 
 def _dist_bpm(a, b):
-    """±8% de §4, escrito acá de nuevo a propósito y no importado de scoring."""
-    return min(abs(a - b), abs(a - 2 * b), abs(a - b / 2)) / max(a, b)
+    """±8% de §4 como pitch real: `1 - lento / rápido` en la mejor de las tres lecturas.
+
+    Escrito acá y DE OTRA FORMA que `scoring`: la versión anterior copiaba la fórmula del
+    motor (`min(|a-b|, |a-2b|, |a-b/2|) / max(a, b)`), que medía la mitad del salto real en
+    los pares de octava, y el test heredaba el mismo error sin avisar."""
+    return min(1.0 - min(a, y) / max(a, y) for y in (b, 2 * b, b / 2))
 
 
 def test_radio_punta_a_punta(tmp_path, capsys, biblioteca):

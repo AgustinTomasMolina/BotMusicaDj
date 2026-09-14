@@ -4,7 +4,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from motor.scoring import bpm_score, mezclabilidad, score  # noqa: E402
+import pytest  # noqa: E402
+
+from motor.scoring import _dist_bpm_relativa, bpm_score, mezclabilidad, score  # noqa: E402
 
 
 def test_bpm_es_compuerta():
@@ -21,6 +23,31 @@ def test_bpm_score_es_simetrico():
     # NaN / BPM inválido no evade la compuerta.
     assert bpm_score(float("nan"), 150) == 0.0
     assert bpm_score(0, 150) == 0.0
+
+
+def test_distancia_simetrica_tambien_en_octava():
+    """`dist(a, b) == dist(b, a)` para pares normales Y de medio/doble tiempo. La versión
+    con denominador `max(a, b)` sin transformar era simétrica solo en los normales: en
+    octava 100→220 medía 4.55% y 220→100 medía 9.09%."""
+    pares = [(150, 160), (150, 138), (128, 131.5), (100, 220), (80, 174), (75, 150),
+             (140, 72), (174, 90), (60, 128), (95.3, 187.1)]
+    for a, b in pares:
+        assert _dist_bpm_relativa(a, b) == pytest.approx(_dist_bpm_relativa(b, a), abs=1e-15), \
+            f"{a}→{b} mide {_dist_bpm_relativa(a, b):.5f} y {b}→{a} {_dist_bpm_relativa(b, a):.5f}"
+
+
+def test_octava_fuera_de_tolerancia_se_corta_en_los_dos_sentidos():
+    """Los tres casos de la auditoría. El pitch real sale a mano: 100 contra 220 se mezcla
+    como 100 contra 110 (medio tiempo), y 110/100 es un 10% más rápido → 1 - 100/110 = 9.09%.
+    80 contra 174 es 80 contra 87 → 1 - 80/87 = 8.05%. Los dos, fuera de ±8%."""
+    casos = [(100.0, 220.0, 1 - 100 / 110), (80.0, 174.0, 1 - 80 / 87)]
+    for a, b, real in casos:
+        for x, y in ((a, b), (b, a)):
+            assert _dist_bpm_relativa(x, y) == pytest.approx(real, abs=1e-12), \
+                f"{x}→{y}: la distancia no es el pitch real {real:.4%}"
+            assert bpm_score(x, y) == 0.0, f"{x}→{y} tiene pitch real {real:.2%} y entró"
+    # Y lo que sí mezcla en octava sigue entrando: 75 contra 152 es 76 contra 75 (1.3%).
+    assert bpm_score(75, 152) > 0.0 and bpm_score(152, 75) > 0.0
 
 
 def test_mezclabilidad():
@@ -40,6 +67,8 @@ def test_scoring_es_multiplicativo():
 if __name__ == "__main__":
     test_bpm_es_compuerta()
     test_bpm_score_es_simetrico()
+    test_distancia_simetrica_tambien_en_octava()
+    test_octava_fuera_de_tolerancia_se_corta_en_los_dos_sentidos()
     test_mezclabilidad()
     test_scoring_es_multiplicativo()
     print("OK — tests de scoring pasaron")

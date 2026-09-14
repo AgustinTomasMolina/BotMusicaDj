@@ -508,3 +508,176 @@ def test_lo_no_medido_vuelve_none_y_no_cero(tmp_path):
     crudo = con.execute("SELECT rms, onset_rate, percussive_ratio FROM tracks").fetchone()
     con.close()
     assert crudo == (None, None, None), f"en la base quedó {crudo} en vez de NULL"
+
+
+# --- stats de normalización: invalidación y cinturón --------------------------------
+
+def _fila_fresca(store: Store, ruta: Path) -> np.ndarray:
+    """La fila de `ruta` en un `matrix()` recalculado AHORA, sobre la biblioteca actual."""
+    m, paths = store.matrix()
+    return m[paths.index(ruta)]
+
+
+def test_alta_nueva_normaliza_con_las_stats_nuevas(tmp_path):
+    """`matrix()` guarda stats; un `upsert` de un track nuevo mueve la media y el desvío de
+    la biblioteca. `get(nuevo)` tiene que normalizar con las stats NUEVAS: con las viejas
+    el vector cae en otra escala y las similitudes contra la matriz mienten."""
+    store = Store(tmp_path / "db.sqlite")
+    rutas = _poblar(store, tmp_path, indices=[0, 1, 2])
+    store.matrix()                                     # guarda stats de 3 tracks
+    nuevo = _poblar(store, tmp_path, indices=[3])[_catalogo()[3]["nombre"]]
+
+    got = store.get(nuevo).embedding                   # ANTES de recalcular a mano
+    esperada = _fila_fresca(store, nuevo)
+    assert np.allclose(got, esperada, rtol=0, atol=1e-12), \
+        f"get() normalizó con stats viejas: {got[:4]} vs {esperada[:4]}"
+    viejo = rutas[_catalogo()[0]["nombre"]]
+    assert np.allclose(store.get(viejo).embedding, _fila_fresca(store, viejo), rtol=0, atol=1e-12)
+    store.close()
+
+
+def test_reanalisis_de_la_misma_ruta_invalida_las_stats(tmp_path):
+    """El caso que el cinturón de `count` NO ve: reanalizar una ruta que ya estaba cambia
+    las stats sin cambiar la cantidad de tracks. Solo la invalidación en `upsert` lo cubre."""
+    store = Store(tmp_path / "db.sqlite")
+    rutas = _poblar(store, tmp_path, indices=[0, 1, 2])
+    store.matrix()
+    ruta = rutas[_catalogo()[1]["nombre"]]
+    otro = _catalogo()[4]                              # embedding distinto, misma ruta
+    store.upsert(ruta, _features(otro), duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    assert store.count() == 3, "el caso necesita que la cantidad NO cambie"
+
+    got = store.get(ruta).embedding
+    esperada = _fila_fresca(store, ruta)
+    assert np.allclose(got, esperada, rtol=0, atol=1e-12), \
+        f"get() normalizó con las stats de antes del reanálisis: {got[:4]} vs {esperada[:4]}"
+    store.close()
+
+
+def test_baja_normaliza_con_las_stats_nuevas(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    rutas = _poblar(store, tmp_path, indices=[0, 1, 2, 3])
+    store.matrix()
+    store.delete(rutas[_catalogo()[2]["nombre"]])
+    queda = rutas[_catalogo()[0]["nombre"]]
+
+    got = store.get(queda).embedding
+    esperada = _fila_fresca(store, queda)
+    assert np.allclose(got, esperada, rtol=0, atol=1e-12), \
+        f"después de un delete, get() normalizó con stats viejas: {got[:4]} vs {esperada[:4]}"
+    store.close()
+
+
+def test_stats_con_count_desfasado_se_recalculan(tmp_path):
+    """Cinturón: una escritura que no pasó por `upsert`/`delete` (otra versión del código,
+    un DELETE a mano) deja stats guardadas con un `count` que ya no es el de la tabla.
+    `get` tiene que notarlo por `count` y recalcular."""
+    db = tmp_path / "db.sqlite"
+    store = Store(db)
+    rutas = _poblar(store, tmp_path, indices=[0, 1, 2, 3])
+    store.matrix()
+    store.close()
+
+    con = sqlite3.connect(str(db))                     # por fuera del store: no invalida
+    con.execute("DELETE FROM tracks WHERE path = ?", (str(rutas[_catalogo()[3]["nombre"]]),))
+    con.commit()
+    assert con.execute("SELECT count FROM norm_stats").fetchone()[0] == 4, \
+        "el caso necesita stats guardadas de 4 tracks"
+    con.close()
+
+    store = Store(db)
+    queda = rutas[_catalogo()[1]["nombre"]]
+    got = store.get(queda).embedding
+    esperada = _fila_fresca(store, queda)
+    assert np.allclose(got, esperada, rtol=0, atol=1e-12), \
+        f"stats de 4 tracks usadas sobre una biblioteca de 3: {got[:4]} vs {esperada[:4]}"
+    store.close()
+
+
+# --- la clave de la ruta ------------------------------------------------------------
+
+_DISTINGUE_MAYUSCULAS = os.path.normcase("A") == "A"
+
+
+@pytest.mark.skipif(_DISTINGUE_MAYUSCULAS,
+                    reason="en este sistema normcase no iguala mayúsculas: son dos archivos")
+def test_la_clave_no_distingue_mayusculas_en_windows(tmp_path):
+    r"""`C:\Musica\a.wav` y `c:\musica\a.wav` son el mismo archivo en Windows: una sola
+    fila, encontrable con cualquiera de las dos grafías. Antes eran dos filas y el mismo
+    track entraba dos veces a la biblioteca."""
+    c, otro = _catalogo()[0], _catalogo()[3]
+    ruta = tmp_path / "Carpeta" / "Tema Uno.wav"
+    ruta.parent.mkdir()
+    ruta.write_bytes(b"x")
+    grito = Path(str(ruta).upper())
+    chico = Path(str(ruta).lower())
+    store = Store(tmp_path / "db.sqlite")
+
+    store.upsert(ruta, _features(c), duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    store.upsert(grito, _features(otro), duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    assert store.count() == 1, f"quedaron {store.count()} filas para el mismo archivo"
+    assert store.get_features(chico).bpm == otro["bpm"], "no encontró el track por otra grafía"
+    assert store.needs_analysis(chico) is False, "otra grafía de la ruta se ve como sin analizar"
+    # La ruta devuelta es USABLE: la última grafía recibida, no la clave en minúsculas.
+    assert [str(p) for p in store.paths()] == [str(grito)], f"paths {store.paths()}"
+    assert store.load_library()[0].path.exists()
+    assert store.delete(chico) is True and store.count() == 0, "delete por otra grafía no borró"
+    store.close()
+
+
+def test_la_clave_es_la_ruta_absoluta(tmp_path, monkeypatch):
+    """Una ruta relativa y la absoluta del mismo archivo son la misma fila, y lo que se
+    devuelve es la absoluta (una relativa deja de servir apenas cambia el cwd)."""
+    c = _catalogo()[2]
+    (tmp_path / "rel.wav").write_bytes(b"x")
+    store = Store(tmp_path / "db.sqlite")
+    monkeypatch.chdir(tmp_path)
+    store.upsert("rel.wav", _features(c), duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    monkeypatch.chdir(tmp_path.parent)
+    assert store.get_features(tmp_path / "rel.wav").bpm == c["bpm"], "la relativa no es la absoluta"
+    assert [str(p) for p in store.paths()] == [str(tmp_path / "rel.wav")], f"{store.paths()}"
+    store.close()
+
+
+def test_el_orden_no_depende_de_las_mayusculas(tmp_path):
+    """Determinismo (§5): mismo contenido, mismo orden. Ordenando por la ruta cruda, 'B.wav'
+    va antes que 'a.wav' (las mayúsculas ordenan primero) y escribir 'b.wav' lo da vuelta."""
+    ordenes = []
+    for n, nombres in enumerate((["a.wav", "B.wav"], ["A.wav", "b.wav"])):
+        carpeta = tmp_path / f"base{n}"
+        carpeta.mkdir()
+        store = Store(carpeta / "db.sqlite")
+        for i, nombre in enumerate(nombres):
+            store.upsert(carpeta / nombre, _features(_catalogo()[i]), duration=10.0,
+                         license=LICENCIA, source_url=ORIGEN, mtime=1.0)
+        ordenes.append([p.name.lower() for p in store.paths()])
+        store.close()
+    assert ordenes[0] == ordenes[1] == ["a.wav", "b.wav"], f"órdenes {ordenes}"
+
+
+@pytest.mark.skipif(_DISTINGUE_MAYUSCULAS,
+                    reason="en este sistema normcase no iguala mayúsculas: no hay colisión")
+def test_base_vieja_se_migra_y_colapsa_duplicados(tmp_path):
+    """Una base de antes de `path_key` puede tener el mismo archivo dos veces con distinta
+    grafía. Al abrirla queda UNA fila — la del análisis más reciente — con la clave llena."""
+    db = tmp_path / "vieja.sqlite"
+    con = sqlite3.connect(str(db))
+    con.execute("""CREATE TABLE tracks (path TEXT PRIMARY KEY, mtime REAL NOT NULL,
+        duration REAL NOT NULL, artist TEXT, title TEXT, bpm REAL NOT NULL, key TEXT NOT NULL,
+        energy_raw REAL NOT NULL, embedding BLOB NOT NULL, rms REAL, onset_rate REAL,
+        percussive_ratio REAL, license TEXT NOT NULL, source_url TEXT NOT NULL,
+        analyzed_at TEXT NOT NULL)""")
+    ruta = tmp_path / "Tema.wav"
+    for grafia, c, cuando in ((str(ruta), _catalogo()[0], "2026-01-01T00:00:00"),
+                              (str(ruta).lower(), _catalogo()[1], "2026-02-01T00:00:00")):
+        con.execute("INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (grafia, 1.0, 10.0, None, None, c["bpm"], c["key"], c["energy_raw"],
+                     c["embedding"].tobytes(), None, None, None, LICENCIA, ORIGEN, cuando))
+    con.commit()
+    con.close()
+
+    store = Store(db)
+    assert store.count() == 1, f"la migración dejó {store.count()} filas del mismo archivo"
+    assert store.get_features(ruta).bpm == _catalogo()[1]["bpm"], "no quedó el análisis más nuevo"
+    store.close()
+    Store(db).close()                                  # idempotente: reabrir no rompe
