@@ -23,9 +23,10 @@ import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+# Formatos de audio: UNA sola lista para todo el repo (calidad.tags.EXTS). Una copia
+# local hacía que el motor escaneara formatos que el benchmark nunca medía.
+from calidad.tags import EXTS
 from motor.analisis import cargar, medir_bpm_y_tono
-
-EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg")
 
 # Semilla por defecto del muestreo de --limit. Fija a propósito: dos corridas con la misma
 # carpeta y el mismo --limit tienen que analizar EXACTAMENTE los mismos tracks, o comparar

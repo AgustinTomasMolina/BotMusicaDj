@@ -29,11 +29,13 @@ from pathlib import Path
 
 import numpy as np
 
+# Formatos de audio: UNA sola lista para todo el repo (calidad.tags.EXTS). Una copia
+# local hacía que el motor escaneara formatos que el benchmark nunca medía.
+from calidad.tags import EXTS
+
 # Se usa el cálculo del PROPIO motor (`ranking`), no una copia: si se duplicara, tarde o
 # temprano esta herramienta mediría algo distinto de lo que hace el motor.
 from motor.tonalidad import _CAMELOT, _VENTANA_S, ranking, tono, ventana_central
-
-EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg")
 
 # Ventana de cada tramo de prueba. Más corta que la del motor a propósito: son 3 tramos
 # por track y el chroma escala con la duración.

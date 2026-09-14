@@ -364,3 +364,161 @@ def test_radio_set_corto_dice_por_que(tmp_path, capsys, biblioteca):
     assert m, f"el set quedó corto y no lo dijo:\n{out}"
     assert m.groups()[:3] == ("1", "5", "sin_candidatos_mezclables"), m.groups()
     assert "170.0 BPM" in m.group(4) and "±8%" in m.group(4), f"el motivo no explica: {m.group(4)}"
+
+
+# --- dependencias y esquema: fallar ANTES de trabajar -----------------------------------
+
+
+def test_scan_sin_mutagen_falla_antes_de_tocar_la_base(tmp_path, capsys, monkeypatch):
+    """Sin mutagen, el scan viejo hacía warm-up, borraba de la base el archivo que ya no
+    estaba, analizaba el nuevo y recién ahí se caía con ModuleNotFoundError. Tiene que salir
+    con error de uso claro sin haber hecho nada de eso."""
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    quitado = _escribir(carpeta, *CATALOGO[0], dur=3.0, seed=0)
+    _escribir(carpeta, *CATALOGO[1], dur=3.0, seed=1)
+    db = tmp_path / "db.sqlite"
+    assert _correr(capsys, *_scan(db, carpeta))[0] == 0
+    quitado.unlink()                                   # uno que el scan borraría de la base
+    _escribir(carpeta, *CATALOGO[2], dur=3.0, seed=2)  # y uno que tendría que analizar
+    antes = db.read_bytes()
+
+    monkeypatch.setitem(sys.modules, "mutagen", None)   # `import mutagen` → ImportError
+    codigo, out, err = _correr(capsys, *_scan(db, carpeta))
+
+    assert codigo == 2, f"salió {codigo}\n{out}\n{err}"
+    assert "mutagen" in err and "pip install mutagen==1.48.1" in err, err
+    assert "warm-up" not in out, f"trabajó antes de avisar que faltaba mutagen:\n{out}"
+    assert db.read_bytes() == antes, "sin mutagen igual se modificó la base"
+
+
+def test_base_de_esquema_futuro_se_rechaza_sin_tocarla(tmp_path, capsys, biblioteca):
+    """Una base escrita por un djradio más nuevo (user_version mayor): error de uso claro en
+    `list` y en `scan`, y la base queda byte a byte igual."""
+    carpeta_bib, db_bib, _ = biblioteca
+    db = tmp_path / "futura.sqlite"
+    shutil.copy(db_bib, db)
+    con = sqlite3.connect(str(db))
+    con.execute("PRAGMA user_version = 99")
+    con.commit()
+    con.close()
+    antes = db.read_bytes()
+
+    codigo, _, err = _correr(capsys, "--db", db, "list")
+    assert codigo == 2 and "versión 99" in err and "No se tocó la base" in err, err
+    codigo, out, err = _correr(capsys, *_scan(db, carpeta_bib))
+    assert codigo == 2 and "versión 99" in err, f"{out}\n{err}"
+    assert db.read_bytes() == antes, "una base de esquema desconocido se modificó igual"
+
+
+def test_archivo_que_cambia_y_no_se_analiza_cuenta_como_borrado(tmp_path, capsys):
+    """Un archivo analizado que cambia y ya no decodifica: la fila vieja se quita (describe
+    OTRO audio) y el resumen tiene que decirlo. Antes decía `borrados 0 · fallidos 1` con
+    una fila menos en la base."""
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    ruta = _escribir(carpeta, *CATALOGO[0], dur=3.0)
+    db = tmp_path / "db.sqlite"
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert _resumen(out) == (1, 0, 0, 0, 0), out
+
+    ruta.write_bytes(b"ya no es audio")
+    os.utime(ruta, (1_000_000_000, 1_000_000_000))
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+
+    assert codigo == 1, out
+    assert _resumen(out) == (0, 0, 0, 1, 1), f"el borrado del análisis viejo no se contó:\n{out}"
+    assert ("borrado (cambió y la versión nueva no se pudo analizar: se quitó el análisis "
+            f"anterior): {ruta.resolve()}") in out, out
+    with Store(db) as store:
+        assert store.count() == 0, "el análisis del audio viejo sigue en la base"
+
+
+# --- radio: la curva con pocos tracks ----------------------------------------------------
+
+
+def test_spearman_de_un_set_chico_se_marca_orientativo(tmp_path, capsys, biblioteca):
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_124", "--largo", 3)
+    assert codigo == 0, out
+    n = len(_pasos(out))
+    assert n >= 2, f"con menos de 2 tracks no hay Spearman que marcar:\n{out}"
+    linea = next(linea for linea in out.splitlines() if "Spearman" in linea)
+    assert f"ORIENTATIVO: con {n} tracks" in linea, f"un Spearman de {n} tracks sin aviso: {linea}"
+
+
+def test_linea_curva_desde_el_minimo_ya_no_es_orientativa():
+    """El borde de `MIN_TRACKS_SPEARMAN` (12): 11 tracks orientativo, 12 no. Energías que
+    suben de a una, así el Spearman esperado es exactamente +1.00."""
+    from motor.cli import MIN_TRACKS_SPEARMAN, linea_curva
+
+    assert MIN_TRACKS_SPEARMAN == 12
+    doce = linea_curva([i / 11 for i in range(12)])
+    once = linea_curva([i / 10 for i in range(11)])
+    assert doce.endswith("§4 pide ≥ 0.5): +1.00"), doce
+    assert "ORIENTATIVO: con 11 tracks" in once and "+1.00" in once, once
+
+
+# --- resolver_track ----------------------------------------------------------------------
+
+
+def test_info_con_carpeta_homonima_en_el_cwd_busca_el_fragmento(tmp_path, capsys, biblioteca,
+                                                               monkeypatch):
+    """`info 134` con una carpeta `134/` en el directorio de trabajo: es un fragmento del
+    nombre, no una ruta a un track (un track es un archivo)."""
+    _, db, _ = biblioteca
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "134").mkdir()
+    codigo, out, err = _correr(capsys, "--db", db, "info", "134")
+    assert codigo == 0, f"la carpeta se tomó como ruta:\n{err}"
+    campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+    assert Path(campos["archivo"]).name == "click_134_Bmin.wav", campos
+
+
+# --- tags reales ---------------------------------------------------------------------------
+
+
+def test_scan_lee_artista_y_titulo_de_tags_reales(tmp_path, capsys):
+    """Ningún otro fixture tiene tags: romper la lectura de artista/título pasaba todo. Acá
+    los tags se escriben con mutagen — Vorbis comments en un FLAC e ID3 en un WAV, las dos
+    familias — y `list` / `info` tienen que mostrar ESOS valores."""
+    from mutagen.flac import FLAC
+    from mutagen.id3 import TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    y, sr = click_track(128.0, dur=3.0, nota="A", modo="min", seed=4)
+    flac = carpeta / "uno.flac"
+    sf.write(str(flac), y, sr, format="FLAC")
+    f = FLAC(str(flac))
+    f["artist"], f["title"] = "Rosa Pistola", "Canción Flac"
+    f.save()
+
+    y, sr = click_track(130.0, dur=3.0, nota="E", modo="min", seed=5)
+    wav = carpeta / "dos.wav"
+    sf.write(str(wav), y, sr, subtype="PCM_16")
+    w = WAVE(str(wav))
+    w.add_tags()
+    w.tags.add(TPE1(encoding=3, text="Dax J"))
+    w.tags.add(TIT2(encoding=3, text="Tema Wav"))
+    w.save()
+
+    db = tmp_path / "db.sqlite"
+    codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
+    assert codigo == 0 and _resumen(out)[0] == 2, f"los archivos con tags no se analizaron:\n{out}"
+
+    codigo, out, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0, out
+    filas = [FILA_LIST.match(linea) for linea in out.splitlines()]
+    assert [m.group(5).rstrip() for m in filas if m] == \
+        ["Dax J — Tema Wav", "Rosa Pistola — Canción Flac"], f"list no muestra los tags:\n{out}"
+
+    for consulta, artista, titulo in (("uno.flac", "Rosa Pistola", "Canción Flac"),
+                                      ("dos.wav", "Dax J", "Tema Wav")):
+        codigo, out, _ = _correr(capsys, "--db", db, "info", consulta)
+        assert codigo == 0, out
+        campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+        assert (campos["artista"], campos["título"]) == (artista, titulo), campos

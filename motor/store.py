@@ -36,10 +36,20 @@ from motor.embeddings import DIM, normalize_matrix, normalize_one
 from motor.energia import percentil
 from motor.modelos import Track, TrackFeatures, require_text
 
-SCHEMA = """
+# Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
+# de una tabla, y agregar el paso a `_MIGRACIONES`. `CREATE TABLE IF NOT EXISTS` no altera
+# una tabla que ya existe: sin versión, una base vieja se abre "bien" y revienta en el primer
+# INSERT que el esquema viejo no acepta — que en el scan llega DESPUÉS de haber borrado filas.
+#
+#   0  sin versionar: cualquier base anterior a esta constante (commits 9440251 a df9819a)
+#   1  rms / onset_rate / percussive_ratio aceptan NULL (9440251 los tenía NOT NULL)
+#   2  columna path_key (ruta absoluta + normcase) con índice único
+VERSION_ESQUEMA = 2
+
+_DDL_TRACKS = """
 CREATE TABLE IF NOT EXISTS tracks (
     path            TEXT PRIMARY KEY,   -- la ruta con la grafía recibida (absoluta), para usarla
-    path_key        TEXT,               -- la CLAVE: absoluta + normcase (índice único, ver abajo)
+    path_key        TEXT,               -- la CLAVE: absoluta + normcase (índice único abajo)
     mtime           REAL NOT NULL,      -- para invalidar la caché si cambió el archivo
     duration        REAL NOT NULL,
     artist          TEXT,
@@ -57,22 +67,31 @@ CREATE TABLE IF NOT EXISTS tracks (
     license         TEXT NOT NULL,      -- obligatorio (spec §5)
     source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
     analyzed_at     TEXT NOT NULL
-);
+)"""
 
-CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
-CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key);
--- El índice único de `path_key` NO va acá: en una base anterior a esa columna el CREATE
--- TABLE no hace nada y el índice fallaría. Lo crea `Store._migrar_path_key`.
+# Sentencias sueltas y no un `executescript`: `executescript` hace COMMIT antes de correr, y
+# las migraciones tienen que ir enteras dentro de UNA transacción (o todo o nada).
+_DDL_INDICES = (
+    "CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm)",
+    "CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_key ON tracks(path_key)",
+)
 
--- Estadísticas de normalización de la biblioteca (media y desvío por dimensión).
--- Se invalidan con cada alta/baja y se recalculan cuando alguien las necesita.
+# Estadísticas de normalización de la biblioteca (media y desvío por dimensión).
+# Se invalidan con cada alta/baja y se recalculan cuando alguien las necesita.
+_DDL_NORM_STATS = """
 CREATE TABLE IF NOT EXISTS norm_stats (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     mean    BLOB NOT NULL,
     std     BLOB NOT NULL,
     count   INTEGER NOT NULL
-);
-"""
+)"""
+
+
+class EsquemaIncompatible(Exception):
+    """La base tiene una versión de esquema que este código no sabe leer. Se lanza al abrir,
+    ANTES de modificar nada."""
+
 
 # dtype del BLOB de embeddings: se ESCRIBE y se LEE con este. Leerlo con otro dtype no
 # falla, devuelve basura silenciosa (90 float32 se leen como 45 float64 plausibles).
@@ -84,8 +103,8 @@ EMB_DTYPE = np.float32
 STATS_DTYPE = np.float64
 
 _COLUMNAS = ("path", "path_key", "mtime", "duration", "artist", "title", "bpm", "key",
-             "energy_raw", "embedding", "rms", "onset_rate", "percussive_ratio", "license", "source_url",
-             "analyzed_at")
+             "energy_raw", "embedding", "rms", "onset_rate", "percussive_ratio", "license",
+             "source_url", "analyzed_at")
 
 
 def _opcional(valor: object) -> float | None:
@@ -103,9 +122,11 @@ class Store:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._con = sqlite3.connect(str(self.db_path))
         self._con.row_factory = sqlite3.Row
-        self._con.executescript(SCHEMA)  # idempotente: CREATE ... IF NOT EXISTS
-        self._migrar_path_key()
-        self._con.commit()
+        try:
+            self._preparar_esquema()
+        except BaseException:
+            self._con.close()
+            raise
 
     # -- ciclo de vida ------------------------------------------------------
 
@@ -289,12 +310,71 @@ class Store:
         y el label de un track sin título diría "señor coconut" en vez de "Señor Coconut"."""
         return os.path.normcase(os.path.abspath(os.fspath(path)))
 
-    def _migrar_path_key(self) -> None:
-        r"""Bases de antes de `path_key`: agrega la columna, la llena y crea el índice único.
+    def _preparar_esquema(self) -> None:
+        """Crea el esquema en una base nueva o migra una vieja, según `PRAGMA user_version`.
+
+        - Versión fuera de 0..`VERSION_ESQUEMA` → `EsquemaIncompatible`, sin tocar nada: la
+          escribió otro código (más nuevo) y leerla con este sería adivinar su forma.
+        - Base sin tabla `tracks` → esquema actual, versión actual.
+        - Versión menor → los pasos de `_MIGRACIONES` que falten, EN ORDEN y en una sola
+          transacción: si uno falla no queda una base a medio migrar.
+
+        Los pasos miran la forma real de la tabla antes de actuar, porque la versión 0 cubre
+        bases de más de un commit (con y sin NOT NULL, con y sin path_key).
+        """
+        version = int(self._con.execute("PRAGMA user_version").fetchone()[0])
+        if not 0 <= version <= VERSION_ESQUEMA:
+            raise EsquemaIncompatible(
+                f"La base {self.db_path} tiene esquema versión {version} y este código entiende "
+                f"hasta la {VERSION_ESQUEMA}: la escribió otra versión de djradio. "
+                f"No se tocó la base; actualizá el código antes de usarla.")
+        existe = self._con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'").fetchone()
+        if existe and version == VERSION_ESQUEMA:
+            return
+
+        self._con.execute("BEGIN")
+        try:
+            if existe:
+                for destino, paso in _MIGRACIONES:
+                    if version < destino:
+                        paso(self)
+            else:
+                self._con.execute(_DDL_TRACKS)
+            for ddl in _DDL_INDICES:
+                self._con.execute(ddl)
+            self._con.execute(_DDL_NORM_STATS)
+            self._con.execute(f"PRAGMA user_version = {VERSION_ESQUEMA}")
+            self._con.execute("COMMIT")
+        except BaseException:
+            self._con.execute("ROLLBACK")
+            raise
+
+    def _migrar_a_1_nulos(self) -> None:
+        """rms / onset_rate / percussive_ratio pasan a aceptar NULL.
+
+        SQLite no tiene `ALTER COLUMN`: se recrea la tabla con el DDL actual y se copian las
+        filas, con las columnas que existan en la vieja. Los valores se copian tal cual: un
+        0.0 que la base vieja haya guardado no se convierte en NULL, porque desde acá no hay
+        forma de saber si fue medido o inventado."""
+        info = list(self._con.execute("PRAGMA table_info(tracks)"))
+        estrictas = {f["name"] for f in info if f["notnull"]}
+        if not estrictas & {"rms", "onset_rate", "percussive_ratio"}:
+            return
+        viejas = {f["name"] for f in info}
+        comunes = ", ".join(c for c in _COLUMNAS if c in viejas)
+        self._con.execute("ALTER TABLE tracks RENAME TO tracks_v0")
+        self._con.execute(_DDL_TRACKS)
+        self._con.execute(f"INSERT INTO tracks ({comunes}) SELECT {comunes} FROM tracks_v0")
+        self._con.execute("DROP TABLE tracks_v0")   # se lleva sus índices; se recrean después
+
+    def _migrar_a_2_path_key(self) -> None:
+        r"""Agrega `path_key` (si falta) y la llena.
 
         Si dos filas viejas caen en la misma clave (`C:\a.wav` y `c:\a.wav`), queda la del
         análisis más reciente y las otras se borran: son dos análisis del mismo archivo, y
-        dejar los dos sería tener el track repetido en la biblioteca. Idempotente."""
+        dejar los dos sería tener el track repetido en la biblioteca. El índice único lo crea
+        `_preparar_esquema` al final."""
         columnas = {f["name"] for f in self._con.execute("PRAGMA table_info(tracks)")}
         if "path_key" not in columnas:
             self._con.execute("ALTER TABLE tracks ADD COLUMN path_key TEXT")
@@ -309,9 +389,7 @@ class Store:
                 self._con.execute("DELETE FROM tracks WHERE path = ?", (ruta,))
             self._con.execute("UPDATE tracks SET path_key = ? WHERE path = ?", (clave, vigente))
         if filas:
-            self._invalidate_norm_stats()
-        self._con.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_key ON tracks(path_key)")
+            self._con.execute("DROP TABLE IF EXISTS norm_stats")   # se recrea vacía después
 
     def _rows(self) -> list[sqlite3.Row]:
         """Todas las filas, ORDENADAS POR CLAVE EN PYTHON — no por la collation de SQLite,
@@ -386,3 +464,10 @@ class Store:
             fila = self._con.execute(consulta).fetchone()
         return (np.frombuffer(fila["mean"], dtype=STATS_DTYPE).copy(),
                 np.frombuffer(fila["std"], dtype=STATS_DTYPE).copy())
+
+
+# (versión a la que lleva, paso), en orden. Ver `VERSION_ESQUEMA`.
+_MIGRACIONES = (
+    (1, Store._migrar_a_1_nulos),
+    (2, Store._migrar_a_2_path_key),
+)

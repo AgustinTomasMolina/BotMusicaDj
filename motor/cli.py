@@ -20,7 +20,8 @@ sale con error. Es la misma regla que `ground_truth.resolver` con los homónimos
 la suerte hace que el motor trabaje sobre otro track y el resultado se ve igual de bien.
 
 Códigos de salida: 0 hecho · 1 algo no se pudo hacer (archivos que no se analizaron) ·
-2 error de uso (falta licencia/origen, base vacía, track inexistente o ambiguo).
+2 error de uso (falta licencia/origen, base vacía o de un esquema que este código no conoce,
+track inexistente o ambiguo, mutagen sin instalar).
 
 NO modifica los audios: solo los lee (regla del proyecto).
 """
@@ -75,17 +76,28 @@ def _clasica(camelot: str) -> str:
     return camelot_a_clasica(camelot) or "?"
 
 
+def _abrir_store(db: Path):
+    """`Store(db)`, con una base de esquema desconocido convertida en error de uso.
+
+    El store rechaza la base al abrirla, antes de tocar ninguna fila; acá solo se le saca el
+    traceback para que el usuario lea el motivo."""
+    from motor.store import EsquemaIncompatible, Store
+
+    try:
+        return Store(db)
+    except EsquemaIncompatible as e:
+        raise ErrorDeUso(str(e)) from e
+
+
 def _abrir_existente(db: Path):
     """Abre la base para LEER. Si no existe no la crea: un `list` con la ruta mal escrita
     dejaría una base vacía nueva y el próximo comando diría "vacía" en vez de "no existe"."""
-    from motor.store import Store
-
     if not db.exists():
         raise ErrorDeUso(
             f"No existe la base {db}.\n"
             f"  Primero analizá una carpeta: python -m motor --db \"{db}\" scan <carpeta> "
             f"--licencia ... --origen ...")
-    store = Store(db)
+    store = _abrir_store(db)
     if store.count() == 0:
         store.close()
         raise ErrorDeUso(
@@ -101,7 +113,10 @@ def resolver_track(consulta: str, biblioteca: list[Track]) -> Track:
     Ambiguo → `ErrorDeUso` con TODOS los candidatos. No hay "el primero" ni "el más
     parecido": ver el docstring del módulo.
     """
-    if Path(consulta).exists():
+    # `is_file` y no `exists`: con una carpeta `crate/` en el directorio de trabajo,
+    # `info crate` se tomaba como ruta y contestaba "existe pero no está en la base" en vez
+    # de buscar el fragmento. Un track es siempre un archivo.
+    if Path(consulta).is_file():
         clave = os.path.normcase(_clave(consulta))
         for t in biblioteca:
             if os.path.normcase(str(t.path)) == clave:
@@ -146,6 +161,21 @@ Ejemplo para una biblioteca personal comprada en Beatport:
 """
 
 
+def _requerir_mutagen() -> None:
+    """`scan` lee artista y título con `calidad.tags.leer_tags`, que importa mutagen recién
+    al usarlo. Sin este chequeo, con mutagen ausente el scan hacía el warm-up, analizaba el
+    primer track y se caía con `ModuleNotFoundError` antes del primer upsert — con las filas
+    de archivos borrados ya quitadas de la base. Se verifica ANTES de abrir la base."""
+    try:
+        import mutagen  # noqa: F401
+    except ImportError as e:
+        raise ErrorDeUso(
+            "`scan` necesita mutagen para leer artista y título de los tags y no está "
+            "instalado.\n"
+            "  Instalalo con: pip install mutagen==1.48.1  (o pip install -e . de nuevo)\n"
+            "No se tocó la base.") from e
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     faltan = [f"--{n}" for n, v in (("licencia", args.licencia), ("origen", args.origen))
               if v is None or not str(v).strip()]
@@ -154,6 +184,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         raise ErrorDeUso(_AYUDA_LICENCIA.format(faltan=" y ".join(faltan)))
     require_text(args.licencia, "licencia")
     require_text(args.origen, "origen")
+    _requerir_mutagen()
 
     carpeta = Path(args.carpeta)
     if not carpeta.is_dir():
@@ -163,7 +194,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     from calidad.tags import leer_tags
     from motor.analisis import analizar_archivo, calentar
-    from motor.store import Store
 
     rutas = sorted({_clave(p) for p in carpeta.rglob("*")
                     if p.is_file() and p.suffix.lower() in EXTS})
@@ -172,9 +202,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     actualizados: list[str] = []
     sin_cambios: list[str] = []
     fallidos: list[tuple[str, str]] = []
-    borrados: list[str] = []
+    borrados: list[tuple[str, str]] = []   # (ruta, por qué se quitó de la base)
 
-    with Store(args.db) as store:
+    with _abrir_store(args.db) as store:
         en_base = {os.path.normcase(str(p)): p for p in store.paths()}
         en_disco = {os.path.normcase(r) for r in rutas}
 
@@ -184,7 +214,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         for clave, ruta in sorted(en_base.items()):
             if _misma_o_adentro(ruta, carpeta) and clave not in en_disco:
                 store.delete(ruta)
-                borrados.append(str(ruta))
+                borrados.append((str(ruta), "ya no está en disco"))
 
         pendientes = [r for r in rutas if store.needs_analysis(r)]
         a_analizar = set(pendientes)
@@ -215,7 +245,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 if estaba:
                     # El archivo cambió y la versión nueva no se puede analizar: el análisis
                     # viejo describe OTRO audio. Dejarlo sería un dato que miente (§6).
+                    # Cuenta como borrado: el resumen no puede decir "borrados 0" con una
+                    # fila menos en la base.
                     store.delete(ruta)
+                    borrados.append((ruta, "cambió y la versión nueva no se pudo analizar: "
+                                           "se quitó el análisis anterior"))
                 print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} FALLÓ ({motivo})", flush=True)
                 continue
 
@@ -233,8 +267,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     print(f"\nnuevos {len(nuevos)} · actualizados {len(actualizados)} · "
           f"sin cambios {len(sin_cambios)} · borrados {len(borrados)} · "
           f"fallidos {len(fallidos)}")
-    for ruta in borrados:
-        print(f"  borrado (ya no está en disco): {ruta}")
+    for ruta, motivo in borrados:
+        print(f"  borrado ({motivo}): {ruta}")
     for nombre, motivo in fallidos:
         print(f"  fallido: {nombre} — {motivo}")
     print(f"Base: {args.db} ({total} tracks)")
@@ -306,6 +340,27 @@ def cmd_similar(args: argparse.Namespace) -> int:
 # --- radio -----------------------------------------------------------------------------
 
 
+# Por debajo de este largo, el Spearman del set se imprime como ORIENTATIVO. Medido por
+# permutaciones (todas hasta n=8, 200k al azar desde n=9): la probabilidad de que un orden
+# AL AZAR dé Spearman ≥ 0.5 es 50% con n=3, 15% con n=6, 7% con n=10, 6% con n=11 y recién
+# baja de 5% en n=12 (4.9%). O sea: con menos de 12 tracks, "pasó el ≥ 0.5 de §4" no
+# distingue una curva armada de un orden cualquiera.
+MIN_TRACKS_SPEARMAN = 12
+
+
+def linea_curva(energias: list[float]) -> str:
+    """El renglón de la curva de energía del set, honesto sobre cuánto significa (§6)."""
+    corr = energy_curve_correlation(energias)
+    base = "curva de energía (Spearman posición vs energía, §4 pide ≥ 0.5): "
+    if math.isnan(corr):
+        return base + "no calculable con menos de 2 tracks o energía constante"
+    if len(energias) < MIN_TRACKS_SPEARMAN:
+        return (base + f"{corr:+.2f} — ORIENTATIVO: con {len(energias)} tracks un orden al "
+                f"azar también puede pasar 0.5; se compara contra §4 desde "
+                f"{MIN_TRACKS_SPEARMAN} tracks")
+    return base + f"{corr:+.2f}"
+
+
 def cmd_radio(args: argparse.Namespace) -> int:
     from motor.export import write_m3u8
     from motor.radio import RadioConfig, build_set
@@ -327,11 +382,7 @@ def cmd_radio(args: argparse.Namespace) -> int:
         print(f"  {i:>2}. {_fila(paso.track)}")
         print(f"      └ {motivo}")
 
-    corr = energy_curve_correlation(rset.energies)
-    print(f"\n{len(rset)} de {config.length} tracks pedidos · curva de energía "
-          f"(Spearman posición vs energía, §4 pide ≥ 0.5): "
-          + ("no calculable con menos de 2 tracks o energía constante" if math.isnan(corr)
-             else f"{corr:+.2f}"))
+    print(f"\n{len(rset)} de {config.length} tracks pedidos · {linea_curva(rset.energies)}")
     if not rset.is_complete:
         print(f"SET CORTO: quedó en {len(rset)} de {config.length}. Motivo ({rset.stop}): "
               f"{rset.stop_detail}")

@@ -681,3 +681,118 @@ def test_base_vieja_se_migra_y_colapsa_duplicados(tmp_path):
     assert store.get_features(ruta).bpm == _catalogo()[1]["bpm"], "no quedó el análisis más nuevo"
     store.close()
     Store(db).close()                                  # idempotente: reabrir no rompe
+
+
+# --- versión del esquema (PRAGMA user_version) --------------------------------------------
+
+# El SCHEMA de `motor/store.py` en el commit 9440251 (`git show 9440251:motor/store.py`),
+# copiado tal cual: rms, onset_rate y percussive_ratio NOT NULL, sin path_key, sin versión.
+SCHEMA_9440251 = """
+CREATE TABLE IF NOT EXISTS tracks (
+    path            TEXT PRIMARY KEY,
+    mtime           REAL NOT NULL,      -- para invalidar la caché si cambió el archivo
+    duration        REAL NOT NULL,
+    artist          TEXT,
+    title           TEXT,
+    bpm             REAL NOT NULL,
+    key             TEXT NOT NULL,      -- Camelot
+    energy_raw      REAL NOT NULL,      -- RMS absoluto; el percentil se calcula al leer
+    embedding       BLOB NOT NULL,      -- float32 crudo, sin normalizar
+    rms             REAL NOT NULL,      -- detalle de energía (debug / reajuste de pesos)
+    onset_rate      REAL NOT NULL,
+    percussive_ratio REAL NOT NULL,
+    license         TEXT NOT NULL,      -- obligatorio (spec §5)
+    source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
+    analyzed_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
+CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key);
+
+-- Estadísticas de normalización de la biblioteca (media y desvío por dimensión).
+-- Se invalidan con cada alta/baja y se recalculan cuando alguien las necesita.
+CREATE TABLE IF NOT EXISTS norm_stats (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    mean    BLOB NOT NULL,
+    std     BLOB NOT NULL,
+    count   INTEGER NOT NULL
+);
+"""
+
+
+def test_base_del_esquema_9440251_se_migra_y_conserva_sus_datos(tmp_path):
+    """Una base de 9440251 abierta con el store actual: sus filas vuelven idénticas, la
+    versión queda en la actual y — el bug — un upsert con rms/onset_rate/percussive_ratio en
+    None ya no tira IntegrityError."""
+    from motor.store import VERSION_ESQUEMA
+
+    db = tmp_path / "vieja.sqlite"
+    rutas = {}
+    con = sqlite3.connect(str(db))
+    con.executescript(SCHEMA_9440251)
+    for i in (0, 1):
+        c = _catalogo()[i]
+        ruta = tmp_path / c["nombre"]
+        ruta.write_bytes(b"x")
+        rutas[i] = ruta
+        con.execute(
+            "INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(ruta), 111.0 + i, 10.0 + i, f"Artista {i}", f"Título {i}", c["bpm"], c["key"],
+             c["energy_raw"], c["embedding"].tobytes(), c["rms"], 2.5 + i, 0.25 * i,
+             LICENCIA, ORIGEN, f"2026-01-0{i + 1}T00:00:00"))
+    con.commit()
+    con.close()
+
+    store = Store(db)
+    for i, ruta in rutas.items():
+        c = _catalogo()[i]
+        got = store.get_features(ruta)
+        assert (got.bpm, got.key, got.energy_raw) == (c["bpm"], c["key"], c["energy_raw"]), got
+        assert np.array_equal(got.embedding, c["embedding"]), f"{ruta.name}: embedding perdido"
+        assert (got.rms, got.onset_rate, got.percussive_ratio) == (c["rms"], 2.5 + i, 0.25 * i)
+        t = store.get(ruta)
+        assert (t.artist, t.title, t.duration) == (f"Artista {i}", f"Título {i}", 10.0 + i)
+
+    nuevo = tmp_path / _catalogo()[2]["nombre"]
+    nuevo.write_bytes(b"x")
+    store.upsert(nuevo, _features(_catalogo()[2]), duration=10.0, license=LICENCIA,
+                 source_url=ORIGEN)                     # rms & cía en None: el INSERT del bug
+    assert store.count() == 3
+    store.close()
+
+    con = sqlite3.connect(str(db))
+    version = con.execute("PRAGMA user_version").fetchone()[0]
+    estrictas = {f[1] for f in con.execute("PRAGMA table_info(tracks)") if f[3]}
+    filas_mtime = dict(con.execute("SELECT path, mtime FROM tracks").fetchall())
+    con.close()
+    assert version == VERSION_ESQUEMA, f"la base quedó en versión {version}"
+    assert not estrictas & {"rms", "onset_rate", "percussive_ratio"}, estrictas
+    assert filas_mtime[str(rutas[0])] == 111.0 and filas_mtime[str(rutas[1])] == 112.0
+
+
+def test_base_con_version_futura_se_rechaza_sin_modificarla(tmp_path):
+    from motor.store import EsquemaIncompatible
+
+    db = tmp_path / "futura.sqlite"
+    store = Store(db)
+    _poblar(store, tmp_path, indices=[0])
+    store.close()
+    con = sqlite3.connect(str(db))
+    con.execute("PRAGMA user_version = 7")
+    con.commit()
+    con.close()
+    antes = db.read_bytes()
+
+    with pytest.raises(EsquemaIncompatible, match="versión 7"):
+        Store(db)
+    assert db.read_bytes() == antes, "la base de versión desconocida se modificó al abrirla"
+
+
+def test_base_nueva_nace_con_la_version_actual(tmp_path):
+    from motor.store import VERSION_ESQUEMA
+
+    db = tmp_path / "nueva.sqlite"
+    Store(db).close()
+    con = sqlite3.connect(str(db))
+    assert con.execute("PRAGMA user_version").fetchone()[0] == VERSION_ESQUEMA
+    con.close()

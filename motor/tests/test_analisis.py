@@ -165,3 +165,49 @@ def test_percussive_ratio_no_medido_vuelve_none_de_la_base(tmp_path):
     crudo = con.execute("SELECT percussive_ratio FROM tracks").fetchone()[0]
     con.close()
     assert crudo is None, f"en la base quedó {crudo!r} en vez de NULL"
+
+
+def test_el_embedding_rota_por_la_key_reportada_con_consenso(audio_que_separa_los_metodos):
+    """Con `consenso=True` la key sale del voto entre tramos (8A), pero la ventana central
+    del audio es mayoría Do# mayor (3B). El embedding tiene que rotar por la key REPORTADA:
+    si `analizar_senal` dejara de pasarle el perfil a `embed`, rotaría por la tónica de la
+    ventana y el timbre guardado describiría otra key que la guardada."""
+    from motor.analisis import analizar_senal, cargar
+    from motor.embeddings import embed
+    from motor.tonalidad import ventana_central
+
+    y = cargar(audio_que_separa_los_metodos)
+    features = analizar_senal(y, SR, consenso=True)
+    assert features.key == "8A", f"el caso necesita consenso en La menor, dio {features.key}"
+
+    ventana = ventana_central(y, SR)
+    por_la_key = embed(ventana, SR, chroma=_perfil_de_la_key("A", "min"))
+    por_la_ventana = embed(ventana, SR, chroma=_perfil_de_la_key("C#", "maj"))
+    assert not np.allclose(por_la_key, por_la_ventana, rtol=0, atol=1e-6), \
+        "rotar por La menor o por Do# mayor da lo mismo: el caso no distingue nada"
+
+    emb = np.asarray(features.embedding, dtype=np.float64)
+    assert np.allclose(emb, por_la_key, rtol=0, atol=1e-6), \
+        "el embedding no es el rotado por la key reportada (8A)"
+    assert not np.allclose(emb, por_la_ventana, rtol=0, atol=1e-6), \
+        "el embedding rotó por la tónica de la ventana central (3B), no por la key guardada"
+
+
+def test_una_sola_lista_de_formatos_de_audio():
+    """Motor, benchmark, calidad y pipeline escanean LOS MISMOS formatos: el mismo objeto,
+    no copias iguales hoy. El benchmark tenía una lista sin `.opus` y medía menos formatos
+    de los que escanea el motor."""
+    import benchmark.analizar
+    import benchmark.calibracion_confianza
+    import benchmark.tiempo_analisis
+    import calidad.corte_espectral
+    import calidad.duplicados
+    import calidad.tags
+    import motor.cli
+    import pipeline.revisar
+
+    for modulo in (benchmark.analizar, benchmark.calibracion_confianza,
+                   benchmark.tiempo_analisis, calidad.corte_espectral, calidad.duplicados,
+                   motor.cli, pipeline.revisar):
+        assert modulo.EXTS is calidad.tags.EXTS, f"{modulo.__name__} tiene su propia lista"
+    assert ".opus" in calidad.tags.EXTS

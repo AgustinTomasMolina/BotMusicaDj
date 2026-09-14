@@ -59,7 +59,9 @@ from pathlib import Path
 # externo. Importarlo NO invoca ffmpeg: solo resuelve rutas al importar.
 from analizar_calidad import MURO_DB, _analizar_espectro, _espectro_db
 
-EXTS = (".mp3", ".wav", ".flac", ".aiff", ".aif", ".m4a", ".ogg", ".opus")
+# Formatos de audio: UNA sola lista para todo el repo (calidad.tags.EXTS). Una copia
+# local hacía que el motor escaneara formatos que el benchmark nunca medía.
+from calidad.tags import EXTS
 
 # Formatos sin pérdida: se espera banda completa. Un lossless que corta bajo es un
 # transcode disfrazado, que es el caso más valioso de detectar.
