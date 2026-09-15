@@ -168,8 +168,16 @@ python -m ground_truth.escucha --analisis gt_out/analisis_sin-consenso.csv --acu
 
 - `--acuerdo-de` hace falta con los CSV de sesiones anteriores a `aabd83d`: la pasada sin
   consenso tiene la key del motor pero no el acuerdo, y lo toma de la otra (cruzando por ruta).
-- Deja en `escucha/` un WAV por fragmento (ventana central + 3 tramos), `escucha.csv` para
-  completar `veredicto` y `notas` en Excel, y `escucha.md` con qué escuchar.
-- Si `escucha/escucha.csv` ya existe no lo pisa (puede tener veredictos): usá otra `--salida`.
+- Deja en `escucha/` un WAV PCM 16 bits por fragmento (ventana central + 3 tramos, unos
+  40 MB por track estéreo a 44.1 kHz), `escucha.md` con qué escuchar y `escucha.csv`.
+- **Los veredictos se anotan en `escucha.md`**: cada track tiene sus líneas `veredicto` y
+  `notas` para completar con un editor de texto.
+- **`escucha.csv` es solo de lectura: no lo guardes desde Excel.** Excel convierte el acuerdo
+  `3/3` en fecha y los tiempos `00:25` en hora, y al guardar el CSV queda corrompido.
+- `--salida` tiene que no existir o estar vacía: si tiene cualquier archivo, el comando corta
+  sin escribir nada (no pisa fragmentos ni un `escucha.md` con veredictos, y no mezcla WAVs de
+  otra corrida). Para regenerar, usá una carpeta nueva.
+- Si ninguna ruta de `--analisis` coincide con las de `--acuerdo-de` (rutas escritas distinto
+  o CSVs de sesiones distintas), o `--analisis` repite una ruta, corta con el motivo.
 - Un track cuyo audio no está (disco desenchufado) queda como `audio no encontrado`; el resto
   se procesa igual.

@@ -21,17 +21,22 @@ corrida cruzando POR RUTA (dos archivos con el mismo nombre en carpetas distinta
 tracks). Es equivalente a reanalizar: `tono_consenso` es determinista sobre el mismo audio,
 así que el acuerdo de la pasada con consenso es el que daría hoy la etapa A.
 
-QUÉ PRODUCE, por track elegido, en `--salida`:
+QUÉ PRODUCE, por track elegido, en `--salida` (que tiene que NO existir o estar VACÍA):
   - `NN_<nombre>_ventana_central.wav`: EXACTAMENTE la ventana que analiza `tono()`.
-  - `NN_<nombre>_tramo1..3.wav`: los tramos disjuntos que vota `tono_consenso()`.
-  - `escucha.csv` y `escucha.md`: una fila por track, con dos columnas vacías para el oído.
+  - `NN_<nombre>_tramo1..N.wav`: los tramos disjuntos que vota `tono_consenso()`.
+  - `escucha.md`: qué escuchar y, por track, dónde anotar `veredicto` y `notas` a mano.
+  - `escucha.csv`: los mismos datos para leer o filtrar. Es SOLO DE LECTURA: no tiene
+    columnas para el oído, porque guardarlo desde Excel lo corrompe (convierte el acuerdo
+    `3/3` en fecha y `00:25` en hora).
 
 Los límites de cada fragmento NO se recalculan acá: se le pregunta a la propia función del
 motor qué muestras toma (ver `limites_analizados`) y se pasan a segundos. Así, si el motor
 cambia la ventana, el fragmento sigue siendo el que se analizó. El corte se hace sobre el
-audio original a su sample rate y con sus canales, para escuchar con la calidad del archivo.
+audio original a su sample rate y con sus canales, y se escribe en WAV PCM 16 bits
+(~40 MB por track estéreo a 44.1 kHz: 90 s de ventana central + 3 × 45 s de tramos).
 
-NUNCA modifica los audios originales: los lee y escribe copias en `--salida`.
+NUNCA modifica los audios originales: los lee y escribe copias en `--salida`. Tampoco pisa
+nada en `--salida`: si la carpeta tiene algo, corta antes de escribir.
 NO INVENTA DATOS: si falta el acuerdo, un CSV o el audio, lo dice y no rellena.
 """
 import argparse
@@ -74,8 +79,12 @@ COLUMNAS_INDICE = [
     "relacion", "error_de_modo", "acuerdo", "tramos",
     "ventana_inicio", "ventana_fin", "ventana_inicio_s", "ventana_fin_s",
     "archivo_ventana_central", "archivos_tramos",
-    "veredicto", "notas",
 ]
+# Sin `veredicto` ni `notas`: se anotan en `escucha.md`. Ningún otro módulo lee este CSV
+# (verificado con `git grep`), y dos columnas vacías en un archivo que no se tiene que editar
+# invitan justo a abrirlo en Excel y guardarlo, que es lo que lo rompe.
+
+FRAGMENTO_SUBTYPE = "PCM_16"
 
 
 class EscuchaIncompleta(RuntimeError):
@@ -87,6 +96,19 @@ class EscuchaIncompleta(RuntimeError):
 
 def _hay_acuerdo(filas: list[dict]) -> bool:
     return any((f.get("acuerdo") or "").strip() for f in filas)
+
+
+def _rechazar_rutas_repetidas(filas: list[dict], etiqueta: str) -> None:
+    """Una ruta repetida es un CSV roto: no hay cómo saber cuál de las dos filas vale, y
+    quedarse con una en silencio pierde un track. Las filas sin ruta no cuentan."""
+    vistas: set[str] = set()
+    for f in filas:
+        ruta = (f.get("ruta") or "").strip()
+        if not ruta:
+            continue
+        if ruta in vistas:
+            raise EscuchaIncompleta(f"Ruta repetida en el CSV de {etiqueta}: {ruta}")
+        vistas.add(ruta)
 
 
 def combinar_acuerdo(analisis: list[dict], con_consenso: list[dict]) -> tuple[list[dict], list[str]]:
@@ -113,14 +135,8 @@ def combinar_acuerdo(analisis: list[dict], con_consenso: list[dict]) -> tuple[li
             f"metodo={METODO_CONSENSO} ni la columna acuerdo llena.\n"
             "  Pasá la pasada CON consenso de la sesión (gt_out/analisis_con-consenso.csv).")
 
-    por_ruta: dict[str, dict] = {}
-    for f in con_consenso:
-        ruta = (f.get("ruta") or "").strip()
-        if not ruta:
-            continue
-        if ruta in por_ruta:
-            raise EscuchaIncompleta(f"Ruta repetida en el CSV de --acuerdo-de: {ruta}")
-        por_ruta[ruta] = f
+    _rechazar_rutas_repetidas(con_consenso, "--acuerdo-de")
+    por_ruta = {r: f for f in con_consenso if (r := (f.get("ruta") or "").strip())}
 
     combinadas, sin_par = [], []
     for f in analisis:
@@ -293,7 +309,9 @@ def exportar_track(ruta: str, prefijo: str, salida: Path) -> Fragmentos:
        para saber cuántas muestras ve el análisis, y de ahí `limites_analizados`.
     2. Pasa esos límites a segundos y los corta del original cargado a su sample rate nativo
        y con sus canales (`librosa.load(sr=None, mono=False)`).
-    3. Escribe WAV float32: es exactamente lo que se leyó, sin recuantizar ni recortar picos.
+    3. Escribe WAV PCM 16 bits (decisión del dueño, por tamaño: la mitad que float32). Eso
+       recuantiza: soundfile escala por 32768 y redondea sin dither (error ≤ 1/32768), y
+       recorta a ±1.0 lo que se pase (un MP3 decodificado puede tener picos por encima).
 
     Si el archivo no existe no se inventa nada: estado `AUDIO_NO_ENCONTRADO`.
     """
@@ -323,7 +341,7 @@ def exportar_track(ruta: str, prefijo: str, salida: Path) -> Fragmentos:
         a = min(a_muestra_nativa(ini, SR, sr_nativo), total)
         b = min(a_muestra_nativa(fin, SR, sr_nativo), total)
         # soundfile espera (muestras, canales): la traspuesta de lo que da librosa.
-        sf.write(str(destino), nativo[:, a:b].T, sr_nativo, subtype="FLOAT")
+        sf.write(str(destino), nativo[:, a:b].T, sr_nativo, subtype=FRAGMENTO_SUBTYPE)
         return destino.name
 
     return Fragmentos(
@@ -354,7 +372,6 @@ def fila_indice(n: int, c: Candidato, fr: Fragmentos) -> dict:
         "ventana_inicio_s": "" if fr.inicio_s is None else f"{fr.inicio_s:.2f}",
         "ventana_fin_s": "" if fr.fin_s is None else f"{fr.fin_s:.2f}",
         "archivo_ventana_central": fr.central, "archivos_tramos": "|".join(fr.tramos),
-        "veredicto": "", "notas": "",
     }
 
 
@@ -368,22 +385,44 @@ def escribir_indice_csv(filas: list[dict], destino: Path) -> None:
         w.writerows(filas)
 
 
-_EXPLICACION_MD = f"""# Escucha de discrepancias de tonalidad
+def _mb_por_track_estereo_44k() -> float:
+    """Tamaño de los fragmentos de un track estéreo a 44.1 kHz en 16 bits (4 bytes por
+    instante), con las duraciones de los defaults del motor."""
+    segundos = inspect.signature(ventana_central).parameters["segundos"].default
+    return (segundos + N_TRAMOS * VENTANA_TRAMO_S) * 44100 * 4 / 1e6
+
+
+def _explicacion_md() -> str:
+    """Cabecera de `escucha.md`. Función y no constante: los nombres de los tramos salen de
+    `N_TRAMOS` en el momento de escribir, no de un texto fijo."""
+    tramos = ", ".join(f"`tramo{k}`" for k in range(2, N_TRAMOS + 1))
+    return f"""# Escucha de discrepancias de tonalidad
 
 Tracks donde el motor está **seguro** (los {N_TRAMOS} tramos del consenso votaron la misma key) y
 **no coincide** con Rekordbox. Rekordbox también se equivoca: acá se decide a oído quién tiene
-razón. Completá `veredicto` y `notas` en `{INDICE_CSV}` (se abre con Excel).
+razón.
+
+**Los veredictos se anotan en ESTE archivo**: cada track tiene abajo sus líneas `veredicto` y
+`notas`; escribí después de los dos puntos (con el Bloc de notas o cualquier editor de texto).
+
+**`{INDICE_CSV}` es solo de lectura: no lo abras y guardes con Excel.** Excel convierte el
+acuerdo `3/3` en una fecha y los tiempos como `00:25` en una hora, y al guardar el CSV queda
+corrompido. Si querés mirarlo en Excel, cerralo sin guardar.
 
 ## Qué es cada archivo
 
 - `NN_<nombre>_ventana_central.wav` — exactamente el fragmento del que `tono()` saca la key
   del motor (la ventana central del track). Es el más importante: la key del motor sale
   solo de esto.
-- `NN_<nombre>_tramo1.wav`, `tramo2`, `tramo3` — los {N_TRAMOS} fragmentos de {VENTANA_TRAMO_S} s
-  (principio, medio y final del track) que votaron el acuerdo. Sirven para oír si la
-  tonalidad cambia a lo largo del tema.
+- `NN_<nombre>_tramo1.wav`{", " + tramos if tramos else ""} — los {N_TRAMOS} fragmentos de
+  {VENTANA_TRAMO_S} s, uno por cada uno de {N_TRAMOS} bloques iguales del track, que votaron el
+  acuerdo. Sirven para oír si la tonalidad cambia a lo largo del tema.
 
-Todos son copias con la calidad del archivo original; el original no se toca.
+Todos son copias al sample rate y con los canales del archivo original, en WAV de 16 bits
+(unos {_mb_por_track_estereo_44k():.0f} MB por track estéreo a 44.1 kHz); el original no se toca.
+
+El análisis de `tono()` usa el **promedio de los canales** (mono), pero el fragmento se exporta
+en estéreo: lo que suene solo en contrafase entre izquierda y derecha no llegó al análisis.
 
 ## Qué escuchar
 
@@ -402,7 +441,7 @@ Todos son copias con la calidad del archivo original; el original no se toca.
 
 
 def escribir_indice_md(filas: list[dict], destino: Path) -> None:
-    lineas = [_EXPLICACION_MD, "## Tracks", "",
+    lineas = [_explicacion_md(), "## Tracks", "",
               "| # | track | motor | rekordbox | relación | error de modo | acuerdo | ventana central | estado |",
               "|---|---|---|---|---|---|---|---|---|"]
     for f in filas:
@@ -425,11 +464,32 @@ def escribir_indice_md(filas: list[dict], destino: Path) -> None:
                        f"- tramos: {', '.join(f'`{t}`' for t in f['archivos_tramos'].split('|') if t) or '—'}"]
         else:
             lineas.append(f"- **{f['estado']}**: no se generaron fragmentos")
-        lineas += ["- veredicto: ", "- notas: ", ""]
+        lineas += ["- veredicto (`motor` / `rekordbox` / `ninguna` / `no sé`): ", "- notas: ", ""]
     destino.write_text("\n".join(lineas), encoding="utf-8")
 
 
 # --- Corrida ----------------------------------------------------------------------------
+
+
+def _exigir_salida_vacia(salida: Path) -> None:
+    """`--salida` tiene que no existir o estar vacía. Se valida antes de escribir nada.
+
+    Los fragmentos tienen nombres fijos (`NN_<nombre>_...wav`): en una carpeta con cosas
+    pisarían un WAV del mismo nombre sin aviso (p.ej. si `--salida` es la carpeta de la
+    música), y al regenerar con otro `-n` o `--seed` dejarían WAVs viejos que no figuran en el
+    índice nuevo. Y un `escucha.md` anterior puede tener veredictos cargados.
+    """
+    if not salida.exists():
+        return
+    if not salida.is_dir():
+        raise EscuchaIncompleta(f"--salida existe y no es una carpeta: {salida}")
+    contenido = sorted(p.name for p in salida.iterdir())
+    if contenido:
+        raise EscuchaIncompleta(
+            f"--salida ya tiene {len(contenido)} elemento(s) (p.ej. {contenido[0]}): {salida}\n"
+            "  Tiene que no existir o estar vacía: los fragmentos pisarían archivos con el mismo "
+            "nombre o quedarían mezclados con los de otra corrida, y un escucha.md anterior "
+            "puede tener veredictos cargados.\n  Usá una carpeta nueva.")
 
 
 def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | None = None,
@@ -440,16 +500,31 @@ def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | No
             raise EscuchaIncompleta(f"No existe el CSV de {etiqueta}: {p}")
     if n < 1:
         raise EscuchaIncompleta(f"-n tiene que ser al menos 1 (recibí {n})")
+    _exigir_salida_vacia(salida)
 
     analisis = leer_csv(analisis_csv)
     if any((f.get("metodo") or "").strip() == METODO_CONSENSO for f in analisis):
         raise EscuchaIncompleta(
             "El CSV de --analisis es una corrida con consenso: su key_est es la del voto, "
             "no la de tono().\n  Pasá la pasada SIN consenso en --analisis y esta en --acuerdo-de.")
+    _rechazar_rutas_repetidas(analisis, "--analisis")
 
     sin_par: list[str] = []
     if acuerdo_de is not None:
-        analisis, sin_par = combinar_acuerdo(analisis, leer_csv(acuerdo_de))
+        con_consenso = leer_csv(acuerdo_de)
+        combinadas, sin_par = combinar_acuerdo(analisis, con_consenso)
+        if not combinadas:
+            ej_a = next((r for f in analisis if (r := (f.get("ruta") or "").strip())), "—")
+            ej_c = next((r for f in con_consenso if (r := (f.get("ruta") or "").strip())), "—")
+            raise EscuchaIncompleta(
+                f"Ninguna ruta coincidió entre las dos pasadas: las {len(analisis)} filas de "
+                f"--analisis y las {len(con_consenso)} de --acuerdo-de no comparten ni una ruta "
+                "(el cruce es por ruta exacta).\n"
+                "  Causa probable: las rutas están escritas distinto (letra de unidad, / contra \\, "
+                "mayúsculas) o los dos CSV son de sesiones distintas.\n"
+                f"  Ejemplo en --analisis:   {ej_a}\n"
+                f"  Ejemplo en --acuerdo-de: {ej_c}")
+        analisis = combinadas
         print(f"Acuerdo tomado de {acuerdo_de.name} (cruce por ruta): "
               f"{len(analisis)} con par · {len(sin_par)} sin par (quedan fuera)")
     elif not _hay_acuerdo(analisis):
@@ -474,10 +549,6 @@ def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | No
         return {"candidatos": len(candidatos), "elegidos": 0, "sin_par": len(sin_par),
                 "filas": [], "conteo": k}
 
-    if (salida / INDICE_CSV).exists():
-        raise EscuchaIncompleta(
-            f"Ya existe {salida / INDICE_CSV}: puede tener veredictos cargados y no se pisa.\n"
-            "  Usá otra --salida, o borralo a mano si de verdad querés regenerarlo.")
     salida.mkdir(parents=True, exist_ok=True)
 
     ancho = max(2, len(str(len(elegidos))))

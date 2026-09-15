@@ -4,12 +4,24 @@ Selección e índice: CSV → decisión, se prueban con tablas armadas a mano co
 `benchmark/tests/test_evaluar.py`. Las keys de esas tablas son valores construidos para
 ejercitar cada caso, no se afirma la tonalidad de ningún track real (spec §5).
 
-Fragmentos: WAVs sintéticos de `motor.sintetico.click_track`. Lo que se protege es que el
+Fragmentos: WAVs de RUIDO BLANCO independiente por canal. Lo que se protege es que el
 fragmento exportado sea EXACTAMENTE el audio que analizó el motor. El corte esperado se
 saca de otro lado que el código bajo prueba: de dónde cae en memoria la vista que devuelve
 la propia función del motor sobre el audio cargado como lo carga el motor (el código bajo
-prueba usa `np.arange`). La tolerancia es ±1 muestra nativa: el redondeo al pasar un
-índice a 22050 Hz al sample rate del original (`a_muestra_nativa`).
+prueba usa `np.arange`).
+
+Dos tolerancias, cada una con su causa y ninguna más ancha que eso:
+  - En el TIEMPO, 0.5 muestra nativa: el redondeo al entero más cercano al pasar un índice a
+    22050 Hz al sample rate del original (`a_muestra_nativa`). A 44100 la cuenta es exacta
+    (tolerancia efectiva 0); a 8000 nunca cae justo en .5 (8000·i ≡ 11025 mod 22050 no
+    tiene solución), así que un corrimiento de 1 muestra siempre queda afuera.
+  - En la AMPLITUD, `TOL_PCM16` = 1/32768: el fragmento es PCM 16 bits. soundfile 0.14 /
+    libsndfile 1.2.2 escala por 32768 y redondea al más cercano SIN dither (error ≤ 0.5/32768),
+    y satura +1.0 en 32767 (error 1/32768). Medido: con ruido uniforme en [-1, 1] el error
+    máximo de ida y vuelta fue exactamente 1/32768. El ruido de prueba va en ±0.9, sin saturar.
+    Por qué sigue detectando 1 muestra de corrimiento: dos muestras vecinas de ruido uniforme
+    en ±0.9 difieren en promedio 0.6 (≈ 20000 veces la tolerancia), y la comparación exige
+    TODAS las muestras del fragmento (millones) dentro de 1/32768 a la vez.
 """
 import csv
 import hashlib
@@ -21,8 +33,9 @@ import soundfile as sf
 from benchmark.analizar import SEMILLA
 from ground_truth import escucha
 from motor.analisis import SR, cargar
-from motor.sintetico import click_track
 from motor.tonalidad import _tramos_disjuntos, ventana_central
+
+TOL_PCM16 = 1.0 / 32768
 
 # --- Tablas de ejemplo -----------------------------------------------------------------
 
@@ -62,23 +75,27 @@ def _sha(p):
 # --- Audio sintético (una vez por módulo: generarlo es lo caro) -------------------------
 
 
+def _ruido(segundos, sr, canales, seed):
+    """Ruido blanco uniforme en ±0.9, independiente por canal: vecinas muy distintas (un
+    corrimiento de 1 muestra no pasa la tolerancia de 16 bits), canales distintos (un cruce
+    se nota) y sin llegar a ±1.0 (el PCM 16 no satura)."""
+    rng = np.random.default_rng(seed)
+    return rng.uniform(-0.9, 0.9, (int(segundos * sr), canales)).astype(np.float32)
+
+
 @pytest.fixture(scope="module")
 def estereo_44k(tmp_path_factory):
-    """100 s estéreo a 44100: > 90 s, así la ventana central es un recorte de verdad.
-    Los canales difieren (ruido con otra semilla) para que un cruce de canales se note."""
-    izq, _ = click_track(128.0, dur=100.0, sr=44100, nota="A", modo="min", seed=1)
-    der, _ = click_track(128.0, dur=100.0, sr=44100, nota="A", modo="min", seed=2)
+    """100 s estéreo a 44100: > 90 s, así la ventana central es un recorte de verdad."""
     p = tmp_path_factory.mktemp("audio") / "estereo.wav"
-    sf.write(str(p), np.stack([izq, der], axis=1), 44100, subtype="FLOAT")
+    sf.write(str(p), _ruido(100.0, 44100, 2, seed=1), 44100, subtype="FLOAT")
     return p
 
 
 @pytest.fixture(scope="module")
 def mono_largo(tmp_path_factory):
     """140 s mono a 8000 Hz: da para los 3 tramos de 45 s (> 135 s) y carga rápido."""
-    y, _ = click_track(128.0, dur=140.0, sr=8000, nota="C", modo="min", seed=3)
     p = tmp_path_factory.mktemp("audio") / "mono_largo.wav"
-    sf.write(str(p), y, 8000, subtype="FLOAT")
+    sf.write(str(p), _ruido(140.0, 8000, 1, seed=3)[:, 0], 8000, subtype="FLOAT")
     return p
 
 
@@ -89,8 +106,11 @@ def _offset_de_vista(vista, base):
 
 
 def _verificar_corte(exportado, original, ini_22k, largo_22k, sr_nat):
-    """El WAV exportado es el trozo del original que empieza en `ini_22k` (a 22050 Hz),
-    con tolerancia ±1 muestra nativa. Compara las muestras, no la duración."""
+    """El WAV exportado es el trozo del original que empieza en `ini_22k` (a 22050 Hz):
+    arranque a ±0.5 muestra nativa (el redondeo) y cada muestra a ±`TOL_PCM16` (16 bits).
+    Compara las muestras, no la duración. Tolerancias explicadas en el docstring del módulo."""
+    info = sf.info(str(exportado))
+    assert info.subtype == "PCM_16", f"el fragmento es {info.subtype}, se decidió PCM_16"
     datos, sr = sf.read(str(exportado), always_2d=True, dtype="float32")
     orig, sr_o = sf.read(str(original), always_2d=True, dtype="float32")
     assert sr == sr_nat == sr_o, f"sample rate exportado {sr}, original {sr_o}"
@@ -101,12 +121,14 @@ def _verificar_corte(exportado, original, ini_22k, largo_22k, sr_nat):
     assert abs(datos.shape[0] - esperado_largo) <= 1, (
         f"el fragmento dura {datos.shape[0]} muestras, se esperaban {esperado_largo:.1f}")
     for s in range(int(np.floor(esperado_ini)) - 1, int(np.ceil(esperado_ini)) + 2):
-        if np.array_equal(datos, orig[s:s + datos.shape[0]]):
-            assert abs(s - esperado_ini) <= 1, (
-                f"el fragmento arranca en la muestra {s}, se esperaba {esperado_ini:.1f} (±1)")
+        trozo = orig[s:s + datos.shape[0]]
+        if trozo.shape == datos.shape and np.max(np.abs(datos - trozo)) <= TOL_PCM16:
+            assert abs(s - esperado_ini) <= 0.5, (
+                f"el fragmento arranca en la muestra {s}, se esperaba {esperado_ini:.1f} (±0.5)")
             return
     raise AssertionError(
-        f"el fragmento no es el audio original desde la muestra {esperado_ini:.1f} (±1)")
+        f"el fragmento no es el audio original desde la muestra {esperado_ini:.1f} (±1), "
+        f"ni siquiera con la tolerancia de 16 bits ({TOL_PCM16:.2e})")
 
 
 # --- Selección -------------------------------------------------------------------------
@@ -170,6 +192,17 @@ def test_acuerdo_de_cruza_por_ruta_no_por_basename():
         ("D:/y/t.wav", "9A", "3/3", "5A|5A|5A"),
     ]
     assert sin_par == ["D:/z/solo.wav"]
+
+
+def test_acuerdo_de_sin_par_exacto_no_toma_el_del_mismo_basename():
+    """El par de `D:/x/t.wav` no le sirve a `D:/w/t.wav`, aunque sea el único `t.wav`."""
+    analisis = [_fila_a("t.wav", "8A", "", carpeta="D:/w"),
+                _fila_a("t.wav", "9A", "", carpeta="D:/x")]
+    consenso = [_fila_a("t.wav", "5A", "3/3", "5A|5A|5A", carpeta="D:/x", metodo="tono_consenso")]
+    combinadas, sin_par = escucha.combinar_acuerdo(analisis, consenso)
+    assert [(f["ruta"], f["key_est"], f["acuerdo"]) for f in combinadas] == [
+        ("D:/x/t.wav", "9A", "3/3")], "una ruta sin par exacto tomó el acuerdo de otra carpeta"
+    assert sin_par == ["D:/w/t.wav"]
 
 
 def test_acuerdo_de_que_no_es_consenso_falla():
@@ -291,12 +324,44 @@ def test_audio_faltante_no_frena_y_el_indice_es_correcto(mono_largo, tmp_path):
     ini = _offset_de_vista(ventana_central(y, SR), y)
     assert f["ventana_inicio_s"] == f"{ini / SR:.2f}"
     assert f["ventana_inicio"] == f"{int(ini / SR) // 60:02d}:{int(ini / SR) % 60:02d}"
-    assert (f["veredicto"], f["notas"]) == ("", ""), "las columnas del oído no salen vacías"
     assert sf.info(str(salida / f["archivo_ventana_central"])).samplerate == 8000
     assert _sha(mono_largo) == antes
 
     md = (salida / escucha.INDICE_MD).read_text(encoding="utf-8")
     assert "| 5A (Cm) | 8B (C) | lejano | si | 3/3 |" in md
+
+
+def test_veredictos_van_en_el_md_y_el_csv_es_de_lectura(monkeypatch, tmp_path):
+    c = escucha.Candidato(ruta="D:/m/t.wav", archivo="t.wav", nombre="Boltcore — Try",
+                          key_motor="5A", key_rekordbox="8B", tonality="C",
+                          acuerdo="3/3", tramos="5A|5A|5A")
+    fr = escucha.Fragmentos(estado=escucha.OK, inicio_s=25.0, fin_s=115.0,
+                            central="01_t_ventana_central.wav", tramos=["01_t_tramo1.wav"])
+    filas = [escucha.fila_indice(1, c, fr)]
+
+    escucha.escribir_indice_csv(filas, tmp_path / "e.csv")
+    with (tmp_path / "e.csv").open(encoding="utf-8-sig", newline="") as fh:
+        columnas = csv.DictReader(fh).fieldnames
+    assert not {"veredicto", "notas"} & set(columnas), (
+        f"el CSV de solo lectura trae columnas para completar: {columnas}")
+
+    escucha.escribir_indice_md(filas, tmp_path / "e.md")
+    md = (tmp_path / "e.md").read_text(encoding="utf-8")
+    cabecera, tracks = md.split("## Tracks", 1)
+    assert "Los veredictos se anotan en ESTE archivo" in cabecera
+    assert "no lo abras y guardes con Excel" in cabecera and "`3/3` en una fecha" in cabecera
+    assert "promedio de los canales" in cabecera and "contrafase" in cabecera
+    # 90 s + 3 × 45 s, estéreo 16 bits a 44.1 kHz = 39.7 MB (cuenta hecha a mano)
+    assert "unos 40 MB por track" in cabecera and "float" not in cabecera.lower()
+    seccion = tracks.split("### 1. Boltcore — Try", 1)[1].splitlines()
+    assert "- veredicto (`motor` / `rekordbox` / `ninguna` / `no sé`): " in seccion
+    assert "- notas: " in seccion
+
+    monkeypatch.setattr(escucha, "N_TRAMOS", 4)   # los nombres de tramo salen de N_TRAMOS
+    escucha.escribir_indice_md(filas, tmp_path / "e4.md")
+    md4 = (tmp_path / "e4.md").read_text(encoding="utf-8")
+    assert "`NN_<nombre>_tramo1.wav`, `tramo2`, `tramo3`, `tramo4` — los 4 fragmentos" in md4, (
+        "la lista de tramos no sale de N_TRAMOS")
 
 
 def test_no_pisa_un_indice_existente(tmp_path):
@@ -308,3 +373,63 @@ def test_no_pisa_un_indice_existente(tmp_path):
     with pytest.raises(escucha.EscuchaIncompleta):
         escucha.correr(a, g, salida)
     assert (salida / escucha.INDICE_CSV).read_text(encoding="utf-8") == "veredicto cargado"
+
+
+def _un_candidato_sin_audio(tmp_path):
+    """Un candidato válido cuyo audio no está: la corrida escribe índice sin cargar audio."""
+    fila = {**_fila_a("t.wav", "8A", "3/3"), "ruta": str(tmp_path / "no_esta" / "t.wav")}
+    a = _escribir(tmp_path / "a.csv", COLS_A, [fila])
+    g = _escribir(tmp_path / "gt.csv", COLS_GT, [_fila_gt(1, "t.wav", "5A")])
+    return a, g
+
+
+def test_salida_con_cualquier_archivo_falla_sin_escribir(tmp_path):
+    a, g = _un_candidato_sin_audio(tmp_path)
+    salida = tmp_path / "musica"
+    salida.mkdir()
+    (salida / "01_t_ventana_central.wav").write_bytes(b"no pisar")
+    with pytest.raises(escucha.EscuchaIncompleta) as e:
+        escucha.correr(a, g, salida)
+    assert "no existir o estar vacía" in str(e.value), f"mensaje: {e.value}"
+    assert sorted(p.name for p in salida.iterdir()) == ["01_t_ventana_central.wav"], (
+        "escribió en una --salida que no estaba vacía")
+    assert (salida / "01_t_ventana_central.wav").read_bytes() == b"no pisar"
+
+
+def test_salida_inexistente_o_vacia_se_usa(tmp_path):
+    a, g = _un_candidato_sin_audio(tmp_path)
+    vacia = tmp_path / "vacia"
+    vacia.mkdir()
+    for salida in (tmp_path / "nueva" / "escucha", vacia):
+        res = escucha.correr(a, g, salida)
+        assert res["elegidos"] == 1
+        assert sorted(p.name for p in salida.iterdir()) == [escucha.INDICE_CSV, escucha.INDICE_MD]
+
+
+def test_acuerdo_de_sin_ninguna_ruta_en_comun_falla(tmp_path):
+    """Misma canción, otra grafía de ruta: sin par no hay acuerdo, y eso no es 'nada que oír'."""
+    a = _escribir(tmp_path / "a.csv", COLS_A, [_fila_a("t.wav", "8A", "", carpeta="D:/musica")])
+    c = _escribir(tmp_path / "c.csv", COLS_A, [_fila_a("t.wav", "8A", "3/3", carpeta="D:\\musica",
+                                                        metodo="tono_consenso")])
+    g = _escribir(tmp_path / "gt.csv", COLS_GT, [_fila_gt(1, "t.wav", "5A")])
+    salida = tmp_path / "escucha"
+    with pytest.raises(escucha.EscuchaIncompleta) as e:
+        escucha.correr(a, g, salida, acuerdo_de=c)
+    msg = str(e.value)
+    assert "Ninguna ruta coincidió entre las dos pasadas" in msg, f"mensaje: {msg}"
+    assert "sesiones distintas" in msg and "D:/musica/t.wav" in msg and "D:\\musica/t.wav" in msg
+    assert not salida.exists()
+
+
+def test_ruta_repetida_en_analisis_falla(tmp_path):
+    """Dos filas con la misma ruta y distinto `archivo` pasan el cruce por basename como dos
+    candidatos, y `elegir` (indexa por ruta) se quedaba con uno solo sin decir nada."""
+    filas = [{**_fila_a("a.wav", "8A", "3/3"), "ruta": "D:/musica/a.wav"},
+             {**_fila_a("b.wav", "8A", "3/3"), "ruta": "D:/musica/a.wav"}]
+    a = _escribir(tmp_path / "a.csv", COLS_A, filas)
+    g = _escribir(tmp_path / "gt.csv", COLS_GT, [_fila_gt(1, "a.wav", "5A"), _fila_gt(2, "b.wav", "5A")])
+    salida = tmp_path / "escucha"
+    with pytest.raises(escucha.EscuchaIncompleta) as e:
+        escucha.correr(a, g, salida)
+    assert "Ruta repetida en el CSV de --analisis: D:/musica/a.wav" in str(e.value)
+    assert not salida.exists()
