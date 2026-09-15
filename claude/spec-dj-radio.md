@@ -142,7 +142,8 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
   y baja: un set que la sigue perfecto daba 0.71, y dos sets que la siguen igual de bien
   (desvío medio 0.123 y 0.126) dieron 0.70 y 0.22. La métrica principal pasa a ser el
   desvío medio |energía − objetivo de la curva|, con umbral a calibrar escuchando las
-  radios de la tarea 14 (el oído gana). El Spearman queda como secundaria, calculado solo
+  radios de la tarea 14 (el oído gana) — superado por la calibración del 2026-09-15, ver
+  la nota de abajo. El Spearman queda como secundaria, calculado solo
   sobre el tramo donde la curva sube (`peak`: hasta el 75%; `warmup`: todo; `flat`: no
   definido).
 
