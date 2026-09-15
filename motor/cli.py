@@ -362,8 +362,10 @@ MIN_PUNTOS_SPEARMAN = 12
 def linea_curva(energias: list[float], curva: str = "peak", largo: int | None = None) -> str:
     """El renglón de la curva de energía del set, honesto sobre cuánto significa (§6).
 
-    Imprime las dos métricas de §4: el desvío medio de la curva (principal, umbral a
-    calibrar) y el Spearman del tramo ascendente (secundaria, ≥ 0.5). `largo` es el largo
+    Imprime las dos métricas de §4: el desvío medio de la curva (principal) y el Spearman del
+    tramo ascendente (secundaria, ≥ 0.5). El umbral del desvío de §4 es sobre la MEDIANA de
+    muchos sets del benchmark, no sobre un set suelto: por eso acá se muestra el valor y el
+    umbral, pero no se aprueba ni se reprueba este set contra él. `largo` es el largo
     PEDIDO del set: si el set quedó corto, la curva contra la que se mide es la que usó
     `build_set`, no una estirada a lo que sonó.
     """
@@ -371,9 +373,14 @@ def linea_curva(energias: list[float], curva: str = "peak", largo: int | None = 
     rho = ascending_spearman(energias, curva, largo)
     n_puntos = len(ascending_positions(len(energias), curva, largo))
 
+    from benchmark.umbrales import UMBRALES  # una sola fuente del número del contrato
+
+    umbral = next(u for u in UMBRALES if u.clave == "energia_desvio_curva")
+    referencia = (f"§4: la mediana de muchos sets ≤ {umbral.limite:g}; un set suelto no se aprueba"
+                  if not umbral.a_calibrar else f"umbral a calibrar, {umbral.calibrar}")
     texto = f"curva de energía ({curva}) · desvío medio "
     texto += ("no calculable sin tracks" if math.isnan(desvio)
-              else f"{desvio:.3f} (umbral a calibrar, tarea 14)")
+              else f"{desvio:.3f} ({referencia})")
     texto += " · Spearman tramo ascendente (§4 pide ≥ 0.5): "
     if curva == "flat":
         return texto + "no definido: la curva flat no tiene tramo que suba"

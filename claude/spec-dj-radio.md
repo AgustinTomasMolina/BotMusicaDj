@@ -121,7 +121,7 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
 | Tonalidad compatible (exacta, relativo o vecino; ídem) | ≥ 95% |
 | Transiciones fuera de ±8% de BPM | 0% |
 | Choques armónicos (compatibilidad < 0.4) | ≤ 10% |
-| Curva de energía — desvío medio de la curva pedida | a calibrar (tarea 14) |
+| Curva de energía — desvío de la curva pedida (mediana sobre los sets del benchmark) | ≤ 0.22 |
 | Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
 | Latencia de la radio | < 200 ms con 10k tracks |
@@ -145,6 +145,15 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
   radios de la tarea 14 (el oído gana). El Spearman queda como secundaria, calculado solo
   sobre el tramo donde la curva sube (`peak`: hasta el 75%; `warmup`: todo; `flat`: no
   definido).
+
+**Calibración (2026-09-15, tarea 14) — curva de energía.** El umbral del desvío quedó en
+**0.22 sobre la MEDIANA del desvío por set** del benchmark, no sobre un set suelto. Se fijó
+estadísticamente sobre 197 sets reales con curva `peak`: mediana 0.177, media 0.181, σ 0.05,
+p90 0.249; 0.22 ≈ mediana + 0.9σ, así el estado sano pasa y reprueba si el set típico deja de
+seguir la curva. Fuente: `benchmark/umbrales.py`, `benchmark/curva_energia_calibracion.py`,
+`claude/curva-energia-2026-09-14.md`. La calibración NO salió de escuchar radios, como decía
+la nota anterior: la validación a oído del umbral queda pendiente (regla de oro). Un set
+individual no se aprueba ni se reprueba contra 0.22.
 
 **Regla de proceso:** ningún cambio en features o scoring se mergea sin correr el
 benchmark antes y después y pegar los dos números en el commit.

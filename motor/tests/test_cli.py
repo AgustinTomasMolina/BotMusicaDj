@@ -450,7 +450,10 @@ def test_spearman_de_un_set_chico_se_marca_orientativo(tmp_path, capsys, bibliot
     # Con n = 2 o 3 tracks sonados, el tramo ascendente tiene 2 puntos.
     assert "ORIENTATIVO: con 2 puntos en el tramo ascendente" in linea, \
         f"un Spearman de 2 puntos sin aviso: {linea}"
-    assert re.search(r"desvío medio \d\.\d{3} \(umbral a calibrar, tarea 14\)", linea), \
+    from benchmark.umbrales import UMBRALES
+    limite = next(u.limite for u in UMBRALES if u.clave == "energia_desvio_curva")
+    assert re.search(rf"desvío medio \d\.\d{{3}} \(§4: la mediana de muchos sets ≤ {limite:g}; "
+                     r"un set suelto no se aprueba\)", linea), \
         f"la radio no imprime el desvío de la curva: {linea}"
 
 
