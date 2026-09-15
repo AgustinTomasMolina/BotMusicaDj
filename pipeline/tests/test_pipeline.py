@@ -110,9 +110,10 @@ def test_muestra_camelot_y_clasica(tmp_path):
 
 
 def test_confianza_baja_va_atenuada_y_con_interrogante(tmp_path):
-    h = generar([_fila(confianza=0.33, acuerdo="1/3")], tmp_path,
+    h = generar([_fila(confianza=0.33, acuerdo="1/3", tramos="2A|5A|9B")], tmp_path,
                 tmp_path / "r.html").read_text(encoding="utf-8")
-    assert "dudoso" in h and "?" in h
+    # 'class="dudoso"' y no "dudoso" a secas: la definición CSS de .dudoso está siempre.
+    assert '<span class="dudoso" title="acuerdo 1/3 entre tramos: 2A|5A|9B">2A · D#m ?</span>' in h
 
 
 def test_confianza_alta_no_va_atenuada(tmp_path):
@@ -323,6 +324,46 @@ def test_pipeline_y_benchmark_dan_la_misma_tonalidad_sobre_el_mismo_audio(tmp_pa
     assert del_pipe.metodo == del_bench.metodo == "tono"
 
 
+@pytest.fixture(scope="module")
+def audio_tres_bloques(tmp_path_factory):
+    """140 s: La menor · Do# mayor · La menor (igual que el de `motor/tests/test_analisis.py`).
+
+    Dura más de 135 s para que `tono_consenso` arme 3 tramos, y los tramos NO coinciden:
+    el acuerdo es 2/3. Con un audio corto las dos rutas darían acuerdo "" y la comparación
+    pasaría aunque una no lo midiera."""
+    import numpy as np
+    import soundfile as sf
+
+    from motor.sintetico import click_track
+
+    sr = 22050
+    partes = [click_track(128.0, dur=140.0 / 3, sr=sr, nota=n, modo=m, seed=i)[0]
+              for i, (n, m) in enumerate((("A", "min"), ("C#", "maj"), ("A", "min")))]
+    ruta = tmp_path_factory.mktemp("tres_bloques") / "tres_bloques.wav"
+    sf.write(ruta, np.concatenate(partes).astype(np.float32), sr, subtype="FLOAT")
+    return ruta
+
+
+def test_pipeline_y_benchmark_dan_el_mismo_acuerdo_sobre_el_mismo_audio(audio_tres_bloques, tmp_path):
+    """La confianza de la key (el acuerdo) tiene que ser la misma en las dos rutas: si el
+    pipeline la calculara por su cuenta, el reporte podría marcar dudosa una key que el
+    benchmark mide como unánime, o al revés."""
+    from benchmark.analizar import analizar_uno
+    from pipeline.revisar import procesar
+
+    del_bench = analizar_uno(str(audio_tres_bloques))
+    del_pipe = procesar([str(audio_tres_bloques)], tmp_path / "stg", progreso=False)[0]
+
+    assert del_bench.acuerdo == "2/3", \
+        f"el caso necesita acuerdo 2/3 en el benchmark, dio {del_bench.acuerdo!r}"
+    assert del_pipe.camelot == del_bench.key_est == "3B", (
+        f"key: pipeline {del_pipe.camelot}, benchmark {del_bench.key_est} (tono() da 3B)")
+    assert del_pipe.acuerdo == del_bench.acuerdo, (
+        f"acuerdo: pipeline {del_pipe.acuerdo!r}, benchmark {del_bench.acuerdo!r}")
+    assert del_pipe.tramos == del_bench.tramos, (
+        f"tramos: pipeline {del_pipe.tramos!r}, benchmark {del_bench.tramos!r}")
+
+
 # --- 5.65: sin nombre y no-track no pueden auto-aprobarse -------------------------------
 
 
@@ -372,18 +413,45 @@ def test_el_reporte_da_campos_editables_solo_donde_hacen_falta(tmp_path):
     assert "misterioso.wav" in h        # el nombre original, que es lo único que hay
 
 
-def test_la_key_no_se_atenua_cuando_el_metodo_no_da_confianza_util(tmp_path):
-    """Con tono() la confianza es la correlación Krumhansl, medida como no predictiva."""
-    f = _fila(confianza=0.30, metodo="tono")
+def test_con_tono_y_acuerdo_unanime_la_key_va_limpia_aunque_krumhansl_sea_bajo(tmp_path):
+    """La confianza Krumhansl de tono() está medida como no predictiva: un 0.30 ahí no dice
+    nada. Lo que decide es el acuerdo entre tramos, y 3/3 es unánime."""
+    f = _fila(confianza=0.30, metodo="tono", acuerdo="3/3", tramos="2A|2A|2A")
     h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
-    assert "no predice fiabilidad" in h
-    assert 'class="dudoso"' not in h      # la definicion CSS existe igual; lo que importa es el uso
+    assert "<b>2A · D#m</b>" in h, "con acuerdo unánime la key tiene que ir limpia"
+    assert 'class="dudoso"' not in h, "la key unánime salió atenuada"
+    assert "2A · D#m ?" not in h, "la key unánime salió con '?'"
 
 
 def test_la_key_si_se_atenua_con_consenso(tmp_path):
     f = _fila(confianza=0.33, acuerdo="1/3", metodo="tono_consenso")
     h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
-    assert 'class="dudoso"' in h and "?" in h
+    assert 'class="dudoso"' in h and "2A · D#m ?" in h
+
+
+def test_con_tono_y_acuerdo_2_de_3_la_key_va_dudosa_con_el_porque(tmp_path):
+    """El default (tono) con tramos en desacuerdo: la key de tono, atenuada, y en el tooltip
+    el acuerdo y qué votó cada tramo, para que se vea por qué."""
+    f = _fila(confianza=0.91, metodo="tono", acuerdo="2/3", tramos="2A|2A|9B")
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    esperado = '<span class="dudoso" title="acuerdo 2/3 entre tramos: 2A|2A|9B">2A · D#m ?</span>'
+    assert esperado in h, "2/3 no salió atenuado con el acuerdo y los tramos en el tooltip"
+    assert "<b>2A · D#m</b>" not in h, "2/3 salió además como key segura"
+
+
+@pytest.mark.parametrize("acuerdo, motivo", [
+    ("", "sin tramos para comparar: no hay acuerdo medido entre tramos "
+         "(la etapa A lo deja vacío cuando el track dura menos de ~135 s)"),
+    ("0/0", "sin tramos para comparar: acuerdo 0/0, el track no alcanzó para votar "
+            "entre tramos disjuntos"),
+])
+def test_sin_tramos_para_comparar_la_key_va_dudosa(tmp_path, acuerdo, motivo):
+    """Sin evidencia de confianza no se finge: dudosa, con el motivo en el tooltip."""
+    f = _fila(confianza=0.91, metodo="tono", acuerdo=acuerdo, tramos="")
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    esperado = f'<span class="dudoso" title="{motivo}">2A · D#m ?</span>'
+    assert esperado in h, f"acuerdo {acuerdo!r} no salió dudoso con el motivo 'sin tramos'"
+    assert "<b>2A · D#m</b>" not in h, f"acuerdo {acuerdo!r} salió como key segura"
 
 
 def test_aplicar_escribe_lo_que_se_completo_a_mano(tmp_path):

@@ -4,9 +4,12 @@ Es el único umbral de §4 que no necesita ground truth: no compara contra nada,
 cronometra lo que cuesta procesar un track. Sirve para decidir si hay que optimizar sin
 depender del XML de Rekordbox.
 
-Mide lo mismo que la corrida del benchmark: **carga + análisis** (`librosa.load` +
-`bpm_refinado` + `tono`). La carga cuenta porque decodificar es parte del costo real de
-procesar un track.
+Mide lo mismo que la corrida del benchmark y el pipeline: **carga + análisis**
+(`librosa.load` + `bpm_refinado` + `tono` + `tono_consenso`). La carga cuenta porque
+decodificar es parte del costo real de procesar un track. El consenso cuenta porque el
+pipeline lo corre en cada track desde el '?' de confianza (la key sale de `tono`, el
+acuerdo de `tono_consenso`): si no se cronometrara, el umbral de §4 se mediría sobre un
+análisis más barato que el real.
 
 Hace un WARM-UP antes de cronometrar: librosa/numba compilan JIT en la primera llamada y
 esa compilación se le carga al primer track, inflándolo varios segundos. Sin warm-up el
@@ -32,7 +35,7 @@ from benchmark.umbrales import UMBRALES
 from calidad.tags import EXTS
 from motor.bpm import bpm_refinado
 from motor.sintetico import click_track
-from motor.tonalidad import tono
+from motor.tonalidad import tono, tono_consenso
 
 _UMBRAL_S = next(u.limite for u in UMBRALES if u.clave == "tiempo_analisis_s")
 
@@ -44,10 +47,11 @@ class Tiempo:
     carga_s: float
     bpm_s: float
     tono_s: float
+    consenso_s: float
 
     @property
     def analisis_s(self) -> float:
-        return self.bpm_s + self.tono_s
+        return self.bpm_s + self.tono_s + self.consenso_s
 
     @property
     def total_s(self) -> float:
@@ -83,7 +87,11 @@ def medir(ruta: str, sr: int = 22050) -> Tiempo | None:
     tono(y, sr)
     t_tono = time.perf_counter() - t2
 
-    return Tiempo(Path(ruta).name, round(y.size / sr, 1), carga, t_bpm, t_tono)
+    t3 = time.perf_counter()
+    tono_consenso(y, sr)
+    t_consenso = time.perf_counter() - t3
+
+    return Tiempo(Path(ruta).name, round(y.size / sr, 1), carga, t_bpm, t_tono, t_consenso)
 
 
 def informe(ts: list[Tiempo]) -> int:
@@ -108,6 +116,8 @@ def informe(ts: list[Tiempo]) -> int:
           f"max {max(t.bpm_s for t in ts):6.2f}")
     print(f"        - tono          : medio {statistics.mean([t.tono_s for t in ts]):6.2f}  "
           f"max {max(t.tono_s for t in ts):6.2f}")
+    print(f"        - tono_consenso : medio {statistics.mean([t.consenso_s for t in ts]):6.2f}  "
+          f"max {max(t.consenso_s for t in ts):6.2f}")
 
     sobre = [t for t in ts if t.total_s > _UMBRAL_S]
     veredicto = "OK ✓" if p95 <= _UMBRAL_S else "ROTO ✗"
@@ -123,7 +133,7 @@ def informe(ts: list[Tiempo]) -> int:
         for t in sorted(ts, key=lambda t: -t.total_s)[:10]:
             print(f"  {t.archivo[:40]:40} dur {t.duracion_s:6.0f}s  "
                   f"total {t.total_s:6.2f}  (carga {t.carga_s:5.2f} + "
-                  f"bpm {t.bpm_s:5.2f} + tono {t.tono_s:5.2f})")
+                  f"bpm {t.bpm_s:5.2f} + tono {t.tono_s:5.2f} + consenso {t.consenso_s:5.2f})")
     return 0 if p95 <= _UMBRAL_S else 1
 
 
@@ -157,7 +167,7 @@ def main(argv=None) -> int:
         ts.append(t)
         print(f"  [{i}/{len(rutas)}] {t.archivo[:40]:40} dur {t.duracion_s:6.0f}s  "
               f"total {t.total_s:6.2f}s (carga {t.carga_s:5.2f} bpm {t.bpm_s:5.2f} "
-              f"tono {t.tono_s:5.2f})", flush=True)
+              f"tono {t.tono_s:5.2f} consenso {t.consenso_s:5.2f})", flush=True)
 
     return informe(ts)
 

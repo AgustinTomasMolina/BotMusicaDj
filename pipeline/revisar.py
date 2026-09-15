@@ -37,10 +37,14 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
     tonalidades distintas para el mismo track — una en el tag y en el XML de Rekordbox, y
     otra la que mide el benchmark y consume el scoring. El consenso sigue detrás del mismo
     flag en los tres lados hasta que haya el antes/después contra ground truth que pide §5
-    para cambiar el default del motor.
+    para cambiar el default del motor. (El A/B del 2026-09-14 no lo justificó: la key
+    sigue siendo la de `tono()`.)
 
-    `pipeline/tests/test_pipeline.py::test_el_pipeline_y_el_benchmark_usan_la_misma_tonalidad`
-    falla si las dos rutas se separan.
+    Con o sin `consenso`, el acuerdo entre tramos viene de `analizar_motor` (la etapa A del
+    benchmark, que lo mide siempre) y el reporte lo usa para atenuar la key dudosa.
+
+    `pipeline/tests/test_pipeline.py::test_pipeline_y_benchmark_dan_la_misma_tonalidad_sobre_el_mismo_audio`
+    y `..._el_mismo_acuerdo_...` fallan si las dos rutas se separan.
     """
     props = {p.ruta: p for p in parsear_nombres(rutas)}
 
@@ -83,6 +87,7 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
             clasica=camelot_a_clasica(motor.key_est) if motor else "",
             confianza=motor.confianza if motor else 0.0,
             acuerdo=motor.acuerdo if motor else "",
+            tramos=motor.tramos if motor else "",
             grupo_id=gid, accion_duplicado=accion_dup.get(ruta, ""),
             cambios=[(c.campo, c.antes, c.despues, c.motivo)
                      for c in plan if c.accion == "escribir"],
@@ -109,7 +114,8 @@ def main(argv=None) -> int:
     ap.add_argument("--reporte", type=Path, default=None,
                     help="Dónde escribir el HTML (default: junto al staging, con fecha).")
     ap.add_argument("--consenso", action="store_true",
-                    help="Usar tono_consenso() para la tonalidad. Es el MISMO flag que "
+                    help="Experimental: la tonalidad la elige tono_consenso(). La key "
+                         "dudosa se marca con o sin este flag. Es el MISMO flag que "
                          "benchmark.analizar: si se prende acá hay que prenderlo allá, o "
                          "el tag y el benchmark quedan con tonalidades distintas.")
     args = ap.parse_args(argv)

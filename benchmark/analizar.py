@@ -45,14 +45,15 @@ class FilaAnalisis:
     ruta: str
     duracion_s: float
     bpm_est: float
-    key_est: str
-    confianza: float
-    acuerdo: str          # "2/3" con --consenso; "" con tono() simple
-    tramos: str           # "6A|6A|1A" con --consenso; "" con tono() simple
+    key_est: str          # la de `metodo`: tono() por default, el voto con --consenso
+    confianza: float      # la de `metodo` (Krumhansl con tono(), fracción con consenso)
+    acuerdo: str          # "2/3" de tono_consenso, SIEMPRE (también sin --consenso);
+    #                       "" si el track no dio para 3 tramos disjuntos (acuerdo 0/0)
+    tramos: str           # "6A|6A|1A" de tono_consenso, siempre; "" en el mismo caso
     t_carga_s: float
-    t_analisis_s: float
+    t_analisis_s: float   # incluye el consenso: es costo real del análisis (§4)
     t_total_s: float
-    metodo: str           # tono | tono_consenso — queda registrado qué produjo la fila
+    metodo: str           # tono | tono_consenso — qué función eligió key_est
 
 
 COLUMNAS = [f.name for f in fields(FilaAnalisis)]
@@ -78,6 +79,10 @@ def analizar_uno(ruta: str, sr: int = 22050, consenso: bool = False) -> FilaAnal
     La carga y la medición NO están copiadas acá: son `motor.analisis.cargar` y
     `motor.analisis.medir_bpm_y_tono`, las mismas que usa el motor para llenar la biblioteca
     (tarea 5.66: dos caminos de medición terminaron dando dos keys para el mismo track).
+
+    El acuerdo entre tramos se mide siempre (`con_acuerdo=True`), con o sin `consenso`: es
+    la confianza de la key que muestra el reporte del pipeline, y su costo entra en
+    `t_analisis_s` porque es parte de analizar el track.
     """
     t0 = time.perf_counter()
     y = cargar(ruta, sr)
@@ -86,7 +91,7 @@ def analizar_uno(ruta: str, sr: int = 22050, consenso: bool = False) -> FilaAnal
         return None
 
     t1 = time.perf_counter()
-    bpm, det = medir_bpm_y_tono(y, sr, consenso=consenso)
+    bpm, det = medir_bpm_y_tono(y, sr, consenso=consenso, con_acuerdo=True)
     t_analisis = time.perf_counter() - t1
 
     ganados, total = det.get("acuerdo", (0, 0))
@@ -152,7 +157,8 @@ def main(argv=None) -> int:
         description="Etapa A: corre el motor sobre una carpeta de audio y escribe un CSV.")
     ap.add_argument("--audio", required=True, type=Path, help="Carpeta con los audios.")
     ap.add_argument("--consenso", action="store_true",
-                    help="Usar tono_consenso() (voto entre 3 tramos) en vez de tono().")
+                    help="Experimental: la KEY la elige tono_consenso() (voto entre 3 "
+                         "tramos) en vez de tono(). El acuerdo se mide igual sin este flag.")
     ap.add_argument("--limit", type=int, default=None,
                     help="Analizar solo N tracks, como muestra aleatoria (no los primeros).")
     ap.add_argument("--seed", type=int, default=SEMILLA,
