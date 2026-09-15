@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+    :root{
+      --bg:#161826; --surface:#232532; --well:#1b1d2b; --raise:#2c2f3e;
+      --text:#e9e9ed; --muted:#9a9aac; --divider:#2a2a36;
+      --accent:#2dd4bf; --brand:#4b90f7; --info:#4b90f7;
+      --ok:#4ade9a; --warn:#ffcc4d; --danger:#f2555f;
+      --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Inter",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:var(--accent)} a:hover{color:#a99ff0}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+    .scroll::-webkit-scrollbar{width:10px}
+    .scroll::-webkit-scrollbar-thumb{background:var(--raise);border-radius:999px;border:2px solid var(--well)}
+  </style>
+</helmet>
+
+<div style="width:1280px;min-height:880px;background:var(--bg);padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+
+  <!-- ================= HEADER ================= -->
+  <header style="display:flex;align-items:center;gap:20px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div aria-hidden="true" style="width:34px;height:34px;border-radius:9px;background:linear-gradient(150deg,var(--accent),var(--brand));display:flex;align-items:center;justify-content:center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#161826" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>
+      </div>
+      <div style="display:flex;flex-direction:column;line-height:1.15">
+        <span style="font-weight:700;font-size:16px;letter-spacing:.2px">DJ Radio</span>
+        <span style="font-size:12px;color:var(--muted)">Armador de set</span>
+      </div>
+    </div>
+
+    <!-- seed selector -->
+    <div style="display:flex;flex-direction:column;gap:4px;min-width:340px">
+      <label for="seed" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Track semilla</label>
+      <button id="seed" style="display:flex;align-items:center;justify-content:space-between;gap:10px;height:40px;padding:0 12px;background:var(--surface);border:1px solid var(--divider);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;cursor:pointer;text-align:left">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">DJ SWISHERMAN — SMOKED OUT <span style="color:var(--muted);font-family:var(--mono)">· 145.1 · 4A</span></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+
+    <!-- curve segmented -->
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Curva de energía</span>
+      <div role="group" aria-label="Curva de energía" style="display:flex;gap:2px;background:var(--well);border:1px solid var(--divider);border-radius:8px;padding:3px">
+        <button aria-pressed="true" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:var(--accent);color:#161826;font-weight:600;font-size:13px;font-family:inherit;cursor:pointer">Peak</button>
+        <button aria-pressed="false" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;font-family:inherit;cursor:pointer">Warm-up</button>
+        <button aria-pressed="false" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;font-family:inherit;cursor:pointer">Flat</button>
+      </div>
+    </div>
+
+    <div style="flex-grow:1"></div>
+
+    <!-- export -->
+    <button style="display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;align-self:flex-end;background:var(--accent);color:#161826;border:0;border-radius:8px;font-weight:600;font-size:14px;font-family:inherit;cursor:pointer">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      Exportar M3U8
+    </button>
+  </header>
+
+  <!-- ================= BODY ================= -->
+  <div style="display:grid;grid-template-columns:minmax(0,1fr) 396px;gap:16px;flex-grow:1">
+
+    <!-- ---------- SET LIST ---------- -->
+    <section aria-label="Set generado" style="display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--divider);border-radius:14px;overflow:hidden">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;padding:16px 18px 12px">
+        <h2 style="margin:0;font-size:15px;font-weight:600">El set <span style="color:var(--muted);font-weight:400">· 19 tracks</span></h2>
+        <span style="font-size:12px;color:var(--muted)">139.9–150.0 BPM · Fm / A#m</span>
+      </div>
+
+      <!-- column header -->
+      <div style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;padding:6px 18px;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--divider)">
+        <span>#</span><span>BPM</span><span>Tono</span><span>Track</span><span style="text-align:right">Energía</span>
+      </div>
+
+      <div class="scroll" role="list" style="overflow-y:auto;max-height:640px;padding:8px 10px">
+
+        <!-- ROW template: track then transition-connector below -->
+
+        <!-- 1 seed -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px;background:var(--well)">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">1</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">145.1</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">4A</span><span style="font-size:12px;color:var(--muted)">Fm</span></span>
+          <span style="display:flex;align-items:center;gap:8px;min-width:0"><span style="font-size:10px;font-weight:600;color:var(--accent);border:1px solid var(--accent);border-radius:5px;padding:1px 6px">SEMILLA</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">DJ SWISHERMAN — SMOKED OUT</span></span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 74% 0 0;background:var(--ok)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">26</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--info)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">−0.0% BPM · 4A → 4A</span><span style="font-size:11px;color:var(--muted)">mismo</span></div>
+
+        <!-- 2 -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">2</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">145.1</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">4A</span><span style="font-size:12px;color:var(--muted)">Fm</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">909HUSTLA &amp; DJ HOUSEARREST — Vibration Assault</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 77% 0 0;background:var(--ok)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">23</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--info)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">−0.0% BPM · 4A → 3A</span><span style="font-size:11px;color:var(--muted)">vecino</span></div>
+
+        <!-- 3 (low confidence key) -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">3</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">145.0</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">3A</span><span style="font-size:12px;color:var(--muted)">A#m</span><button aria-label="Confianza baja: la tonalidad no fue unánime entre tramos" title="Confianza baja: los 3 tramos no coincidieron" style="width:17px;height:17px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);font-size:11px;font-weight:700;cursor:help;font-family:inherit;line-height:1;padding:0">?</button></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">Lucas Boston — Microphone Assassin</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 65% 0 0;background:var(--ok)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">35</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--info)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">+0.0% BPM · 3A → 3A</span><span style="font-size:11px;color:var(--muted)">mismo</span></div>
+
+        <!-- 4 -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">4</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">145.1</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">3A</span><span style="font-size:12px;color:var(--muted)">A#m</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">Webra — Nitro Bong (Extended Mix)</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 50% 0 0;background:var(--ok)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">50</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--info)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">−1.4% BPM · 3A → 3A</span><span style="font-size:11px;color:var(--muted)">mismo</span></div>
+
+        <!-- 5 -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">5</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">143.0</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">3A</span><span style="font-size:12px;color:var(--muted)">A#m</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">West Code — HATE</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 46% 0 0;background:var(--warn)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">54</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--info)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">+0.0% BPM · 3A → 4A</span><span style="font-size:11px;color:var(--muted)">vecino</span></div>
+
+        <!-- 8 (peak-ish) -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">8</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">141.9</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">4A</span><span style="font-size:12px;color:var(--muted)">Fm</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">No Valentia — Spiral</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 14% 0 0;background:var(--danger)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">86</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;gap:8px;padding:3px 8px 3px 42px;color:var(--accent)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M6 13l6 6 6-6"/></svg><span style="font-size:11.5px;font-family:var(--mono)">−0.1% BPM · 4A → 4B</span><span style="font-size:11px;color:var(--muted)">relativo</span></div>
+
+        <!-- 12 relativo -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">12</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">139.9</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#28324a;color:#a9c6f5;padding:2px 7px;border-radius:6px">4B</span><span style="font-size:12px;color:var(--muted)">G#</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">Andres Campo — Ligne Jaune</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 9% 0 0;background:var(--danger)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">91</span></span>
+        </div>
+
+        <div aria-hidden="true" style="display:flex;align-items:center;justify-content:center;padding:6px;color:var(--muted);font-size:12px">· · ·  7 tracks más  · · ·</div>
+
+        <!-- 19 last -->
+        <div role="listitem" tabindex="0" style="display:grid;grid-template-columns:26px 62px 92px 1fr 74px;gap:12px;align-items:center;padding:9px 8px;border-radius:9px">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">19</span>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:600">150.0</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">4A</span><span style="font-size:12px;color:var(--muted)">Fm</span></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px">Ueberrest — Motor Beam (Original Mix)</span>
+          <span style="justify-self:end;display:flex;align-items:center;gap:7px"><span aria-hidden="true" style="width:34px;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 32% 0 0;background:var(--warn)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">68</span></span>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ---------- RIGHT COLUMN ---------- -->
+    <aside style="display:flex;flex-direction:column;gap:16px">
+
+      <!-- energy curve -->
+      <section aria-label="Curva de energía del set" style="background:var(--surface);border:1px solid var(--divider);border-radius:14px;padding:16px 18px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+          <h2 style="margin:0;font-size:15px;font-weight:600">Curva de energía</h2>
+          <span style="font-size:11px;color:var(--muted)">desvío <span style="font-family:var(--mono);color:var(--ok)">0.14</span> ✓</span>
+        </div>
+        <svg viewBox="0 0 300 110" width="100%" height="132" preserveAspectRatio="none" role="img" aria-label="La energía del set sube hacia el pico y baja al final, siguiendo la curva peak">
+          <defs>
+            <linearGradient id="egrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.42"/>
+              <stop offset="1" stop-color="#2dd4bf" stop-opacity="0.03"/>
+            </linearGradient>
+          </defs>
+          <!-- target peak curve (reference) -->
+          <polyline points="0,80 75,50 150,24 205,12 255,26 300,52" fill="none" stroke="#4b90f7" stroke-width="1.4" stroke-dasharray="4 4" stroke-opacity="0.55"/>
+          <!-- actual energies (area + line) -->
+          <polygon points="0,84 16.7,87 33.3,75 50,60 66.7,56 83.3,54 100,46 116.7,24 133.3,63 150,20 166.7,34 183.3,19 200,28 216.7,23 233.3,16 250,47 266.7,38 283.3,67 300,42 300,110 0,110" fill="url(#egrad)"/>
+          <polyline points="0,84 16.7,87 33.3,75 50,60 66.7,56 83.3,54 100,46 116.7,24 133.3,63 150,20 166.7,34 183.3,19 200,28 216.7,23 233.3,16 250,47 266.7,38 283.3,67 300,42" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--muted)">
+          <span>intro</span><span style="color:#4b90f7">— — objetivo peak</span><span>cierre</span>
+        </div>
+      </section>
+
+      <!-- why / legend -->
+      <section aria-label="Cómo leer las transiciones" style="background:var(--surface);border:1px solid var(--divider);border-radius:14px;padding:16px 18px">
+        <h2 style="margin:0 0 12px;font-size:15px;font-weight:600">El porqué de cada mezcla</h2>
+        <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+          <div style="display:flex;align-items:center;gap:10px"><span style="width:10px;height:10px;border-radius:3px;background:var(--info);flex-shrink:0"></span><span><b>mismo / vecino</b> — Camelot adyacente, mezcla segura.</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><span style="width:10px;height:10px;border-radius:3px;background:var(--accent);flex-shrink:0"></span><span><b>relativo</b> — mayor↔menor, cambia el color sin chocar.</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><span style="width:17px;height:17px;border-radius:999px;border:1px solid var(--warn);color:var(--warn);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">?</span><span><b>confianza baja</b> — la tonalidad no fue unánime; no fingimos certeza.</span></div>
+        </div>
+      </section>
+
+      <!-- summary -->
+      <section aria-label="Resumen del set" style="background:var(--well);border:1px solid var(--divider);border-radius:14px;padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Tracks</div><div style="font-family:var(--mono);font-size:20px;font-weight:600;margin-top:2px">19</div></div>
+        <div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Rango BPM</div><div style="font-family:var(--mono);font-size:20px;font-weight:600;margin-top:2px">139.9–150</div></div>
+        <div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Fuera de ±8%</div><div style="font-family:var(--mono);font-size:20px;font-weight:600;color:var(--ok);margin-top:2px">0</div></div>
+        <div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Con dudas</div><div style="font-family:var(--mono);font-size:20px;font-weight:600;color:var(--warn);margin-top:2px">1</div></div>
+      </section>
+
+    </aside>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1280,"height":880}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>
