@@ -1,0 +1,11 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1280, "h": 920 },
+    { "file": "Biblioteca.dc.html", "x": 1360, "y": 0, "w": 1280, "h": 900 },
+    { "file": "Preescucha.dc.html", "x": 2720, "y": 0, "w": 1280, "h": 800 }
+  ],
+  "annotations": [
+    { "id": "flow", "x": 0, "y": -70, "w": 900, "text": "DJ Radio — flujo: Biblioteca → Armador de set → Preescucha. Acento cian/teal. Datos reales de la biblioteca de Rekordbox." }
+  ],
+  "launch": { "view": "canvas" }
+}

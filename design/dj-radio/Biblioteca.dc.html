@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+    :root{
+      --bg:#161826;--surface:#232532;--well:#1b1d2b;--raise:#2c2f3e;
+      --text:#e9e9ed;--muted:#9a9aac;--divider:#2a2a36;
+      --accent:#2dd4bf;--brand:#4b90f7;--info:#4b90f7;
+      --ok:#4ade9a;--warn:#ffcc4d;--danger:#f2555f;
+      --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Inter",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:var(--accent)} a:hover{color:#a99ff0}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+    .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+    .scroll::-webkit-scrollbar{width:10px}
+    .scroll::-webkit-scrollbar-thumb{background:var(--raise);border-radius:999px;border:2px solid var(--well)}
+    tbody tr:hover{background:var(--well)}
+    .play{opacity:0}
+    tbody tr:hover .play,tbody tr:focus-within .play{opacity:1}
+  </style>
+</helmet>
+
+<div style="width:1280px;min-height:880px;background:var(--bg);padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+
+  <!-- header -->
+  <header style="display:flex;align-items:center;gap:16px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div aria-hidden="true" style="width:34px;height:34px;border-radius:9px;background:linear-gradient(150deg,var(--accent),var(--brand));display:flex;align-items:center;justify-content:center">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#161826" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>
+      </div>
+      <div style="display:flex;flex-direction:column;line-height:1.15">
+        <span style="font-weight:700;font-size:16px">Biblioteca</span>
+        <span style="font-size:12px;color:var(--muted)">197 tracks analizados</span>
+      </div>
+    </div>
+
+    <div style="flex-grow:1"></div>
+
+    <!-- search -->
+    <div style="position:relative;width:320px">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" style="position:absolute;left:11px;top:12px"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <label class="sr" for="q">Buscar en la biblioteca</label>
+      <input id="q" type="search" placeholder="Buscar por título, artista, género…" style="width:100%;height:40px;padding:0 12px 0 34px;background:var(--surface);border:1px solid var(--divider);border-radius:8px;color:var(--text);font-size:13.5px;font-family:inherit">
+    </div>
+    <!-- filters -->
+    <button style="display:flex;align-items:center;gap:7px;height:40px;padding:0 13px;background:var(--surface);border:1px solid var(--divider);border-radius:8px;color:var(--text);font-size:13.5px;font-family:inherit;cursor:pointer">Género <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button style="display:flex;align-items:center;gap:7px;height:40px;padding:0 13px;background:var(--surface);border:1px solid var(--divider);border-radius:8px;color:var(--muted);font-size:13.5px;font-family:inherit;cursor:pointer">BPM ↕</button>
+  </header>
+
+  <!-- table -->
+  <section style="background:var(--surface);border:1px solid var(--divider);border-radius:14px;overflow:hidden;flex-grow:1">
+    <div class="scroll" style="overflow-y:auto;max-height:720px">
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <caption class="sr">Tracks de la biblioteca con BPM, tonalidad, energía, género y duración</caption>
+      <thead>
+        <tr style="position:sticky;top:0;background:var(--surface);z-index:1;text-align:left;color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.6px">
+          <th scope="col" style="padding:12px 8px 12px 18px;font-weight:600">Track</th>
+          <th scope="col" style="padding:12px 8px;font-weight:600">BPM</th>
+          <th scope="col" style="padding:12px 8px;font-weight:600">Tono</th>
+          <th scope="col" style="padding:12px 8px;font-weight:600;width:150px">Energía</th>
+          <th scope="col" style="padding:12px 8px;font-weight:600">Género</th>
+          <th scope="col" style="padding:12px 18px 12px 8px;font-weight:600;text-align:right">Dur.</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- helper markup repeated; energy bar color by tier, ? on low confidence -->
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Lesstroboscopic" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Lesstroboscopic</span><span style="font-size:12px;color:var(--muted);font-weight:400">Regal</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">130.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">8A</span> <span style="color:var(--muted);font-size:12px">Am</span></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 43% 0 0;background:var(--warn)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">57</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Electronic</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">5:58</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Bring It Back" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Bring It Back</span><span style="font-size:12px;color:var(--muted);font-weight:400">Ribguga</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">130.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#28324a;color:#a9c6f5;padding:2px 7px;border-radius:6px">10B</span> <span style="color:var(--muted);font-size:12px">D</span></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 81% 0 0;background:var(--info)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">19</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Minimal / Deep</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">5:25</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde IM GONNA GET YA" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>IM GONNA GET YA</span><span style="font-size:12px;color:var(--muted);font-weight:400">REFORMIST</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">145.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">1A</span> <span style="color:var(--muted);font-size:12px">Bbm</span></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 70% 0 0;background:var(--info)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">30</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Hardgroove</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">4:11</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Just Like Me" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Just Like Me</span><span style="font-size:12px;color:var(--muted);font-weight:400">Tha Playah &amp; Angerfist</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">175.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">6A</span> <span style="color:var(--muted);font-size:12px">Gm</span> <button aria-label="Confianza baja: tonalidad no unánime (1 de 3 tramos)" title="Confianza baja (1/3)" style="width:16px;height:16px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);font-size:10px;font-weight:700;cursor:help;font-family:inherit;padding:0;line-height:1">?</button></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 69% 0 0;background:var(--info)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">31</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted)">—</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">2:36</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Fallen Angels" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Fallen Angels</span><span style="font-size:12px;color:var(--muted);font-weight:400">AIROD</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">137.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">1A</span> <span style="color:var(--muted);font-size:12px">Am</span></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 40% 0 0;background:var(--warn)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">60</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Acid, Techno</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">5:13</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Replicant" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Replicant (Extended Mix)</span><span style="font-size:12px;color:var(--muted);font-weight:400">Alan Fitzpatrick</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">136.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">9A</span> <span style="color:var(--muted);font-size:12px">Em</span> <button aria-label="Confianza baja: tonalidad no unánime (2 de 3 tramos)" title="Confianza media (2/3)" style="width:16px;height:16px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);font-size:10px;font-weight:700;cursor:help;font-family:inherit;padding:0;line-height:1">?</button></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 17% 0 0;background:var(--danger)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">83</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Techno</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">5:45</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Mira El Bongo" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Mira El Bongo</span><span style="font-size:12px;color:var(--muted);font-weight:400">Selicato, Virgah</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">160.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">8A</span> <span style="color:var(--muted);font-size:12px">Am</span> <button aria-label="Confianza baja: tonalidad no unánime (2 de 3 tramos)" title="Confianza media (2/3)" style="width:16px;height:16px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);font-size:10px;font-weight:700;cursor:help;font-family:inherit;padding:0;line-height:1">?</button></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 31% 0 0;background:var(--danger)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">69</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">Hard Bounce</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">4:51</td>
+        </tr>
+
+        <tr style="border-top:1px solid var(--divider)">
+          <th scope="row" style="padding:11px 8px 11px 18px;font-weight:500;text-align:left"><div style="display:flex;align-items:center;gap:11px"><button class="play" aria-label="Empezar una radio desde Miles Away" style="width:28px;height:28px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span style="display:flex;flex-direction:column"><span>Miles Away</span><span style="font-size:12px;color:var(--muted);font-weight:400">Irregular Synth</span></span></div></th>
+          <td style="padding:11px 8px;font-family:var(--mono);font-weight:600">130.0</td>
+          <td style="padding:11px 8px"><span style="font-family:var(--mono);font-size:12px;font-weight:600;background:#123a37;color:#7fe6d6;padding:2px 7px;border-radius:6px">5A</span> <span style="color:var(--muted);font-size:12px">Cm</span> <button aria-label="Confianza baja: tonalidad no unánime (1 de 3 tramos)" title="Confianza baja (1/3)" style="width:16px;height:16px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);font-size:10px;font-weight:700;cursor:help;font-family:inherit;padding:0;line-height:1">?</button></td>
+          <td style="padding:11px 8px"><span style="display:flex;align-items:center;gap:8px"><span aria-hidden="true" style="flex-grow:1;height:6px;border-radius:3px;background:var(--divider);position:relative;overflow:hidden"><span style="position:absolute;inset:0 83% 0 0;background:var(--info)"></span></span><span style="font-family:var(--mono);font-size:12px;color:var(--muted)">17</span></span></td>
+          <td style="padding:11px 8px"><span style="font-size:12px;color:var(--muted);background:var(--well);border:1px solid var(--divider);padding:2px 8px;border-radius:999px">House</span></td>
+          <td style="padding:11px 18px 11px 8px;font-family:var(--mono);color:var(--muted);text-align:right">5:43</td>
+        </tr>
+
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- footer -->
+  <footer style="display:flex;align-items:center;gap:18px;color:var(--muted);font-size:12.5px">
+    <span><b style="color:var(--text)">197</b> tracks</span>
+    <span style="width:1px;height:14px;background:var(--divider)"></span>
+    <span>tonalidad detectada en <b style="color:var(--text)">190</b></span>
+    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:999px;border:1px solid var(--warn);color:var(--warn);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center">?</span> confianza baja en las que no fueron unánimes</span>
+  </footer>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1280,"height":880}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

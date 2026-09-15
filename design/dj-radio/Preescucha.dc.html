@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+    :root{
+      --bg:#161826;--surface:#232532;--well:#1b1d2b;--raise:#2c2f3e;
+      --text:#e9e9ed;--muted:#9a9aac;--divider:#2a2a36;
+      --accent:#2dd4bf;--brand:#4b90f7;--info:#4b90f7;
+      --ok:#4ade9a;--warn:#ffcc4d;--danger:#f2555f;
+      --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Inter",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:var(--accent)} a:hover{color:#a99ff0}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+  </style>
+</helmet>
+
+<div style="width:1280px;min-height:780px;background:var(--bg);padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+
+  <!-- header -->
+  <header style="display:flex;align-items:center;gap:12px">
+    <button aria-label="Volver al set" style="width:34px;height:34px;border-radius:9px;border:1px solid var(--divider);background:var(--surface);color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <div style="display:flex;flex-direction:column;line-height:1.15">
+      <span style="font-weight:700;font-size:16px">Preescucha de la transición</span>
+      <span style="font-size:12px;color:var(--muted)">paso 7 → 8 del set</span>
+    </div>
+    <div style="flex-grow:1"></div>
+    <!-- verdict chips -->
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12.5px;background:var(--well);border:1px solid var(--divider);padding:6px 10px;border-radius:8px">142.0 → 141.9 <span style="color:var(--ok)">−0.1%</span></span>
+      <span style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12.5px;background:var(--well);border:1px solid var(--divider);padding:6px 10px;border-radius:8px">3A → 4A <span style="color:var(--info)">vecino</span></span>
+      <span style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12.5px;background:var(--well);border:1px solid var(--divider);padding:6px 10px;border-radius:8px">energía 64 → 86 <span style="color:var(--warn)">↑</span></span>
+    </div>
+  </header>
+
+  <!-- waveforms -->
+  <section aria-label="Formas de onda de la transición" style="background:var(--surface);border:1px solid var(--divider);border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:6px">
+
+    <!-- track A (saliente) -->
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:170px;flex-shrink:0">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Sale · A</div>
+        <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Apache</div>
+        <div style="font-size:12px;color:var(--muted)">Lorcan Kelly · <span style="font-family:var(--mono)">142.0 · 3A</span></div>
+      </div>
+      <div style="position:relative;flex-grow:1;height:88px">
+        <!-- overlap band -->
+        <div aria-hidden="true" style="position:absolute;top:0;bottom:0;left:74%;right:0;background:rgba(45,212,191,0.12);border-left:2px dashed var(--accent);border-radius:0 8px 8px 0"></div>
+        <svg viewBox="0 0 100 40" width="100%" height="88" preserveAspectRatio="none" role="img" aria-label="Apache mantiene energía y baja en el outro donde empieza la mezcla">
+          <path d="M0,20 L1.5,9 L3,26 L4.5,7 L6,30 L7.5,11 L9,28 L10.5,8 L12,31 L13.5,12 L15,27 L16.5,9 L18,30 L19.5,10 L21,29 L22.5,8 L24,31 L25.5,12 L27,28 L28.5,9 L30,30 L31.5,11 L33,29 L34.5,8 L36,31 L37.5,12 L39,27 L40.5,10 L42,30 L43.5,9 L45,29 L46.5,11 L48,28 L49.5,9 L51,30 L52.5,12 L54,27 L55.5,10 L57,29 L58.5,9 L60,30 L61.5,11 L63,28 L64.5,10 L66,29 L67.5,12 L69,27 L70.5,11 L72,28 L73.5,13 L75,26 L76.5,15 L78,25 L79.5,16 L81,24 L82.5,17 L84,23 L85.5,18 L87,23 L88.5,18 L90,22 L91.5,19 L93,21 L94.5,19 L96,21 L97.5,20 L99,20 L100,20 L100,20 L0,20 Z" fill="none" stroke="var(--muted)" stroke-width="0.7" stroke-opacity="0.9"/>
+          <g stroke="#8fe3d6" stroke-width="1.1">
+            <path d="M0,20 L1.5,9 L3,26 L4.5,7 L6,30 L7.5,11 L9,28 L10.5,8 L12,31 L13.5,12 L15,27 L16.5,9 L18,30 L19.5,10 L21,29 L22.5,8 L24,31 L25.5,12 L27,28 L28.5,9 L30,30 L31.5,11 L33,29 L34.5,8 L36,31 L37.5,12 L39,27 L40.5,10 L42,30 L43.5,9 L45,29 L46.5,11 L48,28 L49.5,9 L51,30 L52.5,12 L54,27 L55.5,10 L57,29 L58.5,9 L60,30 L61.5,11 L63,28 L64.5,10 L66,29 L67.5,12 L69,27 L70.5,11 L72,28" fill="none"/>
+          </g>
+          <g stroke="var(--muted)" stroke-width="1.1" stroke-opacity="0.55">
+            <path d="M72,28 L73.5,13 L75,26 L76.5,15 L78,25 L79.5,16 L81,24 L82.5,17 L84,23 L85.5,18 L87,23 L88.5,18 L90,22 L91.5,19 L93,21 L94.5,19 L96,21 L97.5,20 L99,20" fill="none"/>
+          </g>
+        </svg>
+        <!-- MIX OUT cue -->
+        <div aria-hidden="true" style="position:absolute;top:-4px;left:74%;transform:translateX(-50%);font-size:9px;color:var(--accent);font-weight:600">MIX OUT</div>
+      </div>
+    </div>
+
+    <!-- crossfade midline -->
+    <div style="display:flex;align-items:center;gap:14px;color:var(--muted)">
+      <div style="width:170px;flex-shrink:0;text-align:right;font-size:11px">solape 32 s</div>
+      <div style="flex-grow:1;height:1px;background:var(--divider)"></div>
+    </div>
+
+    <!-- track B (entrante) -->
+    <div style="display:flex;align-items:center;gap:14px">
+      <div style="width:170px;flex-shrink:0">
+        <div style="font-size:10px;color:var(--info);text-transform:uppercase;letter-spacing:.6px">Entra · B</div>
+        <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Spiral</div>
+        <div style="font-size:12px;color:var(--muted)">No Valentia · <span style="font-family:var(--mono)">141.9 · 4A</span></div>
+      </div>
+      <div style="position:relative;flex-grow:1;height:88px">
+        <div aria-hidden="true" style="position:absolute;top:0;bottom:0;left:74%;right:0;background:rgba(75,144,247,0.12);border-left:2px dashed var(--info);border-radius:0 8px 8px 0"></div>
+        <svg viewBox="0 0 100 40" width="100%" height="88" preserveAspectRatio="none" role="img" aria-label="Spiral entra desde su intro en el solape y sube al pico">
+          <g stroke="var(--muted)" stroke-width="1.1" stroke-opacity="0.5">
+            <path d="M0,20 L2,18 L4,22 L6,18 L8,22 L10,19 L12,21 L14,18 L16,22 L18,19 L20,21 L22,18 L24,22 L26,19 L28,21 L30,18 L32,22 L34,19 L36,21 L38,18 L40,22 L42,19 L44,21 L46,18 L48,22 L50,19 L52,21 L54,18 L56,22 L58,19 L60,21 L62,18 L64,22 L66,19 L68,21 L70,18 L72,22" fill="none"/>
+          </g>
+          <g stroke="#a9c6f5" stroke-width="1.2">
+            <path d="M72,22 L73.5,14 L75,25 L76.5,12 L78,27 L79.5,11 L81,28 L82.5,10 L84,29 L85.5,9 L87,30 L88.5,11 L90,28 L91.5,9 L93,30 L94.5,10 L96,29 L97.5,8 L99,31 L100,12" fill="none"/>
+          </g>
+        </svg>
+        <!-- cue markers -->
+        <div aria-hidden="true" style="position:absolute;bottom:-4px;left:17%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;color:var(--info)"><span style="font-size:9px;font-weight:600">CUE · 1:01</span></div>
+        <div aria-hidden="true" style="position:absolute;bottom:-4px;left:53%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;color:var(--muted)"><span style="font-size:9px;font-weight:600">CUE · 3:08</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- transport -->
+  <section aria-label="Controles de reproducción" style="background:var(--surface);border:1px solid var(--divider);border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:18px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <button aria-label="Ir al inicio de la mezcla" style="width:40px;height:40px;border-radius:999px;border:1px solid var(--divider);background:var(--well);color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14l-11-7z"/></svg></button>
+      <button aria-label="Reproducir la transición" style="width:52px;height:52px;border-radius:999px;border:0;background:var(--accent);color:#161826;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+      <button aria-pressed="true" aria-label="Repetir el solape" style="width:40px;height:40px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 014-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg></button>
+    </div>
+
+    <!-- scrub -->
+    <div style="flex-grow:1;display:flex;align-items:center;gap:12px">
+      <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">3:04</span>
+      <div role="slider" aria-label="Posición" aria-valuemin="0" aria-valuemax="100" aria-valuenow="74" tabindex="0" style="position:relative;flex-grow:1;height:6px;border-radius:3px;background:var(--divider)">
+        <span style="position:absolute;inset:0 26% 0 0;background:var(--accent);border-radius:3px"></span>
+        <span style="position:absolute;left:74%;top:50%;width:14px;height:14px;border-radius:999px;background:var(--text);transform:translate(-50%,-50%);box-shadow:0 0 0 3px rgba(45,212,191,.35)"></span>
+      </div>
+      <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">4:00</span>
+    </div>
+
+    <!-- A|B monitor -->
+    <div role="group" aria-label="Monitorear" style="display:flex;gap:2px;background:var(--well);border:1px solid var(--divider);border-radius:8px;padding:3px">
+      <button aria-pressed="false" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-weight:600;font-size:13px;font-family:inherit;cursor:pointer">A</button>
+      <button aria-pressed="true" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:var(--accent);color:#161826;font-weight:600;font-size:13px;font-family:inherit;cursor:pointer">Mezcla</button>
+      <button aria-pressed="false" style="height:32px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-weight:600;font-size:13px;font-family:inherit;cursor:pointer">B</button>
+    </div>
+  </section>
+
+  <!-- why -->
+  <section aria-label="Por qué esta mezcla" style="background:var(--well);border:1px solid var(--divider);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:flex-start">
+    <div aria-hidden="true" style="width:32px;height:32px;border-radius:8px;background:rgba(45,212,191,.15);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></div>
+    <div>
+      <h2 style="margin:0 0 4px;font-size:14px;font-weight:600">Por qué esta mezcla</h2>
+      <p style="margin:0;font-size:13.5px;color:#cdcdd6;line-height:1.5">Casi el mismo tempo (<b style="color:var(--text)">−0.1%</b>): entran juntas sin tocar el pitch. <b style="color:var(--text)">3A → 4A</b> es un paso vecino en la rueda Camelot, sube el brillo sin chocar. La energía trepa de <b style="color:var(--text)">64 a 86</b> — buen momento para empujar hacia el pico. El solape arranca en el <b style="color:var(--text)">CUE 1:01</b> de Spiral, su primer downbeat limpio.</p>
+    </div>
+  </section>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1280,"height":780}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>
