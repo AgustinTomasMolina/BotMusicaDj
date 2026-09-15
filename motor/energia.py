@@ -198,7 +198,8 @@ def energy_curve_deviation(energies: Sequence[float], curve: str = "peak",
                            length: int | None = None) -> float:
     """Desvío medio de la curva: promedio de |energía_i − energy_target(i, length, curve)|.
 
-    Métrica PRINCIPAL de la curva en §4 (umbral a calibrar, tarea 14). A diferencia del
+    Métrica PRINCIPAL de la curva en §4 (umbral 0.22 sobre la MEDIANA de los sets del
+    benchmark, calibrado en la tarea 14; ver `benchmark/umbrales.py`). A diferencia del
     Spearman, mide qué tan cerca pasó el set de la curva pedida, no si subió: 0.0 es
     seguirla exacto, y la bajada de "peak" no la penaliza.
 

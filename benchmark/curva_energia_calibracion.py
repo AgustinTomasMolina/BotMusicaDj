@@ -1,7 +1,7 @@
 """Distribución del desvío de la curva de energía sobre sets reales — calibra tarea 14.
 
-El contrato §4 tiene el umbral `energia_desvio_curva` en None (a calibrar). Todavía nada
-alimenta esa métrica: hay que decidir DOS cosas mirando datos reales —
+Con esta herramienta se calibró el umbral `energia_desvio_curva` de §4 (2026-09-15): 0.22
+sobre la MEDIANA del desvío por set. Para eso hubo que decidir DOS cosas mirando datos reales —
   1) cómo se agrega (mediana / p90 / por-set), y
   2) el número del umbral.
 Esta herramienta genera un set desde cada track de la biblioteca (build_set, determinista

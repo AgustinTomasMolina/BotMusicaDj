@@ -26,7 +26,7 @@ Un cambio que rompe cualquiera de estos no entra.
 | Tonalidad compatible (exacta, relativo o vecino; ídem) | ≥ 95% |
 | Transiciones fuera de ±8% de BPM | 0% |
 | Choques armónicos (compatibilidad < 0.4) | ≤ 10% |
-| Curva de energía — desvío medio de la curva pedida | a calibrar (tarea 14) |
+| Curva de energía — desvío de la curva pedida (mediana sobre los sets del benchmark) | ≤ 0.22 |
 | Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
 | Latencia de la radio | < 200 ms con 10k tracks |
