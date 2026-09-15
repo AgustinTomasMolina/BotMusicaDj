@@ -152,3 +152,32 @@ python -m benchmark.evaluar --analisis gt_out/analisis_con-consenso.csv \
 
 Ninguno de estos se arregla solo ni sigue de largo: el comando corta. Un ground truth
 inventado es peor que no tener ground truth.
+
+---
+
+## 8. Escuchar las discrepancias (en la máquina con el disco)
+
+El acierto de tonalidad mide coincidencia con Rekordbox, que también se equivoca. Este
+comando elige los tracks donde el motor está **seguro** (los 3 tramos votaron lo mismo) y
+**no coincide** con Rekordbox, y corta los fragmentos que el motor analizó para decidir a oído.
+Necesita el disco enchufado y los CSV de la sesión en `gt_out/`:
+
+```bash
+python -m ground_truth.escucha --analisis gt_out/analisis_sin-consenso.csv --acuerdo-de gt_out/analisis_con-consenso.csv --ground-truth gt_out/rekordbox_tracks.csv --salida escucha/ -n 10
+```
+
+- `--acuerdo-de` hace falta con los CSV de sesiones anteriores a `aabd83d`: la pasada sin
+  consenso tiene la key del motor pero no el acuerdo, y lo toma de la otra (cruzando por ruta).
+- Deja en `escucha/` un WAV PCM 16 bits por fragmento (ventana central + 3 tramos, unos
+  40 MB por track estéreo a 44.1 kHz), `escucha.md` con qué escuchar y `escucha.csv`.
+- **Los veredictos se anotan en `escucha.md`**: cada track tiene sus líneas `veredicto` y
+  `notas` para completar con un editor de texto.
+- **`escucha.csv` es solo de lectura: no lo guardes desde Excel.** Excel convierte el acuerdo
+  `3/3` en fecha y los tiempos `00:25` en hora, y al guardar el CSV queda corrompido.
+- `--salida` tiene que no existir o estar vacía: si tiene cualquier archivo, el comando corta
+  sin escribir nada (no pisa fragmentos ni un `escucha.md` con veredictos, y no mezcla WAVs de
+  otra corrida). Para regenerar, usá una carpeta nueva.
+- Si ninguna ruta de `--analisis` coincide con las de `--acuerdo-de` (rutas escritas distinto
+  o CSVs de sesiones distintas), o `--analisis` repite una ruta, corta con el motivo.
+- Un track cuyo audio no está (disco desenchufado) queda como `audio no encontrado`; el resto
+  se procesa igual.
