@@ -294,6 +294,36 @@ def test_acierto_de_la_key_analizada_por_acuerdo():
                         ("1/3", 1, 0.0, 100.0), ("sin acuerdo", 1, 100.0, 100.0)], obtenido
 
 
+def test_acierto_por_acuerdo_ordena_por_acuerdo_y_no_por_como_llegan_los_tracks():
+    """Más tramos primero, más acuerdo primero, "sin acuerdo" al final. Los nombres están
+    elegidos para que el orden alfabético (el de `cruzar`) sea el INVERSO al esperado: si el
+    orden de la tabla saliera de cómo llegan los tracks, este test lo ve."""
+    filas = [("a", ""), ("b", "1/3"), ("c", "2/3"), ("d", "3/3"), ("e", "4/5"), ("f", "5/5")]
+    a = [_fila_a(f"{n}.wav", 128.0, "8A", acuerdo=ac, metodo="tono") for n, ac in filas]
+    g = [_fila_gt(i, f"{n}.wav", 128.0, "8A") for i, (n, _) in enumerate(filas)]
+    tabla = acierto_por_acuerdo(cruzar(a, g)["cruces"])
+    assert [t["acuerdo"] for t in tabla] == ["5/5", "4/5", "3/3", "2/3", "1/3", "sin acuerdo"]
+
+
+def test_calibracion_con_metodos_mezclados_no_le_atribuye_la_confianza_a_ninguno(capsys):
+    """Un CSV con filas de tono() y de tono_consenso() mezcla dos escalas de confianza que
+    no significan lo mismo. Atribuírsela a uno de los dos sería imprimir una causa falsa."""
+    a, g = [], []
+    for i, (conf, metodo) in enumerate(((1.0, "tono"), (0.33, "tono_consenso"),
+                                        (0.67, "tono"), (1.0, "tono_consenso"))):
+        a.append(_fila_a(f"t{i}.wav", 128.0, "8A", conf=conf, metodo=metodo))
+        g.append(_fila_gt(i, f"t{i}.wav", 128.0, "8A"))
+    res = cruzar(a, g)
+    cal = calibracion(res["cruces"])
+    assert cal["metodo"] == "", f"con métodos mezclados el método tiene que quedar vacío: {cal['metodo']!r}"
+
+    informe(res)
+    salida = capsys.readouterr().out
+    assert "método mezclado o desconocido: no es una sola escala" in salida, salida
+    assert "Krumhansl de tono()" not in salida, "le atribuyó la confianza mezclada a tono()"
+    assert "coinciden" not in salida and "tramos distintos" not in salida, salida
+
+
 def test_acierto_por_acuerdo_no_esconde_un_acuerdo_roto():
     a = [_fila_a("a.wav", 128.0, "8A", acuerdo="2/3/4", metodo="tono")]
     with pytest.raises(ValueError, match="formato inesperado"):
