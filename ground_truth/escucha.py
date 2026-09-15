@@ -14,6 +14,14 @@ UNÁNIME entre los tramos de `tono_consenso` y key del motor (`key_est`, la de `
 distinta de la de Rekordbox. Sin referencia en el GT, fuera. Si hay más que `-n`, muestra
 determinista con la semilla de `benchmark.analizar` (misma entrada → mismos tracks).
 
+RUTAS REPETIDAS en `--analisis`. `ground_truth.sesion` las produce legítimamente: dos
+entradas del XML con el mismo nombre (una "missing file" de una carpeta vieja y la actual)
+que en disco tienen UN solo archivo resuelven a la misma ruta, y la etapa A escribe dos
+filas. No hay cómo saber a cuál de las dos entradas del GT corresponde el audio, así que esas
+filas quedan FUERA de la selección y se cuentan en lo que se imprime (nunca se elige una al
+azar ni se pierde en silencio). En `--acuerdo-de` pasa lo mismo: la pasada con consenso
+de la misma sesión trae las mismas rutas repetidas, y cortar ahí rompería el flujo de casa.
+
 `--acuerdo-de`. Los CSV de sesiones anteriores a `aabd83d` tienen la key de `tono()` en la
 pasada sin consenso pero con `acuerdo` VACÍO, y el acuerdo en la pasada con consenso, cuya
 key es la del voto (NO la del motor). `--acuerdo-de` toma `acuerdo` y `tramos` de esa otra
@@ -45,6 +53,7 @@ import csv
 import inspect
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,20 +107,22 @@ def _hay_acuerdo(filas: list[dict]) -> bool:
     return any((f.get("acuerdo") or "").strip() for f in filas)
 
 
-def _rechazar_rutas_repetidas(filas: list[dict], etiqueta: str) -> None:
-    """Una ruta repetida es un CSV roto: no hay cómo saber cuál de las dos filas vale, y
-    quedarse con una en silencio pierde un track. Las filas sin ruta no cuentan."""
-    vistas: set[str] = set()
-    for f in filas:
-        ruta = (f.get("ruta") or "").strip()
-        if not ruta:
-            continue
-        if ruta in vistas:
-            raise EscuchaIncompleta(f"Ruta repetida en el CSV de {etiqueta}: {ruta}")
-        vistas.add(ruta)
+def separar_rutas_repetidas(filas: list[dict]) -> tuple[list[dict], list[str]]:
+    """Saca TODAS las filas cuya ruta aparece más de una vez y devuelve `(resto, repetidas)`.
+
+    No se queda con ninguna de las dos: aunque el audio sea uno, las filas vienen de dos
+    entradas distintas del XML y no hay cómo saber cuál es la del track. `repetidas` son las
+    rutas distintas que quedaron fuera, ordenadas, para contarlas. Las filas sin ruta no
+    cuentan como repetidas y se conservan.
+    """
+    veces = Counter(r for f in filas if (r := (f.get("ruta") or "").strip()))
+    repetidas = sorted(r for r, k in veces.items() if k > 1)
+    fuera = set(repetidas)
+    return [f for f in filas if (f.get("ruta") or "").strip() not in fuera], repetidas
 
 
-def combinar_acuerdo(analisis: list[dict], con_consenso: list[dict]) -> tuple[list[dict], list[str]]:
+def combinar_acuerdo(analisis: list[dict],
+                     con_consenso: list[dict]) -> tuple[list[dict], list[str], list[str]]:
     """Pone en cada fila de `analisis` el `acuerdo` y los `tramos` de `con_consenso`.
 
     El cruce es POR `ruta`, exacta como la escribió la etapa A (las dos pasadas de una sesión
@@ -121,12 +132,14 @@ def combinar_acuerdo(analisis: list[dict], con_consenso: list[dict]) -> tuple[li
     `key_est` y el resto de la fila quedan los de `analisis`: la key de la pasada con
     consenso es la del voto y no la del motor.
 
-    Devuelve `(combinadas, sin_par)`: las rutas de `analisis` que no tienen fila en
-    `con_consenso` quedan FUERA y se devuelven para contarlas, no se rellenan.
+    Devuelve `(combinadas, sin_par, repetidas)`: las rutas de `analisis` que no tienen fila en
+    `con_consenso` quedan FUERA y se devuelven para contarlas, no se rellenan. Las que en
+    `con_consenso` aparecen más de una vez también quedan fuera (`repetidas`): la sesión las
+    escribe legítimamente (dos entradas del XML con el mismo nombre y un solo archivo en disco,
+    igual que en `--analisis`) y no hay cómo saber cuál de las filas es la del track.
 
-    Falla si `con_consenso` no es una corrida con consenso (ninguna fila con
-    `metodo == tono_consenso` ni acuerdo), o si repite una ruta (CSV roto: no hay cómo
-    saber cuál de las dos filas vale).
+    Falla solo si `con_consenso` no es una corrida con consenso (ninguna fila con
+    `metodo == tono_consenso` ni acuerdo).
     """
     es_consenso = any((f.get("metodo") or "").strip() == METODO_CONSENSO for f in con_consenso)
     if not (es_consenso or _hay_acuerdo(con_consenso)):
@@ -135,19 +148,23 @@ def combinar_acuerdo(analisis: list[dict], con_consenso: list[dict]) -> tuple[li
             f"metodo={METODO_CONSENSO} ni la columna acuerdo llena.\n"
             "  Pasá la pasada CON consenso de la sesión (gt_out/analisis_con-consenso.csv).")
 
-    _rechazar_rutas_repetidas(con_consenso, "--acuerdo-de")
-    por_ruta = {r: f for f in con_consenso if (r := (f.get("ruta") or "").strip())}
+    unicas, repetidas_consenso = separar_rutas_repetidas(con_consenso)
+    fuera = set(repetidas_consenso)
+    por_ruta = {r: f for f in unicas if (r := (f.get("ruta") or "").strip())}
 
-    combinadas, sin_par = [], []
+    combinadas, sin_par, repetidas = [], [], []
     for f in analisis:
         ruta = (f.get("ruta") or "").strip()
+        if ruta in fuera:
+            repetidas.append(ruta)
+            continue
         par = por_ruta.get(ruta)
         if par is None:
             sin_par.append(ruta)
             continue
         combinadas.append({**f, "acuerdo": par.get("acuerdo", ""),
                            "tramos": par.get("tramos", "")})
-    return combinadas, sin_par
+    return combinadas, sin_par, repetidas
 
 
 # --- Selección --------------------------------------------------------------------------
@@ -421,8 +438,12 @@ corrompido. Si querés mirarlo en Excel, cerralo sin guardar.
 Todos son copias al sample rate y con los canales del archivo original, en WAV de 16 bits
 (unos {_mb_por_track_estereo_44k():.0f} MB por track estéreo a 44.1 kHz); el original no se toca.
 
-El análisis de `tono()` usa el **promedio de los canales** (mono), pero el fragmento se exporta
-en estéreo: lo que suene solo en contrafase entre izquierda y derecha no llegó al análisis.
+Los WAV de 16 bits recortan los picos por encima de ±1.0 (un MP3 decodificado puede tenerlos):
+si algo suena saturado, puede ser eso y no el track.
+
+El análisis de `tono()` usa el **promedio de los canales** (mono); el fragmento se exporta con
+los canales del archivo original: si es estéreo, lo que suene solo en contrafase entre izquierda
+y derecha no llegó al análisis.
 
 ## Qué escuchar
 
@@ -507,13 +528,15 @@ def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | No
         raise EscuchaIncompleta(
             "El CSV de --analisis es una corrida con consenso: su key_est es la del voto, "
             "no la de tono().\n  Pasá la pasada SIN consenso en --analisis y esta en --acuerdo-de.")
-    _rechazar_rutas_repetidas(analisis, "--analisis")
+    trae_acuerdo = _hay_acuerdo(analisis)   # del CSV entero: es una propiedad del formato
+    analisis, repetidas = separar_rutas_repetidas(analisis)
 
     sin_par: list[str] = []
+    repetidas_acuerdo: list[str] = []
     if acuerdo_de is not None:
         con_consenso = leer_csv(acuerdo_de)
-        combinadas, sin_par = combinar_acuerdo(analisis, con_consenso)
-        if not combinadas:
+        combinadas, sin_par, repetidas_acuerdo = combinar_acuerdo(analisis, con_consenso)
+        if not combinadas and not repetidas_acuerdo:
             ej_a = next((r for f in analisis if (r := (f.get("ruta") or "").strip())), "—")
             ej_c = next((r for f in con_consenso if (r := (f.get("ruta") or "").strip())), "—")
             raise EscuchaIncompleta(
@@ -526,8 +549,9 @@ def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | No
                 f"  Ejemplo en --acuerdo-de: {ej_c}")
         analisis = combinadas
         print(f"Acuerdo tomado de {acuerdo_de.name} (cruce por ruta): "
-              f"{len(analisis)} con par · {len(sin_par)} sin par (quedan fuera)")
-    elif not _hay_acuerdo(analisis):
+              f"{len(analisis)} con par · {len(sin_par)} sin par · "
+              f"{len(repetidas_acuerdo)} con la ruta repetida en --acuerdo-de (quedan fuera)")
+    elif not trae_acuerdo:
         raise EscuchaIncompleta(
             "Ninguna fila de --analisis trae la columna acuerdo: es un CSV anterior a aabd83d.\n"
             "  Pasá también la pasada con consenso de la misma sesión, que sí la tiene:\n"
@@ -536,11 +560,14 @@ def correr(analisis_csv: Path, gt_csv: Path, salida: Path, acuerdo_de: Path | No
 
     sel = seleccionar(analisis, leer_csv(gt_csv))
     candidatos, k = sel["candidatos"], sel["conteo"]
+    k["rutas_repetidas"] = len(repetidas)
+    k["rutas_repetidas_acuerdo"] = len(repetidas_acuerdo)
     elegidos = elegir(candidatos, n, semilla)
     print(f"Cruzados con el GT: {k['cruzados']} · fuera: {k['sin_referencia']} sin key de "
           f"referencia · {k['sin_acuerdo']} sin acuerdo · {k['no_unanime']} no unánimes · "
           f"{k['misma_key']} misma key · {k['sin_key_motor']} sin key del motor · "
-          f"{k['ambiguos']} ambiguos (nombre repetido) · {k['sin_gt']} sin GT")
+          f"{k['ambiguos']} ambiguos (nombre repetido) · {k['sin_gt']} sin GT · "
+          f"{k['rutas_repetidas']} rutas repetidas en --analisis (excluidas)")
     print(f"Candidatos (unánime y distinta de Rekordbox): {len(candidatos)} · "
           f"elegidos: {len(elegidos)}"
           + (f" (muestra con semilla {semilla})" if len(elegidos) < len(candidatos) else ""))

@@ -25,12 +25,13 @@ Dos tolerancias, cada una con su causa y ninguna más ancha que eso:
 """
 import csv
 import hashlib
+from pathlib import Path
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-from benchmark.analizar import SEMILLA
+from benchmark.analizar import SEMILLA, FilaAnalisis
 from ground_truth import escucha
 from motor.analisis import SR, cargar
 from motor.tonalidad import _tramos_disjuntos, ventana_central
@@ -186,12 +187,13 @@ def test_acuerdo_de_cruza_por_ruta_no_por_basename():
                 _fila_a("solo.wav", "1A", "", carpeta="D:/z")]
     consenso = [_fila_a("t.wav", "6A", "1/3", "6A|7A|1A", carpeta="D:/x", metodo="tono_consenso"),
                 _fila_a("t.wav", "5A", "3/3", "5A|5A|5A", carpeta="D:/y", metodo="tono_consenso")]
-    combinadas, sin_par = escucha.combinar_acuerdo(analisis, consenso)
+    combinadas, sin_par, repetidas = escucha.combinar_acuerdo(analisis, consenso)
     assert [(f["ruta"], f["key_est"], f["acuerdo"], f["tramos"]) for f in combinadas] == [
         ("D:/x/t.wav", "8A", "1/3", "6A|7A|1A"),
         ("D:/y/t.wav", "9A", "3/3", "5A|5A|5A"),
     ]
     assert sin_par == ["D:/z/solo.wav"]
+    assert repetidas == []
 
 
 def test_acuerdo_de_sin_par_exacto_no_toma_el_del_mismo_basename():
@@ -199,10 +201,26 @@ def test_acuerdo_de_sin_par_exacto_no_toma_el_del_mismo_basename():
     analisis = [_fila_a("t.wav", "8A", "", carpeta="D:/w"),
                 _fila_a("t.wav", "9A", "", carpeta="D:/x")]
     consenso = [_fila_a("t.wav", "5A", "3/3", "5A|5A|5A", carpeta="D:/x", metodo="tono_consenso")]
-    combinadas, sin_par = escucha.combinar_acuerdo(analisis, consenso)
+    combinadas, sin_par, _ = escucha.combinar_acuerdo(analisis, consenso)
     assert [(f["ruta"], f["key_est"], f["acuerdo"]) for f in combinadas] == [
         ("D:/x/t.wav", "9A", "3/3")], "una ruta sin par exacto tomó el acuerdo de otra carpeta"
     assert sin_par == ["D:/w/t.wav"]
+
+
+def test_acuerdo_de_con_ruta_repetida_la_excluye_y_la_cuenta_sin_abortar():
+    """Una ruta que en --acuerdo-de aparece dos veces (la sesión lo escribe legítimamente) no
+    corta la escucha: esa ruta queda fuera, se reporta, y las demás se combinan igual. No se
+    elige ninguna de las dos filas, aunque sean distintas."""
+    analisis = [_fila_a("r.wav", "8A", "", carpeta="D:/m"),
+                _fila_a("ok.wav", "9A", "", carpeta="D:/m")]
+    consenso = [_fila_a("r.wav", "6A", "3/3", "6A|6A|6A", carpeta="D:/m", metodo="tono_consenso"),
+                _fila_a("r.wav", "7A", "1/3", "7A|1A|2A", carpeta="D:/m", metodo="tono_consenso"),
+                _fila_a("ok.wav", "5A", "3/3", "5A|5A|5A", carpeta="D:/m", metodo="tono_consenso")]
+    combinadas, sin_par, repetidas = escucha.combinar_acuerdo(analisis, consenso)
+    assert [(f["ruta"], f["key_est"], f["acuerdo"]) for f in combinadas] == [
+        ("D:/m/ok.wav", "9A", "3/3")], f"la ruta repetida se combinó igual: {combinadas}"
+    assert repetidas == ["D:/m/r.wav"], "la ruta repetida en --acuerdo-de no se reporta"
+    assert sin_par == [], "una ruta repetida no es una ruta sin par"
 
 
 def test_acuerdo_de_que_no_es_consenso_falla():
@@ -329,6 +347,13 @@ def test_audio_faltante_no_frena_y_el_indice_es_correcto(mono_largo, tmp_path):
 
     md = (salida / escucha.INDICE_MD).read_text(encoding="utf-8")
     assert "| 5A (Cm) | 8B (C) | lejano | si | 3/3 |" in md
+    # el track sin audio también tiene dónde anotar: justo el que más necesita una nota
+    n_faltante = filas[str(faltante)]["n"]
+    seccion = md.split(f"### {n_faltante}. a_faltante.wav", 1)[1].split("\n### ", 1)[0].splitlines()
+    assert "- **audio no encontrado**: no se generaron fragmentos" in seccion, seccion
+    assert "- veredicto (`motor` / `rekordbox` / `ninguna` / `no sé`): " in seccion, (
+        f"el track con audio no encontrado no tiene línea de veredicto: {seccion}")
+    assert "- notas: " in seccion, f"el track con audio no encontrado no tiene línea de notas: {seccion}"
 
 
 def test_veredictos_van_en_el_md_y_el_csv_es_de_lectura(monkeypatch, tmp_path):
@@ -351,6 +376,11 @@ def test_veredictos_van_en_el_md_y_el_csv_es_de_lectura(monkeypatch, tmp_path):
     assert "Los veredictos se anotan en ESTE archivo" in cabecera
     assert "no lo abras y guardes con Excel" in cabecera and "`3/3` en una fecha" in cabecera
     assert "promedio de los canales" in cabecera and "contrafase" in cabecera
+    plana = " ".join(cabecera.split())   # el texto va cortado en líneas del .md
+    assert "se exporta en estéreo" not in plana, "afirma estéreo también para un original mono"
+    assert "con los canales del archivo original: si es estéreo, lo que suene solo en contrafase" in plana
+    assert "recortan los picos por encima de ±1.0" in plana and "suena saturado" in plana, (
+        "la cabecera no avisa del recorte a ±1.0 del PCM 16 bits")
     # 90 s + 3 × 45 s, estéreo 16 bits a 44.1 kHz = 39.7 MB (cuenta hecha a mano)
     assert "unos 40 MB por track" in cabecera and "float" not in cabecera.lower()
     seccion = tracks.split("### 1. Boltcore — Try", 1)[1].splitlines()
@@ -421,15 +451,141 @@ def test_acuerdo_de_sin_ninguna_ruta_en_comun_falla(tmp_path):
     assert not salida.exists()
 
 
-def test_ruta_repetida_en_analisis_falla(tmp_path):
-    """Dos filas con la misma ruta y distinto `archivo` pasan el cruce por basename como dos
-    candidatos, y `elegir` (indexa por ruta) se quedaba con uno solo sin decir nada."""
-    filas = [{**_fila_a("a.wav", "8A", "3/3"), "ruta": "D:/musica/a.wav"},
-             {**_fila_a("b.wav", "8A", "3/3"), "ruta": "D:/musica/a.wav"}]
-    a = _escribir(tmp_path / "a.csv", COLS_A, filas)
-    g = _escribir(tmp_path / "gt.csv", COLS_GT, [_fila_gt(1, "a.wav", "5A"), _fila_gt(2, "b.wav", "5A")])
-    salida = tmp_path / "escucha"
-    with pytest.raises(escucha.EscuchaIncompleta) as e:
-        escucha.correr(a, g, salida)
-    assert "Ruta repetida en el CSV de --analisis: D:/musica/a.wav" in str(e.value)
-    assert not salida.exists()
+_XML_REKORDBOX = """<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+ <COLLECTION Entries="{n}">
+{tracks} </COLLECTION>
+</DJ_PLAYLISTS>
+"""
+
+
+def test_ruta_repetida_en_analisis_se_excluye_y_se_cuenta(mono_largo, tmp_path, monkeypatch, capsys):
+    """El caso REAL, por el flujo real de `ground_truth.sesion`: dos entradas del XML con el
+    mismo nombre (una de una carpeta vieja, otra de una carpeta movida) y UN solo archivo en
+    disco resuelven las dos a esa ruta (`resolver`, paso 3 + `_distintos`), y `etapa_a`
+    escribe dos filas idénticas. La escucha no aborta: esa ruta queda fuera, se cuenta, y los
+    otros tracks se procesan.
+
+    El analizador se reemplaza por un doble (las keys son de utilería, spec §5): lo que se
+    prueba es la ruta repetida, no la medición. Los audios de los otros dos tracks son reales
+    para que la exportación corra de verdad (uno da `ok`, el otro dura < 1 s y no decodifica).
+
+    Se corre dos veces: con el GT de la sesión (donde el nombre también está repetido y
+    `cruzar` ya lo daría ambiguo) y con ese GT dejando UNA sola entrada del nombre. La segunda
+    es la que detecta quedarse con una de las dos filas: con el GT real eso lo taparía el
+    ambiguo del lado del GT.
+    """
+    from ground_truth import rekordbox, sesion
+
+    disco = tmp_path / "disco"
+    disco.mkdir()
+    repetido = disco / "repetido.wav"
+    repetido.write_bytes(b"un solo archivo en disco")
+    otro = disco / "otro.wav"
+    otro.write_bytes(mono_largo.read_bytes())
+    corto = disco / "corto.wav"
+    sf.write(str(corto), _ruido(0.5, 8000, 1, seed=7)[:, 0], 8000, subtype="FLOAT")
+
+    ubicaciones = [(tmp_path / "carpeta_vieja" / "repetido.wav", "Am"),   # "missing file"
+                   (tmp_path / "carpeta_movida" / "repetido.wav", "Am"),
+                   (tmp_path / "otra_vieja" / "otro.wav", "Am"),
+                   (tmp_path / "otra_vieja" / "corto.wav", "Em")]
+    xml = tmp_path / "Rekordbox.xml"
+    xml.write_text(_XML_REKORDBOX.format(n=len(ubicaciones), tracks="".join(
+        f'  <TRACK TrackID="{i}" Name="T{i}" Artist="A" AverageBpm="128.0" Tonality="{ton}"'
+        f' TotalTime="200" Kind="WAV File" Location="file://localhost/{p.as_posix()}"/>\n'
+        for i, (p, ton) in enumerate(ubicaciones, 1))), encoding="utf-8")
+    tracks = rekordbox.parsear(xml)
+    gt_sesion, _ = rekordbox.escribir_csv(tracks, tmp_path / "gt_out")
+
+    res = sesion.resolver_todo(tracks, [str(disco)])
+    assert sorted(res["rutas"]) == sorted([str(repetido), str(repetido), str(otro), str(corto)]), (
+        f"la resolución ya no da la ruta repetida: la premisa del test cambió: {res}")
+    assert res["ambiguos"] == [] and res["no_encontrados"] == []
+
+    def _doble(ruta, sr=22050, consenso=False):
+        return FilaAnalisis(archivo=Path(ruta).name, ruta=ruta, duracion_s=200.0,
+                            bpm_est=128.0, key_est="5A", confianza=0.7, acuerdo="3/3",
+                            tramos="5A|5A|5A", t_carga_s=0.1, t_analisis_s=0.5,
+                            t_total_s=0.6, metodo="tono")
+
+    monkeypatch.setattr(sesion, "analizar_uno", _doble)
+    monkeypatch.setattr("benchmark.tiempo_analisis.calentar", lambda sr=22050: 0.0)
+    analisis_csv = tmp_path / "gt_out" / "analisis_sin-consenso.csv"
+    sesion.etapa_a(sorted(res["rutas"]), False, analisis_csv, "sin-consenso")
+    filas_csv = escucha.leer_csv(analisis_csv)
+    dos = [f for f in filas_csv if f["ruta"] == str(repetido)]
+    assert len(dos) == 2 and dos[0] == dos[1], f"etapa_a no escribió las dos filas idénticas: {dos}"
+    capsys.readouterr()
+
+    gt_una_entrada = tmp_path / "gt_una_entrada.csv"
+    with gt_sesion.open(encoding="utf-8", newline="") as fh:
+        filas_gt = list(csv.DictReader(fh))
+    _escribir(gt_una_entrada, COLS_GT, [f for f in filas_gt if "carpeta_movida" not in f["location"]])
+
+    for gt, salida in ((gt_sesion, tmp_path / "escucha_gt_sesion"),
+                       (gt_una_entrada, tmp_path / "escucha_gt_una_entrada")):
+        out = escucha.correr(analisis_csv, gt, salida, n=10)
+        impreso = capsys.readouterr().out
+
+        assert "1 rutas repetidas en --analisis (excluidas)" in impreso, (
+            f"[{gt.name}] la exclusión no se reporta:\n{impreso}")
+        assert out["conteo"]["rutas_repetidas"] == 1, f"[{gt.name}] conteo: {out['conteo']}"
+        assert {f["ruta"]: f["estado"] for f in out["filas"]} == {
+            str(otro): escucha.OK, str(corto): escucha.AUDIO_NO_DECODIFICA}, (
+            f"[{gt.name}] los elegidos no son los otros dos tracks: {out['filas']}")
+        assert (out["candidatos"], out["elegidos"]) == (2, 2), f"[{gt.name}] {out}"
+        md = (salida / escucha.INDICE_MD).read_text(encoding="utf-8")
+        assert str(repetido) not in md, f"[{gt.name}] la ruta repetida quedó en el índice"
+        # elegidos ordenados por ruta: corto.wav es el 01 (no decodifica), otro.wav el 02
+        assert sorted(p.name for p in salida.iterdir()) == sorted(
+            [escucha.INDICE_CSV, escucha.INDICE_MD, "02_otro_ventana_central.wav",
+             "02_otro_tramo1.wav", "02_otro_tramo2.wav", "02_otro_tramo3.wav"]), (
+            f"[{gt.name}] lo exportado no es lo de los dos tracks válidos")
+
+    # EL FLUJO DE CASA: los CSV existentes son anteriores a aabd83d. La pasada sin consenso
+    # trae acuerdo vacío y la pasada con consenso de la MISMA sesión repite la misma ruta. Con
+    # --acuerdo-de la escucha tiene que seguir igual, no abortar.
+    def _doble_viejo(ruta, sr=22050, consenso=False):
+        if consenso:
+            return FilaAnalisis(archivo=Path(ruta).name, ruta=ruta, duracion_s=200.0,
+                                bpm_est=128.0, key_est="1A", confianza=1.0, acuerdo="3/3",
+                                tramos="1A|1A|1A", t_carga_s=0.1, t_analisis_s=0.5,
+                                t_total_s=0.6, metodo="tono_consenso")
+        return FilaAnalisis(archivo=Path(ruta).name, ruta=ruta, duracion_s=200.0,
+                            bpm_est=128.0, key_est="5A", confianza=0.7, acuerdo="",
+                            tramos="", t_carga_s=0.1, t_analisis_s=0.5, t_total_s=0.6,
+                            metodo="tono")
+
+    monkeypatch.setattr(sesion, "analizar_uno", _doble_viejo)
+    viejo_sin = tmp_path / "viejo" / "analisis_sin-consenso.csv"
+    viejo_con = tmp_path / "viejo" / "analisis_con-consenso.csv"
+    sesion.etapa_a(sorted(res["rutas"]), False, viejo_sin, "sin-consenso")
+    sesion.etapa_a(sorted(res["rutas"]), True, viejo_con, "con-consenso")
+    assert sum(f["ruta"] == str(repetido) for f in escucha.leer_csv(viejo_con)) == 2, (
+        "la pasada con consenso ya no repite la ruta: la premisa del test cambió")
+    capsys.readouterr()
+
+    salida_casa = tmp_path / "escucha_flujo_de_casa"
+    out = escucha.correr(viejo_sin, gt_una_entrada, salida_casa, acuerdo_de=viejo_con, n=10)
+    impreso = capsys.readouterr().out
+    assert "1 rutas repetidas en --analisis (excluidas)" in impreso, impreso
+    assert {f["ruta"]: f["estado"] for f in out["filas"]} == {
+        str(otro): escucha.OK, str(corto): escucha.AUDIO_NO_DECODIFICA}, (
+        f"con --acuerdo-de los elegidos no son los otros dos tracks: {out['filas']}")
+    assert all(f["key_motor_camelot"] == "5A" for f in out["filas"]), (
+        f"la key no salió de la pasada sin consenso: {out['filas']}")
+    assert repetido.read_bytes() == b"un solo archivo en disco"
+
+
+def test_sin_elegidos_no_crea_la_salida(tmp_path, capsys):
+    """Con 0 elegidos no se escribe nada, tampoco la carpeta: una vacía confunde ("¿corrió?")
+    y además haría fallar la próxima corrida si no se borra."""
+    a = _escribir(tmp_path / "a.csv", COLS_A, [_fila_a("t.wav", "8A", "3/3")])
+    g = _escribir(tmp_path / "gt.csv", COLS_GT, [_fila_gt(1, "t.wav", "8A")])   # misma key
+    salida = tmp_path / "nueva" / "escucha"
+    res = escucha.correr(a, g, salida)
+    assert (res["candidatos"], res["elegidos"], res["conteo"]["misma_key"]) == (0, 0, 1), res
+    assert "no se escribió ninguna salida" in capsys.readouterr().out
+    assert not salida.exists() and not salida.parent.exists(), (
+        "con 0 elegidos creó la carpeta de salida")
