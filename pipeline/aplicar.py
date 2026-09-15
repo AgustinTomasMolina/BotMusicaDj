@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from benchmark.evaluar import acuerdo_unanime
 from calidad.escribir_tags import escribir_campos
 from motor.tonalidad import camelot_a_clasica
 from pipeline import config
@@ -52,6 +53,51 @@ def leer_decisiones(ruta: Path) -> list[dict]:
 
 def _ruta_de(d: dict) -> str:
     return d.get("ruta_staging") or d.get("ruta") or ""
+
+
+# Entre el comentario que ya traía el track y la nota de la key. No es " · ": el comentario
+# propio del pipeline ("MusiFlix · revisar · ...") ya usa ese separador adentro.
+SEPARADOR_COMENTARIO = " | "
+
+
+def nota_key(d: dict) -> str | None:
+    """La duda de la key para Comments, a partir del `acuerdo` de la decisión.
+
+    - sin el campo `acuerdo` (decisiones.json anterior a este cambio) → None: no se sabe, y
+      no se inventa.
+    - unánime ("3/3") → None: no hay duda que anotar.
+    - no unánime ("2/3") → "key 2/3".
+    - sin evidencia: vacío (track corto), "0/N" (ningún tramo pudo votar) o un acuerdo
+      ilegible → "key ?". En los tres no hay tramos que comparar.
+    """
+    if "acuerdo" not in d:
+        return None
+    texto = (d.get("acuerdo") or "").strip()
+    try:
+        unanime = acuerdo_unanime(texto)
+    except ValueError:
+        return "key ?"
+    if unanime is None:
+        return "key ?"
+    if unanime:
+        return None
+    ganados, total = (int(p) for p in texto.split("/"))
+    if ganados == 0 or total == 0:
+        return "key ?"
+    return f"key {ganados}/{total}"
+
+
+def _comentarios(d: dict) -> str:
+    """Lo que va en Comments: el comentario que ya traía el track + la nota de la key.
+
+    El comentario previo NO se pisa: se conserva y la nota se agrega detrás. Sin nota no se
+    escribe nada (tampoco el previo solo): Comments aparece únicamente cuando la key es dudosa.
+    """
+    nota = nota_key(d)
+    if not nota:
+        return ""
+    previo = (d.get("comentario") or "").strip()
+    return f"{previo}{SEPARADOR_COMENTARIO}{nota}" if previo else nota
 
 
 def _atributos_track(d: dict, i: int, carpeta_itunes: Path) -> dict:
@@ -90,6 +136,16 @@ def _atributos_track(d: dict, i: int, carpeta_itunes: Path) -> dict:
         clasica = camelot_a_clasica(d["camelot"])
     if clasica:
         attrs["Tonality"] = clasica
+        # La Tonality se escribe IGUAL aunque sea dudosa: así Rekordbox no reanaliza. La
+        # duda viaja aparte, en Comments. Solo si hay Tonality: una nota sobre una key que
+        # no se escribió no le dice nada a nadie.
+        #
+        # `Comments` como atributo del <TRACK> NO está verificado con evidencia del repo: ni
+        # `ground_truth/rekordbox.py` lo lee ni hay un export real de Rekordbox acá. Si un
+        # export real dice otro nombre, se cambia acá y en los tests del XML.
+        comentarios = _comentarios(d)
+        if comentarios:
+            attrs["Comments"] = comentarios
 
     dur = float(d.get("duracion_s") or 0)
     if dur > 0:

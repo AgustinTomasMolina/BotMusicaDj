@@ -174,10 +174,12 @@ def acuerdo_unanime(acuerdo: str) -> bool | None:
     Unánime = todos los tramos votaron la misma key: ganados == total, con total > 0. No
     se compara contra "3/3" porque `n_tramos` es configurable.
 
-    Devuelve None cuando no hay acuerdo que leer (campo vacío): el análisis se corrió con
-    `tono()` simple, o `tono_consenso` no pudo votar (audio demasiado corto). Un valor que
-    no tiene la forma "g/t" es un CSV roto y levanta ValueError: adivinarlo sería falsear
-    el subconjunto sobre el que se mide el contrato.
+    Devuelve None cuando no hay acuerdo que leer (campo vacío). Desde `aabd83d` la etapa A
+    mide el acuerdo SIEMPRE, así que el vacío solo sale de dos lados: un CSV anterior a ese
+    commit (que no tenía el acuerdo), o un track demasiado corto para 3 tramos disjuntos
+    (< ~135 s: `tono_consenso` devuelve acuerdo (0, 0) y la etapa A lo escribe vacío). Un
+    valor que no tiene la forma "g/t" es un CSV roto y levanta ValueError: adivinarlo sería
+    falsear el subconjunto sobre el que se mide el contrato.
     """
     texto = (acuerdo or "").strip()
     if not texto:
@@ -193,12 +195,18 @@ def metricas(cruces: list[Cruce]) -> dict:
     """Las métricas de §4 que dependen del análisis por track, más los dos p95 de BPM.
 
     Tonalidad (contrato 2026-09-14): `tonalidad_exacta` y `tonalidad_compatible` se miden
-    SOLO sobre los tracks con acuerdo unánime de `tono_consenso`. Si ningún track trae
-    acuerdo (análisis con `tono()` simple) quedan AUSENTES — sin medir — y no se rellenan con
-    la cifra global: eso sería medir otra cosa con el nombre del contrato. La global va a
-    `extra` como informativa, junto con la COBERTURA del subconjunto (cuántos y qué % de
-    los tracks con referencia son unánimes): un contrato sobre un subconjunto se "cumple"
-    achicando el subconjunto, y ese número tiene que verse.
+    SOLO sobre los tracks con acuerdo unánime de `tono_consenso`. Si ningún track con
+    referencia trae acuerdo quedan AUSENTES — sin medir — y no se rellenan con la cifra
+    global: eso sería medir otra cosa con el nombre del contrato. Hoy eso pasa solo con un
+    CSV anterior a `aabd83d` o si todos los tracks son cortos (ver `acuerdo_unanime`). La
+    global va a `extra` como informativa, junto con la COBERTURA del subconjunto (cuántos y
+    qué % de los tracks con referencia son unánimes): un contrato sobre un subconjunto se
+    "cumple" achicando el subconjunto, y ese número tiene que verse.
+
+    `extra["acierto_por_acuerdo"]`: acierto exacto y compatible de la key ANALIZADA
+    (`key_est`, la de `metodo`) agrupada por el acuerdo entre tramos. El A/B del 2026-09-14
+    midió el acierto de la key DEL CONSENSO por su acuerdo (55/36/26%); la key que se
+    muestra es la de `tono()`, y que el acuerdo prediga ESE acierto es esta tabla.
     """
     eo = [c.err_octava for c in cruces if c.err_octava is not None]
     ec = [c.err_crudo for c in cruces if c.err_crudo is not None]
@@ -238,8 +246,44 @@ def metricas(cruces: list[Cruce]) -> dict:
         "tiempo_p95_s": _p95(ts) if ts else None,
         "sobre_umbral_tiempo": sum(1 for t in ts if t > UMBRAL_TIEMPO),
         "n_tiempo": len(ts), "n_bpm": len(eo), "n_key": len(ex),
+        "acierto_por_acuerdo": acierto_por_acuerdo(cruces),
     }
     return {"umbrales": m, "extra": extra}
+
+
+SIN_ACUERDO = "sin acuerdo"
+
+
+def acierto_por_acuerdo(cruces: list[Cruce]) -> list[dict]:
+    """Acierto de la key analizada (`key_est`) por grupo de acuerdo, solo tracks con referencia.
+
+    Un grupo por valor de `acuerdo` ("3/3", "2/3", "1/3", "0/3"...) y uno `SIN_ACUERDO` para
+    el campo vacío (CSV viejo o track corto). Orden: más tramos primero, y dentro de la misma
+    cantidad de tramos, más acuerdo primero; `SIN_ACUERDO` al final. Cada grupo:
+    {acuerdo, n, exacta, compatible} con los dos aciertos en %.
+
+    Un acuerdo con formato roto levanta ValueError (vía `acuerdo_unanime`): agruparlo como
+    "sin acuerdo" escondería un CSV roto dentro de un número.
+    """
+    grupos: dict[str, list[Cruce]] = {}
+    for c in cruces:
+        if c.key_exacta == "sin-referencia":
+            continue
+        texto = (c.acuerdo or "").strip()
+        acuerdo_unanime(texto)     # valida el formato; el resultado no se usa acá
+        grupos.setdefault(texto or SIN_ACUERDO, []).append(c)
+
+    def _orden(clave: str) -> tuple:
+        if clave == SIN_ACUERDO:
+            return (1, 0, 0)
+        ganados, total = (int(p) for p in clave.split("/"))
+        return (0, -total, -ganados)
+
+    return [{
+        "acuerdo": clave, "n": len(g),
+        "exacta": 100.0 * statistics.mean(1.0 if c.key_exacta == "si" else 0.0 for c in g),
+        "compatible": 100.0 * statistics.mean(1.0 if c.key_compatible == "si" else 0.0 for c in g),
+    } for clave, g in sorted(grupos.items(), key=lambda kv: _orden(kv[0]))]
 
 
 def calibracion(cruces: list[Cruce]) -> dict:
@@ -247,20 +291,41 @@ def calibracion(cruces: list[Cruce]) -> dict:
 
     Devuelve el acierto por tramo de confianza y la correlación de Pearson entre la
     confianza y el acierto (0/1). Si la correlación es ~0, la confianza no informa.
+
+    QUÉ ES `confianza` depende de la columna `metodo`, y las etiquetas de los tramos también:
+    - `tono_consenso`: la fracción de tramos que votaron la key ganadora (0.33/0.67/1.00 con
+      3 tramos) → etiquetas que dicen cuántos tramos coinciden.
+    - `tono` (el default) o una mezcla de métodos: la correlación Krumhansl del mejor perfil,
+      que NO es un conteo de tramos → etiquetas solo numéricas. No se le da otra lectura: el
+      A/B del 2026-09-14 midió que no predice el acierto (Pearson +0.022). La confianza de la
+      key con `tono` es el acuerdo, y su acierto está en `acierto_por_acuerdo`.
+    `metodo` en el resultado: el método si es uno solo, "" si hay mezcla o no se sabe.
     """
-    datos = [(c.confianza, 1.0 if c.key_exacta == "si" else 0.0)
-             for c in cruces if c.key_exacta != "sin-referencia"]
+    con_ref = [c for c in cruces if c.key_exacta != "sin-referencia"]
+    datos = [(c.confianza, 1.0 if c.key_exacta == "si" else 0.0) for c in con_ref]
     if not datos:
-        return {"n": 0, "tramos": [], "pearson": None}
+        return {"n": 0, "tramos": [], "pearson": None, "metodo": ""}
 
     conf = [d[0] for d in datos]
     acierto = [d[1] for d in datos]
+    metodos = {c.metodo for c in con_ref}
+    metodo = next(iter(metodos)) if len(metodos) == 1 else ""
+
+    if metodo == "tono_consenso":
+        bordes = ((0.0, 0.34, "0.33 — los 3 tramos distintos"),
+                  (0.34, 0.67, "0.34-0.66"),
+                  (0.67, 0.99, "0.67 — 2 de 3 coinciden"),
+                  (0.99, 1.01, "1.00 — los 3 coinciden"))
+    else:
+        # Krumhansl es una correlación: puede ser negativa (silencio, ruido). El primer
+        # tramo la incluye para no tirar tracks del conteo sin decirlo.
+        bordes = ((-1.01, 0.34, "< 0.34"),
+                  (0.34, 0.67, "0.34-0.66"),
+                  (0.67, 0.99, "0.67-0.98"),
+                  (0.99, 1.01, ">= 0.99"))
 
     tramos = []
-    for lo, hi, etiqueta in ((0.0, 0.34, "0.33 — los 3 tramos distintos"),
-                             (0.34, 0.67, "0.34-0.66"),
-                             (0.67, 0.99, "0.67 — 2 de 3 coinciden"),
-                             (0.99, 1.01, "1.00 — los 3 coinciden")):
+    for lo, hi, etiqueta in bordes:
         g = [a for c, a in datos if lo <= c < hi]
         if g:
             tramos.append((etiqueta, len(g), 100.0 * statistics.mean(g)))
@@ -272,7 +337,7 @@ def calibracion(cruces: list[Cruce]) -> dict:
         den = (sum((c - mc) ** 2 for c in conf) * sum((a - ma) ** 2 for a in acierto)) ** 0.5
         pearson = num / den if den else None
 
-    return {"n": len(datos), "tramos": tramos, "pearson": pearson,
+    return {"n": len(datos), "tramos": tramos, "pearson": pearson, "metodo": metodo,
             "acierto_global": 100.0 * statistics.mean(acierto)}
 
 
@@ -291,6 +356,15 @@ def escribir_csv(cruces: list[Cruce], out_dir: Path, sufijo: str = "") -> Path:
 
 def _pct(v: float | None) -> str:
     return "—" if v is None else f"{v:.1f}%"
+
+
+# Por qué el contrato de tonalidad puede quedar sin medir. NO es "falta --consenso": desde
+# `aabd83d` la etapa A mide el acuerdo siempre, y `--consenso` cambiaría la KEY (la
+# decisión es que la key salga de tono()). Las dos causas reales están en `acuerdo_unanime`.
+CONTRATO_SIN_ACUERDO = (
+    "CONTRATO — sin medir: ningún track con referencia trae acuerdo entre tramos. O el CSV "
+    "es anterior a aabd83d (reanalizar con la etapa A actual, que mide el acuerdo siempre), "
+    "o todos duran menos de ~135 s y no dan para 3 tramos disjuntos")
 
 
 def informe(res: dict) -> None:
@@ -326,18 +400,23 @@ def informe(res: dict) -> None:
         print(f"  cobertura del subconjunto: {e['n_key_unanimes']}/{e['n_key']} "
               f"({_pct(e['cobertura_unanimes'])})   <- si baja, el contrato mide menos tracks")
     else:
-        print("  CONTRATO — sin medir: el análisis no se corrió con consenso (--consenso),"
-              " no hay acuerdo entre tramos")
+        print(f"  {CONTRATO_SIN_ACUERDO}")
     print(f"  informativo — global, todos los tracks: "
           f"{_pct(e['tonalidad_exacta_global'])} exacta · "
           f"{_pct(e['tonalidad_compatible_global'])} compatible")
+    if e["acierto_por_acuerdo"]:
+        print(f"  acierto de la key analizada (key_est) por acuerdo entre tramos "
+              f"(método: {', '.join(sorted(metodo)) or '?'}):")
+        for g in e["acierto_por_acuerdo"]:
+            print(f"    {g['acuerdo']:12} n={g['n']:4}  exacta {_pct(g['exacta']):>6} · "
+                  f"compatible {_pct(g['compatible']):>6}")
 
     print(f"{'-' * 72}\nContra los umbrales de la spec §4:")
     for f in evaluar_umbrales(met["umbrales"]):
         if f.valor is None:
             estado, val = "· sin medir (necesita la radio)", "—"
             if f.umbral.clave.startswith("tonalidad_"):
-                estado = "· sin medir (necesita análisis con consenso)"
+                estado = "· sin medir (sin acuerdo entre tramos: CSV viejo o tracks cortos)"
         elif f.umbral.a_calibrar:
             estado, val = "~ sin veredicto", f"{f.valor:.2f}{f.umbral.unidad}"
         else:
@@ -382,6 +461,13 @@ def informe(res: dict) -> None:
     cal = calibracion(cruces)
     if cal["n"]:
         print(f"{'-' * 72}\nCalibración: ¿la confianza predice el acierto? (n={cal['n']})")
+        if cal["metodo"] == "tono_consenso":
+            print("  confianza = fracción de tramos que votaron la key (tono_consenso)")
+        else:
+            que = ("correlación Krumhansl de tono()" if cal["metodo"] == "tono"
+                   else "método mezclado o desconocido: no es una sola escala")
+            print(f"  confianza = {que} — NO es acuerdo entre tramos; "
+                  f"el acierto por acuerdo está arriba, en Tonalidad")
         print(f"  acierto global: {cal['acierto_global']:.1f}%")
         for etiqueta, n, acc in cal["tramos"]:
             print(f"  confianza {etiqueta:30} n={n:3}  acierto {acc:5.1f}%")

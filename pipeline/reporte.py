@@ -19,17 +19,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
-# Por debajo de esto la tonalidad se muestra atenuada y con '?'. Aplica SOLO cuando el
-# valor vino de `tono_consenso`, que devuelve la fracción de tramos que coinciden: 0.67 =
-# dos de tres. Un tramo discrepando ya es motivo para no presentarla como segura.
-#
-# Con `tono()` —que es el default— la "confianza" es la correlación Krumhansl, y está
-# MEDIDO que no predice nada (Pearson +0.022 contra la estabilidad entre tramos, tarea
-# 5.6/calibración). Atenuar según ese número sería vestir ruido de información, así que
-# con `tono()` la key se muestra sin adorno y el tooltip aclara que no hay indicador de
-# fiabilidad. Para tenerlo hay que correr con --consenso en los dos lados.
-CONFIANZA_MINIMA = 0.67
-METODO_CONSENSO = "tono_consenso"
+from benchmark.evaluar import acuerdo_unanime
+
+# La confianza de la key NO es el campo `confianza`: con `tono()` —el default— es la
+# correlación Krumhansl, y está MEDIDO que no predice nada (Pearson +0.022). Lo que sí
+# predice el acierto es el ACUERDO entre tramos de `tono_consenso` (A/B 2026-09-14,
+# `claude/ab-tonalidad-2026-09-14.md`: 3/3 → 55% exacta, 2/3 → 36%, 1/3 → 26%), y la etapa A
+# lo mide siempre, con o sin --consenso. Así que la key va limpia SOLO con acuerdo unánime;
+# cualquier otra cosa —tramos en desacuerdo, o ningún tramo para comparar— va atenuada
+# y con '?'. Ver `_dato_key`.
 
 # Por debajo de esto no es un track: es un loop, un sample o una nota de voz. El corte sale
 # de la distribución real de la carpeta, no de una intuición: hay 8 archivos entre 8 y 52 s
@@ -69,6 +67,10 @@ class Fila:
     metodo: str = "tono"         # qué función produjo la tonalidad
     estado: str = PENDIENTE
     motivos: list = field(default_factory=list)   # por qué quedó pendiente
+    tramos: str = ""             # keys de cada tramo del consenso ("8A|3B|8A"), para el tooltip
+    # El comentario que queda en el tag de la copia (el ajeno que se preservó, o el "MusiFlix ·
+    # revisar" que se escribió). Viaja a `aplicar` para no pisarlo con la nota de la key.
+    comentario: str = ""
 
 
 def sin_nombre(artista: str, titulo: str) -> bool:
@@ -213,6 +215,10 @@ function bajar(){
       bpm:parseFloat(t.dataset.bpm)||0,
       camelot:t.dataset.camelot||'', clasica:t.dataset.clasica||'',
       duracion_s:parseFloat(t.dataset.duracion)||0,
+      // El acuerdo entre tramos viaja para que el XML deje la duda en Comments ('key 2/3'),
+      // y el comentario del tag para no pisarlo. Siempre string, también vacío: un
+      // decisiones.json SIN el campo es uno viejo, y ahí aplicar no escribe nada.
+      acuerdo:t.dataset.acuerdo||'', comentario:t.dataset.comentario||'',
       estado:r?r.value:'pendiente'});
   });
   const doc={version:1,generado:new Date().toISOString(),
@@ -227,27 +233,44 @@ contar();
 
 
 def _dato_key(f: Fila) -> str:
-    """Camelot + clásica juntas. Atenuado y con '?' si la confianza es baja (§6).
+    """Camelot + clásica juntas. Atenuado y con '?' si la key no es confiable (§6).
 
-    La atenuación solo se aplica con `tono_consenso`, cuya confianza es la fracción de
-    tramos que coinciden y sí significa algo. Con `tono()` la confianza es la correlación
-    Krumhansl, medida como no predictiva: mostrar el valor atenuado por ese número daría
-    una falsa sensación de que el reporte sabe cuándo desconfiar.
+    La confianza es el ACUERDO entre tramos, no `f.confianza` ni `f.metodo` (ver el
+    comentario de arriba del módulo). Tres casos:
+
+    - unánime ("3/3") → la key limpia.
+    - no unánime ("2/3") → dudosa; el tooltip dice el acuerdo y qué votó cada tramo.
+    - sin evidencia ("0/0", o "" que es como la etapa A escribe el 0/0) → dudosa también:
+      el track no dio para comparar tramos, y presentar la key como segura sería inventar
+      una confianza que nadie midió. El tooltip dice por qué, distinto en cada caso.
     """
     if not f.camelot or f.camelot == "?":
         return '<span class="dudoso">key ?</span>'
     par = (f"{html.escape(f.camelot)} · {html.escape(f.clasica)}" if f.clasica
            else html.escape(f.camelot))
 
-    if f.metodo != METODO_CONSENSO:
-        return (f'<span title="tonalidad por tono(); la confianza de este método no '
-                f'predice fiabilidad — para tener el indicador, correr con --consenso">'
-                f'{par}</span>')
-    if f.confianza < CONFIANZA_MINIMA:
-        acuerdo = f" {html.escape(f.acuerdo)}" if f.acuerdo else ""
-        return (f'<span class="dudoso" title="confianza {f.confianza:.2f}{acuerdo}">'
-                f'{par} ?</span>')
-    return f"<b>{par}</b>"
+    try:
+        unanime = acuerdo_unanime(f.acuerdo)
+    except ValueError:
+        # Un acuerdo con formato roto ("2/3/4", "abc") no puede tirar el reporte ENTERO: el
+        # resto de los tracks no tiene la culpa. Solo esta fila queda dudosa. (En `evaluar`
+        # sí falla ruidosamente, porque ahí falsearía el subconjunto del contrato.)
+        return f'<span class="dudoso" title="acuerdo ilegible">{par} ?</span>'
+    if unanime:
+        return f"<b>{par}</b>"
+    if unanime is None:
+        motivo = ("sin tramos para comparar: no hay acuerdo medido entre tramos "
+                  "(la etapa A lo deja vacío cuando el track dura menos de ~135 s)")
+    elif not f.tramos:
+        # "0/0": `tono_consenso` no armó ningún tramo (devuelve tramos vacío). Se distingue
+        # por los tramos y no volviendo a parsear el texto del acuerdo: eso es de
+        # `acuerdo_unanime`.
+        motivo = (f"sin tramos para comparar: acuerdo {f.acuerdo.strip()}, el track no "
+                  f"alcanzó para votar entre tramos disjuntos")
+    else:
+        tramos = f": {f.tramos}" if f.tramos else ""
+        motivo = f"acuerdo {f.acuerdo.strip()} entre tramos{tramos}"
+    return f'<span class="dudoso" title="{html.escape(motivo)}">{par} ?</span>'
 
 
 def _fila_html(f: Fila) -> str:
@@ -295,7 +318,8 @@ def _fila_html(f: Fila) -> str:
  data-titulo="{html.escape(f.titulo)}" data-grupo="{f.grupo_id}"
  data-motivos="{html.escape('|'.join(f.motivos))}"
  data-bpm="{f.bpm:.1f}" data-camelot="{html.escape(f.camelot)}"
- data-clasica="{html.escape(f.clasica)}" data-duracion="{f.duracion_s:.1f}">
+ data-clasica="{html.escape(f.clasica)}" data-duracion="{f.duracion_s:.1f}"
+ data-acuerdo="{html.escape(f.acuerdo)}" data-comentario="{html.escape(f.comentario)}">
   <div class="cab"><span class="tit">{titulo}</span><span class="art">{artista}</span>
     {badge}{dup}</div>
   <div class="datos">

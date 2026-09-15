@@ -8,6 +8,7 @@ se fabrican (spec §5). Se escriben como WAV float en `tmp_path` y se leen por e
 import os
 import sqlite3
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -141,6 +142,128 @@ def test_el_benchmark_no_tiene_su_propia_copia_de_la_medicion():
     assert bench.cargar is motor.cargar, "benchmark.analizar carga el audio por su cuenta"
     assert bench.medir_bpm_y_tono is motor.medir_bpm_y_tono, \
         "benchmark.analizar mide BPM/tonalidad por su cuenta"
+
+
+# --- key de tono(), confianza del acuerdo de tono_consenso (A/B 2026-09-14) ------------
+
+
+def test_etapa_a_key_de_tono_y_acuerdo_del_consenso(audio_que_separa_los_metodos):
+    """Sobre el audio de tres bloques los dos métodos discrepan: `tono` dice 3B (ventana
+    central mayoría Do# mayor) y `tono_consenso` vota 8A con 2 de 3. La etapa A por default
+    tiene que dar la key de `tono` y el acuerdo del consenso, no los dos del mismo lado."""
+    from benchmark.analizar import analizar_uno
+    from motor.analisis import cargar
+    from motor.tonalidad import tono, tono_consenso
+
+    y = cargar(audio_que_separa_los_metodos)
+    de_tono, del_consenso = tono(y, SR), tono_consenso(y, SR)
+    assert (de_tono["camelot"], del_consenso["camelot"]) == ("3B", "8A"), \
+        f"el caso necesita que discrepen: tono {de_tono['camelot']}, consenso {del_consenso['camelot']}"
+    assert del_consenso["tramos"] == ["8A", "3B", "8A"], f"tramos {del_consenso['tramos']}"
+
+    fila = analizar_uno(str(audio_que_separa_los_metodos))
+
+    assert fila.key_est == "3B", f"key {fila.key_est}: la key tiene que salir de tono() (3B)"
+    assert fila.confianza == de_tono["confianza"], \
+        f"confianza {fila.confianza} y la de tono() es {de_tono['confianza']}"
+    assert fila.metodo == "tono", f"metodo {fila.metodo!r}"
+    assert fila.acuerdo == "2/3", f"acuerdo {fila.acuerdo!r}: tiene que ser el del consenso"
+    assert fila.tramos == "8A|3B|8A", f"tramos {fila.tramos!r}"
+
+
+def test_etapa_a_track_corto_escribe_acuerdo_vacio_no_0_de_0(tmp_path):
+    """< ~135 s no da para 3 tramos disjuntos: `tono_consenso` devuelve acuerdo (0, 0) y la
+    etapa A lo escribe VACÍO. De eso dependen `hay_consenso` de evaluar (vacío = no hay
+    acuerdo) y el tooltip del reporte ("la etapa A lo deja vacío...")."""
+    from benchmark.analizar import analizar_uno
+    from motor.analisis import cargar
+    from motor.tonalidad import tono_consenso
+
+    y, sr = click_track(128.0, dur=30, nota="A", modo="min")
+    ruta = _wav(tmp_path / "corto.wav", y, sr)
+    cons = tono_consenso(cargar(ruta), SR)
+    assert (cons["acuerdo"], cons["tramos"]) == ((0, 0), []), \
+        f"el caso necesita un track sin tramos: acuerdo {cons['acuerdo']}, tramos {cons['tramos']}"
+
+    fila = analizar_uno(str(ruta))
+
+    assert fila.acuerdo == "", f"acuerdo {fila.acuerdo!r}: un track corto escribe vacío"
+    assert fila.tramos == "", f"tramos {fila.tramos!r}"
+
+
+def _dobles_de_medicion(monkeypatch, espera_consenso: float = 0.0):
+    """Reemplaza BPM, tono y tono_consenso de `motor.analisis` por dobles que cuentan
+    llamadas y devuelven valores distinguibles (el consenso vota otra key que tono)."""
+    import motor.analisis as ma
+
+    llamadas = {"tono": 0, "tono_consenso": 0}
+
+    def _tono(y, sr):
+        llamadas["tono"] += 1
+        return {"nota": "C#", "modo": "maj", "camelot": "3B", "confianza": 0.91}
+
+    def _consenso(y, sr):
+        llamadas["tono_consenso"] += 1
+        if espera_consenso:
+            time.sleep(espera_consenso)
+        return {"nota": "A", "modo": "min", "camelot": "8A", "confianza": 0.667,
+                "acuerdo": (2, 3), "tramos": ["8A", "3B", "8A"]}
+
+    monkeypatch.setattr(ma, "bpm_refinado", lambda y, sr: 128.0)
+    monkeypatch.setattr(ma, "tono", _tono)
+    monkeypatch.setattr(ma, "tono_consenso", _consenso)
+    return llamadas
+
+
+def test_con_consenso_el_consenso_se_calcula_una_sola_vez(monkeypatch):
+    """Modo experimental: la key sale del voto, y ese mismo voto trae el acuerdo. Calcularlo
+    dos veces (una para la key y otra para el acuerdo) duplica ~1 s por track."""
+    from motor.analisis import medir_bpm_y_tono
+
+    llamadas = _dobles_de_medicion(monkeypatch)
+    _, det = medir_bpm_y_tono(np.zeros(SR * 2), SR, consenso=True)
+
+    assert llamadas["tono_consenso"] == 1, f"tono_consenso se llamó {llamadas['tono_consenso']} veces"
+    assert llamadas["tono"] == 0, f"tono se llamó {llamadas['tono']} veces y la key es del voto"
+    assert (det["camelot"], det["acuerdo"]) == ("8A", (2, 3)), f"detección {det}"
+
+
+def test_el_scan_del_motor_no_paga_el_consenso(monkeypatch):
+    """`analizar_senal` (el scan) no persiste el acuerdo todavía (tarea 17): no tiene que
+    correr `tono_consenso` para tirarlo. Y la key tiene que ser la de `tono`, la misma que
+    da la etapa A."""
+    from motor import analisis
+
+    llamadas = _dobles_de_medicion(monkeypatch)
+    monkeypatch.setattr(analisis, "embed", lambda *a, **k: np.zeros(4))
+    monkeypatch.setattr(analisis, "onsets_por_segundo", lambda y, sr: 0.0)
+    y, _ = click_track(128.0, dur=3, nota="A", modo="min")
+
+    features = analisis.analizar_senal(y, SR)
+
+    assert llamadas["tono_consenso"] == 0, \
+        f"el scan llamó a tono_consenso {llamadas['tono_consenso']} veces"
+    assert features.key == "3B", f"key {features.key}: tiene que ser la de tono()"
+
+
+def test_el_tiempo_de_analisis_incluye_el_consenso(tmp_path, monkeypatch):
+    """§4 (≤10 s/track) se mide con `t_analisis_s`: si el consenso quedara fuera del
+    cronómetro, el umbral aprobaría un análisis más caro del que mide. El doble del consenso
+    tarda 0.4 s a propósito y todo lo demás es instantáneo: el tiempo tiene que verlo."""
+    from benchmark.analizar import analizar_uno
+
+    espera = 0.4
+    llamadas = _dobles_de_medicion(monkeypatch, espera_consenso=espera)
+    y, sr = click_track(128.0, dur=3)
+    ruta = _wav(tmp_path / "t.wav", y, sr)
+
+    fila = analizar_uno(str(ruta))
+
+    assert llamadas["tono_consenso"] == 1, f"tono_consenso se llamó {llamadas['tono_consenso']} veces"
+    assert fila.t_analisis_s >= espera, \
+        f"t_analisis_s {fila.t_analisis_s} y el consenso solo ya tarda {espera} s"
+    assert fila.t_total_s >= fila.t_analisis_s + fila.t_carga_s - 0.002, \
+        f"t_total_s {fila.t_total_s} no suma carga {fila.t_carga_s} + análisis {fila.t_analisis_s}"
 
 
 # --- lo no medido no se inventa --------------------------------------------------------
