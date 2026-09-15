@@ -59,8 +59,12 @@ UMBRALES: list[Umbral] = [
     Umbral("tonalidad_compatible", "Tonalidad compatible (unánimes)",   95.0, ">=", "%"),
     Umbral("transiciones_fuera_bpm", "Transiciones fuera de ±8% de BPM", 0.0, "<=", "%"),
     Umbral("choques_armonicos",    "Choques armónicos (compat < 0.4)",  10.0, "<=", "%"),
-    Umbral("energia_desvio_curva", "Curva de energía (desvío medio)",   None, "<=",
-           calibrar="tarea 14"),
+    # Calibrado (tarea 14, 2026-09-15): sobre 197 sets reales la MEDIANA del desvío por-set
+    # es 0.177 (media 0.181, σ 0.05, p90 0.249). 0.22 ≈ mediana + 0.9σ: pasa el estado sano
+    # con ~25% de aire y reprueba si el set típico deja de seguir la curva. El valor que se
+    # mide y compara contra este umbral es la MEDIANA de los desvíos por-set del benchmark
+    # (ver benchmark/curva_energia_calibracion.py y claude/curva-energia-2026-09-14.md).
+    Umbral("energia_desvio_curva", "Curva de energía (desvío mediano)",  0.22, "<="),
     Umbral("energia_spearman_ascendente", "Curva de energía (Spearman ↑)", 0.5, ">="),
     Umbral("tiempo_analisis_s",    "Tiempo de análisis",                10.0, "<=", "s/track"),
     Umbral("latencia_radio_ms",    "Latencia de la radio (10k tracks)", 200.0, "<", "ms"),

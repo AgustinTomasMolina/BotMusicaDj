@@ -48,6 +48,15 @@ def _histograma(vals: list[float], bins: int = 12, ancho: int = 50) -> None:
         print(f"  {a:6.3f}–{a + paso:6.3f} | {c:3}  {'#' * round(ancho * c / top)}")
 
 
+def mediana_desvio(db: Path, curva: str = "peak") -> float:
+    """La MEDIANA de los desvíos por-set: el valor que alimenta `energia_desvio_curva` (§4).
+
+    Se agrega por mediana (no media) para que un par de semillas patológicas no reprueben
+    todo el build, pero sí lo haga un corrimiento amplio de la distribución (tarea 14)."""
+    vals = [d for d, _ in desvios(db, curva)]
+    return float(np.median(vals)) if vals else float("nan")
+
+
 def informe(db: Path, curva: str) -> None:
     pares = desvios(db, curva)
     if not pares:
@@ -63,6 +72,15 @@ def informe(db: Path, curva: str) -> None:
     print("\npeores 8 sets:")
     for d, nom in sorted(pares, reverse=True)[:8]:
         print(f"  {d:.3f}  {nom[:52]}")
+
+    # Chequeo contra el contrato §4 (el mismo umbral que usa el benchmark).
+    from benchmark.umbrales import UMBRALES, evaluar
+    med = float(np.median(vals))
+    fila = next(f for f in evaluar({"energia_desvio_curva": med})
+                if f.umbral.clave == "energia_desvio_curva")
+    lim = next(u.limite for u in UMBRALES if u.clave == "energia_desvio_curva")
+    print(f"\nCONTRATO §4: mediana {med:.3f} vs umbral <= {lim:g}  →  "
+          f"{'PASA' if fila.ok else 'ROMPE'}")
 
 
 def main(argv=None) -> int:
