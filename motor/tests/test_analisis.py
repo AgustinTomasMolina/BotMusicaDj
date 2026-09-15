@@ -171,6 +171,26 @@ def test_etapa_a_key_de_tono_y_acuerdo_del_consenso(audio_que_separa_los_metodos
     assert fila.tramos == "8A|3B|8A", f"tramos {fila.tramos!r}"
 
 
+def test_etapa_a_track_corto_escribe_acuerdo_vacio_no_0_de_0(tmp_path):
+    """< ~135 s no da para 3 tramos disjuntos: `tono_consenso` devuelve acuerdo (0, 0) y la
+    etapa A lo escribe VACÍO. De eso dependen `hay_consenso` de evaluar (vacío = no hay
+    acuerdo) y el tooltip del reporte ("la etapa A lo deja vacío...")."""
+    from benchmark.analizar import analizar_uno
+    from motor.analisis import cargar
+    from motor.tonalidad import tono_consenso
+
+    y, sr = click_track(128.0, dur=30, nota="A", modo="min")
+    ruta = _wav(tmp_path / "corto.wav", y, sr)
+    cons = tono_consenso(cargar(ruta), SR)
+    assert (cons["acuerdo"], cons["tramos"]) == ((0, 0), []), \
+        f"el caso necesita un track sin tramos: acuerdo {cons['acuerdo']}, tramos {cons['tramos']}"
+
+    fila = analizar_uno(str(ruta))
+
+    assert fila.acuerdo == "", f"acuerdo {fila.acuerdo!r}: un track corto escribe vacío"
+    assert fila.tramos == "", f"tramos {fila.tramos!r}"
+
+
 def _dobles_de_medicion(monkeypatch, espera_consenso: float = 0.0):
     """Reemplaza BPM, tono y tono_consenso de `motor.analisis` por dobles que cuentan
     llamadas y devuelven valores distinguibles (el consenso vota otra key que tono)."""

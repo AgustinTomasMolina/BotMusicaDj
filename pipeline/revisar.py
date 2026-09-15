@@ -88,6 +88,7 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
             confianza=motor.confianza if motor else 0.0,
             acuerdo=motor.acuerdo if motor else "",
             tramos=motor.tramos if motor else "",
+            comentario=valor.get("comentario") or "",
             grupo_id=gid, accion_duplicado=accion_dup.get(ruta, ""),
             cambios=[(c.campo, c.antes, c.despues, c.motivo)
                      for c in plan if c.accion == "escribir"],

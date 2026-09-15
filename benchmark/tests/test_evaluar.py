@@ -10,6 +10,7 @@ import pytest
 
 from benchmark.evaluar import (
     UMBRAL_BPM,
+    acierto_por_acuerdo,
     acuerdo_unanime,
     calibracion,
     cruzar,
@@ -28,12 +29,13 @@ COLS_GT = ["track_id", "artist", "name", "bpm", "tonality", "camelot",
            "genre", "duration_s", "kind", "num_cues", "location"]
 
 
-def _fila_a(archivo, bpm, key, conf=1.0, acuerdo="3/3", tramos="", t=3.0):
+def _fila_a(archivo, bpm, key, conf=1.0, acuerdo="3/3", tramos="", t=3.0,
+            metodo="tono_consenso"):
     return {"archivo": archivo, "ruta": f"D:/musica/{archivo}", "duracion_s": "240.0",
             "bpm_est": str(bpm), "key_est": key, "confianza": str(conf),
             "acuerdo": acuerdo, "tramos": tramos, "t_carga_s": "1.0",
             "t_analisis_s": str(round(t - 1.0, 2)), "t_total_s": str(t),
-            "metodo": "tono_consenso"}
+            "metodo": metodo}
 
 
 def _fila_gt(track_id, archivo, bpm, camelot, artist="X", name="Y"):
@@ -247,12 +249,67 @@ def test_informe_imprime_la_cobertura_al_lado_del_contrato(capsys):
     assert "50.00%" in fila and "[cobertura 4/6]" in fila, fila
 
 
-def test_informe_sin_consenso_dice_que_el_contrato_no_se_midio(capsys):
-    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="")]
+def test_informe_sin_acuerdo_dice_la_causa_real_y_no_pide_consenso(capsys):
+    """Desde aabd83d la etapa A mide el acuerdo siempre: sin acuerdo es CSV viejo o tracks
+    cortos. Pedir --consenso sería mandar a cambiar la key, contra la decisión."""
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="", metodo="tono")]
     informe(cruzar(a, [_fila_gt(1, "a.wav", 128.0, "8A")]))
     out = capsys.readouterr().out
-    assert "CONTRATO — sin medir: el análisis no se corrió con consenso" in out, out
+    lineas = [linea.strip() for linea in out.splitlines()]
+    assert ("CONTRATO — sin medir: ningún track con referencia trae acuerdo entre tramos. O el "
+            "CSV es anterior a aabd83d (reanalizar con la etapa A actual, que mide el acuerdo "
+            "siempre), o todos duran menos de ~135 s y no dan para 3 tramos disjuntos") in lineas, out
+    assert "--consenso" not in out, "el informe sigue sugiriendo --consenso, que cambia la key"
+    fila = next(linea for linea in lineas if linea.startswith("Tonalidad exacta (unánimes)"))
+    assert fila.endswith("· sin medir (sin acuerdo entre tramos: CSV viejo o tracks cortos)"), fila
     assert "informativo — global, todos los tracks: 100.0% exacta" in out, out
+
+
+# --- B: acierto de la key analizada por acuerdo ------------------------------------------
+
+
+def _cruces_por_acuerdo():
+    """Key de tono() contra GT 8A, un acierto distinto por grupo para que mezclar grupos se note.
+
+    A mano:
+      3/3 : a 8A (exacta), b 9A (vecina)        → n=2  exacta 50.0%  compatible 100.0%
+      2/3 : c 8A (exacta), d 3B, e 3B (lejanas) → n=3  exacta 33.3%  compatible  33.3%
+      1/3 : f 9A (vecina)                       → n=1  exacta  0.0%  compatible 100.0%
+      ""  : g 8A (exacta)                       → n=1  exacta 100%   compatible 100.0%
+      h 3/3 sin referencia en el GT             → fuera
+    """
+    filas = [("a", "8A", "3/3"), ("b", "9A", "3/3"), ("c", "8A", "2/3"), ("d", "3B", "2/3"),
+             ("e", "3B", "2/3"), ("f", "9A", "1/3"), ("g", "8A", ""), ("h", "8A", "3/3")]
+    a = [_fila_a(f"{n}.wav", 128.0, k, acuerdo=ac, metodo="tono") for n, k, ac in filas]
+    g = [_fila_gt(i, f"{n}.wav", 128.0, "8A" if n != "h" else "")
+         for i, (n, _, _) in enumerate(filas)]
+    return cruzar(a, g)
+
+
+def test_acierto_de_la_key_analizada_por_acuerdo():
+    tabla = metricas(_cruces_por_acuerdo()["cruces"])["extra"]["acierto_por_acuerdo"]
+    obtenido = [(g["acuerdo"], g["n"], round(g["exacta"], 1), round(g["compatible"], 1))
+                for g in tabla]
+    assert obtenido == [("3/3", 2, 50.0, 100.0), ("2/3", 3, 33.3, 33.3),
+                        ("1/3", 1, 0.0, 100.0), ("sin acuerdo", 1, 100.0, 100.0)], obtenido
+
+
+def test_acierto_por_acuerdo_no_esconde_un_acuerdo_roto():
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="2/3/4", metodo="tono")]
+    with pytest.raises(ValueError, match="formato inesperado"):
+        acierto_por_acuerdo(cruzar(a, [_fila_gt(1, "a.wav", 128.0, "8A")])["cruces"])
+
+
+def test_informe_imprime_el_acierto_por_acuerdo(capsys):
+    informe(_cruces_por_acuerdo())
+    lineas = [linea.rstrip() for linea in capsys.readouterr().out.splitlines()]
+    i = lineas.index("  acierto de la key analizada (key_est) por acuerdo entre tramos (método: tono):")
+    assert lineas[i + 1:i + 5] == [
+        "    3/3          n=   2  exacta  50.0% · compatible 100.0%",
+        "    2/3          n=   3  exacta  33.3% · compatible  33.3%",
+        "    1/3          n=   1  exacta   0.0% · compatible 100.0%",
+        "    sin acuerdo  n=   1  exacta 100.0% · compatible 100.0%",
+    ], lineas[i:i + 5]
 
 
 # --- Tiempo -----------------------------------------------------------------------------
@@ -295,6 +352,26 @@ def test_calibracion_detecta_confianza_que_no_dice_nada():
         g.append(_fila_gt(i, f"t{i}.wav", 128.0, "8A"))
     cal = calibracion(cruzar(a, g)["cruces"])
     assert abs(cal["pearson"]) < 0.3
+
+
+def test_calibracion_con_tono_no_etiqueta_la_krumhansl_como_tramos(capsys):
+    """Con tono() la confianza es la correlación Krumhansl: etiquetarla "los 3 coinciden"
+    describiría otra cosa. Las etiquetas quedan numéricas y el informe dice qué es."""
+    a, g = [], []
+    for i, conf in enumerate((1.0, 0.2, 0.5, 0.8, -0.1)):
+        a.append(_fila_a(f"t{i}.wav", 128.0, "8A", conf=conf, metodo="tono"))
+        g.append(_fila_gt(i, f"t{i}.wav", 128.0, "8A"))
+    res = cruzar(a, g)
+    cal = calibracion(res["cruces"])
+    assert cal["metodo"] == "tono"
+    assert [(t[0], t[1]) for t in cal["tramos"]] == [
+        ("< 0.34", 2), ("0.34-0.66", 1), ("0.67-0.98", 1), (">= 0.99", 1)], cal["tramos"]
+
+    informe(res)
+    lineas = [linea.strip() for linea in capsys.readouterr().out.splitlines()]
+    assert ("confianza = correlación Krumhansl de tono() — NO es acuerdo entre tramos; "
+            "el acierto por acuerdo está arriba, en Tonalidad") in lineas, lineas
+    assert not any("coinciden" in linea or "tramos distintos" in linea for linea in lineas), lineas
 
 
 def test_calibracion_vacia_si_no_hay_referencia():

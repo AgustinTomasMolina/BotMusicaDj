@@ -454,6 +454,35 @@ def test_sin_tramos_para_comparar_la_key_va_dudosa(tmp_path, acuerdo, motivo):
     assert "<b>2A · D#m</b>" not in h, f"acuerdo {acuerdo!r} salió como key segura"
 
 
+def test_ningun_tramo_pudo_votar_la_key_va_dudosa(tmp_path):
+    """"0/3" con "?|?|?": hubo tramos pero ninguno dio una key. Cero evidencia de confianza."""
+    f = _fila(confianza=0.91, metodo="tono", acuerdo="0/3", tramos="?|?|?")
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    esperado = '<span class="dudoso" title="acuerdo 0/3 entre tramos: ?|?|?">2A · D#m ?</span>'
+    assert esperado in h, "0/3 sin votos no salió dudoso"
+    assert "<b>2A · D#m</b>" not in h, "0/3 sin votos salió como key segura"
+
+
+@pytest.mark.parametrize("acuerdo", ["2/3/4", "abc"])
+def test_un_acuerdo_ilegible_no_tira_el_reporte_y_marca_solo_esa_fila(tmp_path, acuerdo):
+    rota = _fila(archivo="roto.wav", camelot="2A", clasica="D#m", acuerdo=acuerdo, tramos="")
+    sana = _fila(archivo="sano.wav", camelot="8A", clasica="Am", acuerdo="3/3",
+                 tramos="8A|8A|8A")
+    h = generar([rota, sana], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert '<span class="dudoso" title="acuerdo ilegible">2A · D#m ?</span>' in h, \
+        f"el acuerdo {acuerdo!r} no marcó su fila como dudosa con el motivo"
+    assert "<b>8A · Am</b>" in h, "la fila sana dejó de salir limpia por culpa de la rota"
+
+
+def test_el_reporte_manda_el_acuerdo_y_el_comentario_a_decisiones_json(tmp_path):
+    """Sin navegador no se puede correr bajar(): se fija el dato en la fila y la línea del JS
+    que lo lee. Si cualquiera de las dos puntas falta, el acuerdo no llega a aplicar."""
+    f = _fila(acuerdo="2/3", tramos="2A|2A|9B", comentario='1A - Energy 7 "x"')
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert 'data-acuerdo="2/3" data-comentario="1A - Energy 7 &quot;x&quot;"' in h
+    assert "acuerdo:t.dataset.acuerdo||'', comentario:t.dataset.comentario||''," in h
+
+
 def test_aplicar_escribe_lo_que_se_completo_a_mano(tmp_path):
     """Los valores editados en el reporte tienen que llegar al tag de la copia final."""
     import numpy as np
@@ -574,6 +603,83 @@ def test_todavia_no_se_inventan_cues(tmp_path):
     xml = tmp_path / "rb.xml"
     aplicar([_decision_completa(tmp_path)], itunes, xml)
     assert list(ET.parse(xml).getroot().iter("POSITION_MARK")) == []
+
+
+# --- La duda de la key viaja a Rekordbox en Comments ---------------------------------------
+
+
+def _track_xml(tmp_path, **kw):
+    import xml.etree.ElementTree as ET
+
+    itunes = tmp_path / "itunes"
+    itunes.mkdir(exist_ok=True)
+    xml = tmp_path / "rb.xml"
+    aplicar([_decision_completa(tmp_path, **kw)], itunes, xml)
+    return ET.parse(xml).getroot().find("COLLECTION").find("TRACK")
+
+
+def test_key_unanime_no_escribe_comments(tmp_path):
+    t = _track_xml(tmp_path, acuerdo="3/3", comentario="")
+    assert "Comments" not in t.attrib, f"unánime escribió Comments={t.get('Comments')!r}"
+    assert t.get("Tonality") == "D#m"
+
+
+def test_key_unanime_con_comentario_previo_tampoco_escribe_comments(tmp_path):
+    t = _track_xml(tmp_path, acuerdo="3/3", comentario="1A - Energy 7")
+    assert "Comments" not in t.attrib, f"unánime escribió Comments={t.get('Comments')!r}"
+
+
+def test_key_2_de_3_deja_el_acuerdo_en_comments_y_la_tonality_igual(tmp_path):
+    t = _track_xml(tmp_path, acuerdo="2/3", comentario="")
+    assert t.get("Comments") == "key 2/3"
+    assert t.get("Tonality") == "D#m", "la key dudosa se tiene que escribir igual"
+
+
+@pytest.mark.parametrize("acuerdo", ["", "0/3", "0/0", "abc"])
+def test_key_sin_evidencia_deja_key_interrogacion(tmp_path, acuerdo):
+    t = _track_xml(tmp_path, acuerdo=acuerdo, comentario="")
+    assert t.get("Comments") == "key ?", f"acuerdo {acuerdo!r} → Comments={t.get('Comments')!r}"
+    assert t.get("Tonality") == "D#m"
+
+
+def test_comentario_previo_se_conserva_y_se_agrega_la_nota(tmp_path):
+    t = _track_xml(tmp_path, acuerdo="1/3",
+                   comentario="MusiFlix · revisar · [bitrate inflado] muro a 16.0 kHz")
+    assert t.get("Comments") == "MusiFlix · revisar · [bitrate inflado] muro a 16.0 kHz | key 1/3"
+
+
+def test_decisiones_json_viejo_sin_acuerdo_no_escribe_comments(tmp_path):
+    """Un decisiones.json bajado antes de este cambio no trae `acuerdo`: no se inventa."""
+    d = _decision_completa(tmp_path, comentario="1A - Energy 7")
+    assert "acuerdo" not in d
+    t = _track_xml(tmp_path, comentario="1A - Energy 7")
+    assert "Comments" not in t.attrib, f"JSON viejo escribió Comments={t.get('Comments')!r}"
+    assert t.get("Tonality") == "D#m"
+
+
+def test_sin_tonality_no_hay_nota_de_key(tmp_path):
+    t = _track_xml(tmp_path, acuerdo="2/3", camelot="", clasica="")
+    assert "Tonality" not in t.attrib and "Comments" not in t.attrib, t.attrib
+
+
+def test_revisar_lleva_el_comentario_que_queda_en_el_tag(tmp_path):
+    """El comentario ajeno del archivo tiene que llegar a la Fila, o aplicar no tiene qué
+    conservar y la nota de la key lo taparía en Rekordbox."""
+    import numpy as np
+    import soundfile as sf
+
+    from calidad.escribir_tags import escribir_campos
+    from pipeline.revisar import procesar
+
+    orig = tmp_path / "orig"
+    orig.mkdir()
+    ruta = orig / "con_comentario.wav"
+    sf.write(ruta, (0.3 * np.sin(2 * np.pi * 220.0 * np.arange(22050 * 20) / 22050))
+             .astype(np.float32), 22050)
+    escribir_campos(ruta, {"comentario": "1A - Energy 7"})
+
+    fila = procesar([str(ruta)], tmp_path / "stg", progreso=False)[0]
+    assert fila.comentario == "1A - Energy 7", f"comentario {fila.comentario!r}"
 
 
 def test_el_xml_no_vive_en_el_staging(monkeypatch, tmp_path):

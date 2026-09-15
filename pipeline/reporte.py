@@ -68,6 +68,9 @@ class Fila:
     estado: str = PENDIENTE
     motivos: list = field(default_factory=list)   # por qué quedó pendiente
     tramos: str = ""             # keys de cada tramo del consenso ("8A|3B|8A"), para el tooltip
+    # El comentario que queda en el tag de la copia (el ajeno que se preservó, o el "MusiFlix ·
+    # revisar" que se escribió). Viaja a `aplicar` para no pisarlo con la nota de la key.
+    comentario: str = ""
 
 
 def sin_nombre(artista: str, titulo: str) -> bool:
@@ -212,6 +215,10 @@ function bajar(){
       bpm:parseFloat(t.dataset.bpm)||0,
       camelot:t.dataset.camelot||'', clasica:t.dataset.clasica||'',
       duracion_s:parseFloat(t.dataset.duracion)||0,
+      // El acuerdo entre tramos viaja para que el XML deje la duda en Comments ('key 2/3'),
+      // y el comentario del tag para no pisarlo. Siempre string, también vacío: un
+      // decisiones.json SIN el campo es uno viejo, y ahí aplicar no escribe nada.
+      acuerdo:t.dataset.acuerdo||'', comentario:t.dataset.comentario||'',
       estado:r?r.value:'pendiente'});
   });
   const doc={version:1,generado:new Date().toISOString(),
@@ -242,7 +249,13 @@ def _dato_key(f: Fila) -> str:
     par = (f"{html.escape(f.camelot)} · {html.escape(f.clasica)}" if f.clasica
            else html.escape(f.camelot))
 
-    unanime = acuerdo_unanime(f.acuerdo)
+    try:
+        unanime = acuerdo_unanime(f.acuerdo)
+    except ValueError:
+        # Un acuerdo con formato roto ("2/3/4", "abc") no puede tirar el reporte ENTERO: el
+        # resto de los tracks no tiene la culpa. Solo esta fila queda dudosa. (En `evaluar`
+        # sí falla ruidosamente, porque ahí falsearía el subconjunto del contrato.)
+        return f'<span class="dudoso" title="acuerdo ilegible">{par} ?</span>'
     if unanime:
         return f"<b>{par}</b>"
     if unanime is None:
@@ -305,7 +318,8 @@ def _fila_html(f: Fila) -> str:
  data-titulo="{html.escape(f.titulo)}" data-grupo="{f.grupo_id}"
  data-motivos="{html.escape('|'.join(f.motivos))}"
  data-bpm="{f.bpm:.1f}" data-camelot="{html.escape(f.camelot)}"
- data-clasica="{html.escape(f.clasica)}" data-duracion="{f.duracion_s:.1f}">
+ data-clasica="{html.escape(f.clasica)}" data-duracion="{f.duracion_s:.1f}"
+ data-acuerdo="{html.escape(f.acuerdo)}" data-comentario="{html.escape(f.comentario)}">
   <div class="cab"><span class="tit">{titulo}</span><span class="art">{artista}</span>
     {badge}{dup}</div>
   <div class="datos">
