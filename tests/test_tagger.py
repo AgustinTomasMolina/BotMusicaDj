@@ -1,8 +1,7 @@
 """Tests de tagger._titulo_sin_artista (#5.35).
 
-Módulo de raíz (capa de adquisición), igual que test_bot.py. OJO: la raíz NO está en
-`testpaths` de pyproject, así que `pytest -q` (que usa testpaths) NO lo colecta; hay que
-correrlo apuntándolo: `pytest test_tagger.py`.
+Prueba un módulo de la raíz (capa de adquisición). Vive en `tests/`, que está en `testpaths`:
+corre con toda la suite. Antes estaba suelto en la raíz y la suite no lo colectaba nunca.
 """
 from tagger import _titulo_sin_artista
 

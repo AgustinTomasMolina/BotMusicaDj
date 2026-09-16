@@ -44,6 +44,8 @@ pipeline/staging/
 
 # Salidas de la sesion de ground truth (CSVs con rutas personales, no van al repo)
 gt_out/
+# Reportes HTML de pipeline.revisar: rutas personales y nombres de la biblioteca (el repo es publico)
+pipeline/revision_*.html
 # Material de escucha de ground_truth.escucha: fragmentos de audio (cientos de MB) y un
 # indice con rutas personales y los veredictos a oido
 escucha/

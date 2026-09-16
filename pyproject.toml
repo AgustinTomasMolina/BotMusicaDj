@@ -64,7 +64,10 @@ known-first-party = ["motor", "benchmark", "ground_truth", "calidad", "pipeline"
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-testpaths = ["motor/tests", "benchmark/tests", "ground_truth/tests", "calidad/tests", "pipeline/tests"]
+# tests/ = tests de los módulos de la raíz (capa de adquisición). Antes estaban sueltos en la
+# raíz, fuera de testpaths, y la suite no los corría nunca.
+testpaths = ["motor/tests", "benchmark/tests", "ground_truth/tests", "calidad/tests", "pipeline/tests", "tests"]
+pythonpath = ["."]   # para que tests/ importe los módulos de la raíz (analizar_calidad, tagger)
 addopts = "-q --strict-markers"
 markers = [
     "slow: tests que analizan audio real (se saltean con -m 'not slow')",
