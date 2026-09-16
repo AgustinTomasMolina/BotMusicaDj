@@ -369,7 +369,7 @@ async def buscar_lista(payload: dict):
     cada una, hasta 3 opciones priorizadas por fuente según el formato. El usuario
     elige cuál bajar en el front."""
     texto = (payload.get("lista") or "").strip()
-    formato = (payload.get("formato") or "mp3").lower()
+    formato = (payload.get("formato") or "wav").lower()
     lineas = [l.strip() for l in texto.splitlines() if l.strip()]
     if not lineas:
         return JSONResponse({"exito": False, "mensaje": "Pegá una lista de canciones (una por línea)."}, status_code=400)
@@ -394,7 +394,7 @@ async def buscar_lista(payload: dict):
 
 
 @app.get("/api/buscar")
-async def buscar(q: str = "", limite: int = 24, formato: str = "mp3", genero: str = ""):
+async def buscar(q: str = "", limite: int = 24, formato: str = "wav", genero: str = ""):
     """Busca una canción/artista/género y devuelve los resultados agrupados por TEMA
     (una fila por track, con sus versiones de cada plataforma como opciones).
     `genero` (opcional) sesga la búsqueda hacia ese estilo (ej. 'hard techno')."""
@@ -415,7 +415,7 @@ async def buscar(q: str = "", limite: int = 24, formato: str = "mp3", genero: st
 
     # La relevancia se mide contra lo que el usuario TIPEÓ (q); si solo eligió género,
     # se usa el género como consulta (así no filtra de más un browse por estilo).
-    grupos = _agrupar_por_track(resultados, (formato or "mp3").lower(), q or genero)
+    grupos = _agrupar_por_track(resultados, (formato or "wav").lower(), q or genero)
     logger.info(f"✅ {len(resultados)} resultados → {len(grupos)} temas (agrupados por versión).")
     await asyncio.to_thread(db.registrar_busqueda, q, len(grupos))
     # `canciones` se mantiene por compatibilidad; el front usa `grupos`.
@@ -457,7 +457,7 @@ async def parecidas(titulo: str, artista: str = "", total: int = 25):
 
 @app.get("/api/parecidas_lista")
 async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
-                          formato: str = "mp3", genero: str = ""):
+                          formato: str = "wav", genero: str = ""):
     """Como /api/parecidas, pero por CADA tema parecido trae hasta 3 opciones de
     plataformas distintas (YouTube, SoundCloud, MP3 directo…) para comparar con el
     Spek y elegir la mejor. Devuelve 'grupos' como el modo lista + la semilla.
@@ -474,7 +474,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}")
         return res
 
-    formato = (formato or "mp3").lower()
+    formato = (formato or "wav").lower()
     lineas = [f"{c['artista']} - {c['titulo']}".strip(" -") for c in res["canciones"]]
     resultados = await asyncio.to_thread(_buscar_lista, lineas, formato)
 
@@ -738,7 +738,7 @@ def procesar_descarga(payload: dict) -> dict:
     artista = payload.get("artista") or ""
     fuente = payload.get("fuente") or ""
     url = payload.get("url") or ""
-    formato = (payload.get("formato") or "mp3").lower()
+    formato = (payload.get("formato") or "wav").lower()
 
     logger.info(f"📥 Descargando: {titulo} — {artista} [{fuente}] como {formato.upper()}")
 

@@ -397,6 +397,33 @@ textarea.input { min-height: 90px; resize: vertical; }
 .search .kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);pointer-events:none}
 .kbd{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:5px;font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-500);background:color-mix(in srgb,var(--color-text) 6%,transparent);box-shadow:inset 0 0 0 1px var(--color-divider)}
 
+/* — barra de descarga: topbar + formato/preview pegados arriba como un solo bloque — */
+.topbar-stack{position:sticky;top:0;z-index:40}
+.topbar-stack>.topbar{position:relative;z-index:1} /* el menú de géneros tapa la barra de abajo */
+.dlbar{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3);padding:var(--space-2) var(--space-4);background:color-mix(in srgb,var(--color-bg) 86%,transparent);backdrop-filter:blur(16px)}
+.dlbar-push{margin-left:auto}
+/* selector de formato: el elegido va relleno con el acento para que se lea de un vistazo */
+.seg-fmt{background:var(--color-well)}
+.seg-fmt .seg-opt{position:relative;gap:6px;padding:6px 14px;color:var(--color-neutral-300);transition:background .15s var(--ease),color .15s var(--ease)}
+.seg-fmt .seg-opt b{font-weight:600;letter-spacing:0.02em}
+.seg-sub{font-family:var(--font-mono);font-size:10px;opacity:.7}
+.seg-fmt .seg-opt:has(input:checked){color:var(--color-bg);background:var(--color-accent);box-shadow:none}
+/* switch de preview: checkbox real oculto + pista/perilla; encendido = relleno + texto */
+.switch{position:relative;display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px 0 6px;border-radius:var(--radius-pill);border:1px solid var(--color-divider);color:var(--color-neutral-400);font-size:13px;cursor:pointer;user-select:none;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease)}
+.switch:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+.switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.switch-track{position:relative;flex:none;width:34px;height:20px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-text) 18%,transparent);transition:background .15s var(--ease)}
+.switch-thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--color-neutral-300);transition:transform .15s var(--ease),background .15s var(--ease)}
+.switch.is-on{color:var(--color-accent-200);border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 16%,transparent)}
+.switch.is-on .switch-track{background:var(--color-accent)}
+.switch.is-on .switch-thumb{transform:translateX(14px);background:var(--color-accent-200)}
+.switch:has(input:focus-visible){outline:2px solid var(--color-accent);outline-offset:2px}
+/* menú de géneros: buscador fijo arriba, lista acotada con scroll */
+.genre-menu{width:min(280px,calc(100vw - 24px))}
+.genre-selected{display:flex;flex-wrap:wrap;gap:6px;padding:0 var(--space-1) var(--space-2)}
+.genre-list{display:flex;flex-direction:column;gap:1px;max-height:min(248px,45vh);overflow-y:auto;overscroll-behavior:contain}
+.genre-empty{padding:var(--space-2);font-size:12px;line-height:1.4;color:var(--color-neutral-500)}
+
 /* — chips: genre presets and other toggles — */
 .chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:var(--radius-pill);border:1px solid var(--color-divider);background:transparent;color:var(--color-neutral-300);font:inherit;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;transition:background .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease)}
 .chip:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent);color:var(--color-text)}
@@ -794,5 +821,8 @@ textarea.input { min-height: 90px; resize: vertical; }
 .toasts{left:var(--space-3);right:var(--space-3);bottom:var(--space-3);width:auto}
 .topbar{flex-wrap:wrap;height:auto;padding:var(--space-2) var(--space-3);row-gap:var(--space-2)}
 .search{order:3;flex-basis:100%;max-width:none}
+.dlbar{padding:var(--space-2) var(--space-3)}
+.seg-sub{display:none}
+.seg-fmt .seg-opt{padding:6px 11px}
 }
 

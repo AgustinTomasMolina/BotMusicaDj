@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { songKey, metaKey } from './utils'
+import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { buscar, buscarLista, parecidasLista, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { useToast } from './toast.jsx'
@@ -11,7 +11,9 @@ import Playlists from './components/Playlists'
 import { Home, ResultsView, ListForm, ListResults } from './components/views'
 
 export default function App() {
-  const [formato, setFormato] = useState('mp3')
+  // Único estado del formato de descarga: default WAV, o lo que el usuario eligió y quedó guardado.
+  const [formato, setFormato] = useState(loadFormat)
+  const chooseFormat = (f) => { setFormato(f); saveFormat(f) }
   const [genero, setGenero] = useState('')   // filtro de género para las búsquedas
   const [activePlaylist, setActivePlaylist] = useState(null)  // crate activa (auto-add al descargar)
   const [previewEnabled, setPreviewEnabled] = useState(true)
@@ -202,7 +204,7 @@ export default function App() {
   return (
     <div className="app">
       <TopBar
-        formato={formato} setFormato={setFormato}
+        formato={formato} setFormato={chooseFormat}
         genero={genero} setGenero={setGenero}
         onSearch={doSearch}
         previewEnabled={previewEnabled} togglePreview={togglePreview}

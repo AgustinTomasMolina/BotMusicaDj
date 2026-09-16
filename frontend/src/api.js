@@ -7,7 +7,7 @@ async function json(res) {
 
 export async function buscar(q, formato, genero) {
   const r = await fetch(`/api/buscar?q=${encodeURIComponent(q || '')}&limite=28` +
-    `&formato=${encodeURIComponent(formato || 'mp3')}&genero=${encodeURIComponent(genero || '')}`)
+    `&formato=${encodeURIComponent(formato || 'wav')}&genero=${encodeURIComponent(genero || '')}`)
   return json(r)
 }
 

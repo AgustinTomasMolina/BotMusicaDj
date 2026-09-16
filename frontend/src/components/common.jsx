@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { metaKey, songKey, cuePoint } from '../utils'
+import { metaKey, songKey, cuePoint, DEFAULT_FORMAT } from '../utils'
 import { calidad as fetchCalidad } from '../api'
 
 /* ---------- Nota de calidad (A/B/C/D/F) con carga lazy ----------
@@ -52,7 +52,7 @@ export function QualityBadge({ c, formato }) {
   if (!res) return <span className="grade grade-sm" style={{ opacity: 0.5 }} title="Analizando calidad real…">…</span>
   if (!res.ok) return <span className="grade grade-sm" title="No pude analizar la calidad de este tema">?</span>
 
-  const fmt = (formato || 'mp3').toLowerCase()
+  const fmt = (formato || DEFAULT_FORMAT).toLowerCase()
   const fakeLossless = res.lossy && _LOSSLESS.includes(fmt)
   const title = `Calidad real: ${res.grade} — ${res.calidad}` +
     (fakeLossless ? ` · ⚠️ la fuente es lossy: bajar en ${fmt.toUpperCase()} NO mejora la calidad (fake lossless)` : '')
@@ -74,7 +74,7 @@ export function Badges({ c, formato, metaMap, calidad }) {
   const genero = c.genero || m.genero
   const genDone = c.genero || m.done
   const fijoMp3 = src === 'ligaudio' || src === 'hitplayer'
-  const fmt = fijoMp3 ? 'mp3' : (formato || 'mp3').toLowerCase()
+  const fmt = fijoMp3 ? 'mp3' : (formato || DEFAULT_FORMAT).toLowerCase()
   const fmtVal = fmt.toUpperCase()
   const lossless = _LOSSLESS.includes(fmt)
   return (
