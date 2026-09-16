@@ -10,7 +10,8 @@ se guarda, esta carpeta queda atrás: volver a extraerlo antes de tocar nada ac�
 
 **Hoy** — lo que el motor hace de verdad:
 - `Biblioteca.dc.html` — La colección: BPM con un decimal, Camelot + clásica, energía como
-  percentil, `?` en las tonalidades con acuerdo no unánime, ▶ para armar una radio desde ese track.
+  percentil, `?` en las tonalidades con acuerdo no unánime, y un botón por fila para armar una
+  radio desde ese track (ícono de emisión, no ▶: el ▶ sugeriría reproducir audio, que no existe).
 - `Main.dc.html` — Armador de set: semilla y controles de `RadioConfig` (curva, largo,
   randomness, semilla del azar, artist_gap) → set con el porqué de cada transición en el
   formato real (`+X.X% BPM | 8A → 9A (vecino)`), curva de energía (desvío medio + Spearman del
@@ -35,7 +36,12 @@ desvío y Spearman ascendente con `energy_curve_deviation` / `ascending_spearman
 Decisiones del dueño en esa pasada: las funciones inexistentes van a la página Futuro; el `?` se
 muestra como estado objetivo (la tarea 17 lo lleva al motor); energía neutra; se agregaron aviso de
 set corto, controles completos y métrica de energía completa. Licencia y duración por track NO se
-agregaron todavía, aunque §6 pide la licencia siempre visible.
+agregaron todavía, aunque §6 pide la licencia siempre visible (confirmado de nuevo el
+2026-09-16: "por ahora no").
+
+2026-09-16: el botón de cada fila de Biblioteca pasó de ▶ a un ícono de emisión con el texto
+"Armar radio"; el Armador muestra por transición solo el renglón del porqué (§6), sin energía
+pedida ni mezclabilidad (ese detalle queda en la Preescucha, página Futuro).
 
 Datos: reales de la biblioteca de Rekordbox (store `gt_out/biblioteca.sqlite`, no versionado).
 Acento: **cian/teal** `#2dd4bf`; azul `#4b90f7` para "mismo/vecino" y el lado B. Base: design
