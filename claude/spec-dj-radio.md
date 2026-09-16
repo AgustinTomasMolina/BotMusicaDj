@@ -139,7 +139,7 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
   cifras globales quedan como informativas. Sin consenso corrido, la tonalidad queda sin
   medir.
 - *Curva de energía.* Spearman mide monotonía y la curva `peak` sube hasta el 75% del set
-  y baja: un set que la sigue perfecto daba 0.71, y dos sets que la siguen igual de bien
+  y baja: un set que la sigue perfecto daba 0.72 con 20 tracks (0.71 con 12), y dos sets que la siguen igual de bien
   (desvío medio 0.123 y 0.126) dieron 0.70 y 0.22. La métrica principal pasa a ser el
   desvío medio |energía − objetivo de la curva|, con umbral a calibrar escuchando las
   radios de la tarea 14 (el oído gana) — superado por la calibración del 2026-09-15, ver

@@ -330,6 +330,18 @@ def test_acierto_por_acuerdo_no_esconde_un_acuerdo_roto():
         acierto_por_acuerdo(cruzar(a, [_fila_gt(1, "a.wav", 128.0, "8A")])["cruces"])
 
 
+def test_acuerdo_roto_en_un_track_sin_referencia_tambien_levanta():
+    """El track 'b' no tiene camelot en el GT (sin referencia) y trae un acuerdo roto. La
+    etapa A escribe el acuerdo sin saber del GT: es el mismo CSV roto y no se saltea."""
+    a = [_fila_a("a.wav", 128.0, "8A", acuerdo="3/3"),
+         _fila_a("b.wav", 128.0, "8A", acuerdo="tres de tres")]
+    g = [_fila_gt(1, "a.wav", 128.0, "8A"), _fila_gt(2, "b.wav", 128.0, "")]
+    cruces = cruzar(a, g)["cruces"]
+    assert [c.key_exacta for c in cruces] == ["si", "sin-referencia"], "precondición del caso"
+    with pytest.raises(ValueError, match=r"formato inesperado: 'tres de tres'"):
+        metricas(cruces)
+
+
 def test_informe_imprime_el_acierto_por_acuerdo(capsys):
     informe(_cruces_por_acuerdo())
     lineas = [linea.rstrip() for linea in capsys.readouterr().out.splitlines()]
