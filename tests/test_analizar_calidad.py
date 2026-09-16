@@ -1,7 +1,7 @@
 """Tests de analizar_calidad._resolver_bin (#5.16).
 
-Módulo de raíz: la raíz NO está en `testpaths`, así que `pytest -q` no lo colecta;
-correr apuntándolo: `pytest test_analizar_calidad.py`.
+Prueba un módulo de la raíz (capa de adquisición). Vive en `tests/`, que está en `testpaths`:
+corre con toda la suite. Antes estaba suelto en la raíz y la suite no lo colectaba nunca.
 """
 import analizar_calidad as A
 
