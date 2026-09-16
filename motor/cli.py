@@ -82,16 +82,32 @@ def _clasica(camelot: str) -> str:
 
 
 def _abrir_store(db: Path):
-    """`Store(db)`, con una base de esquema desconocido convertida en error de uso.
+    """`Store(db)`, con una base de esquema desconocido o bloqueada convertida en error de uso.
 
     El store rechaza la base al abrirla, antes de tocar ninguna fila; acá solo se le saca el
-    traceback para que el usuario lea el motivo."""
+    traceback para que el usuario lea el motivo.
+
+    Bloqueada (hallazgo H2, tarea 1.2): si otro proceso tiene la base tomada — la está
+    migrando, o escribiendo un scan — más de `store.ESPERA_BLOQUEO_S`, SQLite se rinde con
+    `OperationalError: database is locked`. No es un bug del usuario ni de la base: es "hay
+    otra instancia", y se dice así. Cualquier otro `OperationalError` sigue su camino con
+    traceback: esconderlo detrás de un mensaje de uso sería mentir sobre qué pasó."""
+    import sqlite3
+
+    from motor import store as modulo_store
     from motor.store import EsquemaIncompatible, Store
 
     try:
         return Store(db)
     except EsquemaIncompatible as e:
         raise ErrorDeUso(str(e)) from e
+    except sqlite3.OperationalError as e:
+        if "locked" not in str(e) and "busy" not in str(e):
+            raise
+        raise ErrorDeUso(
+            f"La base {db} está ocupada: otra instancia de djradio la está usando o migrando "
+            f"(se esperó {modulo_store.ESPERA_BLOQUEO_S:g} s).\n"
+            f"  Esperá a que termine y reintentá.") from e
 
 
 def _abrir_existente(db: Path):

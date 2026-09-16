@@ -366,6 +366,40 @@ def test_energy_fuera_de_0_1_no_se_acepta():
     assert Track(**base, energy=0.0).energy == 0.0, "el extremo válido 0.0 tiene que entrar"
 
 
+def test_bpm_no_finito_no_entra_ni_por_track_ni_por_la_cache(tmp_path):
+    """H1 (tarea 1.2): con `bpm=inf` la compuerta daba mezclabilidad NaN y el track entraba
+    al set con score NaN. `inf`/NaN se rechazan al construir el `Track` y en `upsert` (si
+    entraran a la caché, `load_library` fallaría para TODA la biblioteca al leer esa fila).
+
+    El 0.0 tiene que seguir entrando: es lo que el análisis real devuelve sobre silencio. El
+    test no lo supone, lo MIDE (`bpm_refinado` sobre 30 s de ceros) y usa ese valor."""
+    from motor.bpm import bpm_refinado
+
+    base = dict(path=Path("x.wav"), duration=10.0, key="8A", energy=0.5,
+                embedding=np.zeros(DIM, dtype=EMB_DTYPE), license=LICENCIA, source_url=ORIGEN)
+    for malo in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValueError) as e:
+            Track(**base, bpm=malo)
+        assert "bpm" in str(e.value), f"bpm={malo} falló por otro motivo: {e.value}"
+
+    bpm_silencio = bpm_refinado(np.zeros(22050 * 30, dtype=np.float32), 22050)
+    assert bpm_silencio == 0.0, f"el análisis del silencio ya no da 0.0 sino {bpm_silencio!r}"
+    assert Track(**base, bpm=bpm_silencio).bpm == 0.0, "un track mudo tiene que poder cargarse"
+
+    store = Store(tmp_path / "db.sqlite")
+    ruta = tmp_path / "a.wav"
+    ruta.write_bytes(b"x")
+    feats = _features(_catalogo()[0])
+    feats.bpm = float("inf")
+    with pytest.raises(ValueError, match="bpm"):
+        store.upsert(ruta, feats, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    assert store.count() == 0, "quedó persistido un track con BPM infinito"
+    feats.bpm = bpm_silencio
+    store.upsert(ruta, feats, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    assert [t.bpm for t in store.load_library()] == [0.0]
+    store.close()
+
+
 # --- bordes --------------------------------------------------------------------------
 
 def test_base_vacia(tmp_path):
@@ -796,3 +830,176 @@ def test_base_nueva_nace_con_la_version_actual(tmp_path):
     con = sqlite3.connect(str(db))
     assert con.execute("PRAGMA user_version").fetchone()[0] == VERSION_ESQUEMA
     con.close()
+
+
+# --- migración: atomicidad y concurrencia (hallazgos H2 y H3, tarea 1.2) --------------------
+
+def _base_9440251(carpeta: Path) -> Path:
+    """Base con el esquema de 9440251 (versión 0) y dos filas del catálogo."""
+    db = carpeta / "v0.sqlite"
+    con = sqlite3.connect(str(db))
+    con.executescript(SCHEMA_9440251)
+    for i in (0, 1):
+        c = _catalogo()[i]
+        ruta = carpeta / c["nombre"]
+        ruta.write_bytes(b"x")
+        con.execute(
+            "INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(ruta), 111.0 + i, 10.0 + i, f"Artista {i}", f"Título {i}", c["bpm"], c["key"],
+             c["energy_raw"], c["embedding"].tobytes(), c["rms"], 2.5 + i, 0.25 * i,
+             LICENCIA, ORIGEN, f"2026-01-0{i + 1}T00:00:00"))
+    con.commit()
+    con.close()
+    return db
+
+
+def _foto(db: Path) -> tuple:
+    """Todo lo que una migración puede tocar: versión, objetos del esquema con su SQL,
+    columnas de `tracks` (nombre, tipo, NOT NULL) y las filas completas."""
+    con = sqlite3.connect(str(db))
+    try:
+        return (
+            con.execute("PRAGMA user_version").fetchone()[0],
+            sorted(con.execute("SELECT type, name, tbl_name, sql FROM sqlite_master").fetchall(),
+                   key=repr),
+            [tuple(f)[1:4] for f in con.execute("PRAGMA table_info(tracks)")],
+            sorted(con.execute("SELECT * FROM tracks").fetchall(), key=repr),
+        )
+    finally:
+        con.close()
+
+
+class _ConexionQueFalla:
+    """Envuelve la conexión del store y hace fallar UNA sentencia elegida. `sqlite3.Connection`
+    es un tipo de C y no se le puede pisar `execute`, por eso el envoltorio."""
+
+    def __init__(self, con: sqlite3.Connection, prefijo: str) -> None:
+        self._real, self._prefijo = con, prefijo
+
+    def execute(self, sql, *args):
+        if sql.strip().startswith(self._prefijo):
+            raise RuntimeError(f"falla inyectada en {sql.strip()!r}")
+        return self._real.execute(sql, *args)
+
+    def __getattr__(self, nombre):
+        return getattr(self._real, nombre)
+
+
+def _reabrir_y_verificar(db: Path, carpeta: Path) -> None:
+    """Después del fallo, una apertura normal migra bien y conserva los datos."""
+    from motor.store import VERSION_ESQUEMA
+
+    store = Store(db)
+    try:
+        assert store.count() == 2
+        for i in (0, 1):
+            c = _catalogo()[i]
+            got = store.get_features(carpeta / c["nombre"])
+            assert (got.bpm, got.key, got.rms) == (c["bpm"], c["key"], c["rms"]), got
+            assert np.array_equal(got.embedding, c["embedding"])
+    finally:
+        store.close()
+    con = sqlite3.connect(str(db))
+    assert con.execute("PRAGMA user_version").fetchone()[0] == VERSION_ESQUEMA
+    con.close()
+
+
+def test_migracion_que_falla_en_el_paso_2_deja_la_base_como_estaba(tmp_path, monkeypatch):
+    """H3: los pasos de `_MIGRACIONES` corren en UNA transacción. Si el paso 2 falla DESPUÉS
+    de hacer su trabajo (y después de que el paso 1 recreó la tabla), la base tiene que
+    quedar con el esquema, la versión y las filas de antes, no a medio migrar."""
+    import motor.store as modulo_store
+
+    db = _base_9440251(tmp_path)
+    antes = _foto(db)
+
+    def paso_2_que_falla(self):
+        Store._migrar_a_2_path_key(self)
+        raise RuntimeError("falla inyectada al final de la migración 2")
+
+    monkeypatch.setattr(modulo_store, "_MIGRACIONES",
+                        ((1, Store._migrar_a_1_nulos), (2, paso_2_que_falla)))
+    with pytest.raises(RuntimeError, match="migración 2"):
+        Store(db)
+    assert _foto(db) == antes, "la migración fallida dejó la base modificada"
+
+    monkeypatch.undo()
+    _reabrir_y_verificar(db, tmp_path)
+
+
+def test_migracion_que_falla_al_escribir_la_version_deja_la_base_como_estaba(tmp_path, monkeypatch):
+    """H3: el `PRAGMA user_version` final es parte de la MISMA transacción. Si falla ahí —
+    con las dos migraciones ya hechas — tampoco puede quedar una base migrada con versión
+    vieja (la próxima apertura re-migraría algo que ya cambió de forma)."""
+    import motor.store as modulo_store
+
+    db = _base_9440251(tmp_path)
+    antes = _foto(db)
+
+    def paso_2_y_romper_la_version(self):
+        Store._migrar_a_2_path_key(self)
+        self._con = _ConexionQueFalla(self._con, "PRAGMA user_version =")
+
+    monkeypatch.setattr(modulo_store, "_MIGRACIONES",
+                        ((1, Store._migrar_a_1_nulos), (2, paso_2_y_romper_la_version)))
+    with pytest.raises(RuntimeError, match="user_version"):
+        Store(db)
+    assert _foto(db) == antes, "la falla al escribir la versión dejó la base modificada"
+
+    monkeypatch.undo()
+    _reabrir_y_verificar(db, tmp_path)
+
+
+def test_dos_aperturas_simultaneas_de_una_base_vieja_no_se_pisan(tmp_path, monkeypatch):
+    """H2: dos procesos abriendo a la vez una base de esquema viejo. Antes el segundo moría
+    con `database is locked` AL INSTANTE (sin esperar el timeout): el primero leía dentro de
+    un `BEGIN` diferido, el segundo migraba y pedía el lock para confirmar, y cuando el
+    primero pedía el de escritura SQLite detectaba el abrazo mutuo y lo tiraba.
+
+    Se reproduce de forma determinista con dos hilos: A entra a la migración, lee y se
+    frena; B abre la misma base mientras tanto; después A sigue. Los dos tienen que abrir
+    bien y la base tiene que quedar migrada con sus datos."""
+    import threading
+
+    import motor.store as modulo_store
+
+    db = _base_9440251(tmp_path)
+    a_adentro, seguir_a = threading.Event(), threading.Event()
+    migraron: list[str] = []
+
+    def paso_1_que_se_frena_en_a(self):
+        migraron.append(threading.current_thread().name)
+        if threading.current_thread().name == "A":
+            self._con.execute("SELECT COUNT(*) FROM tracks").fetchone()   # lee dentro de la tx
+            a_adentro.set()
+            seguir_a.wait(10)
+        Store._migrar_a_1_nulos(self)
+
+    monkeypatch.setattr(modulo_store, "_MIGRACIONES",
+                        ((1, paso_1_que_se_frena_en_a), (2, Store._migrar_a_2_path_key)))
+    resultados: dict[str, object] = {}
+
+    def abrir(nombre):
+        try:
+            store = Store(db)
+            resultados[nombre] = store.count()
+            store.close()
+        except Exception as e:  # noqa: BLE001 — el resultado ES la excepción
+            resultados[nombre] = e
+
+    hilo_a = threading.Thread(target=abrir, args=("A",), name="A")
+    hilo_a.start()
+    assert a_adentro.wait(10), "A nunca llegó a la migración"
+    hilo_b = threading.Thread(target=abrir, args=("B",), name="B")
+    hilo_b.start()
+    hilo_b.join(0.5)                 # B llega a la base mientras A la tiene a medio migrar
+    seguir_a.set()
+    hilo_a.join(60)
+    hilo_b.join(60)
+
+    assert resultados == {"A": 2, "B": 2}, f"aperturas simultáneas: {resultados}"
+    # B tiene que releer la versión con el lock tomado y ver que A ya migró: los pasos no
+    # pueden correr dos veces (hoy son idempotentes, pero nada obliga a que el próximo lo sea).
+    assert migraron == ["A"], f"la migración corrió en {migraron}"
+    monkeypatch.undo()
+    _reabrir_y_verificar(db, tmp_path)

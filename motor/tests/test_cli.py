@@ -411,6 +411,35 @@ def test_base_de_esquema_futuro_se_rechaza_sin_tocarla(tmp_path, capsys, bibliot
     assert db.read_bytes() == antes, "una base de esquema desconocido se modificó igual"
 
 
+def test_base_tomada_por_otra_instancia_es_error_de_uso(tmp_path, capsys, biblioteca, monkeypatch):
+    """H2 (tarea 1.2): si otro proceso tiene la base tomada más de lo que el store espera,
+    SQLite tira `OperationalError: database is locked`. La CLI lo tiene que decir como lo
+    que es — hay otra instancia, reintentá — y no como un traceback. La espera se acorta a
+    0.2 s para que el test no tarde los 30 s reales."""
+    from motor import store as modulo_store
+
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "tomada.sqlite"
+    shutil.copy(db_bib, db)
+    monkeypatch.setattr(modulo_store, "ESPERA_BLOQUEO_S", 0.2)
+    otra = sqlite3.connect(str(db))
+    otra.execute("BEGIN EXCLUSIVE")                  # la "otra instancia"
+    try:
+        t0 = time.perf_counter()
+        codigo, out, err = _correr(capsys, "--db", db, "list")
+        espera = time.perf_counter() - t0
+    finally:
+        otra.rollback()
+        otra.close()
+    assert codigo == 2, f"código {codigo}\n{out}\n{err}"
+    assert "está ocupada" in err and "otra instancia" in err and "reintentá" in err, err
+    assert "Traceback" not in err, err
+    assert 0.2 <= espera < 4.0, (f"esperó {espera:.3f} s: no es la espera del store (0.2 s) "
+                                 f"— ¿se abrió sin `ESPERA_BLOQUEO_S` (default de sqlite3: 5 s)?")
+    codigo, out, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0, "suelta la otra instancia, la base tiene que volver a abrirse"
+
+
 def test_archivo_que_cambia_y_no_se_analiza_cuenta_como_borrado(tmp_path, capsys):
     """Un archivo analizado que cambia y ya no decodifica: la fila vieja se quita (describe
     OTRO audio) y el resumen tiene que decirlo. Antes decía `borrados 0 · fallidos 1` con
