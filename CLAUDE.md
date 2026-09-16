@@ -29,7 +29,7 @@ Un cambio que rompe cualquiera de estos no entra.
 | Curva de energía — desvío de la curva pedida (mediana sobre los sets del benchmark) | ≤ 0.22 |
 | Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
-| Latencia de la radio | < 200 ms con 10k tracks |
+| Latencia de la radio | < 200 ms con 10k tracks y sets de 30 |
 
 ## Reglas de ingeniería (spec §5 — textuales)
 
