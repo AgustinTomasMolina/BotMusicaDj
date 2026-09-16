@@ -22,6 +22,9 @@ veredicto usa el PEOR caso de `build_set` contra `latencia_radio_ms` de
     python -m benchmark.latencia_radio
     python -m benchmark.latencia_radio --tracks 10000 --corridas 9 --perfil peor_caso
     python -m benchmark.latencia_radio --perfilar      # cProfile de una corrida
+    python -m benchmark.latencia_radio --largo 50      # explorar otro largo (no es §4)
+
+El umbral de §4 se mide con sets de `LARGO_BENCHMARK` (30) tracks: el costo crece con el largo.
 """
 import argparse
 import contextlib
@@ -59,12 +62,23 @@ _GENEROS = (
 
 PERFILES = ("realista", "peor_caso")
 
-# Las configs que se cronometran. `length=20` es el largo del benchmark y del default.
-CONFIGS: dict[str, RadioConfig] = {
-    "peak r=0": RadioConfig(length=20, curve="peak", randomness=0.0),
-    "peak r=0.5": RadioConfig(length=20, curve="peak", randomness=0.5, seed=7),
-    "flat r=0 gap=0": RadioConfig(length=20, curve="flat", randomness=0.0, artist_gap=0),
-}
+# Largo del set con el que se mide el umbral de §4 (decisión del dueño, 2026-09-16): 30
+# tracks, unas 3 horas con tracks de ~6 minutos. §4 decía "< 200 ms con 10k tracks" sin
+# decir para qué largo, y el costo de `build_set` crece con el largo (cada posición recorre
+# la biblioteca). 20 (el default de RadioConfig) no representaba un set largo real.
+LARGO_BENCHMARK = 30
+
+
+def configs(largo: int = LARGO_BENCHMARK) -> dict[str, RadioConfig]:
+    """Las configs que se cronometran, todas con el mismo largo de set."""
+    return {
+        "peak r=0": RadioConfig(length=largo, curve="peak", randomness=0.0),
+        "peak r=0.5": RadioConfig(length=largo, curve="peak", randomness=0.5, seed=7),
+        "flat r=0 gap=0": RadioConfig(length=largo, curve="flat", randomness=0.0, artist_gap=0),
+    }
+
+
+CONFIGS: dict[str, RadioConfig] = configs()
 
 
 def biblioteca_sintetica(n: int = 10_000, seed: int = 20260916,
@@ -156,13 +170,18 @@ def main(argv=None) -> int:
                     help="Perfil de biblioteca (repetible). Default: los dos.")
     ap.add_argument("--perfilar", action="store_true",
                     help="Imprimir además un cProfile de build_set (config 'peak r=0').")
+    ap.add_argument("--largo", type=int, default=LARGO_BENCHMARK,
+                    help=f"Largo del set (default {LARGO_BENCHMARK}: el del umbral de §4). "
+                         "Otro largo sirve para explorar, pero el veredicto de §4 es con el default.")
     args = ap.parse_args(argv)
-    if args.tracks < 2 or args.corridas < 1:
-        ap.error("--tracks >= 2 y --corridas >= 1")
+    if args.tracks < 2 or args.corridas < 1 or args.largo < 1:
+        ap.error("--tracks >= 2, --corridas >= 1 y --largo >= 1")
 
     perfiles = args.perfil or list(PERFILES)
-    print(f"Latencia de la radio — {args.tracks} tracks, mediana de {args.corridas} corridas "
-          f"(umbral spec §4: {_UMBRAL.objetivo()})")
+    a_medir = configs(args.largo)
+    print(f"Latencia de la radio — {args.tracks} tracks, sets de {args.largo}, mediana de "
+          f"{args.corridas} corridas (umbral spec §4: {_UMBRAL.objetivo()} con sets de "
+          f"{LARGO_BENCHMARK})")
 
     peor_build = 0.0
     for perfil in perfiles:
@@ -170,7 +189,7 @@ def main(argv=None) -> int:
         semilla = _semilla(biblioteca, perfil)
         print(f"\n[{perfil}] semilla {semilla.path.name} ({semilla.bpm:.1f} BPM, {semilla.key})")
 
-        for nombre, config in CONFIGS.items():
+        for nombre, config in a_medir.items():
             ultimo = {}
 
             def correr(config=config, ultimo=ultimo, semilla=semilla, biblioteca=biblioteca):
@@ -190,7 +209,7 @@ def main(argv=None) -> int:
 
         if args.perfilar:
             print(f"\n  cProfile build_set 'peak r=0' [{perfil}]:")
-            print(perfilar(biblioteca, semilla, CONFIGS["peak r=0"]))
+            print(perfilar(biblioteca, semilla, a_medir["peak r=0"]))
 
     fila = next(f for f in evaluar({_CLAVE: round(peor_build, 1)}) if f.umbral.clave == _CLAVE)
     veredicto = "OK ✓" if fila.ok else "ROTO ✗"

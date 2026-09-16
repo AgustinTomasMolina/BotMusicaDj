@@ -124,7 +124,7 @@ Son el contrato. Un cambio que rompe cualquiera de estos no entra.
 | Curva de energía — desvío de la curva pedida (mediana sobre los sets del benchmark) | ≤ 0.22 |
 | Curva de energía — Spearman sobre el tramo ascendente | ≥ 0.5 |
 | Tiempo de análisis | ≤ 10 s/track |
-| Latencia de la radio | < 200 ms con 10k tracks |
+| Latencia de la radio | < 200 ms con 10k tracks y sets de 30 |
 
 **Cambio de contrato (2026-09-14) — tonalidad y curva de energía.**
 
@@ -155,6 +155,13 @@ seguir la curva. Fuente: `benchmark/umbrales.py`, `benchmark/curva_energia_calib
 `claude/curva-energia-2026-09-14.md`. La calibración NO salió de escuchar radios, como decía
 la nota anterior: la validación a oído del umbral queda pendiente (regla de oro). Un set
 individual no se aprueba ni se reprueba contra 0.22.
+
+**Latencia (2026-09-16, tarea 1.2) — largo del set.** El umbral no decía para qué largo, y el
+costo de armar el set crece con el largo (cada posición recorre la biblioteca). Queda en **sets
+de 30 tracks** (unas 3 horas con tracks de ~6 minutos), porque 20 no representa un set largo
+real. Medido con `benchmark/latencia_radio.py` sobre 10k tracks: peor mediana 139.9 ms (perfil
+en el que todo mezcla con todo), realista 68–100 ms. No hay tope: se pueden pedir sets más
+largos, pero el umbral garantiza hasta 30.
 
 **Regla de proceso:** ningún cambio en features o scoring se mergea sin correr el
 benchmark antes y después y pegar los dos números en el commit.
