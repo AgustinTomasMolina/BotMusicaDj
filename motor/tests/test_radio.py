@@ -650,3 +650,34 @@ def test_mmr_negativo_premiaria_la_redundancia():
     assert redundante > fresco, "con mmr_lambda < 0 la redundancia tiene que salir premiada"
     with pytest.raises(ValueError, match="mmr_lambda"):
         RadioConfig(mmr_lambda=-0.3)
+
+
+# ---------------------------------------------------------------------------
+# Encaje vectorizado (tarea 1.2)
+# ---------------------------------------------------------------------------
+
+def test_musical_fit_vectorizado_es_bit_a_bit_el_escalar():
+    """`build_set` calcula el encaje de todos los candidatos con `_musical_fit_vector`; tiene
+    que dar EXACTAMENTE `musical_fit` (un último bit distinto decide un empate). La grilla
+    cruza el recorte del tanh (crudo negativo → 0), el 0 exacto con signo, y pesos que
+    apagan o saturan cada término."""
+    from motor.radio import _musical_fit_vector
+
+    rng = np.random.default_rng(12)
+    n = 4000
+    sims = np.concatenate([rng.uniform(-1.0, 1.0, n), [0.0, -0.0, 1.0, -1.0, 0.5]])
+    prev = np.concatenate([rng.uniform(-1.0, 1.0, n), [0.0, 0.0, 1.0, -1.0, -0.5]])
+    red = np.concatenate([rng.uniform(-1.0, 1.0, n), [0.0, 0.0, 1.0, 1.0, 0.0]])
+    energia = np.concatenate([rng.choice([0.0, 0.25, 0.5, 1.0], n), rng.random(5)])
+    configs = [RadioConfig(), RadioConfig(w_energy=0.0, mmr_lambda=0.0),
+               RadioConfig(w_energy=1.0), RadioConfig(w_seed=40.0, w_prev=0.0, mmr_lambda=3.0),
+               RadioConfig(w_seed=0.0, w_prev=0.0, mmr_lambda=0.0, w_energy=0.0)]
+    for cfg in configs:
+        for goal in (0.0, 0.37, 1.0):
+            esperado = np.array([musical_fit(float(s), float(p), float(r), float(e), goal, cfg)
+                                 for s, p, r, e in zip(sims, prev, red, energia, strict=True)])
+            obtenido = _musical_fit_vector(sims, prev, red, energia, goal, cfg)
+            malos = np.flatnonzero(esperado.view(np.int64) != obtenido.view(np.int64))
+            assert malos.size == 0, (
+                f"{cfg} goal={goal}: {malos.size} encajes difieren; primero en "
+                f"{malos[0]}: escalar {esperado[malos[0]]!r} vs vector {obtenido[malos[0]]!r}")

@@ -17,6 +17,7 @@ y lo impone el código, no un comentario: son campos sin default y además se va
 no lleguen vacíos. El boceto viejo los declaraba `str | None = None` dos líneas debajo
 de un comentario que decía que eran obligatorios — o sea que no lo eran.
 """
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +37,33 @@ def require_text(value: object, field: str) -> str:
             f"`{field}` es obligatorio y no puede venir vacío (spec §5: licencia y origen "
             f"son obligatorios en cualquier modelo de track desde el primer día); recibí {value!r}"
         )
+    return value
+
+
+def require_finite_bpm(value: object) -> float:
+    """Exige un BPM finito. Devuelve el valor tal cual (no lo convierte).
+
+    Finito, y NO "> 0", a propósito (hallazgo H1, tarea 1.2):
+
+    - `inf` y NaN no los produce el análisis y rompen la compuerta: con `inf` todas las
+      distancias de `scoring` daban `inf/inf = NaN`, y un NaN no es `>= tolerancia`, así que
+      el track entraba al set con score NaN. `scoring._bpm_valido` ya los trata como no
+      medibles; esto los frena antes, en la construcción.
+    - 0.0 SÍ lo produce el análisis real: `bpm.bpm_refinado` devuelve el tempo de
+      `beat_track` tal cual cuando es <= 0, y sobre silencio (30 s o 3 s de ceros, o ruido de
+      amplitud 1e-9) da exactamente 0.0 — medido. Rechazarlo haría que un solo track mudo
+      en la carpeta rompiera `Store.load_library` para toda la biblioteca. La compuerta ya
+      lo trata como "sin BPM": nunca mezcla, y el motivo muestra `?%` en vez de un número.
+    - negativo no lo produce el análisis (beat_track no da tempos negativos) y la compuerta
+      lo trata igual que 0; no se rechaza para no inventar una regla que nada necesita.
+
+    La usan `Track.__post_init__` y `Store.upsert`, como `require_text`: un BPM infinito no
+    entra ni por el constructor ni por la caché (si entrara a la caché, cargar la biblioteca
+    entera fallaría al armar ese `Track`).
+    """
+    if not math.isfinite(float(value)):
+        raise ValueError(
+            f"`bpm` tiene que ser un número finito (0.0 = sin BPM medido), recibí {value!r}")
     return value
 
 
@@ -135,6 +163,7 @@ class Track:
         self.embedding = _as_vector(self.embedding, "embedding")
         self.license = require_text(self.license, "license")
         self.source_url = require_text(self.source_url, "source_url")
+        self.bpm = require_finite_bpm(self.bpm)
         # 0..1, no 0..100: `energia.percentil` devuelve 0..100 y el store divide. Si acá
         # entra un 80.0 es que alguien salteó esa conversión, y el motor lo trataría como
         # un track 80 veces más energético que el máximo posible.

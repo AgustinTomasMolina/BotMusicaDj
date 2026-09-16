@@ -34,7 +34,7 @@ import numpy as np
 
 from motor.embeddings import DIM, normalize_matrix, normalize_one
 from motor.energia import percentil
-from motor.modelos import Track, TrackFeatures, require_text
+from motor.modelos import Track, TrackFeatures, require_finite_bpm, require_text
 
 # Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
 # de una tabla, y agregar el paso a `_MIGRACIONES`. `CREATE TABLE IF NOT EXISTS` no altera
@@ -45,6 +45,11 @@ from motor.modelos import Track, TrackFeatures, require_text
 #   1  rms / onset_rate / percussive_ratio aceptan NULL (9440251 los tenía NOT NULL)
 #   2  columna path_key (ruta absoluta + normcase) con índice único
 VERSION_ESQUEMA = 2
+
+# Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está
+# migrando) antes de rendirse con `sqlite3.OperationalError: database is locked`. La CLI
+# convierte ese error en un mensaje de uso (`cli._abrir_store`). Hallazgo H2, tarea 1.2.
+ESPERA_BLOQUEO_S = 30.0
 
 _DDL_TRACKS = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -120,7 +125,7 @@ class Store:
         self.db_path = Path(db_path)
         if str(self.db_path.parent) not in ("", "."):
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._con = sqlite3.connect(str(self.db_path))
+        self._con = sqlite3.connect(str(self.db_path), timeout=ESPERA_BLOQUEO_S)
         self._con.row_factory = sqlite3.Row
         try:
             self._preparar_esquema()
@@ -165,6 +170,7 @@ class Store:
             )
         require_text(license, "license")
         require_text(source_url, "source_url")
+        require_finite_bpm(features.bpm)
 
         key = self._key(path)
         mt = float(mtime) if mtime is not None else Path(path).stat().st_mtime
@@ -322,19 +328,28 @@ class Store:
         Los pasos miran la forma real de la tabla antes de actuar, porque la versión 0 cubre
         bases de más de un commit (con y sin NOT NULL, con y sin path_key).
         """
-        version = int(self._con.execute("PRAGMA user_version").fetchone()[0])
-        if not 0 <= version <= VERSION_ESQUEMA:
-            raise EsquemaIncompatible(
-                f"La base {self.db_path} tiene esquema versión {version} y este código entiende "
-                f"hasta la {VERSION_ESQUEMA}: la escribió otra versión de djradio. "
-                f"No se tocó la base; actualizá el código antes de usarla.")
-        existe = self._con.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'").fetchone()
+        version = self._version_compatible()
+        existe = self._existe_tracks()
         if existe and version == VERSION_ESQUEMA:
             return
 
-        self._con.execute("BEGIN")
+        # `BEGIN IMMEDIATE` y no `BEGIN` (hallazgo H2, tarea 1.2). Con `BEGIN` a secas la
+        # transacción arranca leyendo (lock compartido) y recién pide el de escritura en el
+        # primer ALTER. Si otro proceso está migrando la misma base y ya pidió el lock para
+        # confirmar, SQLite ve el abrazo mutuo y le devuelve "database is locked" AL INSTANTE
+        # a uno de los dos, sin pasar por el `timeout` — medido: 4 procesos abriendo una base
+        # vieja a la vez, de 1 a 3 morían con OperationalError. Tomando el lock de escritura
+        # de entrada, el segundo proceso ESPERA (hasta `ESPERA_BLOQUEO_S`) en vez de morir.
+        self._con.execute("BEGIN IMMEDIATE")
         try:
+            # Releer con el lock tomado: mientras este proceso esperaba, otro pudo haber
+            # migrado la base. Sin esto se migraría dos veces (o se rechazaría una versión
+            # que ya no es la que se leyó arriba).
+            version = self._version_compatible()
+            existe = self._existe_tracks()
+            if existe and version == VERSION_ESQUEMA:
+                self._con.execute("COMMIT")
+                return
             if existe:
                 for destino, paso in _MIGRACIONES:
                     if version < destino:
@@ -349,6 +364,21 @@ class Store:
         except BaseException:
             self._con.execute("ROLLBACK")
             raise
+
+    def _version_compatible(self) -> int:
+        """`PRAGMA user_version`, o `EsquemaIncompatible` si este código no la sabe leer."""
+        version = int(self._con.execute("PRAGMA user_version").fetchone()[0])
+        if not 0 <= version <= VERSION_ESQUEMA:
+            raise EsquemaIncompatible(
+                f"La base {self.db_path} tiene esquema versión {version} y este código entiende "
+                f"hasta la {VERSION_ESQUEMA}: la escribió otra versión de djradio. "
+                f"No se tocó la base; actualizá el código antes de usarla.")
+        return version
+
+    def _existe_tracks(self) -> bool:
+        return self._con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'"
+        ).fetchone() is not None
 
     def _migrar_a_1_nulos(self) -> None:
         """rms / onset_rate / percussive_ratio pasan a aceptar NULL.

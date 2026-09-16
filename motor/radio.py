@@ -50,9 +50,12 @@ from motor.modelos import Track
 from motor.scoring import (
     FACTORES_OCTAVA,
     TOLERANCIA_BPM,
+    KeysIndexadas,
+    _bpm_valido,
     _dist_bpm_relativa,
     _distancias_por_lectura,
     mezclabilidad,
+    mezclabilidad_vector,
     score,
 )
 from motor.tonalidad import _parse_camelot, compat_camelot
@@ -85,10 +88,11 @@ def bpm_delta_pct(a: float, b: float) -> tuple[float, str]:
     si y solo si la transición pasó la compuerta de §4. El signo se agrega acá (la
     distancia no lo tiene) para poder decir "+1.8%" o "-2.4%" como pide §6.
 
-    BPM inválido (0, negativo, NaN) devuelve `nan` y lectura `""`: §6 dice que un dato
-    ausente es mejor que uno que miente, y un 0.0 se leería como "mismo tempo".
+    BPM inválido (0, negativo, NaN, inf — `scoring._bpm_valido`, el mismo criterio que la
+    compuerta) devuelve `nan` y lectura `""`: §6 dice que un dato ausente es mejor que uno
+    que miente, y un 0.0 se leería como "mismo tempo".
     """
-    if not (a > 0 and b > 0):
+    if not (_bpm_valido(a) and _bpm_valido(b)):
         return float("nan"), ""
 
     # Las tres lecturas que considera `_dist_bpm_relativa`, medidas con SU misma función y
@@ -403,10 +407,42 @@ def musical_fit(
     El coseno puede ser negativo (dos timbres opuestos); el recorte a 0..1 evita que un
     encaje negativo dé vuelta el signo del score al multiplicarse por la mezclabilidad.
     """
-    crudo = config.w_seed * sim_seed + config.w_prev * sim_prev - config.mmr_lambda * redundancy
+    crudo = _timbre_crudo(sim_seed, sim_prev, redundancy, config)
     timbre = min(max(math.tanh(crudo), 0.0), 1.0)
-    energia = 1.0 - abs(float(energy) - float(goal))   # 0..1: 1 = le pegó justo a la curva
+    return _con_energia(timbre, float(energy), float(goal), config)
+
+
+# Las dos mitades de la cuenta de `musical_fit`, elemento a elemento: las usan la escalar
+# (arriba) y `_musical_fit_vector` (build_set). Así la fórmula está escrita UNA vez; lo único
+# que cada camino hace por su cuenta es el tanh y el recorte a 0..1 (ver `_musical_fit_vector`).
+
+def _timbre_crudo(sim_seed, sim_prev, redundancy, config: RadioConfig):
+    """`w_seed·sim_seed + w_prev·sim_prev − mmr_lambda·redundancy`, antes del tanh."""
+    return config.w_seed * sim_seed + config.w_prev * sim_prev - config.mmr_lambda * redundancy
+
+
+def _con_energia(timbre, energy, goal: float, config: RadioConfig):
+    """Mezcla el timbre (ya en 0..1) con la cercanía a la curva de energía."""
+    energia = 1.0 - abs(energy - goal)   # 0..1: 1 = le pegó justo a la curva
     return (1.0 - config.w_energy) * timbre + config.w_energy * energia
+
+
+def _musical_fit_vector(sim_seed: np.ndarray, sim_prev: np.ndarray, redundancy: np.ndarray,
+                        energy: np.ndarray, goal: float, config: RadioConfig) -> np.ndarray:
+    """`musical_fit` para muchos candidatos a la vez, con el MISMO resultado bit a bit.
+
+    - El tanh es `math.tanh` sobre cada valor, no `np.tanh`: numpy usa su propia
+      implementación (con SIMD según la máquina) y no está garantizado que redondee igual
+      que la de C en el último bit. Un bit distinto en un empate cambia qué track entra.
+    - El recorte replica `min(max(t, 0.0), 1.0)` de Python con `np.where`, no con
+      `np.clip`: `max` de Python devuelve el PRIMER argumento si ninguno es mayor (así
+      trata el -0.0 y el NaN), y `np.clip` no promete lo mismo.
+    """
+    crudo = _timbre_crudo(sim_seed, sim_prev, redundancy, config)
+    tanh = np.fromiter(map(math.tanh, crudo.tolist()), dtype=np.float64, count=crudo.size)
+    timbre = np.where(tanh < 0.0, 0.0, tanh)
+    timbre = np.where(timbre > 1.0, 1.0, timbre)
+    return _con_energia(timbre, energy, float(goal), config)
 
 
 def _unicos_por_ruta(tracks: Iterable[Track]) -> list[Track]:
@@ -453,13 +489,36 @@ def _artist_blocked(candidato: Track, elegidos: list[Track], gap: int) -> bool:
     entre sí. La comparación es case-insensitive con los bordes recortados, porque
     "Fran Perrotta" y "fran perrotta " son el mismo tipo y el metadata real viene sucio.
     """
-    if gap <= 0 or not candidato.artist or not candidato.artist.strip():
+    quien = _artista_normalizado(candidato.artist)
+    if gap <= 0 or quien is None:
         return False
-    quien = candidato.artist.strip().casefold()
-    for previo in elegidos[-gap:]:
-        if previo.artist and previo.artist.strip().casefold() == quien:
-            return True
-    return False
+    return any(_artista_normalizado(previo.artist) == quien for previo in elegidos[-gap:])
+
+
+def _artista_normalizado(artist: str | None) -> str | None:
+    """La identidad de artista que compara `artist_gap`: recortada y case-insensitive.
+    `None` si no hay artista (vacío o solo espacios). La usan `_artist_blocked` y la
+    versión vectorizada de `build_set`, para que las dos comparen lo mismo."""
+    if not artist or not artist.strip():
+        return None
+    return artist.strip().casefold()
+
+
+def _bloqueados_por_artista(codigos_artista: np.ndarray, codigo_de: dict[str, int],
+                            elegidos: list[Track], gap: int) -> np.ndarray:
+    """Máscara de los candidatos que `_artist_blocked` taparía, para todo el pool a la vez.
+
+    `codigos_artista[i]` es el código del artista normalizado del candidato `i`, o -1 si no
+    tiene (nunca bloquea). Un artista de la ventana que no está en el pool (la semilla, por
+    ejemplo, puede tener un artista que ningún candidato comparte) no tapa a nadie.
+    """
+    if gap <= 0:
+        return np.zeros(codigos_artista.shape, dtype=bool)
+    ventana = {codigo_de[a] for a in map(_artista_normalizado, (p.artist for p in elegidos[-gap:]))
+               if a is not None and a in codigo_de}
+    if not ventana:
+        return np.zeros(codigos_artista.shape, dtype=bool)
+    return np.isin(codigos_artista, np.fromiter(ventana, dtype=np.intp, count=len(ventana)))
 
 
 def _transition(anterior: Track | None, elegido: Track, goal: float,
@@ -538,8 +597,22 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
     # arranca en cero y no en las similitudes contra la semilla.
     redundancy = np.zeros(len(pool), dtype=np.float64)
 
+    # Lo que no cambia entre posiciones se arma UNA vez por pool (tarea 1.2: el loop por
+    # candidato × posición con las funciones escalares costaba ~650 ms con 10.000 tracks,
+    # contra < 200 ms de §4). Cada posición trabaja sobre arrays; las cuentas son las de
+    # `scoring.mezclabilidad_vector` y `_musical_fit_vector`, que dan bit a bit lo mismo
+    # que las escalares (hay un test que compara este build_set contra el anterior).
+    bpms = np.array([float(t.bpm) for t in pool], dtype=np.float64)
+    energias = np.array([float(t.energy) for t in pool], dtype=np.float64)
+    keys = KeysIndexadas.de([t.key for t in pool])
+    codigo_artista: dict[str, int] = {}
+    codigos_artista = np.array(
+        [-1 if a is None else codigo_artista.setdefault(a, len(codigo_artista))
+         for a in (_artista_normalizado(t.artist) for t in pool)],
+        dtype=np.intp)
+
     elegidos: list[Track] = [seed_track]
-    usados: set[int] = set()
+    usados = np.zeros(len(pool), dtype=bool)
     stop: str | None = None
     detalle = ""
 
@@ -548,38 +621,41 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
         goal = energy_target(len(steps), config.length, config.curve)
         sim_prev = emb @ np.asarray(anterior.embedding, dtype=np.float64)
 
-        libres = 0          # candidatos que pasaron el artist_gap (para distinguir el corte)
-        tapados = 0         # mezclables que quedaron afuera SOLO por artist_gap
-        ranked: list[tuple[float, int, float]] = []   # (total, índice en pool, encaje)
-        for i, cand in enumerate(pool):
-            if i in usados:
-                continue
-            # Compuerta de §4: fuera de ±8% de BPM la mezclabilidad es 0 y el track no
-            # existe para esta posición, por más que suene igual que el anterior.
-            mezcla = mezclabilidad(anterior.bpm, cand.bpm, anterior.key, cand.key)
-            if _artist_blocked(cand, elegidos, config.artist_gap):
-                tapados += mezcla > 0.0
-                continue
-            libres += 1
-            if mezcla <= 0.0:
-                continue
-            encaje = musical_fit(float(sim_seed[i]), float(sim_prev[i]), float(redundancy[i]),
-                                 cand.energy, goal, config)
-            total = score(encaje, anterior.bpm, cand.bpm, anterior.key, cand.key)
-            ranked.append((total, i, encaje))
+        # Compuerta de §4: fuera de ±8% de BPM la mezclabilidad es 0 y el track no existe
+        # para esta posición, por más que suene igual que el anterior.
+        mezcla = mezclabilidad_vector(anterior.bpm, bpms, anterior.key, keys)
+        mezclan = mezcla > 0.0
+        libres_mask = ~usados
+        tapados_mask = libres_mask & _bloqueados_por_artista(codigos_artista, codigo_artista,
+                                                             elegidos, config.artist_gap)
+        libres_mask &= ~tapados_mask
+        libres = int(np.count_nonzero(libres_mask))   # pasaron el artist_gap (para el corte)
+        tapados = int(np.count_nonzero(tapados_mask & mezclan))   # mezclaban, tapó el gap
 
-        if not ranked:
-            stop, detalle = _motivo_de_corte(anterior, len(pool) - len(usados), libres,
+        candidatos = np.flatnonzero(libres_mask & mezclan)   # índices en pool, ascendentes
+        if candidatos.size == 0:
+            stop, detalle = _motivo_de_corte(anterior, int(np.count_nonzero(~usados)), libres,
                                              tapados, config)
             break
 
-        # Orden: mayor score primero; a igual score, el de índice menor en `pool`, que
-        # está ordenado por ruta. El desempate es estable y no depende del recorrido.
-        ranked.sort(key=lambda r: (-r[0], r[1]))
+        encajes = _musical_fit_vector(sim_seed[candidatos], sim_prev[candidatos],
+                                      redundancy[candidatos], energias[candidatos], goal, config)
+        # `score = encaje × mezclabilidad` (scoring.score), sobre los mismos valores.
+        totales = encajes * mezcla[candidatos]
+
+        # Orden: mayor score primero; a igual score, el de índice menor en `pool`, que está
+        # ordenado por ruta. `candidatos` ya viene ascendente, así que un argsort ESTABLE de
+        # `-totales` es exactamente `sorted(key=(-total, índice))`. Solo hace falta la
+        # cabeza que `_elegir` puede mirar: el primero, o los `top_k` si hay azar.
+        if config.randomness <= 0.0:
+            cabeza = np.array([int(np.argmax(totales))])
+        else:
+            cabeza = np.argsort(-totales, kind="stable")[:config.top_k]
+        ranked = [(float(totales[j]), int(candidatos[j]), float(encajes[j])) for j in cabeza]
         _, idx, encaje = _elegir(ranked, config, rng)
 
         elegido = pool[idx]
-        usados.add(idx)
+        usados[idx] = True
         elegidos.append(elegido)
         steps.append(SetStep(elegido, _transition(anterior, elegido, goal, encaje)))
         redundancy = np.maximum(redundancy, emb @ np.asarray(elegido.embedding, dtype=np.float64))
