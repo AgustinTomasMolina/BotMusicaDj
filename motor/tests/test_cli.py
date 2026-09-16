@@ -486,6 +486,50 @@ def test_spearman_de_un_set_chico_se_marca_orientativo(tmp_path, capsys, bibliot
         f"la radio no imprime el desvío de la curva: {linea}"
 
 
+RENGLON_CURVA = re.compile(r"^(\d+) de (\d+) tracks pedidos · curva de energía \((\w+)\) · "
+                           r"desvío medio (\d\.\d{3}) ")
+
+
+@pytest.mark.parametrize("curva", ["warmup", "flat"])
+def test_radio_set_cortado_mide_la_curva_pedida(tmp_path, capsys, biblioteca, curva):
+    """La CLI le pasa a `linea_curva` la curva y el largo PEDIDOS, no los que sonaron.
+
+    Se piden 12 tracks: el catálogo tiene 6 mezclables entre sí (el de 170 BPM no entra), así
+    que el set queda cortado. El desvío esperado se calcula con `energy_curve_deviation`
+    sobre las energías de los tracks impresos (leídas de la base), la curva pedida y el
+    largo pedido. La precondición verifica que con el largo real, o con la curva "peak",
+    el número impreso sería otro: si no, el test no distinguiría el error."""
+    from motor.energia import energy_curve_deviation
+
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    pedido = 12
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_126", "--largo", pedido,
+                             "--curva", curva)
+    assert codigo == 0, out
+    with Store(db) as store:
+        por_label = {t.label: t for t in store.load_library()}
+    energias = [por_label[label].energy for label, _ in _pasos(out)]
+    assert 2 <= len(energias) < pedido, f"el set no quedó cortado ({len(energias)}):\n{out}"
+
+    renglon = next((linea for linea in out.splitlines() if RENGLON_CURVA.match(linea)), None)
+    assert renglon, f"no está el renglón de la curva:\n{out}"
+    n, n_pedido, nombre, desvio = RENGLON_CURVA.match(renglon).groups()
+    assert (int(n), int(n_pedido), nombre) == (len(energias), pedido, curva), renglon
+
+    esperado = f"{energy_curve_deviation(energias, curva, pedido):.3f}"
+    con_largo_real = f"{energy_curve_deviation(energias, curva, len(energias)):.3f}"
+    con_peak = f"{energy_curve_deviation(energias, 'peak', pedido):.3f}"
+    assert esperado != con_peak, "precondición: peak y la curva pedida dan el mismo desvío"
+    if curva != "flat":   # flat es constante: el largo no cambia su objetivo
+        assert esperado != con_largo_real, "precondición: el largo pedido no cambia el desvío"
+    assert desvio == esperado, \
+        f"desvío {desvio} ≠ {esperado} (curva {curva}, largo {pedido}): {renglon}"
+    if curva == "flat":
+        assert renglon.endswith("no definido: la curva flat no tiene tramo que suba"), renglon
+
+
 def test_linea_curva_el_minimo_cuenta_puntos_del_tramo_ascendente():
     """El borde de `MIN_PUNTOS_SPEARMAN` (12) se mide en PUNTOS del tramo ascendente, no en
     tracks. Con "warmup" todo el set sube: 11 puntos orientativo, 12 no. Energías que suben
