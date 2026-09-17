@@ -81,6 +81,49 @@ def _clasica(camelot: str) -> str:
     return camelot_a_clasica(camelot) or "?"
 
 
+# La key va marcada con `?` salvo que los tramos del track hayan votado TODOS lo mismo
+# (spec §6: un dato que miente es peor que uno ausente). La confianza es el ACUERDO entre
+# tramos de `tono_consenso`, no el campo `confianza` de `tono()`: está medido que ese no
+# predice nada (Pearson +0.02) y que el acuerdo sí (3/3 → 55% exacta, 2/3 → 36%, 1/3 → 26%;
+# A/B 2026-09-14). Es la misma regla y la misma función que el reporte del pipeline.
+MARCA_DUDOSA = "?"
+
+
+def key_dudosa(acuerdo: str | None) -> bool:
+    """¿Hay que mostrar la key con `?`? Sí salvo acuerdo unánime entre tramos.
+
+    Tres casos que caen del lado del `?`: no unánime ("2/3"), sin evidencia ("0/0" o NULL
+    porque la fila se analizó antes de que el scan midiera el acuerdo) y acuerdo ilegible.
+    Un acuerdo roto no puede tirar la tabla entera —el resto de los tracks no tiene la
+    culpa— y tampoco puede pasar por confiable: es dudoso, como el reporte del pipeline.
+
+    El formato lo lee `benchmark.evaluar.acuerdo_unanime`, que es donde vive esa regla;
+    acá no se vuelve a parsear "g/t".
+    """
+    from benchmark.evaluar import acuerdo_unanime
+
+    try:
+        return acuerdo_unanime(acuerdo) is not True
+    except ValueError:
+        return True
+
+
+def marca_key(acuerdo: str | None) -> str:
+    """Lo que va pegado a la key en las tablas: `"?"` si es dudosa, un espacio si no.
+
+    Un espacio y no cadena vacía: las columnas de `list` tienen que quedar alineadas
+    igual con y sin marca, o la tabla se lee como si faltara un campo.
+    """
+    return MARCA_DUDOSA if key_dudosa(acuerdo) else " "
+
+
+# Pie de las tablas que muestran keys. Sin esto el `?` es un símbolo mudo: el DJ ve que
+# algo pasa pero no qué, y la regla de §6 es justamente no dejarlo adivinar.
+LEYENDA_KEY = ("? junto a la key = la detección no es confiable (los tramos del track no "
+               "votaron todos lo mismo, o el acuerdo no se midió) · `info <track>` dice cuál "
+               "de los dos")
+
+
 def _abrir_store(db: Path):
     """`Store(db)`, con una base de esquema desconocido o bloqueada convertida en error de uso.
 
@@ -161,8 +204,9 @@ def resolver_track(consulta: str, biblioteca: list[Track]) -> Track:
 
 
 def _fila(t: Track) -> str:
-    """El renglón de un track: BPM con un decimal y las DOS notaciones de key (spec §6)."""
-    return (f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<3}  "
+    """El renglón de un track: BPM con un decimal, las DOS notaciones de key y el `?` de
+    confianza cuando la key es dudosa (spec §6)."""
+    return (f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<3}{marca_key(t.key_acuerdo)} "
             f"energía {t.energy * 100:3.0f}  {t.label}")
 
 
@@ -281,7 +325,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
                          title=tags.get("titulo") or None, mtime=mtime)
             (actualizados if estaba else nuevos).append(nombre)
             print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} {features.bpm:6.1f} BPM  "
-                  f"{features.key:>3} {_clasica(features.key):<3}  {dt:5.2f} s", flush=True)
+                  f"{features.key:>3} {_clasica(features.key):<3}"
+                  f"{marca_key(features.key_acuerdo)} {dt:5.2f} s", flush=True)
 
         total = store.count()
 
@@ -302,17 +347,45 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     with _abrir_existente(args.db) as store:
         biblioteca = store.load_library()   # ordenada por ruta: orden estable
-    print(f"{'BPM':>6}      {'key':>3} {'clás':<4} {'energía':>7}  "
+    print(f"{'BPM':>6}      {'key':>3} {'clás':<4} {'energía':>8}  "
           f"artista — título (sin tags: el nombre del archivo)")
     for t in biblioteca:
-        print(f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<4} {t.energy * 100:7.0f}  "
-              f"{t.label}")
+        print(f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<4}{marca_key(t.key_acuerdo)} "
+              f"{t.energy * 100:7.0f}  {t.label}")
     print(f"\n{len(biblioteca)} tracks · energía = percentil dentro de esta biblioteca (0-100)")
+    print(LEYENDA_KEY)
     return OK
 
 
 def _o_no_medido(valor: float | None, formato: str) -> str:
     return "no medido" if valor is None else format(valor, formato)
+
+
+def _detalle_acuerdo(acuerdo: str | None, tramos: str | None) -> str:
+    """El renglón de `info` que explica el `?` (o su ausencia) de la key.
+
+    Distingue los dos "no hay confianza" que la tabla de `list` no puede distinguir, porque
+    se arreglan distinto: NULL se arregla volviendo a analizar el archivo, "0/0" no se
+    arregla con nada (el track es más corto que los tres tramos disjuntos que hacen falta).
+    """
+    from benchmark.evaluar import acuerdo_unanime
+
+    texto = (acuerdo or "").strip()
+    if not texto:
+        # NULL, o el vacío que escribiría otra herramienta: en los dos casos nadie midió.
+        return ("no medido — este track se analizó antes de que el scan guardara el acuerdo. "
+                "La key va con ? hasta que se vuelva a analizar el archivo")
+    try:
+        unanime = acuerdo_unanime(texto)
+    except ValueError:
+        return f"ilegible ({acuerdo!r}) — la key va con ?"
+    votos = f" ({tramos})" if tramos else ""
+    if unanime:
+        return f"{texto} — todos los tramos votaron la misma key{votos}"
+    if not tramos:
+        return (f"{texto} — el track no da para comparar tramos disjuntos (hacen falta "
+                f"~135 s): la key va con ?")
+    return f"{texto} — los tramos no coinciden{votos}: la key va con ?"
 
 
 def cmd_info(args: argparse.Namespace) -> int:
@@ -327,7 +400,10 @@ def cmd_info(args: argparse.Namespace) -> int:
         ("título", t.title if t.title else "(sin tag)"),
         ("duración", f"{int(minutos)}:{segundos:04.1f} ({t.duration:.1f} s)"),
         ("BPM", f"{t.bpm:.1f}"),
-        ("key", f"{t.key} ({_clasica(t.key)})"),
+        # El `?` va pegado a la key y el porqué en el renglón de abajo: el dato dudoso se
+        # marca donde se lee, no solo en una nota al pie (§6).
+        ("key", f"{t.key} ({_clasica(t.key)}) {marca_key(t.key_acuerdo)}".rstrip()),
+        ("acuerdo key", _detalle_acuerdo(f.key_acuerdo, f.key_tramos)),
         ("energía", f"percentil {t.energy * 100:.0f} de la biblioteca (RMS crudo {f.energy_raw:.4f})"),
         ("rms", _o_no_medido(f.rms, ".4f")),
         ("onsets/s", _o_no_medido(f.onset_rate, ".2f")),
@@ -355,6 +431,7 @@ def cmd_similar(args: argparse.Namespace) -> int:
         return OK
     for i, (otro, sim) in enumerate(parecidos, 1):
         print(f"  {i:>2}. {sim:+.3f}  {_fila(otro)}")
+    print(f"\n{LEYENDA_KEY}")
     return OK
 
 
@@ -436,6 +513,7 @@ def cmd_radio(args: argparse.Namespace) -> int:
     if not rset.is_complete:
         print(f"SET CORTO: quedó en {len(rset)} de {config.length}. Motivo ({rset.stop}): "
               f"{rset.stop_detail}")
+    print(LEYENDA_KEY)
 
     if args.m3u8:
         destino = write_m3u8(rset.tracks, args.m3u8)

@@ -1003,3 +1003,190 @@ def test_dos_aperturas_simultaneas_de_una_base_vieja_no_se_pisan(tmp_path, monke
     assert migraron == ["A"], f"la migración corrió en {migraron}"
     monkeypatch.undo()
     _reabrir_y_verificar(db, tmp_path)
+
+
+# --- confianza de la key: acuerdo entre tramos (tarea 17) ---------------------------------
+
+# El esquema de la versión 2 (`git show 6036031:motor/store.py`): igual al actual pero sin
+# `key_acuerdo` ni `key_tramos`. Es la base que tiene hoy cualquiera que ya escaneó su
+# biblioteca, y la que la migración 3 tiene que poder abrir.
+SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS tracks (
+    path            TEXT PRIMARY KEY,
+    path_key        TEXT,
+    mtime           REAL NOT NULL,
+    duration        REAL NOT NULL,
+    artist          TEXT,
+    title           TEXT,
+    bpm             REAL NOT NULL,
+    key             TEXT NOT NULL,
+    energy_raw      REAL NOT NULL,
+    embedding       BLOB NOT NULL,
+    rms             REAL,
+    onset_rate      REAL,
+    percussive_ratio REAL,
+    license         TEXT NOT NULL,
+    source_url      TEXT NOT NULL,
+    analyzed_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
+CREATE INDEX IF NOT EXISTS idx_tracks_key ON tracks(key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_path_key ON tracks(path_key);
+
+CREATE TABLE IF NOT EXISTS norm_stats (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    mean    BLOB NOT NULL,
+    std     BLOB NOT NULL,
+    count   INTEGER NOT NULL
+);
+
+PRAGMA user_version = 2;
+"""
+
+
+def _base_v2(carpeta: Path) -> Path:
+    """Base del esquema versión 2 (sin las columnas del acuerdo) con dos filas del catálogo."""
+    db = carpeta / "v2.sqlite"
+    con = sqlite3.connect(str(db))
+    con.executescript(SCHEMA_V2)
+    for i in (0, 1):
+        c = _catalogo()[i]
+        ruta = carpeta / c["nombre"]
+        ruta.write_bytes(b"x")
+        con.execute(
+            "INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (str(ruta), os.path.normcase(str(ruta)), 111.0 + i, 10.0 + i, f"Artista {i}",
+             f"Título {i}", c["bpm"], c["key"], c["energy_raw"], c["embedding"].tobytes(),
+             c["rms"], 2.5 + i, None, LICENCIA, ORIGEN, f"2026-01-0{i + 1}T00:00:00"))
+    con.commit()
+    con.close()
+    return db
+
+
+def test_el_acuerdo_de_la_key_vuelve_igual_de_la_base(tmp_path):
+    """El acuerdo entre tramos y los votos viajan enteros hasta la base y vuelven: es la
+    confianza con la que la CLI decide si la key va con `?` (§6). Dos tracks con acuerdos
+    DISTINTOS, así que guardar el de uno para los dos se ve."""
+    ruta_a, ruta_b = tmp_path / "unanime.wav", tmp_path / "dudosa.wav"
+    for r in (ruta_a, ruta_b):
+        r.write_bytes(b"x")
+    ca, cb = _catalogo()[0], _catalogo()[1]
+    fa = TrackFeatures(bpm=ca["bpm"], key=ca["key"], energy_raw=ca["energy_raw"],
+                       embedding=ca["embedding"], key_acuerdo="3/3",
+                       key_tramos=f"{ca['key']}|{ca['key']}|{ca['key']}")
+    fb = TrackFeatures(bpm=cb["bpm"], key=cb["key"], energy_raw=cb["energy_raw"],
+                       embedding=cb["embedding"], key_acuerdo="2/3",
+                       key_tramos=f"{cb['key']}|{ca['key']}|{cb['key']}")
+
+    with Store(tmp_path / "db.sqlite") as store:
+        store.upsert(ruta_a, fa, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+        store.upsert(ruta_b, fb, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+
+        vuelta_a, vuelta_b = store.get_features(ruta_a), store.get_features(ruta_b)
+        assert (vuelta_a.key_acuerdo, vuelta_a.key_tramos) == (fa.key_acuerdo, fa.key_tramos), \
+            f"unanime.wav volvió con {vuelta_a.key_acuerdo!r} / {vuelta_a.key_tramos!r}"
+        assert (vuelta_b.key_acuerdo, vuelta_b.key_tramos) == (fb.key_acuerdo, fb.key_tramos), \
+            f"dudosa.wav volvió con {vuelta_b.key_acuerdo!r} / {vuelta_b.key_tramos!r}"
+
+        # El `Track` del motor también lo lleva: es el que imprimen `list`, `similar` y `radio`.
+        por_ruta = {t.path.name: t.key_acuerdo for t in store.load_library()}
+        assert por_ruta == {"unanime.wav": "3/3", "dudosa.wav": "2/3"}, por_ruta
+        assert store.get(ruta_b).key_acuerdo == "2/3", store.get(ruta_b).key_acuerdo
+
+
+def test_acuerdo_no_medido_se_guarda_null_y_no_un_acuerdo_inventado(tmp_path):
+    """Un análisis sin consenso deja NULL en las dos columnas. Un "3/3" por defecto diría
+    que la key es confiable sin que nadie la haya medido (§6)."""
+    db = tmp_path / "db.sqlite"
+    ruta = tmp_path / _catalogo()[0]["nombre"]
+    ruta.write_bytes(b"x")
+    with Store(db) as store:
+        store.upsert(ruta, _features(_catalogo()[0]), duration=10.0,
+                     license=LICENCIA, source_url=ORIGEN)
+        vuelta = store.get_features(ruta)
+    assert (vuelta.key_acuerdo, vuelta.key_tramos) == (None, None), \
+        f"lo no medido volvió como {vuelta.key_acuerdo!r} / {vuelta.key_tramos!r}"
+
+    con = sqlite3.connect(str(db))
+    fila = con.execute("SELECT key_acuerdo, key_tramos FROM tracks").fetchone()
+    con.close()
+    assert fila == (None, None), f"en la base quedó {fila}, y NULL es lo único honesto"
+
+
+def test_base_v2_se_migra_con_acuerdo_null_y_conserva_sus_datos(tmp_path):
+    """Una biblioteca ya escaneada (versión 2) abierta con este código: queda en la versión
+    actual, con las columnas nuevas en NULL y TODO lo demás intacto. La migración no puede
+    inventar el acuerdo: esas filas se analizaron sin correr `tono_consenso`."""
+    from motor.store import VERSION_ESQUEMA
+
+    db = _base_v2(tmp_path)
+
+    with Store(db) as store:
+        assert store.count() == 2, f"la migración dejó {store.count()} filas"
+        for i in (0, 1):
+            c = _catalogo()[i]
+            got = store.get_features(tmp_path / c["nombre"])
+            assert (got.bpm, got.key, got.energy_raw) == (c["bpm"], c["key"], c["energy_raw"]), got
+            assert (got.rms, got.onset_rate) == (c["rms"], 2.5 + i), got
+            assert np.array_equal(got.embedding, c["embedding"]), f"{c['nombre']}: embedding perdido"
+            assert (got.key_acuerdo, got.key_tramos) == (None, None), \
+                f"{c['nombre']}: la migración inventó acuerdo {got.key_acuerdo!r}"
+        assert [t.key_acuerdo for t in store.load_library()] == [None, None], \
+            "los Track de una base vieja tienen que venir sin acuerdo"
+
+    con = sqlite3.connect(str(db))
+    version = con.execute("PRAGMA user_version").fetchone()[0]
+    columnas = [f[1] for f in con.execute("PRAGMA table_info(tracks)")]
+    con.close()
+    assert version == VERSION_ESQUEMA, f"la base quedó en versión {version}"
+    assert "key_acuerdo" in columnas and "key_tramos" in columnas, columnas
+
+
+def test_una_base_v2_migrada_acepta_el_acuerdo_del_proximo_scan(tmp_path):
+    """El otro lado de la migración: sobre la base ya migrada, reanalizar un track SÍ guarda
+    su acuerdo, y NO se lo pone al que no se tocó."""
+    db = _base_v2(tmp_path)
+    c = _catalogo()[0]
+    ruta = tmp_path / c["nombre"]
+    tramos = "|".join([c["key"]] * 3)
+
+    with Store(db) as store:
+        store.upsert(ruta, TrackFeatures(bpm=c["bpm"], key=c["key"], energy_raw=c["energy_raw"],
+                                         embedding=c["embedding"], key_acuerdo="3/3",
+                                         key_tramos=tramos),
+                     duration=10.0, license=LICENCIA, source_url=ORIGEN)
+        got = store.get_features(ruta)
+        otro = store.get_features(tmp_path / _catalogo()[1]["nombre"])
+
+    assert (got.key_acuerdo, got.key_tramos) == ("3/3", tramos), \
+        f"el reanálisis sobre la base migrada guardó {got.key_acuerdo!r} / {got.key_tramos!r}"
+    assert otro.key_acuerdo is None, \
+        f"reanalizar un track le puso acuerdo {otro.key_acuerdo!r} a OTRO que no se tocó"
+
+
+def test_migracion_3_que_falla_deja_la_base_v2_como_estaba(tmp_path, monkeypatch):
+    """La migración 3 va en la MISMA transacción que las anteriores: si falla, la base
+    vuelve a la versión 2 sin columnas nuevas. Una base a medio migrar (columnas puestas y
+    versión vieja) se re-migraría en la próxima apertura sobre una forma que ya cambió."""
+    import motor.store as modulo_store
+
+    db = _base_v2(tmp_path)
+    antes = _foto(db)
+    assert antes[0] == 2, f"la base de partida tiene que ser versión 2, es {antes[0]}"
+
+    def paso_3_que_falla(self):
+        Store._migrar_a_3_acuerdo_key(self)
+        raise RuntimeError("falla inyectada al final de la migración 3")
+
+    monkeypatch.setattr(modulo_store, "_MIGRACIONES",
+                        ((1, Store._migrar_a_1_nulos), (2, Store._migrar_a_2_path_key),
+                         (3, paso_3_que_falla)))
+    with pytest.raises(RuntimeError, match="migración 3"):
+        Store(db)
+    assert _foto(db) == antes, "la migración 3 fallida dejó la base modificada"
+
+    monkeypatch.undo()
+    with Store(db) as store:                     # después del fallo, una apertura normal migra
+        assert store.count() == 2
+        assert store.get_features(tmp_path / _catalogo()[0]["nombre"]).key_acuerdo is None

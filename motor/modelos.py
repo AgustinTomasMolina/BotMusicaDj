@@ -111,6 +111,19 @@ class TrackFeatures:
     onset_rate: float | None = None  # onsets por segundo
     percussive_ratio: float | None = None  # energía percusiva / total (HPSS) — no medido
 
+    # CONFIANZA de la key: el acuerdo entre tramos de `tono_consenso`, no el campo
+    # `confianza` de `tono()` (está medido que ese no predice nada, Pearson +0.02; el
+    # acuerdo sí: 3/3 → 55% exacta, 2/3 → 36%, 1/3 → 26% — A/B 2026-09-14). La key la
+    # sigue eligiendo `tono()`: esto es SOLO para poder mostrar `?` (spec §6).
+    #
+    # `key_acuerdo` es "ganados/total" en crudo ("3/3", "2/3", "0/0") y `key_tramos` lo que
+    # votó cada tramo ("8A|3B|8A"). `None` en los dos = el consenso NO se corrió, que es
+    # distinto de haberlo corrido sin evidencia ("0/0"): lo primero se arregla reanalizando,
+    # lo segundo no se arregla con nada porque el track es muy corto. Un "3/3" por defecto
+    # diría que la key es confiable sin que nadie la haya medido.
+    key_acuerdo: str | None = None   # "g/t" de `tono_consenso`; None = no se midió
+    key_tramos: str | None = None    # "8A|3B|8A"; "" si no hubo tramos; None = no se midió
+
     def __post_init__(self) -> None:
         self.embedding = _as_vector(self.embedding, "embedding")
 
@@ -121,9 +134,10 @@ class TrackFeatures:
         if not isinstance(other, TrackFeatures):
             return NotImplemented
         return (
-            (self.bpm, self.key, self.energy_raw, self.rms, self.onset_rate, self.percussive_ratio)
+            (self.bpm, self.key, self.energy_raw, self.rms, self.onset_rate,
+             self.percussive_ratio, self.key_acuerdo, self.key_tramos)
             == (other.bpm, other.key, other.energy_raw, other.rms, other.onset_rate,
-                other.percussive_ratio)
+                other.percussive_ratio, other.key_acuerdo, other.key_tramos)
             and self.embedding.dtype == other.embedding.dtype
             and np.array_equal(self.embedding, other.embedding)
         )
@@ -158,6 +172,11 @@ class Track:
     artist: str | None = None
     title: str | None = None
 
+    # Confianza de la key: ver `TrackFeatures.key_acuerdo`. Viaja hasta acá porque es lo
+    # que la CLI imprime al lado de la key (`list`, `similar`, `radio`), y sin el acuerdo
+    # esas tablas presentarían una key dudosa como si fuera segura (spec §6).
+    key_acuerdo: str | None = None
+
     def __post_init__(self) -> None:
         self.path = Path(self.path)
         self.embedding = _as_vector(self.embedding, "embedding")
@@ -185,9 +204,9 @@ class Track:
             return NotImplemented
         return (
             (self.path, self.duration, self.bpm, self.key, self.energy, self.license,
-             self.source_url, self.artist, self.title)
+             self.source_url, self.artist, self.title, self.key_acuerdo)
             == (other.path, other.duration, other.bpm, other.key, other.energy, other.license,
-                other.source_url, other.artist, other.title)
+                other.source_url, other.artist, other.title, other.key_acuerdo)
             and self.embedding.dtype == other.embedding.dtype
             and np.array_equal(self.embedding, other.embedding)
         )

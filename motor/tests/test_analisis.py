@@ -228,10 +228,11 @@ def test_con_consenso_el_consenso_se_calcula_una_sola_vez(monkeypatch):
     assert (det["camelot"], det["acuerdo"]) == ("8A", (2, 3)), f"detección {det}"
 
 
-def test_el_scan_del_motor_no_paga_el_consenso(monkeypatch):
-    """`analizar_senal` (el scan) no persiste el acuerdo todavía (tarea 17): no tiene que
-    correr `tono_consenso` para tirarlo. Y la key tiene que ser la de `tono`, la misma que
-    da la etapa A."""
+def test_el_scan_del_motor_guarda_el_acuerdo_del_consenso(monkeypatch):
+    """`analizar_senal` (el scan) corre `tono_consenso` UNA vez y se queda con su acuerdo
+    (tarea 17): es la confianza que la CLI muestra como `?`. La key sigue siendo la de
+    `tono` — el doble del consenso vota otra a propósito, así que si la key saliera del
+    consenso este test lo ve."""
     from motor import analisis
 
     llamadas = _dobles_de_medicion(monkeypatch)
@@ -241,9 +242,46 @@ def test_el_scan_del_motor_no_paga_el_consenso(monkeypatch):
 
     features = analisis.analizar_senal(y, SR)
 
-    assert llamadas["tono_consenso"] == 0, \
-        f"el scan llamó a tono_consenso {llamadas['tono_consenso']} veces"
+    assert llamadas["tono_consenso"] == 1, \
+        f"el scan llamó a tono_consenso {llamadas['tono_consenso']} veces (tiene que ser 1)"
     assert features.key == "3B", f"key {features.key}: tiene que ser la de tono()"
+    assert features.key_acuerdo == "2/3", f"key_acuerdo {features.key_acuerdo!r}"
+    assert features.key_tramos == "8A|3B|8A", f"key_tramos {features.key_tramos!r}"
+
+
+def test_el_scan_no_inventa_acuerdo_cuando_el_track_no_da_para_tramos(monkeypatch):
+    """Un track más corto que 3 ventanas de 45 s: `tono_consenso` devuelve acuerdo (0, 0) y
+    tramos vacíos. Eso se guarda como "0/0" y "", NO como None ni como un acuerdo inventado:
+    el consenso SÍ corrió y su respuesta es "no hay evidencia" (§6)."""
+    from motor import analisis
+    from motor.tonalidad import tono_consenso
+
+    monkeypatch.setattr(analisis, "embed", lambda *a, **k: np.zeros(4))
+    monkeypatch.setattr(analisis, "onsets_por_segundo", lambda y, sr: 0.0)
+    y, _ = click_track(128.0, dur=30, nota="A", modo="min")
+    cons = tono_consenso(y, SR)
+    assert (cons["acuerdo"], cons["tramos"]) == ((0, 0), []), \
+        f"el caso necesita un track sin tramos: acuerdo {cons['acuerdo']}, tramos {cons['tramos']}"
+
+    features = analisis.analizar_senal(y, SR)
+
+    assert features.key_acuerdo == "0/0", f"key_acuerdo {features.key_acuerdo!r}"
+    assert features.key_tramos == "", f"key_tramos {features.key_tramos!r}"
+
+
+def test_el_scan_de_un_track_largo_mide_acuerdo_unanime():
+    """Camino real, sin dobles: 140 s del generador sintético con una sola capa tonal en La
+    menor. Los 3 tramos ven lo mismo, así que el acuerdo es unánime y la CLI muestra la key
+    limpia. El valor esperado sale del generador (spec §5), no del motor."""
+    from motor.analisis import analizar_senal
+
+    y, sr = click_track(128.0, dur=140.0, nota="A", modo="min")
+
+    features = analizar_senal(y, sr)
+
+    assert features.key == "8A", f"key {features.key}: el generador hizo La menor (8A)"
+    assert features.key_acuerdo == "3/3", f"key_acuerdo {features.key_acuerdo!r}"
+    assert features.key_tramos == "8A|8A|8A", f"key_tramos {features.key_tramos!r}"
 
 
 def test_el_tiempo_de_analisis_incluye_el_consenso(tmp_path, monkeypatch):
