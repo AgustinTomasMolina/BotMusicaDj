@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { buscar, buscarLista, parecidasLista, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
+import { crearPlaylistConPrompt } from './playlists'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
 import ConsoleDrawer from './components/ConsoleDrawer'
@@ -18,6 +19,7 @@ export default function App() {
   const [genero, setGenero] = useState('')   // filtro de género para las búsquedas
   const [activePlaylist, setActivePlaylist] = useState(null)  // crate activa (auto-add al descargar)
   const [misPlaylists, setMisPlaylists] = useState([])        // para el rail lateral siempre visible
+  const [playlistAbierta, setPlaylistAbierta] = useState(null) // la que muestra la vista Playlists
   const [previewEnabled, setPreviewEnabled] = useState(true)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [historialOpen, setHistorialOpen] = useState(false)
@@ -59,6 +61,10 @@ export default function App() {
   // `pick` cambia en cada click: volver a tocar en el rail la misma playlist después de elegir otra
   // adentro de la vista tiene que volver a seleccionarla.
   const openPlaylists = (id) => { setModal(null); setView({ kind: 'playlists', id: typeof id === 'number' ? id : null, pick: Date.now() }) }
+  // El ＋ del rail crea la playlist (en escritorio la lista de adentro de la vista está escondida,
+  // así que este es el único ＋) y abre su página. Mismo flujo que el de la vista: src/playlists.js.
+  const nuevaPlaylistDesdeRail = () =>
+    crearPlaylistConPrompt({ toast, onCreada: (p) => { setMisPlaylists((ps) => [...ps, p]); openPlaylists(p.id) } })
 
   // Mensajes de error que dicen qué hacer, no solo qué pasó.
   const HINT_CONEXION = 'Revisá que el servidor esté corriendo y volvé a intentar.'
@@ -224,7 +230,7 @@ export default function App() {
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.
@@ -259,7 +265,9 @@ export default function App() {
       <div className="app-body">
         {/* Siempre a la vista, en TODAS las pantallas (decisión del dueño 2026-09-17): antes solo
             se dibujaba en la home y al entrar a Playlists o buscar desaparecía. */}
-        <PlaylistsRail playlists={misPlaylists} activa={activePlaylist} onOpen={openPlaylists} />
+        <PlaylistsRail playlists={misPlaylists} activa={activePlaylist}
+          abierta={view.kind === 'playlists' ? playlistAbierta : null}
+          onOpen={openPlaylists} onNueva={nuevaPlaylistDesdeRail} />
 
         <main className="app-main" id="contenido" tabIndex={-1}><div className="app-wrap">{body}</div></main>
       </div>

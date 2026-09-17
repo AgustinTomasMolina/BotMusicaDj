@@ -3,9 +3,10 @@ import { fmtDur } from '../utils'
 import { useDialog } from '../hooks'
 import { gradeClass } from './common'
 import {
-  listarPlaylists, getPlaylist, crearPlaylist, editarPlaylist,
+  listarPlaylists, getPlaylist, editarPlaylist,
   borrarPlaylistMia, quitarItemPlaylist, exportarPlaylist, avisarPlaylists,
 } from '../api'
+import { crearPlaylistConPrompt } from '../playlists'
 
 /* Iconos inline (Phosphor-ish) */
 const S = (p, sz = 16) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>
@@ -89,7 +90,7 @@ function ExportDialog({ crate, onClose, toast }) {
   )
 }
 
-export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick }) {
+export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick, onSeleccion }) {
   const [lists, setLists] = useState(null)
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
@@ -98,25 +99,31 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   const cargarLista = async () => { try { const d = await listarPlaylists(); const ps = d.playlists || []; setLists(ps); return ps } catch { setLists([]); return [] } }
   const cargarCrate = async (id) => { if (!id) { setCrate(null); return } try { const d = await getPlaylist(id); setCrate(d.exito ? d.data : null) } catch { setCrate(null) } }
 
-  // initialId: la playlist clickeada en el rail de la home (si existe); si no, la primera.
-  useEffect(() => { (async () => { const ps = await cargarLista(); if (ps.length) setSelId(ps.some((p) => p.id === initialId) ? initialId : ps[0].id) })() }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // El rail sigue a la vista DENTRO de esta pantalla: click en otra playlist del rail tiene que
-  // cambiar la elegida aunque la vista ya esté montada (el efecto de arriba corre solo al montar).
-  useEffect(() => { if (initialId != null && lists?.some((p) => p.id === initialId)) setSelId(initialId) }, [initialId, pick]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { cargarLista() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // La lista cambia desde afuera (el ＋ del rail, el ＋ de una tarjeta): sin esto, crear la
+  // primera playlist desde el rail dejaba esta pantalla en "todavía no tenés playlists".
+  useEffect(() => {
+    const recargar = () => { cargarLista() }
+    window.addEventListener('musiflix:playlists', recargar)
+    return () => window.removeEventListener('musiflix:playlists', recargar)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Qué playlist se muestra: la que pidió el rail (initialId + pick, que cambia en cada click),
+  // y si no hay ninguna válida elegida, la primera de la lista.
+  useEffect(() => {
+    if (!lists || !lists.length) return
+    if (initialId != null && lists.some((p) => p.id === initialId)) setSelId(initialId)
+    else if (selId == null || !lists.some((p) => p.id === selId)) setSelId(lists[0].id)
+  }, [lists, initialId, pick]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargarCrate(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Cuál está abierta lo marca el rail, que en escritorio es la única lista: se lo avisamos.
+  // La selección también cambia sola (al crear una, o al borrar la abierta).
+  useEffect(() => { onSeleccion?.(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { await cargarLista(); await cargarCrate(selId) }
 
   // Antes estas acciones no tenían catch: sin conexión fallaban en silencio.
   const fallo = (title) => toast.danger({ title, body: 'Revisá que el servidor esté corriendo y probá de nuevo.' })
-  const nueva = async () => {
-    const nombre = window.prompt('Nombre de la nueva playlist:')
-    if (!nombre || !nombre.trim()) return
-    try {
-      const r = await crearPlaylist(nombre.trim())
-      if (r.exito) { avisarPlaylists(); await cargarLista(); setSelId(r.playlist.id); toast.info({ title: `Playlist "${r.playlist.nombre}" creada` }) }
-      else fallo('No pude crear la playlist')
-    } catch { fallo('No pude crear la playlist') }
-  }
+  // Mismo flujo que el ＋ del rail (src/playlists.js), con la playlist nueva ya seleccionada acá.
+  const nueva = () => crearPlaylistConPrompt({ toast, onCreada: async (p) => { await cargarLista(); setSelId(p.id) } })
   const activar = async (id, nombre) => {
     try { await editarPlaylist(id, { activar: true }); setActivePlaylist({ id, nombre }); await cargarLista() }
     catch { fallo('No pude marcarla como activa') }

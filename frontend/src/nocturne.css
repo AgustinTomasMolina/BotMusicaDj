@@ -770,11 +770,14 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    inside a crate is the same .trk with two carriers swapped.
    ══════════════════════════════════════════════════════════════════════ */
 
-/* — the two-column view — */
-.crates{display:grid;grid-template-columns:264px minmax(0,1fr);gap:var(--space-4);align-items:start}
+/* — la vista del crate —
+   Una sola columna: la lista de playlists es el rail lateral. La lista de adentro
+   (.crates-aside) solo aparece cuando el rail no está (viewport <= 860px, ver el final del
+   archivo, que es donde vive ese umbral). */
+.crates{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-4);align-items:start}
 .crates>*{min-width:0}
 .crate-actions{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);flex-wrap:wrap}
-.crates-aside{position:sticky;top:var(--topbar-h);display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
+.crates-aside{display:none;flex-direction:column;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
 .cratelist{display:flex;flex-direction:column;gap:2px}
 .crate-item{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:46px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);font:inherit;text-align:left;cursor:pointer;transition:background .14s var(--ease)}
 .crate-item:hover{color:var(--color-text);background:color-mix(in srgb,var(--color-text) 8%,transparent)}
@@ -838,12 +841,10 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
    desaparecía hasta ~1360px de viewport. */
 @container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
-/* Crate: su fila de escritorio pide ~712px y la lista de crates al lado se come 280, así que
-   su corte queda en 1068. El bloque de 829 excluye .results-crate con :not(), así el crate no
-   depende del orden de estos dos bloques en el archivo. */
-@container main (max-width:1068px){.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-crate .trk>.trk-meta{display:none}}
-/* The crate view drops to one column before its row runs out of room. */
-@container main (max-width:968px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
+/* El crate ya no tiene la lista de playlists al lado (es el rail), así que su fila de escritorio
+   —que pide 712px: 26+44+170+140+52+112+72 + 6 huecos de 12 + 24 de padding— entra en todo lo que
+   no sea la tarjeta de 728px de abajo. Por eso tiene dos layouts y no tres; el bloque de 829
+   excluye .results-crate con :not() para no pisarle las columnas. */
 /* Debajo de 728px de contenido la fila pasa a tarjeta: arte, tema y nota arriba; las versiones
    en su renglón y las acciones en otro, TODAS (Espectrograma, Comparar, Parecidas, Agregar,
    Descargar). Antes se escondían las tres primeras esperando un menú "más" que nunca existió,
@@ -893,6 +894,9 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .pl-item{display:flex;align-items:center;gap:10px;padding:8px;border:0;border-radius:9px;background:transparent;color:var(--color-text,#e9e9ed);cursor:pointer;text-align:left;width:100%;font:inherit}
 .pl-item:hover{background:var(--color-well,#1b1d2b)}
 .pl-item.on{background:var(--color-well,#1b1d2b);outline:1px solid var(--color-accent,#9184d9)}
+/* La que está abierta en pantalla: misma marca que .navitem[aria-current=page] del sistema.
+   No es lo mismo que la activa (.on), que es donde caen las descargas. */
+.pl-item[aria-current=page]{background:var(--color-well,#1b1d2b);box-shadow:inset 2px 0 0 var(--color-accent,#9184d9)}
 .pl-thumb{width:32px;height:32px;border-radius:7px;flex-shrink:0}
 .pl-item-txt{min-width:0;display:flex;flex-direction:column}
 .pl-item-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -936,6 +940,8 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .pl-thumb.g5{background:linear-gradient(145deg,#2f5e4a,#1a3329)}
 .pl-thumb.g6{background:linear-gradient(145deg,#5e5230,#332d1a)}
 @keyframes shelfIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
-@media (max-width:860px){.pl-rail{display:none}}
+/* Único lugar donde vive el umbral del rail: sin rail, la vista Playlists vuelve a mostrar su
+   propia lista de playlists (si no, no habría ninguna). */
+@media (max-width:860px){.pl-rail{display:none}.crates-aside{display:flex}}
 /* Pantallas táctiles: no hay hover, así que el play de las tarjetas era un botón invisible. */
 @media (hover:none){.lib-play{opacity:1;transform:none}}
