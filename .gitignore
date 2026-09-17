@@ -5,10 +5,16 @@
 
 # === Datos locales / generados ===
 downloads/
-ground_truth/out/        # CSVs derivados del XML de Rekordbox (rutas personales)
-benchmark/out/          # CSVs por corrida del benchmark (rutas personales)
-calidad/out/            # CSVs de la revision de calidad (rutas personales)
-*.xml                    # el export de Rekordbox no va al repo
+# OJO: git no admite comentarios al final de una línea de patrón ("dir/  # texto" no ignora
+# nada). Los comentarios van SIEMPRE en su propia línea.
+# CSVs derivados del XML de Rekordbox (rutas personales)
+ground_truth/out/
+# CSVs por corrida del benchmark (rutas personales)
+benchmark/out/
+# CSVs de la revision de calidad (rutas personales)
+calidad/out/
+# el export de Rekordbox no va al repo
+*.xml
 *.db
 *.sqlite
 *.sqlite3
