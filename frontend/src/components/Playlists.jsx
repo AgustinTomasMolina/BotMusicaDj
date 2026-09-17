@@ -89,7 +89,7 @@ function ExportDialog({ crate, onClose, toast }) {
   )
 }
 
-export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId }) {
+export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick }) {
   const [lists, setLists] = useState(null)
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
@@ -100,6 +100,9 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
   // initialId: la playlist clickeada en el rail de la home (si existe); si no, la primera.
   useEffect(() => { (async () => { const ps = await cargarLista(); if (ps.length) setSelId(ps.some((p) => p.id === initialId) ? initialId : ps[0].id) })() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // El rail sigue a la vista DENTRO de esta pantalla: click en otra playlist del rail tiene que
+  // cambiar la elegida aunque la vista ya esté montada (el efecto de arriba corre solo al montar).
+  useEffect(() => { if (initialId != null && lists?.some((p) => p.id === initialId)) setSelId(initialId) }, [initialId, pick]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargarCrate(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { await cargarLista(); await cargarCrate(selId) }
 
@@ -158,7 +161,9 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
   return (
     <div className="crates">
-      <aside className="crates-aside">
+      {/* Nombre propio: el rail lateral ya es "Mis playlists" y dos regiones con el mismo nombre
+          no se distinguen en la lista de regiones del lector de pantalla. */}
+      <aside className="crates-aside" aria-label="Elegir playlist">
         <div className="cluster" style={{ padding: 'var(--space-1) var(--space-2)' }}>
           <span className="eyebrow">Mis playlists</span>
           <button type="button" className="btn btn-icon-sm push" aria-label="Nueva playlist" title="Nueva playlist" onClick={nueva}><IcoPlus /></button>

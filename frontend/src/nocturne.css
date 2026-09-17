@@ -138,6 +138,9 @@
   /* Result-list geometry — the seven column carriers and the row height. */
   --trk-cols: 30px 44px minmax(180px,1.6fr) minmax(140px,0.9fr) 52px minmax(160px,1fr) 128px /* @kind other */;
   --trk-h: 64px;
+  /* Altura de la barra fija (.topbar-stack). TopBar.jsx la mide y la pisa en vivo (cambia cuando
+     la barra se parte en dos renglones); este valor es solo el de arranque en escritorio. */
+  --topbar-h: 110px;
 
   /* Elevation — derived from the ground: soft ink-tinted shadows on a
      light theme, a hairline edge + ambient darkness on a dark one. */
@@ -348,6 +351,9 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* — dialog — */
 .dialog-backdrop {
   position: fixed; inset: 0; display: grid; place-items: center;
+  /* Por encima de la barra fija (40) y de los cajones (60), debajo de los avisos (80): sin
+     z-index la barra quedaba usable con un diálogo abierto. */
+  z-index: 70;
   padding: var(--space-4);
   background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
 }
@@ -388,8 +394,19 @@ textarea.input { min-height: 90px; resize: vertical; }
 ::-webkit-scrollbar-thumb:hover{background:var(--color-neutral-700);background-clip:padding-box}
 
 /* — app shell — */
-.app{min-height:100vh;display:flex;flex-direction:column;background:var(--color-bg);overflow-x:hidden}
-.app-main{flex:1;min-width:0;padding:var(--space-4) var(--space-4) var(--space-8)}
+/* overflow-x:clip y no hidden: hidden fuerza overflow-y:auto y convierte a .app en contenedor de
+   scroll, así que ningún position:sticky (barra, rail, encabezado de resultados) se pegaba nunca. */
+/* Lo que recibe foco por teclado no queda bajo la barra fija ni bajo el encabezado pegado de
+   resultados (.results-head, 34px). */
+html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
+.app{min-height:100vh;display:flex;flex-direction:column;background:var(--color-bg);overflow-x:clip}
+/* .app-main es el contenedor de las grillas de filas (@container main, abajo): los cortes se
+   miden sobre el ancho real del contenido, con o sin el rail de playlists al lado. */
+.app-main{flex:1;min-width:0;padding:var(--space-4) var(--space-4) var(--space-8);container:main / inline-size}
+.app-main:focus-visible{outline:none} /* recibe el foco del "Saltar al contenido"; no es un control */
+/* Saltar al contenido: primer foco de la página, oculto hasta que lo recibe. */
+.skip-link{position:fixed;top:var(--space-2);left:var(--space-2);z-index:90;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);font-size:13px;font-weight:500;text-decoration:none;color:var(--color-accent-200);background:var(--color-raise);box-shadow:var(--shadow-md);transform:translateY(calc(-100% - var(--space-4)))}
+.skip-link:focus,.skip-link:focus-visible{transform:none}
 .app-wrap{max-width:1400px;margin:0 auto;min-width:0}
 
 /* — topbar — */
@@ -495,7 +512,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* — result list: one row per track — */
 .results{display:flex;flex-direction:column}
 .results-head,.trk{display:grid;grid-template-columns:var(--trk-cols);align-items:center;gap:var(--space-3);padding:0 var(--space-3)}
-.results-head{position:sticky;top:60px;z-index:20;height:34px;background:color-mix(in srgb,var(--color-bg) 92%,transparent);backdrop-filter:blur(10px);font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-500)}
+.results-head{position:sticky;top:var(--topbar-h);z-index:20;height:34px;background:color-mix(in srgb,var(--color-bg) 92%,transparent);backdrop-filter:blur(10px);font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-500)}
 .results-head>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trk{position:relative;min-height:var(--trk-h);border-radius:var(--radius-md);transition:background .14s var(--ease)}
 .trk::after{content:'';position:absolute;left:var(--space-3);right:var(--space-3);bottom:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 9%,transparent) 48px,color-mix(in srgb,var(--color-text) 9%,transparent) calc(100% - 48px),transparent)}
@@ -628,7 +645,7 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 
 /* — tooltip: the only way a dense row can explain itself — */
 .tip{position:relative;display:inline-flex}
-.tip>.tip-body{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:30;width:max-content;max-width:240px;padding:6px 9px;border-radius:6px;font-size:11.5px;line-height:1.45;text-align:left;color:var(--color-neutral-200);background:var(--color-raise);box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
+.tip>.tip-body{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:46;width:max-content;max-width:240px;padding:6px 9px;border-radius:6px;font-size:11.5px;line-height:1.45;text-align:left;color:var(--color-neutral-200);background:var(--color-raise);box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
 .tip:hover>.tip-body,.tip:focus-within>.tip-body{opacity:1}
 
 /* — popover: a filter's own panel, anchored to its button — */
@@ -743,12 +760,8 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .paste textarea{min-height:190px;padding:10px 12px;border:0;background:transparent;resize:vertical;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;color:var(--color-text);caret-color:var(--color-accent)}
 .paste textarea:focus-visible{outline:none}
 .paste-foot{display:flex;align-items:center;gap:var(--space-2);margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-500)}
-/* Bulk download: one determinate bar for the whole set. */
-.bulkbar{position:sticky;top:94px;z-index:22;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-sm)}
 .progress-det>i{width:var(--p,0%);animation:none;transition:width .3s var(--ease)}
 
-/* — the row's mobile overflow button, hidden until the row collapses — */
-.trk-more{display:none}
 
 /* ══════════════════════════════════════════════════════════════════════════
    CRATES — Mis Playlists
@@ -761,7 +774,7 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .crates{display:grid;grid-template-columns:264px minmax(0,1fr);gap:var(--space-4);align-items:start}
 .crates>*{min-width:0}
 .crate-actions{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);flex-wrap:wrap}
-.crates-aside{position:sticky;top:94px;display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
+.crates-aside{position:sticky;top:var(--topbar-h);display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
 .cratelist{display:flex;flex-direction:column;gap:2px}
 .crate-item{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:46px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);font:inherit;text-align:left;cursor:pointer;transition:background .14s var(--ease)}
 .crate-item:hover{color:var(--color-text);background:color-mix(in srgb,var(--color-text) 8%,transparent)}
@@ -815,31 +828,51 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 /* animation-delay 0: sin esto las tarjetas de la home (delay escalonado + fill both) igual
    aparecían de a una, invisibles hasta ~0.5 s. */
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
-@media (max-width:1100px){.results{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+/* Las grillas de filas (.trk) y la vista de crates se cortan por el ANCHO DEL CONTENEDOR
+   (.app-main, container "main"), no del viewport: desde que el rail de playlists (250px) está
+   en todas las pantallas, los cortes de viewport dejaban filas más anchas que el lugar real y
+   .app las recortaba (se perdían Descargar y Quitar). Cada corte es el de viewport de antes
+   menos el padding de .app-main (32px), salvo el de Metadata en resultados (ver abajo). */
+/* Resultados: las 7 columnas de escritorio entran desde 830px de contenido
+   (30+44+180+140+52+160+128 + 6 huecos de 12 + 24 de padding; medido: a 830 no se corta nada).
+   Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
+   desaparecía hasta ~1360px de viewport. */
+@container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+/* Crate: su fila de escritorio pide ~712px y la lista de crates al lado se come 280, así que
+   su corte queda en 1068. El bloque de 829 excluye .results-crate con :not(), así el crate no
+   depende del orden de estos dos bloques en el archivo. */
+@container main (max-width:1068px){.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-crate .trk>.trk-meta{display:none}}
 /* The crate view drops to one column before its row runs out of room. */
-@media (max-width:1000px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
-/* Below 760 the seven columns collapse to a two-line card: artwork, title,
-   grade and the two actions a DJ still needs on a phone (download, more);
-   the version chips move to their own line, metadata and the index go. */
-@media (max-width:760px){
+@container main (max-width:968px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
+/* Debajo de 728px de contenido la fila pasa a tarjeta: arte, tema y nota arriba; las versiones
+   en su renglón y las acciones en otro, TODAS (Espectrograma, Comparar, Parecidas, Agregar,
+   Descargar). Antes se escondían las tres primeras esperando un menú "más" que nunca existió,
+   y con el rail eso pasaba también en escritorio (861-1020px). Metadata y el índice se van. */
+@container main (max-width:728px){
 .results-head{display:none}
-.trk{grid-template-columns:44px minmax(0,1fr) 52px 76px;grid-template-areas:'art id grade acts' 'art vers vers vers';row-gap:6px;padding:var(--space-2) var(--space-3)}
+.trk{grid-template-columns:44px minmax(0,1fr) 52px;grid-template-areas:'art id grade' 'art vers vers' 'art acts acts';row-gap:6px;padding:var(--space-2) var(--space-3)}
 .trk>.trk-idx,.trk>.trk-meta{display:none}
 .trk>.thumb{grid-area:art;align-self:start}
 .trk>.trk-id{grid-area:id}
 .trk>.trk-grade{grid-area:grade}
 .trk>.trk-acts{grid-area:acts}
 .trk>.trk-vers{grid-area:vers}
-.trk-acts>.btn-icon-sm{display:none}
-.trk-acts>.trk-more{display:grid}
-.trk-acts{opacity:1}
+.trk-acts{opacity:1;justify-content:flex-start;flex-wrap:wrap}
+/* El crate tiene una sola acción (Quitar): va arriba a la derecha, al lado de la nota. */
+.results-crate .trk{grid-template-columns:44px minmax(0,1fr) 52px 40px;grid-template-areas:'art id grade acts' 'art st st st'}
+.results-crate .trk-acts{justify-content:flex-end}
+.results-crate .drag{display:none}
+.trk>.trk-status{grid-area:st}
+}
+@media (max-width:760px){
 .filterbar{flex-wrap:nowrap;overflow-x:auto}
 .cmp{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:80%;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:var(--space-2)}
 .cmp-col{scroll-snap-align:start}
-.results-crate .trk{grid-template-columns:44px minmax(0,1fr) 52px 40px;grid-template-areas:'art id grade acts' 'art st st st'}
-.results-crate .drag{display:none}
-.trk>.trk-status{grid-area:st}
 .toasts{left:var(--space-3);right:var(--space-3);bottom:var(--space-3);width:auto}
+/* En el teléfono la barra se parte en tres renglones (~220px): pegada arriba se come un tercio
+   de la pantalla. Queda en el flujo, como se veía hasta ahora (el sticky no andaba, ver .app). */
+.topbar-stack{position:relative}
+html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descontarla */
 .topbar{flex-wrap:wrap;height:auto;padding:var(--space-2) var(--space-3);row-gap:var(--space-2)}
 .search{order:3;flex-basis:100%;max-width:none}
 .dlbar{padding:var(--space-2) var(--space-3)}
@@ -850,7 +883,9 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 
 /* ===== Home poblada: rail de playlists + estantes por género (2026-09-17) ===== */
 .app-body{display:flex;align-items:flex-start;flex:1;min-width:0}
-.pl-rail{width:250px;flex-shrink:0;position:sticky;top:60px;align-self:stretch;max-height:calc(100vh - 60px);overflow-y:auto;border-right:1px solid var(--color-divider,#2a2a36);padding:16px 10px;display:flex;flex-direction:column;gap:4px}
+/* top/max-height con la altura real de la barra fija (topbar + barra de descarga): con 60px el
+   encabezado del rail quedaba bajo la barra de descarga y el pie se iba por debajo del viewport. */
+.pl-rail{width:250px;flex-shrink:0;position:sticky;top:var(--topbar-h);align-self:stretch;max-height:calc(100vh - var(--topbar-h));overflow-y:auto;border-right:1px solid var(--color-divider,#2a2a36);padding:16px 10px;display:flex;flex-direction:column;gap:4px}
 .pl-rail-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 8px;font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--color-muted,#9a9aac)}
 .pl-rail-add{width:26px;height:26px;border-radius:7px;border:1px solid var(--color-divider,#2a2a36);background:var(--color-surface,#232532);color:var(--color-accent,#9184d9);cursor:pointer;display:grid;place-items:center}
 .pl-rail-list{display:flex;flex-direction:column;gap:2px}

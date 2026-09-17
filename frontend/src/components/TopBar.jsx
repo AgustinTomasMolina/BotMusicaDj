@@ -112,6 +112,18 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // Altura real de la barra fija (topbar + barra de descarga): no es fija, cambia cuando la barra
+  // se parte en dos renglones. Se publica en --topbar-h para que lo que se pega debajo (rail,
+  // encabezado de resultados, lista de crates) no quede tapado ni se salga por abajo.
+  const stackRef = useRef(null)
+  useEffect(() => {
+    const el = stackRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const root = document.documentElement
+    const ro = new ResizeObserver(() => root.style.setProperty('--topbar-h', `${Math.ceil(el.getBoundingClientRect().height)}px`))
+    ro.observe(el)
+    return () => { ro.disconnect(); root.style.removeProperty('--topbar-h') }
+  }, [])
   const submit = async (e) => {
     e.preventDefault()
     const t = q.trim()
@@ -129,7 +141,7 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
   )
   return (
     <>
-      <div className="topbar-stack">
+      <div className="topbar-stack" ref={stackRef}>
         <header className="topbar rule-b">
           <button type="button" className="btn btn-icon btn-icon-sm" aria-label="Menú" aria-expanded={menuOpen}
             onClick={() => setMenuOpen((o) => !o)}>
