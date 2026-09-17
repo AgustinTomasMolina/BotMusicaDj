@@ -34,7 +34,13 @@ import numpy as np
 
 from motor.embeddings import DIM, normalize_matrix, normalize_one
 from motor.energia import percentil
-from motor.modelos import Track, TrackFeatures, require_finite_bpm, require_text
+from motor.modelos import (
+    Track,
+    TrackFeatures,
+    require_acuerdo_key,
+    require_finite_bpm,
+    require_text,
+)
 
 # Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
 # de una tabla, y agregar el paso a `_MIGRACIONES`. `CREATE TABLE IF NOT EXISTS` no altera
@@ -178,6 +184,10 @@ class Store:
         require_text(license, "license")
         require_text(source_url, "source_url")
         require_finite_bpm(features.bpm)
+        # La confianza de la key se valida al ESCRIBIR y no al leer: acá el dato lo produce
+        # el análisis y tiene que ser coherente; al leer, una fila corrupta se degrada a `?`
+        # en vez de tirar la biblioteca entera (ver `require_acuerdo_key`).
+        require_acuerdo_key(features.key_acuerdo, features.key_tramos)
 
         key = self._key(path)
         mt = float(mtime) if mtime is not None else Path(path).stat().st_mtime

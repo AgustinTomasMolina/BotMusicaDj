@@ -193,7 +193,11 @@ def test_etapa_a_track_corto_escribe_acuerdo_vacio_no_0_de_0(tmp_path):
 
 def _dobles_de_medicion(monkeypatch, espera_consenso: float = 0.0):
     """Reemplaza BPM, tono y tono_consenso de `motor.analisis` por dobles que cuentan
-    llamadas y devuelven valores distinguibles (el consenso vota otra key que tono)."""
+    llamadas y devuelven valores distinguibles (el consenso vota otra key que tono).
+
+    Los tramos del doble son ASIMÉTRICOS (`8A|8A|3B`) a propósito: con el palíndromo que
+    había antes (`8A|3B|8A`) un bug que invirtiera el orden de los votos daba la misma
+    cadena y no lo veía nadie, y `info` los imprime en orden."""
     import motor.analisis as ma
 
     llamadas = {"tono": 0, "tono_consenso": 0}
@@ -207,7 +211,7 @@ def _dobles_de_medicion(monkeypatch, espera_consenso: float = 0.0):
         if espera_consenso:
             time.sleep(espera_consenso)
         return {"nota": "A", "modo": "min", "camelot": "8A", "confianza": 0.667,
-                "acuerdo": (2, 3), "tramos": ["8A", "3B", "8A"]}
+                "acuerdo": (2, 3), "tramos": ["8A", "8A", "3B"]}
 
     monkeypatch.setattr(ma, "bpm_refinado", lambda y, sr: 128.0)
     monkeypatch.setattr(ma, "tono", _tono)
@@ -246,7 +250,57 @@ def test_el_scan_del_motor_guarda_el_acuerdo_del_consenso(monkeypatch):
         f"el scan llamó a tono_consenso {llamadas['tono_consenso']} veces (tiene que ser 1)"
     assert features.key == "3B", f"key {features.key}: tiene que ser la de tono()"
     assert features.key_acuerdo == "2/3", f"key_acuerdo {features.key_acuerdo!r}"
-    assert features.key_tramos == "8A|3B|8A", f"key_tramos {features.key_tramos!r}"
+    # Orden exacto, no el multiconjunto: el primer voto es el del arranque del track y
+    # `info` los imprime así. "3B|8A|8A" sería el mismo acuerdo y otra historia.
+    assert features.key_tramos == "8A|8A|3B", f"key_tramos {features.key_tramos!r}"
+
+
+def test_los_votos_de_los_tramos_se_guardan_en_orden(monkeypatch):
+    """El orden de los votos es dato, no presentación: dice QUÉ TRAMO votó qué. Con tres
+    votos distintos, cualquier reordenamiento (invertir, ordenar) da otra cadena."""
+    from motor import analisis
+
+    def _consenso(y, sr):
+        return {"nota": "A", "modo": "min", "camelot": "8A", "confianza": 0.333,
+                "acuerdo": (1, 3), "tramos": ["9A", "3B", "8A"]}
+
+    monkeypatch.setattr(analisis, "bpm_refinado", lambda y, sr: 128.0)
+    monkeypatch.setattr(analisis, "tono", lambda y, sr: {
+        "nota": "C#", "modo": "maj", "camelot": "3B", "confianza": 0.91})
+    monkeypatch.setattr(analisis, "tono_consenso", _consenso)
+    monkeypatch.setattr(analisis, "embed", lambda *a, **k: np.zeros(4))
+    monkeypatch.setattr(analisis, "onsets_por_segundo", lambda y, sr: 0.0)
+    y, _ = click_track(128.0, dur=3, nota="A", modo="min")
+
+    features = analisis.analizar_senal(y, SR)
+
+    assert features.key_tramos == "9A|3B|8A", \
+        f"key_tramos {features.key_tramos!r}: invertido daría '8A|3B|9A' y ordenado '3B|8A|9A'"
+    assert features.key_acuerdo == "1/3", f"key_acuerdo {features.key_acuerdo!r}"
+
+
+def test_una_deteccion_sin_consenso_no_inventa_acuerdo():
+    """`medir_bpm_y_tono(con_acuerdo=False)` devuelve una detección SIN la clave `acuerdo`, y
+    `acuerdo_y_tramos` la traduce a "no medido" (None, None) en vez de a un "0/0" que diría
+    que el consenso corrió y no encontró nada.
+
+    Es la única rama de `acuerdo_y_tramos` que el scan no ejecuta (siempre pide
+    `con_acuerdo=True`): sin ella, componer las dos funciones revienta al desempaquetar
+    `None`. Las dos son públicas y la composición es el contrato entre ellas."""
+    from motor.analisis import acuerdo_y_tramos, medir_bpm_y_tono
+
+    y, sr = click_track(128.0, dur=3, nota="A", modo="min")
+    _, det = medir_bpm_y_tono(y, sr, con_acuerdo=False)
+    assert "acuerdo" not in det, f"el caso necesita una detección sin acuerdo: {sorted(det)}"
+
+    assert acuerdo_y_tramos(det) == (None, None), \
+        f"sin consenso corrido el acuerdo es (None, None), no {acuerdo_y_tramos(det)}"
+
+    # Y con consenso corrido sobre el MISMO audio sí hay acuerdo: el (None, None) de arriba
+    # no es "esta función siempre devuelve None".
+    _, con = medir_bpm_y_tono(y, sr, con_acuerdo=True)
+    assert acuerdo_y_tramos(con) == ("0/0", ""), \
+        f"con consenso corrido sobre 3 s el acuerdo es ('0/0', ''), no {acuerdo_y_tramos(con)}"
 
 
 def test_el_scan_no_inventa_acuerdo_cuando_el_track_no_da_para_tramos(monkeypatch):

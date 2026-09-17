@@ -122,11 +122,19 @@ def onsets_por_segundo(y: np.ndarray, sr: int = SR) -> float:
 def acuerdo_y_tramos(det: dict) -> tuple[str | None, str | None]:
     """La confianza de la key de una detección, como la guarda el store.
 
-    `(acuerdo, tramos)` = `("2/3", "8A|3B|8A")`. `(None, None)` si la detección no trae
-    acuerdo, o sea si el consenso NO se corrió: es el "no medido" que el store escribe como
-    NULL y la CLI muestra con `?`. Distinto de `("0/0", "")`, que es el consenso corrido
-    sobre un track demasiado corto para comparar tramos — ahí tampoco hay confianza, pero
-    reanalizar no la va a traer.
+    `(acuerdo, tramos)` = `("2/3", "8A|3B|9A")`, con los votos EN EL ORDEN en que salieron
+    los tramos: el primero es el del arranque del track. `info` los imprime tal cual, así
+    que reordenarlos sería mentir sobre qué tramo votó qué.
+
+    `(None, None)` si la detección no trae acuerdo, o sea si el consenso NO se corrió. Ese
+    caso NO lo produce `analizar_senal`, que siempre pide `con_acuerdo=True` (tarea 17); lo
+    produce `medir_bpm_y_tono(..., con_acuerdo=False)`, que sigue siendo parte del contrato
+    de esa función y devuelve una detección sin la clave `acuerdo`. Sin esta rama, componer
+    las dos revienta con `TypeError` al desempaquetar `None`
+    (`test_analisis.py::test_una_deteccion_sin_consenso_no_inventa_acuerdo` lo fija).
+
+    Distinto de `("0/0", "")`, que es el consenso corrido sobre un track demasiado corto
+    para comparar tramos — ahí tampoco hay confianza, pero reanalizar no la va a traer.
 
     El `0/0` NO se colapsa a vacío como hace el CSV de la etapa A (`benchmark.analizar`):
     ahí el vacío alcanza porque el CSV se regenera entero de una corrida, y acá la base

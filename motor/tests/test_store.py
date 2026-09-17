@@ -1075,9 +1075,11 @@ def test_el_acuerdo_de_la_key_vuelve_igual_de_la_base(tmp_path):
     fa = TrackFeatures(bpm=ca["bpm"], key=ca["key"], energy_raw=ca["energy_raw"],
                        embedding=ca["embedding"], key_acuerdo="3/3",
                        key_tramos=f"{ca['key']}|{ca['key']}|{ca['key']}")
+    # Tramos ASIMÉTRICOS: con un palíndromo ("8A|5A|8A") invertir el orden de los votos al
+    # guardarlos o al leerlos daría la misma cadena y el round-trip no lo vería.
     fb = TrackFeatures(bpm=cb["bpm"], key=cb["key"], energy_raw=cb["energy_raw"],
                        embedding=cb["embedding"], key_acuerdo="2/3",
-                       key_tramos=f"{cb['key']}|{ca['key']}|{cb['key']}")
+                       key_tramos=f"{cb['key']}|{cb['key']}|{ca['key']}")
 
     with Store(tmp_path / "db.sqlite") as store:
         store.upsert(ruta_a, fa, duration=10.0, license=LICENCIA, source_url=ORIGEN)
@@ -1190,3 +1192,95 @@ def test_migracion_3_que_falla_deja_la_base_v2_como_estaba(tmp_path, monkeypatch
     with Store(db) as store:                     # después del fallo, una apertura normal migra
         assert store.count() == 2
         assert store.get_features(tmp_path / _catalogo()[0]["nombre"]).key_acuerdo is None
+
+
+# --- la compuerta del acuerdo: qué NO se puede persistir --------------------------------
+
+# (acuerdo, tramos, qué tiene de malo). Todos son datos inventados de distinta forma: el
+# scan real no produce ninguno, y guardarlos haría que `info` narrara una confianza que
+# nadie midió (spec §6).
+ACUERDOS_INVALIDOS = [
+    ("abc", "8A|3B|9A", "no tiene la forma ganados/total"),
+    ("2-3", "8A|3B|9A", "el separador no es /"),
+    ("4/3", "8A|3B|9A", "más tramos de acuerdo que tramos"),
+    ("3/3", "", "dice 3 tramos coincidiendo y no guarda ninguno"),
+    ("3/3", "8A|8A", "dice 3 tramos y guarda 2"),
+    ("0/0", "8A", "dice 0 tramos y guarda 1"),
+    ("", "", "vacío en vez de NULL: nadie midió, y eso se guarda como NULL"),
+    ("2/3", None, "acuerdo sin votos"),
+    (None, "8A|3B|9A", "votos sin acuerdo"),
+]
+
+
+@pytest.mark.parametrize(("acuerdo", "tramos", "motivo"), ACUERDOS_INVALIDOS,
+                         ids=[f"{a!r}-{t!r}" for a, t, _ in ACUERDOS_INVALIDOS])
+def test_la_cache_no_acepta_un_acuerdo_inventado(tmp_path, acuerdo, tramos, motivo):
+    """`Store.upsert` rechaza la confianza de la key mal formada, igual que ya rechaza una
+    licencia vacía o un BPM infinito. La fila NO entra: después del intento la base sigue
+    sin ese track."""
+    db = tmp_path / "db.sqlite"
+    c = _catalogo()[0]
+    ruta = tmp_path / c["nombre"]
+    ruta.write_bytes(b"x")
+    features = TrackFeatures(bpm=c["bpm"], key=c["key"], energy_raw=c["energy_raw"],
+                             embedding=c["embedding"], key_acuerdo=acuerdo, key_tramos=tramos)
+
+    with Store(db) as store, pytest.raises(ValueError, match="key_acuerdo|key_tramos"):
+        store.upsert(ruta, features, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+
+    with Store(db) as store:
+        assert store.count() == 0, \
+            f"entró a la caché un acuerdo {acuerdo!r} con tramos {tramos!r} ({motivo})"
+
+
+@pytest.mark.parametrize(("acuerdo", "tramos"), [
+    (None, None),            # no se midió
+    ("0/0", ""),             # se midió y el track no dio para tramos
+    ("1/3", "9A|3B|8A"),     # los tres tramos votaron distinto
+    ("2/3", "8A|8A|3B"),
+    ("3/3", "8A|8A|8A"),
+    ("5/5", "8A|8A|8A|8A|8A"),   # n_tramos es configurable: no se compara contra 3
+    ("0/3", "?|?|?"),        # ningún tramo pudo votar
+])
+def test_la_cache_acepta_los_acuerdos_que_produce_el_consenso(tmp_path, acuerdo, tramos):
+    """El otro lado de la compuerta: todo lo que `tono_consenso` puede devolver entra y
+    vuelve igual. Una validación que rechazara alguno de estos rompería el scan."""
+    db = tmp_path / "db.sqlite"
+    c = _catalogo()[0]
+    ruta = tmp_path / c["nombre"]
+    ruta.write_bytes(b"x")
+
+    with Store(db) as store:
+        store.upsert(ruta, TrackFeatures(bpm=c["bpm"], key=c["key"], energy_raw=c["energy_raw"],
+                                         embedding=c["embedding"], key_acuerdo=acuerdo,
+                                         key_tramos=tramos),
+                     duration=10.0, license=LICENCIA, source_url=ORIGEN)
+        got = store.get_features(ruta)
+
+    assert (got.key_acuerdo, got.key_tramos) == (acuerdo, tramos), \
+        f"entró ({acuerdo!r}, {tramos!r}) y volvió ({got.key_acuerdo!r}, {got.key_tramos!r})"
+
+
+def test_leer_una_fila_con_acuerdo_corrupto_no_rompe_la_biblioteca(tmp_path):
+    """La compuerta es de ESCRITURA. Una base tocada por fuera puede tener "abc", y leerla
+    tiene que devolver ese texto tal cual —para que la CLI lo muestre con `?`— en vez de
+    tirar `load_library` para los otros tracks."""
+    db = tmp_path / "db.sqlite"
+    rutas = _poblar(Store(db), tmp_path, indices=[0, 1])
+    store = Store(db)
+    store.close()
+    con = sqlite3.connect(str(db))
+    con.execute("UPDATE tracks SET key_acuerdo = 'abc', key_tramos = 'x' WHERE path LIKE ?",
+                (f"%{_catalogo()[0]['nombre']}",))
+    con.commit()
+    con.close()
+
+    with Store(db) as store:
+        biblio = store.load_library()
+        corrupto = store.get_features(rutas[_catalogo()[0]["nombre"]])
+
+    assert len(biblio) == 2, f"una fila corrupta se llevó puesta la biblioteca: {len(biblio)}"
+    assert corrupto.key_acuerdo == "abc", f"el acuerdo corrupto volvió como {corrupto.key_acuerdo!r}"
+    assert {t.path.name: t.key_acuerdo for t in biblio} == \
+        {_catalogo()[0]["nombre"]: "abc", _catalogo()[1]["nombre"]: None}, \
+        {t.path.name: t.key_acuerdo for t in biblio}

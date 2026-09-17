@@ -380,6 +380,13 @@ def _detalle_acuerdo(acuerdo: str | None, tramos: str | None) -> str:
     except ValueError:
         return f"ilegible ({acuerdo!r}) — la key va con ?"
     votos = f" ({tramos})" if tramos else ""
+    if unanime and not tramos:
+        # Fila incoherente: dice que N tramos coincidieron y no guarda ninguno.
+        # `Store.upsert` no la deja entrar (`require_acuerdo_key`), así que solo puede venir
+        # de una base tocada por fuera. No se narra como confianza: se dice que está rota,
+        # porque "todos los tramos votaron la misma key" sin un solo voto es inventar.
+        return (f"{texto} — INCOHERENTE: dice {texto.split('/')[-1]} tramos de acuerdo y no "
+                f"guarda ninguno; la fila no la escribió djradio")
     if unanime:
         return f"{texto} — todos los tramos votaron la misma key{votos}"
     if not tramos:

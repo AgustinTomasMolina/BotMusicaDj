@@ -18,6 +18,7 @@ no lleguen vacíos. El boceto viejo los declaraba `str | None = None` dos línea
 de un comentario que decía que eran obligatorios — o sea que no lo eran.
 """
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,52 @@ def require_finite_bpm(value: object) -> float:
         raise ValueError(
             f"`bpm` tiene que ser un número finito (0.0 = sin BPM medido), recibí {value!r}")
     return value
+
+
+_FORMA_ACUERDO = re.compile(r"^(\d+)/(\d+)$")
+
+
+def require_acuerdo_key(acuerdo: object, tramos: object) -> None:
+    """Exige que la confianza de la key sea un par coherente, o que no esté. No devuelve
+    nada: o pasa o levanta `ValueError`.
+
+    Qué acepta: `(None, None)` —no se midió— o `("g/t", "8A|3B|9A")` con `g <= t` y
+    EXACTAMENTE `t` votos (ninguno si `t` es 0). Ese invariante es el que produce
+    `tono_consenso`, que devuelve `acuerdo=(ganados, len(votos))` junto a esos mismos votos.
+
+    Por qué existe: un `"3/3"` con los votos vacíos diría "los tres tramos coincidieron" sin
+    tener tramos, y un `"4/3"` o un `"abc"` no dicen nada — son datos inventados, y el
+    proyecto no los quiere (spec §6). Es la misma compuerta que `require_text` para la
+    licencia, en el mismo lugar: la frontera de ESCRITURA de la caché (`Store.upsert`).
+
+    Dónde NO se usa, a propósito: al LEER. `Store._features` arma un `TrackFeatures` con lo
+    que haya en la fila, y `Track` ni mira el formato. Si una base editada a mano tiene
+    `"abc"`, la CLI tiene que poder mostrar ese track con `?` (`cli.key_dudosa` atrapa el
+    `ValueError` de `acuerdo_unanime`); levantar acá haría que una fila corrupta tirara
+    `load_library` para la biblioteca entera.
+    """
+    if acuerdo is None and tramos is None:
+        return
+    if acuerdo is None or tramos is None:
+        raise ValueError(
+            f"`key_acuerdo` y `key_tramos` van juntos: o los dos None (no se midió) o los dos "
+            f"con valor; recibí acuerdo={acuerdo!r} y tramos={tramos!r}")
+    if not isinstance(acuerdo, str) or not (m := _FORMA_ACUERDO.match(acuerdo.strip())):
+        raise ValueError(
+            f"`key_acuerdo` tiene la forma 'ganados/total' de `tono_consenso` (ej. '2/3'); "
+            f"recibí {acuerdo!r}")
+    ganados, total = int(m.group(1)), int(m.group(2))
+    if ganados > total:
+        raise ValueError(
+            f"`key_acuerdo` {acuerdo!r}: no puede haber más tramos de acuerdo ({ganados}) que "
+            f"tramos ({total})")
+    if not isinstance(tramos, str):
+        raise ValueError(f"`key_tramos` tiene que ser texto ('8A|3B|9A'); recibí {tramos!r}")
+    votos = tramos.split("|") if tramos else []
+    if len(votos) != total:
+        raise ValueError(
+            f"`key_acuerdo` {acuerdo!r} dice {total} tramos y `key_tramos` {tramos!r} trae "
+            f"{len(votos)}: un acuerdo sin sus votos no se puede mostrar sin inventarlos")
 
 
 def _as_vector(value: object, field: str) -> np.ndarray:

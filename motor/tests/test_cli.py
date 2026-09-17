@@ -304,7 +304,7 @@ def test_list_deja_la_key_limpia_solo_con_acuerdo_unanime(tmp_path, capsys, bibl
     _, db_bib, _ = biblioteca
     db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {
         "click_120": ("3/3", "8A|8A|8A"),
-        "click_124": ("2/3", "8A|3B|8A"),
+        "click_124": ("2/3", "8A|3B|9A"),
         "click_126": (None, None),
     })
 
@@ -325,7 +325,7 @@ def test_info_explica_por_que_la_key_es_dudosa(tmp_path, capsys, biblioteca):
     _, db_bib, _ = biblioteca
     db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {
         "click_120": ("3/3", "8A|8A|8A"),
-        "click_124": ("2/3", "8A|3B|8A"),
+        "click_124": ("2/3", "8A|3B|9A"),
         "click_126": (None, None),
     })
 
@@ -341,7 +341,7 @@ def test_info_explica_por_que_la_key_es_dudosa(tmp_path, capsys, biblioteca):
 
     assert campos["click_124"]["key"] == "8A (Am) ?", campos["click_124"]["key"]
     assert campos["click_124"]["acuerdo key"] == \
-        "2/3 — los tramos no coinciden (8A|3B|8A): la key va con ?", \
+        "2/3 — los tramos no coinciden (8A|3B|9A): la key va con ?", \
         campos["click_124"]["acuerdo key"]
 
     assert campos["click_126"]["key"].endswith(" ?"), campos["click_126"]["key"]
@@ -368,32 +368,109 @@ def test_radio_marca_la_key_dudosa_en_cada_paso(tmp_path, capsys, biblioteca):
     otros = {k: v for k, v in marcas.items() if k not in ("click_126_Cmaj", "click_128_Gmaj")}
     assert set(otros.values()) == {"?"}, \
         f"tracks de 10 s (acuerdo 0/0) sin marcar: {otros}\n{out}"
+    # El set es una salida que se lee sola (se exporta, se pega en un chat): sin la leyenda
+    # el `?` es un símbolo mudo. Va DESPUÉS del aviso de set corto, que no se puede tapar.
+    from motor.cli import LEYENDA_KEY
+    assert out.rstrip().endswith(LEYENDA_KEY), \
+        f"la radio no cierra con la leyenda del `?`:\n{out}"
+
+
+# Renglón de progreso del `scan`. Grupos: 1 archivo · 2 BPM · 3 Camelot · 4 clásica ·
+# 5 marca de duda de la key.
+PROGRESO_SCAN = re.compile(
+    r"^\s*\[\d+/\d+\]\s+(\S+)\s+(\d+\.\d) BPM\s+(\d{1,2}[AB]|\?)\s+(\S+)\s{0,2}(\?)?\s+"
+    r"\d+\.\d\d s$")
 
 
 def test_scan_de_un_track_largo_deja_la_key_sin_marca(tmp_path, capsys):
-    """Punta a punta y sin tocar la base a mano: 140 s del generador en La menor → el scan
-    mide acuerdo unánime, lo guarda, y `list` muestra la key limpia. Es el único caso donde
-    la marca NO aparece por el camino real."""
+    """Punta a punta y sin tocar la base a mano. Dos archivos en la misma carpeta:
+
+    - 140 s en La menor: da para tres tramos disjuntos, los tres votan 8A → acuerdo unánime
+      y la key sale LIMPIA (el único caso donde no hay marca por el camino real);
+    - 10 s: no da para tramos → "0/0" y la key sale con `?`.
+
+    Se miran las dos salidas que imprimen una key: el progreso del propio `scan` y `list`.
+    """
     carpeta = tmp_path / "crate"
     carpeta.mkdir()
-    y, sr = click_track(128.0, dur=140.0, nota="A", modo="min", seed=3)
-    ruta = carpeta / "largo_128_Amin.wav"
-    sf.write(str(ruta), y, sr, subtype="FLOAT")
+    largo, _ = click_track(128.0, dur=140.0, nota="A", modo="min", seed=3)
+    corto, sr = click_track(124.0, dur=10.0, nota="C", modo="maj", seed=4)
+    sf.write(str(carpeta / "largo_128_Amin.wav"), largo, sr, subtype="FLOAT")
+    sf.write(str(carpeta / "corto_124_Cmaj.wav"), corto, sr, subtype="FLOAT")
 
     db = tmp_path / "db.sqlite"
     codigo, out, _ = _correr(capsys, *_scan(db, carpeta))
     assert codigo == 0, out
 
     with Store(db) as store:
-        f = store.get_features(ruta)
-    assert (f.key, f.key_acuerdo, f.key_tramos) == ("8A", "3/3", "8A|8A|8A"), \
-        f"el scan midió key {f.key} acuerdo {f.key_acuerdo!r} tramos {f.key_tramos!r}"
+        f_largo = store.get_features(carpeta / "largo_128_Amin.wav")
+        f_corto = store.get_features(carpeta / "corto_124_Cmaj.wav")
+    assert (f_largo.key, f_largo.key_acuerdo, f_largo.key_tramos) == ("8A", "3/3", "8A|8A|8A"), \
+        f"el scan midió key {f_largo.key} acuerdo {f_largo.key_acuerdo!r} tramos {f_largo.key_tramos!r}"
+    assert (f_corto.key_acuerdo, f_corto.key_tramos) == ("0/0", ""), \
+        f"el track corto midió acuerdo {f_corto.key_acuerdo!r} tramos {f_corto.key_tramos!r}"
+
+    # El progreso del scan es la primera vez que el DJ ve una key: también respeta §6.
+    progreso = {m.group(1): (m.group(5) or "")
+                for m in (PROGRESO_SCAN.match(linea) for linea in out.splitlines()) if m}
+    assert set(progreso) == {"largo_128_Amin.wav", "corto_124_Cmaj.wav"}, \
+        f"el progreso del scan no imprimió los dos tracks con formato de key:\n{out}"
+    assert progreso["largo_128_Amin.wav"] == "", \
+        f"el scan marcó una key de acuerdo unánime:\n{out}"
+    assert progreso["corto_124_Cmaj.wav"] == "?", \
+        f"el scan no marcó una key con acuerdo 0/0:\n{out}"
 
     codigo, out, _ = _correr(capsys, "--db", db, "list")
     assert codigo == 0, out
-    fila = next(m for m in (FILA_LIST.match(linea) for linea in out.splitlines()) if m)
+    filas = {m.group(6).rstrip(): m for m in
+             (FILA_LIST.match(linea) for linea in out.splitlines()) if m}
+    fila = filas["largo_128_Amin"]
     assert (fila.group(2), fila.group(3)) == ("8A", "Am"), fila.groups()
     assert fila.group(4) is None, f"la key de acuerdo unánime salió marcada:\n{out}"
+    assert filas["corto_124_Cmaj"].group(4) == "?", f"la key con 0/0 salió sin marcar:\n{out}"
+
+
+def test_un_acuerdo_ilegible_no_pasa_por_confiable(tmp_path, capsys, biblioteca):
+    """Una base tocada por fuera puede tener basura en `key_acuerdo` (`Store.upsert` no la
+    deja entrar, pero un UPDATE a mano sí). Un acuerdo que no se puede leer NO es un acuerdo
+    unánime: la key va con `?` y `info` dice que el dato está ilegible, en vez de tirar un
+    traceback o —peor— mostrar la key como segura."""
+    _, db_bib, _ = biblioteca
+    db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {
+        "click_120": ("3/3", "8A|8A|8A"),
+        "click_124": ("abc", "8A|3B|9A"),
+    })
+
+    codigo, out, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0, out
+    marcas = {m.group(6).rstrip(): (m.group(4) or "")
+              for m in (FILA_LIST.match(linea) for linea in out.splitlines()) if m}
+    assert marcas["click_124_Amin"] == "?", f"un acuerdo ilegible salió sin marcar:\n{out}"
+    assert marcas["click_120_Amin"] == "", \
+        f"precondición: la fila sana tiene que seguir saliendo limpia:\n{out}"
+
+    codigo, out, _ = _correr(capsys, "--db", db, "info", "click_124")
+    assert codigo == 0, out
+    campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+    assert campos["key"] == "8A (Am) ?", campos["key"]
+    assert campos["acuerdo key"] == "ilegible ('abc') — la key va con ?", campos["acuerdo key"]
+
+
+def test_info_no_narra_un_acuerdo_unanime_sin_votos(tmp_path, capsys, biblioteca):
+    """"3/3" con los tramos vacíos es una fila incoherente: dice que tres tramos coincidieron
+    y no guarda ninguno. `Store.upsert` la rechaza, así que solo puede venir de afuera, e
+    `info` la tiene que denunciar — no decir "todos los tramos votaron la misma key" sin
+    tener un solo voto que mostrar (§6)."""
+    _, db_bib, _ = biblioteca
+    db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {"click_120": ("3/3", "")})
+
+    codigo, out, _ = _correr(capsys, "--db", db, "info", "click_120")
+    assert codigo == 0, out
+    campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+    assert campos["acuerdo key"] == \
+        "3/3 — INCOHERENTE: dice 3 tramos de acuerdo y no guarda ninguno; la fila no la " \
+        "escribió djradio", campos["acuerdo key"]
+    assert "votaron la misma key" not in campos["acuerdo key"], campos["acuerdo key"]
 
 
 def test_base_inexistente_no_se_crea(tmp_path, capsys):
