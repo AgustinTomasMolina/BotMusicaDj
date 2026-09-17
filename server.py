@@ -202,7 +202,7 @@ def _buscar_mix(q: str, limite: int) -> list:
 
 def _rank_calidad(fuente: str, formato: str) -> int:
     """Prioridad de fuente según el formato de descarga pedido.
-    Para destinos lossless (wav/flac/aiff) conviene la mejor fuente convertible;
+    Para destinos lossless (wav/flac) conviene la mejor fuente convertible;
     las que ya vienen en MP3 fijo (scrapers) van al final porque convertir un MP3
     a WAV no recupera calidad. Para MP3 el orden casi no importa, se usa el mismo."""
     f = (fuente or "").lower()
@@ -369,7 +369,7 @@ async def buscar_lista(payload: dict):
     cada una, hasta 3 opciones priorizadas por fuente según el formato. El usuario
     elige cuál bajar en el front."""
     texto = (payload.get("lista") or "").strip()
-    formato = (payload.get("formato") or "mp3").lower()
+    formato = (payload.get("formato") or "wav").lower()
     lineas = [l.strip() for l in texto.splitlines() if l.strip()]
     if not lineas:
         return JSONResponse({"exito": False, "mensaje": "Pegá una lista de canciones (una por línea)."}, status_code=400)
@@ -394,7 +394,7 @@ async def buscar_lista(payload: dict):
 
 
 @app.get("/api/buscar")
-async def buscar(q: str = "", limite: int = 24, formato: str = "mp3", genero: str = ""):
+async def buscar(q: str = "", limite: int = 24, formato: str = "wav", genero: str = ""):
     """Busca una canción/artista/género y devuelve los resultados agrupados por TEMA
     (una fila por track, con sus versiones de cada plataforma como opciones).
     `genero` (opcional) sesga la búsqueda hacia ese estilo (ej. 'hard techno')."""
@@ -415,7 +415,7 @@ async def buscar(q: str = "", limite: int = 24, formato: str = "mp3", genero: st
 
     # La relevancia se mide contra lo que el usuario TIPEÓ (q); si solo eligió género,
     # se usa el género como consulta (así no filtra de más un browse por estilo).
-    grupos = _agrupar_por_track(resultados, (formato or "mp3").lower(), q or genero)
+    grupos = _agrupar_por_track(resultados, (formato or "wav").lower(), q or genero)
     logger.info(f"✅ {len(resultados)} resultados → {len(grupos)} temas (agrupados por versión).")
     await asyncio.to_thread(db.registrar_busqueda, q, len(grupos))
     # `canciones` se mantiene por compatibilidad; el front usa `grupos`.
@@ -457,7 +457,7 @@ async def parecidas(titulo: str, artista: str = "", total: int = 25):
 
 @app.get("/api/parecidas_lista")
 async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
-                          formato: str = "mp3", genero: str = ""):
+                          formato: str = "wav", genero: str = ""):
     """Como /api/parecidas, pero por CADA tema parecido trae hasta 3 opciones de
     plataformas distintas (YouTube, SoundCloud, MP3 directo…) para comparar con el
     Spek y elegir la mejor. Devuelve 'grupos' como el modo lista + la semilla.
@@ -474,7 +474,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}")
         return res
 
-    formato = (formato or "mp3").lower()
+    formato = (formato or "wav").lower()
     lineas = [f"{c['artista']} - {c['titulo']}".strip(" -") for c in res["canciones"]]
     resultados = await asyncio.to_thread(_buscar_lista, lineas, formato)
 
@@ -738,7 +738,7 @@ def procesar_descarga(payload: dict) -> dict:
     artista = payload.get("artista") or ""
     fuente = payload.get("fuente") or ""
     url = payload.get("url") or ""
-    formato = (payload.get("formato") or "mp3").lower()
+    formato = (payload.get("formato") or "wav").lower()
 
     logger.info(f"📥 Descargando: {titulo} — {artista} [{fuente}] como {formato.upper()}")
 
@@ -998,6 +998,88 @@ async def listar_descargas():
         for f in DOWNLOADS_DIR.glob("*") if f.is_file()
     ]
     return {"exito": True, "total": len(archivos), "archivos": archivos}
+
+
+# --- Biblioteca local (colección analizada): estantes por género + audio para el preview ---
+# Rutas por ENTORNO, sin hardcodear (#5.16): MUSIFLIX_LIBRARY_XML (el XML de Rekordbox) y
+# MUSIFLIX_LIBRARY_ROOTS (carpetas de audio separadas por os.pathsep). Sin config → vacía.
+_LIB_XML = os.getenv("MUSIFLIX_LIBRARY_XML", "")
+_LIB_ROOTS = [r for r in os.getenv("MUSIFLIX_LIBRARY_ROOTS", "").split(os.pathsep) if r]
+_lib_audio: dict[str, str] = {}          # id de track → ruta real (para /api/audio)
+
+# Estado de la última carga. "sin-configurar" y "sin-lector" cuentan como NO configurada
+# (no hay nada que el usuario pueda arreglar tocando rutas); los demás sí lo están.
+_LIB_OK, _LIB_SIN_CONFIG, _LIB_SIN_LECTOR, _LIB_XML_ILEGIBLE = (
+    "ok", "sin-configurar", "sin-lector", "xml-ilegible")
+_LIB_MOTIVOS = {
+    _LIB_SIN_LECTOR: "Esta instalación no incluye el lector de la biblioteca (ground_truth), "
+                     "así que la biblioteca local está desactivada.",
+    _LIB_XML_ILEGIBLE: "No pude leer el XML de Rekordbox. Revisá MUSIFLIX_LIBRARY_XML.",
+}
+
+
+def _cargar_biblioteca() -> tuple[list[dict], str]:
+    """Lee el XML de Rekordbox y resuelve cada track a su archivo. Devuelve (tracks, estado):
+    solo los tracks que tienen audio (para poder escucharlos), con género/BPM/tonalidad, y
+    el estado de la carga (_LIB_*). Cachea id→ruta."""
+    global _lib_audio
+    if not _LIB_XML or not _LIB_ROOTS:
+        return [], _LIB_SIN_CONFIG
+    # ground_truth/ no entra en la imagen Docker (el Dockerfile copia solo los *.py de la
+    # raíz): sin el lector, degradar como "sin configurar" en vez de tirar un 500.
+    try:
+        from ground_truth.rekordbox import parsear
+        from ground_truth.resolver import construir_indice, resolver
+    except ImportError as e:
+        logger.warning(f"⚠️ Biblioteca: falta el lector de ground_truth ({e}); queda desactivada.")
+        return [], _LIB_SIN_LECTOR
+    try:
+        tracks = parsear(Path(_LIB_XML))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ Biblioteca: no pude leer el XML: {e}")
+        return [], _LIB_XML_ILEGIBLE
+    indice = construir_indice(_LIB_ROOTS)
+    audio, out = {}, []
+    for t in tracks:
+        r = resolver(t["location"], _LIB_ROOTS, indice)
+        if not r:                        # sin audio no se puede escuchar → fuera del browse
+            continue
+        tid = str(t["track_id"]) or str(len(out))
+        audio[tid] = r.ruta
+        out.append({
+            "id": tid, "titulo": t["name"] or Path(r.ruta).stem, "artista": t["artist"] or "",
+            "bpm": round(t["bpm"], 1) if t["bpm"] else None,
+            "camelot": t["camelot"] or None, "tonalidad": t["tonality"] or None,
+            "genero": (t["genre"] or "").strip() or "Sin género", "dur": t["duration_s"] or 0,
+        })
+    _lib_audio = audio
+    return out, _LIB_OK
+
+
+@app.get("/api/biblioteca")
+async def biblioteca():
+    """Estantes de la biblioteca local agrupados por género (para la home).
+    `motivo` explica por qué está vacía cuando no es solo falta de configuración."""
+    from collections import defaultdict
+    tracks, estado = await asyncio.to_thread(_cargar_biblioteca)
+    por_genero: dict[str, list] = defaultdict(list)
+    for t in tracks:
+        por_genero[t["genero"]].append(t)
+    generos = [{"genero": g, "tracks": ts} for g, ts in por_genero.items()]
+    generos.sort(key=lambda s: -len(s["tracks"]))     # los géneros con más temas primero
+    return {"total": len(tracks), "configurada": estado not in (_LIB_SIN_CONFIG, _LIB_SIN_LECTOR),
+            "motivo": _LIB_MOTIVOS.get(estado), "generos": generos}
+
+
+@app.get("/api/audio/{track_id}")
+async def audio(track_id: str):
+    """Sirve el archivo de un track de la biblioteca para el preview. Solo lee, nunca escribe."""
+    if not _lib_audio:
+        await asyncio.to_thread(_cargar_biblioteca)
+    ruta = _lib_audio.get(track_id)
+    if not ruta or not Path(ruta).exists():
+        return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
 
 
 @app.get("/api/historial")

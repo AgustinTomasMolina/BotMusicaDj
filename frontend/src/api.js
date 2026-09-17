@@ -7,7 +7,7 @@ async function json(res) {
 
 export async function buscar(q, formato, genero) {
   const r = await fetch(`/api/buscar?q=${encodeURIComponent(q || '')}&limite=28` +
-    `&formato=${encodeURIComponent(formato || 'mp3')}&genero=${encodeURIComponent(genero || '')}`)
+    `&formato=${encodeURIComponent(formato || 'wav')}&genero=${encodeURIComponent(genero || '')}`)
   return json(r)
 }
 
@@ -71,6 +71,11 @@ export async function calidad(c) {
   return json(r)
 }
 
+// Biblioteca local (colección analizada) agrupada por género, para la home.
+export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
+// URL de audio de un track de la biblioteca (para el <audio> del preview).
+export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
+
 // Historial persistido: búsquedas, playlists (modo lista) y descargas.
 export async function historial(limite = 20) {
   const r = await fetch(`/api/historial?limite=${limite}`)
@@ -95,6 +100,8 @@ export async function limpiarHistorial(que = 'todo') {
 }
 
 /* ---------- Mis Playlists (crates) ---------- */
+// Aviso global de "cambiaron las playlists" (el rail de la home lo escucha para refrescarse).
+export const avisarPlaylists = () => { try { window.dispatchEvent(new Event('musiflix:playlists')) } catch { /* sin window */ } }
 const jpost = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(json)
 
 export const listarPlaylists = () => fetch('/api/playlists').then(json)

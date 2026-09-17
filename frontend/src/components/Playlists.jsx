@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fmtDur } from '../utils'
+import { useDialog } from '../hooks'
 import { gradeClass } from './common'
 import {
   listarPlaylists, getPlaylist, crearPlaylist, editarPlaylist,
-  borrarPlaylistMia, quitarItemPlaylist, exportarPlaylist,
+  borrarPlaylistMia, quitarItemPlaylist, exportarPlaylist, avisarPlaylists,
 } from '../api'
 
 /* Iconos inline (Phosphor-ish) */
@@ -34,6 +35,9 @@ function ExportDialog({ crate, onClose, toast }) {
   const bajos = items.filter((i) => i.descargado && (i.grade === 'D' || i.grade === 'F'))
   const incluidos = items.length - sinBajar
   const [busy, setBusy] = useState(false)
+  // Antes no cerraba con Escape ni movía el foco: ahora igual que los otros diálogos.
+  const dialogRef = useRef(null)
+  useDialog(dialogRef, true, onClose)
   const exportar = async () => {
     setBusy(true)
     try {
@@ -48,10 +52,11 @@ function ExportDialog({ crate, onClose, toast }) {
   }
   return (
     <div className="dialog-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="dialog" style={{ width: 'min(520px,100%)' }}>
+      <div className="dialog" style={{ width: 'min(520px,100%)' }} ref={dialogRef} role="dialog" aria-modal="true"
+        aria-label={`Exportar playlist ${crate.nombre}`} tabIndex={-1}>
         <div className="cluster" style={{ flexWrap: 'nowrap' }}>
           <div><div className="eyebrow">Exportar playlist</div><div className="dialog-title" style={{ marginTop: 2 }}>{crate.nombre}</div></div>
-          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar" onClick={onClose}><IcoX /></button>
+          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar" onClick={onClose} data-autofocus><IcoX /></button>
         </div>
         <div className="destpick">
           <button type="button" className="dest" aria-pressed="true"><b><IcoFile />Archivo .m3u8</b><span>Universal. Lo abre Rekordbox, Serato, VLC e iTunes. Rutas a tus archivos locales.</span></button>
@@ -84,7 +89,7 @@ function ExportDialog({ crate, onClose, toast }) {
   )
 }
 
-export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay }) {
+export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId }) {
   const [lists, setLists] = useState(null)
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
@@ -93,26 +98,49 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   const cargarLista = async () => { try { const d = await listarPlaylists(); const ps = d.playlists || []; setLists(ps); return ps } catch { setLists([]); return [] } }
   const cargarCrate = async (id) => { if (!id) { setCrate(null); return } try { const d = await getPlaylist(id); setCrate(d.exito ? d.data : null) } catch { setCrate(null) } }
 
-  useEffect(() => { (async () => { const ps = await cargarLista(); if (ps.length) setSelId(ps[0].id) })() }, [])
+  // initialId: la playlist clickeada en el rail de la home (si existe); si no, la primera.
+  useEffect(() => { (async () => { const ps = await cargarLista(); if (ps.length) setSelId(ps.some((p) => p.id === initialId) ? initialId : ps[0].id) })() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargarCrate(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { await cargarLista(); await cargarCrate(selId) }
 
+  // Antes estas acciones no tenían catch: sin conexión fallaban en silencio.
+  const fallo = (title) => toast.danger({ title, body: 'Revisá que el servidor esté corriendo y probá de nuevo.' })
   const nueva = async () => {
     const nombre = window.prompt('Nombre de la nueva playlist:')
     if (!nombre || !nombre.trim()) return
-    const r = await crearPlaylist(nombre.trim())
-    if (r.exito) { await cargarLista(); setSelId(r.playlist.id); toast.info({ title: `Playlist "${r.playlist.nombre}" creada` }) }
+    try {
+      const r = await crearPlaylist(nombre.trim())
+      if (r.exito) { avisarPlaylists(); await cargarLista(); setSelId(r.playlist.id); toast.info({ title: `Playlist "${r.playlist.nombre}" creada` }) }
+      else fallo('No pude crear la playlist')
+    } catch { fallo('No pude crear la playlist') }
   }
-  const activar = async (id, nombre) => { await editarPlaylist(id, { activar: true }); setActivePlaylist({ id, nombre }); await cargarLista() }
-  const renombrar = async (nombre) => { if (!crate || !nombre.trim() || nombre === crate.nombre) return; await editarPlaylist(crate.id, { nombre: nombre.trim() }); cargarLista() }
+  const activar = async (id, nombre) => {
+    try { await editarPlaylist(id, { activar: true }); setActivePlaylist({ id, nombre }); await cargarLista() }
+    catch { fallo('No pude marcarla como activa') }
+  }
+  const renombrar = async (input) => {
+    const nombre = input.value
+    // Nombre vacío: se vuelve al que tenía (antes quedaba el campo vacío y el server con el viejo).
+    if (crate && !nombre.trim()) { input.value = crate.nombre; return }
+    if (!crate || nombre === crate.nombre) return
+    try { await editarPlaylist(crate.id, { nombre: nombre.trim() }); avisarPlaylists(); cargarLista() }
+    catch { input.value = crate.nombre; fallo('No pude renombrar la playlist') }
+  }
   const borrar = async () => {
     if (!crate || !window.confirm(`¿Borrar la playlist "${crate.nombre}"? No se borran los archivos, solo la lista.`)) return
-    await borrarPlaylistMia(crate.id)
-    if (activePlaylist?.id === crate.id) setActivePlaylist(null)
-    const ps = await cargarLista(); setSelId(ps[0]?.id || null)
-    toast.info({ title: 'Playlist borrada' })
+    try {
+      await borrarPlaylistMia(crate.id)
+      avisarPlaylists()
+      if (activePlaylist?.id === crate.id) setActivePlaylist(null)
+      const ps = await cargarLista(); setSelId(ps[0]?.id || null)
+      toast.info({ title: 'Playlist borrada' })
+    } catch { fallo('No pude borrar la playlist') }
   }
-  const quitar = async (itemId) => { if (!crate) return; await quitarItemPlaylist(crate.id, itemId); refresh() }
+  const quitar = async (itemId) => {
+    if (!crate) return
+    try { await quitarItemPlaylist(crate.id, itemId); avisarPlaylists(); refresh() }
+    catch { fallo('No pude quitar el tema') }
+  }
 
   if (lists && lists.length === 0) {
     return (
@@ -138,9 +166,10 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
         <div className="cratelist">
           {(lists || []).map((p) => (
             <button type="button" key={p.id} className="crate-item" aria-current={p.id === selId} onClick={() => setSelId(p.id)}>
-              {p.activa ? <span className="now-dot" title="Playlist activa" /> : <span style={{ width: 5, flex: 'none' }} />}
+              {p.activa ? <span className="now-dot" title="Playlist activa" aria-hidden="true" /> : <span style={{ width: 5, flex: 'none' }} />}
               <span style={{ minWidth: 0, flex: 1 }}>
-                <span className="crate-name">{p.nombre}</span>
+                {/* La activa se marcaba solo con un punto de color: el texto oculto lo dice. */}
+                <span className="crate-name">{p.nombre}{p.activa && <span className="sr-only"> (activa)</span>}</span>
                 <span className="crate-sub">{p.total} tema{p.total === 1 ? '' : 's'} · {fmtLong(p.duracion)}{p.bpm_prom ? ` · ${p.bpm_prom} BPM` : ''}</span>
               </span>
             </button>
@@ -157,7 +186,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 <div style={{ flex: 1, minWidth: 180 }}>
                   <div className="eyebrow" style={{ marginBottom: 4 }}>{crate.activa ? 'Playlist activa' : 'Playlist'}</div>
                   <input key={crate.id} className="name-edit" defaultValue={crate.nombre} aria-label="Nombre de la playlist"
-                    onBlur={(e) => renombrar(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }} />
+                    onBlur={(e) => renombrar(e.target)} onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur() }} />
                 </div>
                 <div className="crate-actions cluster" style={{ gap: 'var(--space-2)' }}>
                   {!crate.activa && <button type="button" className="btn btn-secondary btn-sm" onClick={() => activar(crate.id, crate.nombre)}>Marcar activa</button>}
@@ -191,10 +220,11 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
               )}
               {(crate.items || []).map((it) => (
                 <div className="trk" key={it.id}>
-                  <div className="drag" aria-label="Reordenar"><IcoDrag /></div>
+                  {/* Reordenar no está implementado: el ícono es decorativo (antes anunciaba "Reordenar" sin hacer nada). */}
+                  <div className="drag" aria-hidden="true"><IcoDrag /></div>
                   <div className="thumb" onClick={() => onPlay?.(it)}>
-                    {it.thumbnail ? <img src={it.thumbnail} loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
-                    <button type="button" className="thumb-play" aria-label="Reproducir" onClick={(e) => { e.stopPropagation(); onPlay?.(it) }}><IcoPlay /></button>
+                    {it.thumbnail ? <img src={it.thumbnail} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
+                    <button type="button" className="thumb-play" aria-label={`Reproducir ${it.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay?.(it) }}><IcoPlay /></button>
                   </div>
                   <div className="trk-id">
                     <div className="trk-title" title={it.titulo}>{it.titulo}</div>
@@ -212,7 +242,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                       : <span className="status status-need"><IcoDown /> Falta bajar</span>}
                   </div>
                   <div className="trk-acts">
-                    <button type="button" className="btn btn-icon-sm" aria-label="Quitar de la playlist" title="Quitar" onClick={() => quitar(it.id)}><IcoX /></button>
+                    <button type="button" className="btn btn-icon-sm" aria-label={`Quitar ${it.titulo} de la playlist`} title="Quitar" onClick={() => quitar(it.id)}><IcoX /></button>
                   </div>
                 </div>
               ))}
