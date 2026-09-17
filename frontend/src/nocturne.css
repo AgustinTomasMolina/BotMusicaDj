@@ -351,6 +351,9 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* — dialog — */
 .dialog-backdrop {
   position: fixed; inset: 0; display: grid; place-items: center;
+  /* Por encima de la barra fija (40) y de los cajones (60), debajo de los avisos (80): sin
+     z-index la barra quedaba usable con un diálogo abierto. */
+  z-index: 70;
   padding: var(--space-4);
   background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
 }
@@ -393,6 +396,9 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* — app shell — */
 /* overflow-x:clip y no hidden: hidden fuerza overflow-y:auto y convierte a .app en contenedor de
    scroll, así que ningún position:sticky (barra, rail, encabezado de resultados) se pegaba nunca. */
+/* Lo que recibe foco por teclado no queda bajo la barra fija ni bajo el encabezado pegado de
+   resultados (.results-head, 34px). */
+html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 .app{min-height:100vh;display:flex;flex-direction:column;background:var(--color-bg);overflow-x:clip}
 /* .app-main es el contenedor de las grillas de filas (@container main, abajo): los cortes se
    miden sobre el ancho real del contenido, con o sin el rail de playlists al lado. */
@@ -639,7 +645,7 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 
 /* — tooltip: the only way a dense row can explain itself — */
 .tip{position:relative;display:inline-flex}
-.tip>.tip-body{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:30;width:max-content;max-width:240px;padding:6px 9px;border-radius:6px;font-size:11.5px;line-height:1.45;text-align:left;color:var(--color-neutral-200);background:var(--color-raise);box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
+.tip>.tip-body{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:46;width:max-content;max-width:240px;padding:6px 9px;border-radius:6px;font-size:11.5px;line-height:1.45;text-align:left;color:var(--color-neutral-200);background:var(--color-raise);box-shadow:var(--shadow-md);opacity:0;pointer-events:none;transition:opacity .12s var(--ease)}
 .tip:hover>.tip-body,.tip:focus-within>.tip-body{opacity:1}
 
 /* — popover: a filter's own panel, anchored to its button — */
@@ -754,12 +760,8 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .paste textarea{min-height:190px;padding:10px 12px;border:0;background:transparent;resize:vertical;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;color:var(--color-text);caret-color:var(--color-accent)}
 .paste textarea:focus-visible{outline:none}
 .paste-foot{display:flex;align-items:center;gap:var(--space-2);margin-top:var(--space-2);font-size:12px;color:var(--color-neutral-500)}
-/* Bulk download: one determinate bar for the whole set. */
-.bulkbar{position:sticky;top:94px;z-index:22;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-sm)}
 .progress-det>i{width:var(--p,0%);animation:none;transition:width .3s var(--ease)}
 
-/* — the row's mobile overflow button, hidden until the row collapses — */
-.trk-more{display:none}
 
 /* ══════════════════════════════════════════════════════════════════════════
    CRATES — Mis Playlists
@@ -830,29 +832,35 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    (.app-main, container "main"), no del viewport: desde que el rail de playlists (250px) está
    en todas las pantallas, los cortes de viewport dejaban filas más anchas que el lugar real y
    .app las recortaba (se perdían Descargar y Quitar). Cada corte es el de viewport de antes
-   menos el padding de .app-main (32px): sin rail se ven igual que antes. */
-@container main (max-width:1068px){.results{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+   menos el padding de .app-main (32px), salvo el de Metadata en resultados (ver abajo). */
+/* Resultados: las 7 columnas de escritorio entran desde 830px de contenido
+   (30+44+180+140+52+160+128 + 6 huecos de 12 + 24 de padding; medido: a 830 no se corta nada).
+   Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
+   desaparecía hasta ~1360px de viewport. */
+@container main (max-width:829px){.results{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+/* Crate: su fila de escritorio pide ~712px y la lista de crates al lado se come 280, así que
+   su corte queda en 1068. Va después del de .results para ganarle (.results-crate también es .results). */
+@container main (max-width:1068px){.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-crate .trk>.trk-meta{display:none}}
 /* The crate view drops to one column before its row runs out of room. */
 @container main (max-width:968px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
-/* Below 728 of content the seven columns collapse to a two-line card: artwork, title,
-   grade and the two actions a DJ still needs on a phone (download, more);
-   the version chips move to their own line, metadata and the index go. */
+/* Debajo de 728px de contenido la fila pasa a tarjeta: arte, tema y nota arriba; las versiones
+   en su renglón y las acciones en otro, TODAS (Espectrograma, Comparar, Parecidas, Agregar,
+   Descargar). Antes se escondían las tres primeras esperando un menú "más" que nunca existió,
+   y con el rail eso pasaba también en escritorio (861-1020px). Metadata y el índice se van. */
 @container main (max-width:728px){
 .results-head{display:none}
-.trk{grid-template-columns:44px minmax(0,1fr) 52px 76px;grid-template-areas:'art id grade acts' 'art vers vers vers';row-gap:6px;padding:var(--space-2) var(--space-3)}
+.trk{grid-template-columns:44px minmax(0,1fr) 52px;grid-template-areas:'art id grade' 'art vers vers' 'art acts acts';row-gap:6px;padding:var(--space-2) var(--space-3)}
 .trk>.trk-idx,.trk>.trk-meta{display:none}
 .trk>.thumb{grid-area:art;align-self:start}
 .trk>.trk-id{grid-area:id}
 .trk>.trk-grade{grid-area:grade}
 .trk>.trk-acts{grid-area:acts}
 .trk>.trk-vers{grid-area:vers}
-.trk-acts>.btn-icon-sm{display:none}
-.trk-acts>.trk-more{display:grid}
-.trk-acts{opacity:1}
+.trk-acts{opacity:1;justify-content:flex-start;flex-wrap:wrap}
+/* El crate tiene una sola acción (Quitar): va arriba a la derecha, al lado de la nota. */
 .results-crate .trk{grid-template-columns:44px minmax(0,1fr) 52px 40px;grid-template-areas:'art id grade acts' 'art st st st'}
+.results-crate .trk-acts{justify-content:flex-end}
 .results-crate .drag{display:none}
-/* Quitar es la única acción del crate y la fila no tiene menú "más": no se esconde. */
-.results-crate .trk-acts>.btn-icon-sm{display:inline-flex}
 .trk>.trk-status{grid-area:st}
 }
 @media (max-width:760px){
@@ -863,6 +871,7 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 /* En el teléfono la barra se parte en tres renglones (~220px): pegada arriba se come un tercio
    de la pantalla. Queda en el flujo, como se veía hasta ahora (el sticky no andaba, ver .app). */
 .topbar-stack{position:relative}
+html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descontarla */
 .topbar{flex-wrap:wrap;height:auto;padding:var(--space-2) var(--space-3);row-gap:var(--space-2)}
 .search{order:3;flex-basis:100%;max-width:none}
 .dlbar{padding:var(--space-2) var(--space-3)}
