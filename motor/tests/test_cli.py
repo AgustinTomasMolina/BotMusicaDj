@@ -456,6 +456,37 @@ def test_un_acuerdo_ilegible_no_pasa_por_confiable(tmp_path, capsys, biblioteca)
     assert campos["acuerdo key"] == "ilegible ('abc') — la key va con ?", campos["acuerdo key"]
 
 
+def test_un_acuerdo_que_no_es_texto_no_tira_la_biblioteca(tmp_path, capsys, biblioteca):
+    """La columna es TEXT, pero SQLite deja escribir un BLOB por fuera y vuelve como `bytes`.
+    `acuerdo_unanime` hace `.strip()` sobre eso y levanta `TypeError`, que no es `ValueError`:
+    antes UNA fila así tiraba `list` e `info` con traceback para TODA la biblioteca. Un dato
+    corrupto es dudoso, no una excusa para dejar al DJ sin tabla."""
+    _, db_bib, _ = biblioteca
+    # La fila sana es la precondición: sin ella el test no distingue "marca la corrupta" de
+    # "marca todo" (los clicks del fixture duran 12 s, así que su acuerdo real es "0/0").
+    db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {"click_120": ("3/3", "8A|8A|8A")})
+    con = sqlite3.connect(str(db))
+    n = con.execute("UPDATE tracks SET key_acuerdo = ?, key_tramos = ? WHERE path LIKE ?",
+                    (b"\x00\xff", "8A|3B|9A", "%click_124%")).rowcount
+    assert n == 1, f"el UPDATE tocó {n} filas y el caso necesita exactamente una"
+    con.commit()
+    con.close()
+
+    codigo, out, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0, f"una fila con BLOB tiró la tabla entera:\n{out}"
+    marcas = {m.group(6).rstrip(): (m.group(4) or "")
+              for m in (FILA_LIST.match(linea) for linea in out.splitlines()) if m}
+    assert marcas["click_124_Amin"] == "?", f"un acuerdo no textual salió sin marcar:\n{out}"
+    assert marcas["click_120_Amin"] == "", \
+        f"precondición: las otras filas siguen limpias:\n{out}"
+
+    codigo, out, _ = _correr(capsys, "--db", db, "info", "click_124")
+    assert codigo == 0, f"info se cayó con la fila corrupta:\n{out}"
+    campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
+    assert campos["key"] == "8A (Am) ?", campos["key"]
+    assert campos["acuerdo key"].startswith("ilegible"), campos["acuerdo key"]
+
+
 def test_info_no_narra_un_acuerdo_unanime_sin_votos(tmp_path, capsys, biblioteca):
     """"3/3" con los tramos vacíos es una fila incoherente: dice que tres tramos coincidieron
     y no guarda ninguno. `Store.upsert` la rechaza, así que solo puede venir de afuera, e

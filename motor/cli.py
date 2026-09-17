@@ -104,7 +104,10 @@ def key_dudosa(acuerdo: str | None) -> bool:
 
     try:
         return acuerdo_unanime(acuerdo) is not True
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):
+        # TypeError/AttributeError: la columna es TEXT, pero un BLOB escrito por fuera vuelve
+        # como bytes y `acuerdo_unanime` hace .strip() sobre eso. Sin esto, UNA fila corrupta
+        # tiraba `list`, `radio`, `similar` e `info` con traceback para toda la biblioteca.
         return True
 
 
@@ -370,14 +373,16 @@ def _detalle_acuerdo(acuerdo: str | None, tramos: str | None) -> str:
     """
     from benchmark.evaluar import acuerdo_unanime
 
-    texto = (acuerdo or "").strip()
+    # str(): un BLOB escrito por fuera llega como bytes y rompería `.strip()` de más abajo,
+    # tirando `info` entero. Se lo trata como ilegible, igual que un texto con otro formato.
+    texto = str(acuerdo or "").strip()
     if not texto:
         # NULL, o el vacío que escribiría otra herramienta: en los dos casos nadie midió.
         return ("no medido — este track se analizó antes de que el scan guardara el acuerdo. "
                 "La key va con ? hasta que se vuelva a analizar el archivo")
     try:
         unanime = acuerdo_unanime(texto)
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):
         return f"ilegible ({acuerdo!r}) — la key va con ?"
     votos = f" ({tramos})" if tramos else ""
     if unanime and not tramos:
