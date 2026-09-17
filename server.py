@@ -1007,20 +1007,37 @@ _LIB_XML = os.getenv("MUSIFLIX_LIBRARY_XML", "")
 _LIB_ROOTS = [r for r in os.getenv("MUSIFLIX_LIBRARY_ROOTS", "").split(os.pathsep) if r]
 _lib_audio: dict[str, str] = {}          # id de track → ruta real (para /api/audio)
 
+# Estado de la última carga. "sin-configurar" y "sin-lector" cuentan como NO configurada
+# (no hay nada que el usuario pueda arreglar tocando rutas); los demás sí lo están.
+_LIB_OK, _LIB_SIN_CONFIG, _LIB_SIN_LECTOR, _LIB_XML_ILEGIBLE = (
+    "ok", "sin-configurar", "sin-lector", "xml-ilegible")
+_LIB_MOTIVOS = {
+    _LIB_SIN_LECTOR: "Esta instalación no incluye el lector de la biblioteca (ground_truth), "
+                     "así que la biblioteca local está desactivada.",
+    _LIB_XML_ILEGIBLE: "No pude leer el XML de Rekordbox. Revisá MUSIFLIX_LIBRARY_XML.",
+}
 
-def _cargar_biblioteca() -> list[dict]:
-    """Lee el XML de Rekordbox y resuelve cada track a su archivo. Devuelve solo los que
-    tienen audio (para poder escucharlos), con género/BPM/tonalidad. Cachea id→ruta."""
+
+def _cargar_biblioteca() -> tuple[list[dict], str]:
+    """Lee el XML de Rekordbox y resuelve cada track a su archivo. Devuelve (tracks, estado):
+    solo los tracks que tienen audio (para poder escucharlos), con género/BPM/tonalidad, y
+    el estado de la carga (_LIB_*). Cachea id→ruta."""
     global _lib_audio
     if not _LIB_XML or not _LIB_ROOTS:
-        return []
-    from ground_truth.rekordbox import parsear
-    from ground_truth.resolver import construir_indice, resolver
+        return [], _LIB_SIN_CONFIG
+    # ground_truth/ no entra en la imagen Docker (el Dockerfile copia solo los *.py de la
+    # raíz): sin el lector, degradar como "sin configurar" en vez de tirar un 500.
+    try:
+        from ground_truth.rekordbox import parsear
+        from ground_truth.resolver import construir_indice, resolver
+    except ImportError as e:
+        logger.warning(f"⚠️ Biblioteca: falta el lector de ground_truth ({e}); queda desactivada.")
+        return [], _LIB_SIN_LECTOR
     try:
         tracks = parsear(Path(_LIB_XML))
     except Exception as e:  # noqa: BLE001
         logger.warning(f"⚠️ Biblioteca: no pude leer el XML: {e}")
-        return []
+        return [], _LIB_XML_ILEGIBLE
     indice = construir_indice(_LIB_ROOTS)
     audio, out = {}, []
     for t in tracks:
@@ -1036,20 +1053,22 @@ def _cargar_biblioteca() -> list[dict]:
             "genero": (t["genre"] or "").strip() or "Sin género", "dur": t["duration_s"] or 0,
         })
     _lib_audio = audio
-    return out
+    return out, _LIB_OK
 
 
 @app.get("/api/biblioteca")
 async def biblioteca():
-    """Estantes de la biblioteca local agrupados por género (para la home)."""
+    """Estantes de la biblioteca local agrupados por género (para la home).
+    `motivo` explica por qué está vacía cuando no es solo falta de configuración."""
     from collections import defaultdict
-    tracks = await asyncio.to_thread(_cargar_biblioteca)
+    tracks, estado = await asyncio.to_thread(_cargar_biblioteca)
     por_genero: dict[str, list] = defaultdict(list)
     for t in tracks:
         por_genero[t["genero"]].append(t)
     generos = [{"genero": g, "tracks": ts} for g, ts in por_genero.items()]
     generos.sort(key=lambda s: -len(s["tracks"]))     # los géneros con más temas primero
-    return {"total": len(tracks), "configurada": bool(_LIB_XML and _LIB_ROOTS), "generos": generos}
+    return {"total": len(tracks), "configurada": estado not in (_LIB_SIN_CONFIG, _LIB_SIN_LECTOR),
+            "motivo": _LIB_MOTIVOS.get(estado), "generos": generos}
 
 
 @app.get("/api/audio/{track_id}")

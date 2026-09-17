@@ -70,10 +70,13 @@ export function Home({ toast }) {
     return (
       <div className="empty">
         <div className="empty-art"><NoteIcon /></div>
-        <h3>{data.configurada ? 'Tu biblioteca está vacía' : 'Conectá tu biblioteca'}</h3>
-        <p>{data.configurada
-          ? 'No encontré audios resueltos. Revisá las rutas de la biblioteca (MUSIFLIX_LIBRARY_ROOTS).'
-          : 'Definí MUSIFLIX_LIBRARY_XML y MUSIFLIX_LIBRARY_ROOTS para ver tus temas por género acá. Mientras tanto, buscá un tema arriba.'}</p>
+        <h3>{data.motivo ? 'Biblioteca no disponible' : data.configurada ? 'Tu biblioteca está vacía' : 'Conectá tu biblioteca'}</h3>
+        {/* motivo: el server explica por qué no pudo leerla (sin lector, XML ilegible). */}
+        <p>{data.motivo
+          ? `${data.motivo} Mientras tanto, buscá un tema arriba.`
+          : data.configurada
+            ? 'No encontré audios resueltos. Revisá las rutas de la biblioteca (MUSIFLIX_LIBRARY_ROOTS).'
+            : 'Definí MUSIFLIX_LIBRARY_XML y MUSIFLIX_LIBRARY_ROOTS para ver tus temas por género acá. Mientras tanto, buscá un tema arriba.'}</p>
       </div>
     )
   }
