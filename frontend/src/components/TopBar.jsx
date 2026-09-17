@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FORMATOS, GENEROS, normalizeText } from '../utils'
+import { useDialog } from '../hooks'
 import { IconHome, IconEar, IconEarOff, IconList, IconHistory, IconTerminal } from './icons'
 
 /* Filtro de género: buscador + lista con scroll + escribir uno propio. Sesga la búsqueda
@@ -8,16 +9,23 @@ function GenrePicker({ genero, setGenero }) {
   const [open, setOpen] = useState(false)
   const [txt, setTxt] = useState('')
   const ref = useRef(null)
+  const triggerRef = useRef(null)
   useEffect(() => {
     // isConnected: al quitar el chip del género, el botón clickeado ya se desmontó y no
     // debe contar como "click afuera" (si no, el menú se cerraría solo).
     const onDoc = (e) => { if (ref.current && e.target.isConnected && !ref.current.contains(e.target)) setOpen(false) }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    // Escape con el foco adentro del menú: cerrar y devolver el foco al botón (si no, el
+    // foco queda en un input desmontado y el teclado vuelve al principio de la página).
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (ref.current && ref.current.contains(document.activeElement)) triggerRef.current?.focus()
+      setOpen(false)
+    }
     document.addEventListener('click', onDoc)
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('click', onDoc); document.removeEventListener('keydown', onKey) }
   }, [])
-  const pick = (g) => { setGenero(g); setTxt(''); setOpen(false) }
+  const pick = (g) => { setGenero(g); setTxt(''); setOpen(false); triggerRef.current?.focus() }
   const query = normalizeText(txt)
   const matches = query ? GENEROS.filter((g) => normalizeText(g).includes(query)) : GENEROS
   // Enter: si el texto coincide exacto con un preset (o hay una sola coincidencia) usa ese;
@@ -31,18 +39,20 @@ function GenrePicker({ genero, setGenero }) {
   }
   return (
     <div style={{ position: 'relative' }} ref={ref}>
-      <button type="button" className="btn btn-secondary" aria-expanded={open}
-        title="Filtrar por género" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o) }}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></svg>
+      <button type="button" className="btn btn-secondary" aria-expanded={open} ref={triggerRef}
+        title="Filtrar por género" aria-label={genero ? `Filtro de género: ${genero}` : 'Filtrar por género'}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o) }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></svg>
         {genero || 'Género'}
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9.5l6 6 6-6" /></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6" /></svg>
       </button>
       {open && (
         <div className="menu genre-menu elev-md" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 45 }}>
           <div className="menu-label eyebrow">Filtrar por género</div>
           {genero && (
             <div className="genre-selected">
-              <button type="button" className="chip" aria-pressed="true" title="Quitar el filtro de género"
+              {/* Es una acción (quitar), no un toggle: sin aria-pressed, el estilo va por clase. */}
+              <button type="button" className="chip is-active" title="Quitar el filtro de género"
                 aria-label={`Quitar género ${genero}`} onClick={() => setGenero('')}>
                 {genero}<span aria-hidden="true">✕</span>
               </button>
@@ -52,10 +62,11 @@ function GenrePicker({ genero, setGenero }) {
             <input className="input" value={txt} onChange={(e) => setTxt(e.target.value)} autoFocus
               placeholder="Buscá o escribí un género…" autoComplete="off" aria-label="Buscar género" />
           </form>
+          {/* aria-pressed (no aria-checked): en un <button> sin role de menú, aria-checked no se anuncia. */}
           <div className="genre-list" role="group" aria-label="Géneros">
-            {!query && <button type="button" className="menu-item" aria-checked={!genero} onClick={() => pick('')}>Todos</button>}
+            {!query && <button type="button" className="menu-item" aria-pressed={!genero} onClick={() => pick('')}>Todos</button>}
             {matches.map((g) => (
-              <button type="button" key={g} className="menu-item" aria-checked={g === genero} onClick={() => pick(g)}>{g}</button>
+              <button type="button" key={g} className="menu-item" aria-pressed={g === genero} onClick={() => pick(g)}>{g}</button>
             ))}
             {query && !matches.length && (
               <div className="genre-empty">Sin géneros para «{txt.trim()}». Enter para buscar igual.</div>
@@ -109,6 +120,8 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
     try { await onSearch(t) } finally { setBusy(false) }
   }
   const cerrar = () => setMenuOpen(false)
+  const drawerRef = useRef(null)
+  useDialog(drawerRef, menuOpen, cerrar)
   const item = (Icon, label, onClick, active) => (
     <button type="button" className="navitem" aria-current={active ? 'page' : undefined} onClick={onClick}>
       <Icon size={17} />{label}
@@ -120,22 +133,26 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
         <header className="topbar rule-b">
           <button type="button" className="btn btn-icon btn-icon-sm" aria-label="Menú" aria-expanded={menuOpen}
             onClick={() => setMenuOpen((o) => !o)}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
           </button>
           <button type="button" className="brand" onClick={onBrand} title="Inicio" style={{ background: 'none', border: 0, cursor: 'pointer' }}>
-            <span className="brand-mark"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg></span>
+            <span className="brand-mark"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg></span>
             <span>Musi<em>Flix</em></span>
           </button>
-          <form className="search" onSubmit={submit}>
-            <span className="search-icon">
+          <form className="search" role="search" onSubmit={submit} aria-busy={busy}>
+            <span className="search-icon" aria-hidden="true">
               {busy ? <span className="spinner" /> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" /></svg>}
             </span>
             <input className="input" value={q} onChange={(e) => setQ(e.target.value)} type="search"
-              placeholder="Buscá una canción, artista o género…" autoComplete="off" />
+              placeholder="Buscá una canción, artista o género…" autoComplete="off"
+              aria-label="Buscar una canción, artista o género" />
           </form>
           <GenrePicker genero={genero} setGenero={setGenero} />
-          <button type="button" className="chip" title={activePlaylist ? `Agregando descargas a "${activePlaylist.nombre}"` : 'Mis playlists'}
-            aria-pressed={!!activePlaylist} onClick={onPlaylists} style={{ gap: 6 }}>
+          {/* Navega a Mis playlists (no es un toggle): la playlist activa se marca con clase, no con aria-pressed. */}
+          <button type="button" className={`chip${activePlaylist ? ' is-active' : ''}`}
+            title={activePlaylist ? `Agregando descargas a "${activePlaylist.nombre}"` : 'Mis playlists'}
+            aria-label={activePlaylist ? `Mis playlists — activa: ${activePlaylist.nombre}` : 'Mis playlists'}
+            onClick={onPlaylists} style={{ gap: 6 }}>
             <IconCrate size={14} />{activePlaylist ? activePlaylist.nombre : 'Playlists'}
           </button>
         </header>
@@ -149,14 +166,16 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
       </div>
 
       {menuOpen && <div className="scrim" onClick={cerrar} />}
-      <aside className={`drawer drawer-left${menuOpen ? ' is-open' : ''}`}>
+      {/* Cerrado queda fuera de pantalla: inert lo saca del orden de Tab y del lector. */}
+      <div ref={drawerRef} className={`drawer drawer-left${menuOpen ? ' is-open' : ''}`}
+        role="dialog" aria-modal="true" aria-label="Módulos" inert={!menuOpen}>
         <div className="drawer-head rule-b">
           <span className="eyebrow">Módulos</span>
-          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar" onClick={cerrar}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar menú" onClick={cerrar} data-autofocus>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
-        <div className="drawer-body">
+        <nav className="drawer-body" aria-label="Módulos">
           <div className="navlist">
             {item(IconHome, 'Inicio', () => { onBrand(); cerrar() })}
             {item(IconCrate, 'Mis Playlists', () => { onPlaylists(); cerrar() })}
@@ -164,8 +183,8 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
             {item(IconHistory, 'Historial', () => { onHistorial(); cerrar() }, historialActive)}
             {item(IconTerminal, 'Consola', () => { onConsola(); cerrar() }, consoleActive)}
           </div>
-        </div>
-      </aside>
+        </nav>
+      </div>
     </>
   )
 }

@@ -36,7 +36,9 @@ export function ToastProvider({ children }) {
   return (
     <ToastCtx.Provider value={api}>
       {children}
-      <div className="toasts">
+      {/* Región viva siempre montada: descargas, "agregado a playlist" y errores se anuncian
+          al aparecer (antes solo se veían). */}
+      <div className="toasts" role="region" aria-label="Avisos" aria-live="polite">
         {items.map((t) => (
           <div key={t.id} className={`toast toast-${t.role}`}>
             {ICON[t.role]}
@@ -52,7 +54,7 @@ export function ToastProvider({ children }) {
                 </div>
               )}
             </div>
-            <button type="button" className="btn btn-icon-sm" aria-label="Cerrar" onClick={() => remove(t.id)}><IcoX /></button>
+            <button type="button" className="btn btn-icon-sm" aria-label="Cerrar aviso" onClick={() => remove(t.id)}><IcoX /></button>
             {t.role !== 'danger' && <div className="toast-life"><i /></div>}
           </div>
         ))}

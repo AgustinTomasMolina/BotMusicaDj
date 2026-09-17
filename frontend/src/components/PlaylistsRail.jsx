@@ -1,5 +1,5 @@
 // Rail lateral con las playlists, SIEMPRE a la vista (no hay que entrar a un menú).
-// Click en una (o en ＋) abre la vista de Playlists.
+// Click en una abre la vista de Playlists con ESA playlist elegida; ＋ abre la vista.
 export default function PlaylistsRail({ playlists = [], activa, onOpen }) {
   const cuenta = (p) =>
     p.total ?? p.n ?? (Array.isArray(p.items) ? p.items.length : (p.count ?? null))
@@ -10,8 +10,8 @@ export default function PlaylistsRail({ playlists = [], activa, onOpen }) {
     <aside className="pl-rail" aria-label="Mis playlists">
       <div className="pl-rail-head">
         <span>Mis playlists</span>
-        <button type="button" className="pl-rail-add" aria-label="Nueva playlist" onClick={onOpen}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+        <button type="button" className="pl-rail-add" aria-label="Nueva playlist" onClick={() => onOpen()}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
         </button>
       </div>
       <div className="pl-rail-list">
@@ -22,7 +22,7 @@ export default function PlaylistsRail({ playlists = [], activa, onOpen }) {
           const n = cuenta(p)
           const act = esActiva(p)
           return (
-            <button key={p.id ?? p.nombre ?? i} type="button" className={`pl-item${act ? ' on' : ''}`} onClick={onOpen}>
+            <button key={p.id ?? p.nombre ?? i} type="button" className={`pl-item${act ? ' on' : ''}`} onClick={() => onOpen(p.id)}>
               <span className={`pl-thumb g${(i % 6) + 1}`} aria-hidden="true" />
               <span className="pl-item-txt">
                 <span className="pl-item-name">{p.nombre || 'Playlist'}</span>

@@ -1,5 +1,7 @@
 /* Cajón lateral con el historial persistido: búsquedas, playlists (modo lista) y
    descargas. Migrado a la design system Nocturne (.drawer / .hist / .grade). */
+import { useRef } from 'react'
+import { useDialog } from '../hooks'
 
 const IcoX = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
 const IcoSearch = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" /></svg>
@@ -40,7 +42,8 @@ function Section({ title, count, onClear, children }) {
         <span className="eyebrow">{title}</span>
         {count != null && <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-neutral-600)' }}>{count}</span>}
         {onClear && count > 0 &&
-          <button type="button" className="btn btn-icon-sm push" title="Vaciar esta sección" onClick={onClear}><IcoTrash /></button>}
+          <button type="button" className="btn btn-icon-sm push" title="Vaciar esta sección"
+            aria-label={`Vaciar ${title.toLowerCase()}`} onClick={onClear}><IcoTrash /></button>}
       </div>
       <div className="hist">{children}</div>
     </div>
@@ -54,18 +57,26 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
   const playlists = data?.playlists || []
   const descargas = data?.descargas || []
   const total = busquedas.length + playlists.length + descargas.length
+  const drawerRef = useRef(null)
+  useDialog(drawerRef, open, onClose)
 
   return (
-    <aside className={`drawer drawer-right${open ? ' is-open' : ''}`}>
+    // Cerrado queda fuera de pantalla: inert lo saca del orden de Tab y del lector.
+    <div ref={drawerRef} className={`drawer drawer-right${open ? ' is-open' : ''}`}
+      role="dialog" aria-modal="true" aria-label="Historial" inert={!open}>
       <div className="drawer-head rule-b">
         <span className="eyebrow">Historial</span>
         {data && total > 0 &&
           <button type="button" className="btn btn-ghost push" style={{ fontSize: 12 }} onClick={() => onLimpiar('todo')}>Vaciar todo</button>}
-        <button type="button" className={`btn btn-icon btn-icon-sm${data && total > 0 ? '' : ' push'}`} aria-label="Cerrar" onClick={onClose}><IcoX /></button>
+        <button type="button" className={`btn btn-icon btn-icon-sm${data && total > 0 ? '' : ' push'}`} aria-label="Cerrar historial" onClick={onClose} data-autofocus><IcoX /></button>
       </div>
-      <div className="drawer-body">
+      <div className="drawer-body" aria-busy={!data}>
         {!data ? (
           <div className="cluster" style={{ gap: 9, color: 'var(--color-neutral-500)', fontSize: 13, padding: 'var(--space-3)' }}><span className="spinner" /> Cargando historial…</div>
+        ) : data.error ? (
+          <div role="alert" style={{ color: 'var(--color-neutral-400)', fontSize: 13, padding: 'var(--space-3)' }}>
+            No pude cargar el historial. Revisá que el servidor esté corriendo y volvé a abrirlo.
+          </div>
         ) : (
           <>
             <Section title="Búsquedas" count={busquedas.length} onClear={() => onLimpiar('busquedas')}>
@@ -81,10 +92,15 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
             <Section title="Playlists" count={playlists.length} onClear={() => onLimpiar('playlists')}>
               {playlists.length === 0 && <Vacio>No guardaste playlists aún.</Vacio>}
               {playlists.map((p) => (
-                <div key={p.id} className="hist-item" role="button" title="Abrir playlist" onClick={() => onOpenPlaylist(p.id)}>
-                  <IcoList />
-                  <ItemCol title={p.nombre || 'Playlist'} sub={`${p.total} tema${p.total === 1 ? '' : 's'} · ${hace(p.creado_en)}`} />
-                  <button type="button" className="btn btn-icon-sm" title="Borrar del historial" onClick={(e) => { e.stopPropagation(); onDeletePlaylist(p.id) }}><IcoX /></button>
+                // Antes: <div role="button"> sin tabindex ni teclado, con otro botón adentro.
+                // Ahora abrir y borrar son dos <button> hermanos, los dos operables con teclado.
+                <div key={p.id} className="hist-item">
+                  <button type="button" className="hist-open" title="Abrir playlist" onClick={() => onOpenPlaylist(p.id)}>
+                    <IcoList />
+                    <ItemCol title={p.nombre || 'Playlist'} sub={`${p.total} tema${p.total === 1 ? '' : 's'} · ${hace(p.creado_en)}`} />
+                  </button>
+                  <button type="button" className="btn btn-icon-sm" title="Borrar del historial"
+                    aria-label={`Borrar «${p.nombre || 'Playlist'}» del historial`} onClick={() => onDeletePlaylist(p.id, p.nombre)}><IcoX /></button>
                 </div>
               ))}
             </Section>
@@ -102,6 +118,6 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
           </>
         )}
       </div>
-    </aside>
+    </div>
   )
 }

@@ -100,6 +100,8 @@ export async function limpiarHistorial(que = 'todo') {
 }
 
 /* ---------- Mis Playlists (crates) ---------- */
+// Aviso global de "cambiaron las playlists" (el rail de la home lo escucha para refrescarse).
+export const avisarPlaylists = () => { try { window.dispatchEvent(new Event('musiflix:playlists')) } catch { /* sin window */ } }
 const jpost = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(json)
 
 export const listarPlaylists = () => fetch('/api/playlists').then(json)

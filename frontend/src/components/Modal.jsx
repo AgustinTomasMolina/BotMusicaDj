@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { spectroUrl } from '../api'
 import { SRC_COLOR, FUENTE_CORTO } from '../utils'
 import { getCalidad, GRADE_RANK, gradeClass } from './common'
+import { useDialog } from '../hooks'
 
 const IcoX = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
 const IcoDown = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v10M8 11l4 4 4-4M5 19h14" /></svg>
@@ -21,13 +22,14 @@ function Player({ song: c }) {
   }, [c])
 
   let node
+  const titulo = `Reproductor: ${c.titulo}${c.artista ? ` — ${c.artista}` : ''}`   // los iframes necesitan title
   if (c.fuente === 'youtube' && c.video_id) {
-    node = <div className="player-frame"><iframe data-yt="1" src={`https://www.youtube.com/embed/${c.video_id}?autoplay=1&enablejsapi=1`} allow="autoplay; encrypted-media" allowFullScreen /></div>
+    node = <div className="player-frame"><iframe data-yt="1" title={titulo} src={`https://www.youtube.com/embed/${c.video_id}?autoplay=1&enablejsapi=1`} allow="autoplay; encrypted-media" allowFullScreen /></div>
   } else if (c.fuente === 'spotify' && c.id) {
-    node = <iframe style={{ width: '100%', height: 152, border: 0, borderRadius: 'var(--radius-md)' }} src={`https://open.spotify.com/embed/track/${c.id}`} />
+    node = <iframe title={titulo} style={{ width: '100%', height: 152, border: 0, borderRadius: 'var(--radius-md)' }} src={`https://open.spotify.com/embed/track/${c.id}`} />
   } else if (c.fuente === 'soundcloud' && c.video_id) {
     const tk = encodeURIComponent('https://api.soundcloud.com/tracks/' + c.video_id)
-    node = <iframe data-sc="1" style={{ width: '100%', height: 166, border: 0, borderRadius: 'var(--radius-md)' }} src={`https://w.soundcloud.com/player/?url=${tk}&auto_play=true&hide_related=true&color=%23ff5500`} />
+    node = <iframe data-sc="1" title={titulo} style={{ width: '100%', height: 166, border: 0, borderRadius: 'var(--radius-md)' }} src={`https://w.soundcloud.com/player/?url=${tk}&auto_play=true&hide_related=true&color=%23ff5500`} />
   } else if (c.stream_url) {
     node = <audio controls autoPlay src={c.stream_url} style={{ width: '100%' }} />
   } else if (c.preview_url) {
@@ -43,10 +45,10 @@ function SpekViewer({ song: c }) {
   const [state, setState] = useState('loading') // loading | ok | err
   return (
     <>
-      {state === 'loading' && <div className="note-warn" style={{ color: 'var(--color-neutral-500)' }}><span className="spinner" /> Analizando el audio real… (puede tardar unos segundos)</div>}
-      {state === 'err' && <div className="note-warn">No pude generar el espectrograma de este tema.</div>}
+      {state === 'loading' && <div className="note-warn" role="status" style={{ color: 'var(--color-neutral-500)' }}><span className="spinner" aria-hidden="true" /> Analizando el audio real… (puede tardar unos segundos)</div>}
+      {state === 'err' && <div className="note-warn" role="alert">No pude generar el espectrograma de este tema. Probá con otra versión o más tarde.</div>}
       <figure className="spectro" style={{ display: state === 'ok' ? 'block' : 'none' }}>
-        <img src={spectroUrl(c)} alt="Espectrograma" onLoad={() => setState('ok')} onError={() => setState('err')} />
+        <img src={spectroUrl(c)} alt={`Espectrograma de ${c.titulo}`} onLoad={() => setState('ok')} onError={() => setState('err')} />
       </figure>
       <p className="text-muted" style={{ fontSize: 12, lineHeight: 1.5, margin: 0 }}>
         El eje vertical es la frecuencia. Fijate hasta qué altura llega el color: si corta abajo de ~16 kHz es un MP3
@@ -77,13 +79,14 @@ function CompareColumn({ song: o, best, onDownload }) {
       </div>
       <div><span className={`grade grade-lg ${gradeClass(cal?.grade)}`}>{cal?.grade || '…'}</span></div>
       <figure className="spectro">
-        {spek === 'loading' && <div className="note-warn" style={{ color: 'var(--color-neutral-500)', padding: 'var(--space-3)' }}><span className="spinner" /></div>}
+        {spek === 'loading' && <div className="note-warn" style={{ color: 'var(--color-neutral-500)', padding: 'var(--space-3)' }}><span className="spinner" aria-hidden="true" /><span className="sr-only">Generando espectrograma</span></div>}
         {spek === 'err' && <div className="note-warn" style={{ padding: 'var(--space-3)' }}>sin espectrograma</div>}
-        <img style={{ display: spek === 'ok' ? 'block' : 'none' }} src={spectroUrl(o)} alt="Espectrograma"
+        <img style={{ display: spek === 'ok' ? 'block' : 'none' }} src={spectroUrl(o)} alt={`Espectrograma de la versión de ${FUENTE_CORTO[f] || o.fuente || 'esta fuente'}`}
           onLoad={() => setSpek('ok')} onError={() => setSpek('err')} />
       </figure>
       <div className="text-muted" style={{ fontSize: 12 }} title={cal?.calidad || ''}>{cal ? (cal.calidad || 'no analizable') : 'analizando…'}</div>
-      <button className="btn btn-secondary btn-block btn-dl" data-state={dlState} onClick={bajar} disabled={dl === 'busy'}>
+      <button type="button" className="btn btn-secondary btn-block btn-dl" data-state={dlState} onClick={bajar} disabled={dl === 'busy'}
+        aria-label={`${dl === 'busy' ? 'Bajando' : dl === 'ok' ? 'Descargada' : dl === 'err' ? 'Reintentar' : 'Bajar'} la versión de ${FUENTE_CORTO[f] || o.fuente || 'esta fuente'}`}>
         {dl === 'busy' ? <><span className="spinner" /> Bajando</> : dl === 'ok' ? <><IcoCheck /> Descargada</> : dl === 'err' ? '✗ Reintentar' : <><IcoDown /> Bajar esta</>}
       </button>
     </div>
@@ -120,18 +123,23 @@ function Comparator({ options, onDownload }) {
 }
 
 export default function Modal({ modal, onClose, onDownload }) {
+  // Foco adentro al abrir, Tab contenido, Escape cierra, foco de vuelta al disparador al cerrar.
+  // El hook va antes del return temprano (reglas de hooks).
+  const dialogRef = useRef(null)
+  useDialog(dialogRef, !!modal, onClose)
   if (!modal) return null
   const c = modal.song
   const stop = (e) => { if (e.target === e.currentTarget) onClose() }
+  const dlg = (label) => ({ ref: dialogRef, role: 'dialog', 'aria-modal': 'true', 'aria-label': label, tabIndex: -1 })
 
   // Comparador: hoja ancha
   if (modal.kind === 'compare') {
     return (
       <div className="dialog-backdrop" onClick={stop}>
-        <div className="sheet elev-lg">
+        <div className="sheet elev-lg" {...dlg(`Comparar versiones de ${modal.titulo}`)}>
           <div className="sheet-head rule-b">
             <div style={{ minWidth: 0 }}><div className="eyebrow">Comparar versiones</div><h4 style={{ margin: '2px 0 0' }} className="truncate">{modal.titulo}</h4></div>
-            <button className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar"><IcoX /></button>
+            <button type="button" className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar" data-autofocus><IcoX /></button>
           </div>
           <div className="sheet-body">
             <Comparator options={modal.options} onDownload={onDownload} />
@@ -145,10 +153,10 @@ export default function Modal({ modal, onClose, onDownload }) {
   if (modal.kind === 'spek') {
     return (
       <div className="dialog-backdrop" onClick={stop}>
-        <div className="dialog elev-lg" style={{ width: 'min(620px, 100%)' }}>
+        <div className="dialog elev-lg" style={{ width: 'min(620px, 100%)' }} {...dlg(`Espectrograma de ${c.titulo}`)}>
           <div className="cluster" style={{ flexWrap: 'nowrap' }}>
             <div style={{ minWidth: 0 }}><div className="eyebrow">Spek</div><div className="dialog-title truncate" style={{ marginTop: 2, fontSize: 18 }}>{c.titulo} <span className="text-muted">— {c.artista}</span></div></div>
-            <button className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar"><IcoX /></button>
+            <button type="button" className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar" data-autofocus><IcoX /></button>
           </div>
           <SpekViewer song={c} />
         </div>
@@ -159,11 +167,11 @@ export default function Modal({ modal, onClose, onDownload }) {
   // Reproductor
   return (
     <div className="dialog-backdrop" onClick={stop}>
-      <div className="sheet player">
+      <div className="sheet player" {...dlg(`Reproductor: ${c.titulo}`)}>
         <div className="sheet-head rule-b">
           <span className="thumb" style={{ width: 34, height: 34 }}>{c.thumbnail ? <img src={c.thumbnail} alt="" /> : <span className="thumb-ph" />}</span>
           <div style={{ minWidth: 0 }}><div className="trk-title truncate">{c.titulo}</div><div className="trk-artist"><span className="truncate">{c.artista}</span></div></div>
-          <button className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar"><IcoX /></button>
+          <button type="button" className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar" data-autofocus><IcoX /></button>
         </div>
         <div className="sheet-body">
           <Player song={c} />

@@ -61,7 +61,8 @@ export function QualityBadge({ c, formato }) {
   return (
     <>
       <span className={`grade grade-sm ${gradeClass(res.grade)}`} title={title}>{res.grade}</span>
-      {fakeLossless && <span className="note-warn" title={title}><IcoWarn /></span>}
+      {/* role=img + aria-label: el aviso de "fake lossless" vivía solo en title (mouse). */}
+      {fakeLossless && <span className="note-warn" role="img" aria-label={title} title={title}><IcoWarn /></span>}
     </>
   )
 }
@@ -100,16 +101,20 @@ export function Badges({ c, formato, metaMap, calidad }) {
 
 /* Botón de descarga con el ciclo de estados de Nocturne (reposo / busy con anillo /
    done ✓ / fail). App manda dl.state = busy|ok|err; lo mapeamos a busy|done|fail. */
-export function DlButton({ dl, onClick, children, className }) {
+export function DlButton({ dl, onClick, children, className, label }) {
   const st = dl?.state
   const nocturneState = st === 'ok' ? 'done' : st === 'err' ? 'fail' : st
   let content = children
-  if (st === 'busy') content = <span className="spinner" />
+  if (st === 'busy') content = <span className="spinner" aria-hidden="true" />
   else if (st === 'ok') content = <IcoCheck />
   else if (st === 'err') content = <IcoRetry />
+  // El estado va en el nombre: antes decía "Descargar" también bajando, terminado o fallido.
+  const accion = st === 'busy' ? 'Descargando' : st === 'ok' ? 'Descargado' : st === 'err' ? 'Reintentar descarga' : 'Descargar'
+  const nombre = label ? `${accion}${st === 'err' ? ' de' : ''} ${label}` : accion
   return (
-    <button className={`btn btn-secondary btn-dl ${className || ''}`} data-state={nocturneState}
-      onClick={onClick} title={dl?.title || 'Descargar'} aria-label="Descargar">
+    <button type="button" className={`btn btn-secondary btn-dl ${className || ''}`} data-state={nocturneState}
+      onClick={onClick} title={dl?.title || 'Descargar'} aria-label={nombre}
+      aria-busy={st === 'busy'}>
       {content}
     </button>
   )
@@ -124,20 +129,23 @@ export function PreviewLayer({ song: c }) {
   const cue = cuePoint(c)
   let node = null, seekAudio = 0
   const media = { width: '100%', height: '100%', border: 0, display: 'block', objectFit: 'cover' }
+  // El preview es un adorno del mouse: los iframes llevan title pero quedan fuera del Tab.
+  const titulo = `Preview de ${c.titulo || 'tema'}`
   if (c.fuente === 'youtube' && c.video_id) {
-    node = <iframe data-yt="1" style={media} src={`https://www.youtube.com/embed/${c.video_id}?autoplay=1&controls=0&modestbranding=1&rel=0&enablejsapi=1&start=${cue}`} allow="autoplay" />
+    node = <iframe data-yt="1" style={media} title={titulo} tabIndex={-1} src={`https://www.youtube.com/embed/${c.video_id}?autoplay=1&controls=0&modestbranding=1&rel=0&enablejsapi=1&start=${cue}`} allow="autoplay" />
   } else if (c.fuente === 'soundcloud' && c.video_id) {
     const tk = encodeURIComponent('https://api.soundcloud.com/tracks/' + c.video_id)
-    node = <iframe data-sc="1" style={media} src={`https://w.soundcloud.com/player/?url=${tk}&auto_play=true&visual=false&hide_related=true&buying=false&sharing=false&download=false&show_comments=false`} allow="autoplay" />
+    node = <iframe data-sc="1" style={media} title={titulo} tabIndex={-1} src={`https://w.soundcloud.com/player/?url=${tk}&auto_play=true&visual=false&hide_related=true&buying=false&sharing=false&download=false&show_comments=false`} allow="autoplay" />
   } else if (c.stream_url) {
     seekAudio = cue
     node = <audio autoPlay src={c.stream_url} />
   } else if (c.preview_url) {
     node = <audio autoPlay src={c.preview_url} /> // snippet de 30s → ya es la parte buena
-  } else {
-    return null
   }
 
+  // El hook va ANTES de cualquier return (antes había un `return null` arriba: hook condicional,
+  // el error de oxlint rules-of-hooks). Corre una vez por montaje: el padre le pone key por
+  // canción, así cada tema monta su propia capa y seekAudio/cue son los de ese montaje.
   useEffect(() => {
     const root = ref.current
     if (!root) return
@@ -159,8 +167,9 @@ export function PreviewLayer({ song: c }) {
         if (cue) setTimeout(() => { try { sc.contentWindow.postMessage(JSON.stringify({ method: 'seekTo', value: cue * 1000 }), '*') } catch { /* ignore */ } }, 350)
       } catch { /* ignore */ }
     })
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (!node) return null
   return (
     <>
       <span className="thumb-prev" ref={ref} style={{ opacity: 1 }}>{node}</span>

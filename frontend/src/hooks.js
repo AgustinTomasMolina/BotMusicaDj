@@ -42,6 +42,40 @@ export function useConsole() {
   return { connected, lines }
 }
 
+/* ---------- Diálogos y cajones: foco accesible ----------
+   Mientras `open`: mueve el foco adentro (al [data-autofocus] o al primer control), Escape
+   llama a onClose y Tab no se escapa al fondo (Escape siempre saca: no es una trampa).
+   Al cerrar devuelve el foco a lo que lo tenía antes de abrir (el disparador). */
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),' +
+  'textarea:not([disabled]),iframe:not([tabindex="-1"]),[tabindex]:not([tabindex="-1"])'
+export function useDialog(ref, open, onClose) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    if (!open) return
+    const prev = document.activeElement
+    const node = ref.current
+    const focusables = () => (node ? [...node.querySelectorAll(FOCUSABLE)].filter((el) => el.getClientRects().length) : [])
+    const inicial = node && (node.querySelector('[data-autofocus]') || focusables()[0] || node)
+    if (inicial) inicial.focus({ preventScroll: true })
+    const onKey = (e) => {
+      if (e.key === 'Escape') { onCloseRef.current?.(); return }
+      if (e.key !== 'Tab' || !node) return
+      const f = focusables()
+      if (!f.length) { e.preventDefault(); return }
+      const primero = f[0], ultimo = f[f.length - 1]
+      if (!node.contains(document.activeElement)) { e.preventDefault(); primero.focus() }
+      else if (e.shiftKey && document.activeElement === primero) { e.preventDefault(); ultimo.focus() }
+      else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primero.focus() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (prev && prev.isConnected && typeof prev.focus === 'function') prev.focus({ preventScroll: true })
+    }
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 /* ---------- Preview al pasar el mouse (estilo Netflix) ---------- */
 const PREVIEW_DELAY = 450
 export function usePreview(enabled, blocked) {

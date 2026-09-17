@@ -10,7 +10,7 @@ const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 
 
 /* ---------- Pantalla de inicio ---------- */
 const NoteIcon = () => (
-  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg>
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg>
 )
 
 // Tarjeta de un track de la biblioteca: carátula (con play/pausa), título, artista y ＋ a playlist.
@@ -20,11 +20,12 @@ function LibCard({ t, i, playing, onToggle }) {
   return (
     <div className="lib-card" style={{ animationDelay: `${Math.min(i, 12) * 0.04}s` }}>
       <div className={`lib-cover g${(i % 6) + 1}`}>
+        {/* El nombre incluye el tema: 18 botones "Reproducir" iguales no dicen cuál suena. */}
         <button type="button" className={`lib-play${playing ? ' on' : ''}`}
-          aria-label={playing ? 'Pausar' : 'Reproducir'} onClick={onToggle}>
+          aria-label={`${playing ? 'Pausar' : 'Reproducir'} ${t.titulo}`} onClick={onToggle}>
           {playing
-            ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" /><rect x="14" y="5" width="4" height="14" /></svg>
-            : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>}
+            ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" /><rect x="14" y="5" width="4" height="14" /></svg>
+            : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>}
         </button>
         {meta && <span className="lib-meta">{meta}</span>}
       </div>
@@ -53,8 +54,11 @@ export function Home({ toast }) {
         const gs = [...(d.generos || [])].sort(() => Math.random() - 0.5)
         setData({ ...d, generos: gs })
       })
-      .catch(() => vivo && setData({ total: 0, configurada: false, generos: [] }))
-    return () => { vivo = false; if (audioRef.current) audioRef.current.pause() }
+      // Sin conexión no es "sin configurar": se explica con motivo en vez de pedir variables.
+      .catch(() => vivo && setData({ total: 0, configurada: false, generos: [],
+        motivo: 'No pude conectar con el servidor para leer la biblioteca. Revisá que esté corriendo y recargá.' }))
+    // El <audio> se monta DESPUÉS (cuando llegan los datos): el ref se lee al desmontar a propósito.
+    return () => { vivo = false; if (audioRef.current) audioRef.current.pause() } // eslint-disable-line react-hooks/exhaustive-deps
   }, [])
 
   const toggle = (t) => {
@@ -62,10 +66,16 @@ export function Home({ toast }) {
     if (!a) return
     if (playing === t.id) { a.pause(); setPlaying(null); return }
     a.src = audioUrl(t.id)
-    a.play().then(() => setPlaying(t.id)).catch(() => { if (toast) toast('No pude reproducir ese audio'); setPlaying(null) })
+    a.play().then(() => setPlaying(t.id)).catch((e) => {
+      // AbortError = se cambió de tema antes de que arrancara: no es un error para el usuario.
+      if (e && e.name === 'AbortError') return
+      // Antes: toast('…') con toast siendo un objeto → TypeError y el error nunca se mostraba.
+      toast?.danger({ title: 'No pude reproducir ese audio', body: `«${t.titulo}»: puede que el archivo se haya movido o borrado.` })
+      setPlaying(null)
+    })
   }
 
-  if (!data) return <div className="empty"><span className="spinner" /><p>Cargando tu biblioteca…</p></div>
+  if (!data) return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando tu biblioteca…</p></div>
   if (!data.total) {
     return (
       <div className="empty">
@@ -86,14 +96,16 @@ export function Home({ toast }) {
 
   return (
     <div className="home">
-      <audio ref={audioRef} onEnded={() => setPlaying(null)} preload="none" />
+      {/* onError: si el archivo falla a mitad de camino, el botón no queda en "Pausar". */}
+      <audio ref={audioRef} onEnded={() => setPlaying(null)} onError={() => setPlaying(null)} preload="none" />
       <div className="home-head">
         <h1>Para arrancar</h1>
         <p className="muted">{data.total} temas en tu biblioteca · el orden cambia cada vez que entrás</p>
       </div>
-      <div className="genre-chips" role="tablist" aria-label="Filtrar por género">
+      {/* Botones con aria-pressed: role="tab" sin tabpanel ni flechas prometía un teclado que no existía. */}
+      <div className="genre-chips" role="group" aria-label="Filtrar por género">
         {chips.map((g) => (
-          <button key={g} type="button" role="tab" aria-selected={gf === g}
+          <button key={g} type="button" aria-pressed={gf === g}
             className={`chip${gf === g ? ' on' : ''}`} onClick={() => setGf(g)}>{g}</button>
         ))}
       </div>
@@ -127,11 +139,13 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, on
       onMouseLeave={() => { preview.cancel(); preview.stop() }}>
       <div className="trk-idx">{String(i + 1).padStart(2, '0')}</div>
       <div className="thumb" onClick={() => onPlay(c)}>
-        {c.thumbnail ? <img src={c.thumbnail} loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
-        <button type="button" className="thumb-play" aria-label="Reproducir" onClick={(e) => { e.stopPropagation(); onPlay(c) }}>
+        {/* Carátula decorativa: el título está al lado. */}
+        {c.thumbnail ? <img src={c.thumbnail} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
+        <button type="button" className="thumb-play" aria-label={`Reproducir ${c.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay(c) }}>
           <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" /></svg>
         </button>
-        {rowPrev && <PreviewLayer song={rowPrev} />}
+        {/* key por canción: al pasar a otra versión de la fila se monta una capa nueva (volumen y cue incluidos). */}
+        {rowPrev && <PreviewLayer key={songKey(rowPrev)} song={rowPrev} />}
       </div>
       <div className="trk-id">
         <div className="trk-title" title={c.titulo}>{c.titulo}</div>
@@ -158,13 +172,13 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, on
         })}
       </div>
       <div className="trk-acts">
-        <button type="button" className="btn btn-icon-sm" onClick={() => onSpek(c)} title="Espectrograma (Spek)"><IconActivity size={16} /></button>
+        <button type="button" className="btn btn-icon-sm" onClick={() => onSpek(c)} title="Espectrograma (Spek)" aria-label={`Espectrograma de ${c.titulo}`}><IconActivity size={16} /></button>
         {g.opciones.length > 1 &&
-          <button type="button" className="btn btn-icon-sm" onClick={() => onCompare(g.opciones, g.consulta || c.titulo)} title="Comparar versiones"><IconCompare size={16} /></button>}
+          <button type="button" className="btn btn-icon-sm" onClick={() => onCompare(g.opciones, g.consulta || c.titulo)} title="Comparar versiones" aria-label={`Comparar versiones de ${c.titulo}`}><IconCompare size={16} /></button>}
         {onParecidas &&
-          <button type="button" className="btn btn-icon-sm" onClick={() => onParecidas(c)} title="Temas parecidos"><IconSparkles size={16} /></button>}
+          <button type="button" className="btn btn-icon-sm" onClick={() => onParecidas(c)} title="Temas parecidos" aria-label={`Temas parecidos a ${c.titulo}`}><IconSparkles size={16} /></button>}
         <AddToPlaylist track={{ ...c, bpm, genero, camelot: key }} />
-        <DlButton dl={dl} onClick={() => onDownload(c)}><IconDownload size={15} /></DlButton>
+        <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={15} /></DlButton>
       </div>
     </div>
   )
@@ -192,6 +206,8 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
 
   return (
     <>
+      {/* Sin encabezado visible en esta vista: uno oculto para navegar por títulos con lector. */}
+      <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : seed ? `Parecidas a ${seed.titulo}` : 'Resultados de la lista'}</h1>
       {seed && (
         <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
           <div style={{ minWidth: 0 }}>
@@ -211,9 +227,11 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
         <span className="push cluster" style={{ gap: 'var(--space-2)' }}>
           {!esBusqueda && <button type="button" className="btn btn-ghost" onClick={onEditar}>Editar lista</button>}
           <button type="button" className="btn btn-primary" onClick={descargarTodas} disabled={allBusy}>
-            {allBusy ? <><span className="spinner" /> {allLabel}</> : (allLabel || `Descargar todas (${formato.toUpperCase()})`)}
+            {allBusy ? <><span className="spinner" aria-hidden="true" /> {allLabel}</> : (allLabel || `Descargar todas (${formato.toUpperCase()})`)}
           </button>
         </span>
+        {/* El resumen final de "Descargar todas" se anuncia (el progreso ya sale en los avisos). */}
+        <span className="sr-only" role="status">{!allBusy && allLabel ? allLabel.replace('✓ ', '') : ''}</span>
       </div>
 
       {no_encontradas && no_encontradas.length > 0 && (
@@ -247,28 +265,34 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
 export function ListForm({ formato, onBuscar, onCancel }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const areaRef = useRef(null)
   const lineas = text.split('\n').map((s) => s.trim()).filter(Boolean)
   const n = lineas.length
   const nums = Array.from({ length: Math.max(text.split('\n').length, 1) }, (_, i) => i + 1).join('\n')
   const submit = async () => {
-    if (!lineas.length) return
+    // Antes, con la lista vacía el botón no hacía nada y no decía por qué.
+    if (!lineas.length) { setErr('Pegá al menos un tema (uno por línea) para buscar.'); areaRef.current?.focus(); return }
     setBusy(true)
     try { await onBuscar(text.trim()) } finally { setBusy(false) }
   }
   return (
     <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 var(--space-3)' }}>
-      <div className="eyebrow" style={{ marginBottom: 'var(--space-2)' }}>Modo lista (DJ) — un tema por línea, hasta 3 versiones de cada uno</div>
+      <h1 className="sr-only">Modo lista</h1>
+      <div className="eyebrow" style={{ marginBottom: 'var(--space-2)' }} id="lista-ayuda">Modo lista (DJ) — un tema por línea, hasta 3 versiones de cada uno</div>
       <div className="paste">
-        <div className="paste-nums">{nums}</div>
-        <textarea spellCheck="false" value={text} onChange={(e) => setText(e.target.value)} aria-label="Pegá tu lista de temas"
+        <div className="paste-nums" aria-hidden="true">{nums}</div>
+        <textarea ref={areaRef} spellCheck="false" value={text} onChange={(e) => { setText(e.target.value); if (err) setErr('') }}
+          aria-label="Pegá tu lista de temas" aria-describedby={err ? 'lista-ayuda lista-error' : 'lista-ayuda'} aria-invalid={!!err}
           placeholder={'Skrillex - Bangarang\nDaft Punk - One More Time\nFisher - Losing It\n…'} />
       </div>
+      {err && <p id="lista-error" role="alert" className="note-warn" style={{ margin: 'var(--space-2) 0 0' }}>{err}</p>}
       <div className="paste-foot">
         <span className="mono">{n} línea{n !== 1 ? 's' : ''}</span>
         <span className="push cluster" style={{ gap: 'var(--space-2)' }}>
           <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
           <button type="button" className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? <><span className="spinner" /> Buscando…</> : `Buscar lista${formato ? ` (${formato.toUpperCase()})` : ''}`}
+            {busy ? <><span className="spinner" aria-hidden="true" /> Buscando…</> : `Buscar lista${formato ? ` (${formato.toUpperCase()})` : ''}`}
           </button>
         </span>
       </div>

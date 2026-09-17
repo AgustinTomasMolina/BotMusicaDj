@@ -44,11 +44,22 @@ export default function App() {
   useEffect(() => { playlistActiva().then((d) => setActivePlaylist(d.activa || null)).catch(() => {}) }, [])
   // Rail lateral: la lista de playlists, siempre a la vista (se refresca si cambia la activa).
   useEffect(() => { listarPlaylists().then((d) => setMisPlaylists(Array.isArray(d) ? d : (d.playlists || []))).catch(() => {}) }, [activePlaylist])
+  // …y cuando se crea/borra/modifica una playlist desde cualquier lado (evento 'musiflix:playlists').
+  // Antes el rail no se enteraba: crear una desde el ＋ de una tarjeta no la mostraba hasta recargar.
+  useEffect(() => {
+    const recargar = () => listarPlaylists().then((d) => setMisPlaylists(Array.isArray(d) ? d : (d.playlists || []))).catch(() => {})
+    window.addEventListener('musiflix:playlists', recargar)
+    return () => window.removeEventListener('musiflix:playlists', recargar)
+  }, [])
 
   /* ---------- Navegación / búsquedas ---------- */
   const goHome = () => { setModal(null); setView({ kind: 'home' }) }
   const openListaForm = () => { setModal(null); setView({ kind: 'listaForm' }) }
-  const openPlaylists = () => { setModal(null); setView({ kind: 'playlists' }) }
+  // id opcional (desde el rail): abre esa playlist. Desde otros botones llega el evento → se ignora.
+  const openPlaylists = (id) => { setModal(null); setView({ kind: 'playlists', id: typeof id === 'number' ? id : null }) }
+
+  // Mensajes de error que dicen qué hacer, no solo qué pasó.
+  const HINT_CONEXION = 'Revisá que el servidor esté corriendo y volvé a intentar.'
 
   const doSearch = async (q) => {
     setModal(null)
@@ -58,7 +69,8 @@ export default function App() {
       const d = await buscar(q, formato, genero)
       const grupos = d.grupos && d.grupos.length ? d.grupos : null
       if (!d.exito || !grupos) {
-        setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'Sin resultados' })
+        setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'Sin resultados',
+          hint: genero ? 'Probá con otras palabras o quitá el filtro de género.' : 'Probá con otras palabras o con el nombre del artista.' })
         return
       }
       // Una fila por TEMA con sus versiones (mismo componente que el modo lista).
@@ -66,13 +78,14 @@ export default function App() {
       setView({ kind: 'lista', data: { groups: grupos, sel, origen: 'busqueda', query: q, total: grupos.length } })
       enrich(grupos.map((g) => g.opciones[0]))
     } catch {
-      setView({ kind: 'error', emoji: '⚠️', message: 'Error al conectar con el servidor.' })
+      setView({ kind: 'error', emoji: '⚠️', message: 'Error al conectar con el servidor.', hint: HINT_CONEXION })
     }
   }
 
   const applyLista = (d) => {
     if (!d.exito || !d.grupos || !d.grupos.length) {
-      setView({ kind: 'error', emoji: '😕', message: (d && d.mensaje) || 'No encontré ninguna de la lista.' })
+      setView({ kind: 'error', emoji: '😕', message: (d && d.mensaje) || 'No encontré ninguna de la lista.',
+        hint: 'Revisá que haya un tema por línea, idealmente «Artista - Título».' })
       return
     }
     const sel = d.grupos.map(() => 0)
@@ -84,7 +97,7 @@ export default function App() {
     setModal(null)
     setView({ kind: 'loading', message: 'Buscando temas (hasta 3 opciones c/u)… puede tardar unos segundos.' })
     try { applyLista(await buscarLista(text, formato)) }
-    catch { setView({ kind: 'error', emoji: '⚠️', message: 'Error al conectar con el servidor.' }) }
+    catch { setView({ kind: 'error', emoji: '⚠️', message: 'Error al conectar con el servidor.', hint: HINT_CONEXION }) }
   }
 
   const doParecidas = async (c) => {
@@ -95,9 +108,9 @@ export default function App() {
       const gen = genero || c.genero || (metaMap[metaKey(c)] || {}).genero || ''
       const d = await parecidasLista(c.titulo, c.artista, formato, gen)
       if (d.exito) applyLista(d)
-      else setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'No se pudo armar la playlist de parecidas.' })
+      else setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'No se pudo armar la playlist de parecidas.', hint: 'Probá con otro tema.' })
     } catch {
-      setView({ kind: 'error', emoji: '⚠️', message: 'Error al armar la playlist de parecidas.' })
+      setView({ kind: 'error', emoji: '⚠️', message: 'Error al armar la playlist de parecidas.', hint: HINT_CONEXION })
     }
   }
 
@@ -162,7 +175,8 @@ export default function App() {
   }
 
   /* ---------- Historial ---------- */
-  const refreshHistorial = async () => { try { setHistorialData(await historial()) } catch { /* ignore */ } }
+  // Sin conexión el cajón mostraba "Cargando historial…" para siempre: ahora muestra el error.
+  const refreshHistorial = async () => { try { setHistorialData(await historial()) } catch { setHistorialData({ error: true }) } }
   const toggleHistorial = () => {
     setHistorialOpen((o) => {
       const next = !o
@@ -179,10 +193,16 @@ export default function App() {
         setView({ kind: 'lista', data: d.data })
         enrich(d.data.groups.map((g) => g.opciones[0]))
         setHistorialOpen(false)
-      }
-    } catch { /* ignore */ }
+      } else toast.danger({ title: 'No pude abrir esa playlist', body: d.mensaje || 'Puede que se haya borrado. Actualizá el historial.' })
+    } catch { toast.danger({ title: 'No pude abrir esa playlist', body: HINT_CONEXION }) }
   }
-  const onDeletePlaylist = async (id) => { try { await borrarPlaylist(id); refreshHistorial() } catch { /* ignore */ } }
+  // Decisión tomada (a validar): borrar una playlist del historial pide confirmación, igual
+  // que vaciar secciones o borrar una playlist propia. Antes se borraba al primer click.
+  const onDeletePlaylist = async (id, nombre) => {
+    if (!window.confirm(`¿Borrar «${nombre || 'Playlist'}» del historial? No se puede deshacer.`)) return
+    try { await borrarPlaylist(id); refreshHistorial() }
+    catch { toast.danger({ title: 'No pude borrar la playlist del historial', body: HINT_CONEXION }) }
+  }
   const onLimpiar = async (que) => {
     const txt = que === 'todo' ? 'todo el historial' : `las ${que}`
     if (!window.confirm(`¿Vaciar ${txt}? No se puede deshacer.`)) return
@@ -197,12 +217,22 @@ export default function App() {
   const shared = { formato, metaMap, preview, dl, onPlay: play, onSpek: openSpek, onDownload, onCompare: openCompare, onParecidas: doParecidas }
   let body
   if (view.kind === 'home') body = <Home toast={toast} />
-  else if (view.kind === 'loading') body = <div className="empty"><span className="spinner" /><p>{view.message}</p></div>
-  else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p></div>
+  else if (view.kind === 'loading') body = <div className="empty"><span className="spinner" aria-hidden="true" /><p>{view.message}</p></div>
+  else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p>{view.hint && <p>{view.hint}</p>}</div>
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} />
+
+  // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
+  // por una región viva: sin esto un lector de pantalla no se entera de que terminó.
+  const anuncio = view.kind === 'loading' ? view.message
+    : view.kind === 'error' ? `${view.message} ${view.hint || ''}`.trim()
+    : view.kind === 'lista'
+      ? (view.data.origen === 'busqueda'
+        ? `${view.data.groups.length} temas encontrados.`
+        : `${view.data.encontradas ?? view.data.groups.length} de ${view.data.total ?? view.data.groups.length} temas encontrados.`)
+      : ''
 
   const drawerAbierto = consoleOpen || historialOpen
   return (
@@ -224,6 +254,7 @@ export default function App() {
         )}
         <main className="app-main"><div className="app-wrap">{body}</div></main>
       </div>
+      <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>
       {drawerAbierto && <div className="scrim" onClick={() => { setConsoleOpen(false); setHistorialOpen(false) }} />}
       <ConsoleDrawer open={consoleOpen} onClose={() => setConsoleOpen(false)} connected={connected} lines={lines} />
       <HistorialDrawer open={historialOpen} onClose={() => setHistorialOpen(false)} data={historialData}
