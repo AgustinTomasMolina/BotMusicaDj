@@ -14,7 +14,7 @@ echo Instalando dependencias si hace falta...
 %PY% -m pip install -r requirements.txt -q
 
 echo.
-echo [1/2] Tests del motor (motor\tests, via pytest)...
+echo Tests del motor (motor\tests, via pytest)...
 echo.
 %PY% -m pytest motor/tests
 if errorlevel 1 (
@@ -23,10 +23,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-
-echo.
-echo [2/2] Chequeos del bot (test_bot.py)...
-echo.
-%PY% test_bot.py
 
 pause

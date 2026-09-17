@@ -38,8 +38,6 @@ echo.
 echo Como seguir:
 echo   scripts\iniciar_web.bat           Servidor web + navegador
 echo   scripts\iniciar_api.bat           Solo la API (uvicorn server:app)
-echo   scripts\iniciar_discord_bot.bat   Bot de Discord
-echo   scripts\demo.bat                  Demo interactivo
 echo.
 echo Documentacion: README.md
 echo.
