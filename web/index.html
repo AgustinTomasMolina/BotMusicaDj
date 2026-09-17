@@ -338,7 +338,7 @@
           <option value="mp3">MP3</option>
           <option value="wav" selected>WAV</option>
           <option value="flac">FLAC</option>
-          <option value="aiff">AIFF</option>
+          <!-- sin AIFF: yt-dlp no lo acepta como formato de salida -->
         </select>
         <button type="button" class="fmt-trigger ghost" id="fmtTrigger"
                 aria-haspopup="listbox" aria-expanded="false" title="Formato de descarga">
@@ -356,9 +356,6 @@
             <span class="fmt-tag lossless">lossless</span></button>
           <button type="button" class="fmt-opt" data-val="flac" role="option">
             <span class="fmt-opt-main"><b>FLAC</b><span>Sin pérdida · comprimido</span></span>
-            <span class="fmt-tag lossless">lossless</span></button>
-          <button type="button" class="fmt-opt" data-val="aiff" role="option">
-            <span class="fmt-opt-main"><b>AIFF</b><span>Sin pérdida · Apple</span></span>
             <span class="fmt-tag lossless">lossless</span></button>
         </div>
       </div>
@@ -468,7 +465,7 @@ document.getElementById("formato").addEventListener("change", () => {
   const menu    = document.getElementById("fmtMenu");
   const curEl   = trigger.querySelector(".fmt-cur");
   const subEl   = trigger.querySelector(".fmt-cur-sub");
-  const SUB = { mp3:"lossy", wav:"lossless", flac:"lossless", aiff:"lossless" };
+  const SUB = { mp3:"lossy", wav:"lossless", flac:"lossless" };
   const open  = () => { menu.classList.add("open");  trigger.setAttribute("aria-expanded","true");  };
   const close = () => { menu.classList.remove("open"); trigger.setAttribute("aria-expanded","false"); };
   function sync(){

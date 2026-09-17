@@ -33,6 +33,8 @@ export const GRADE_RANK = { A: 6, 'A-': 5, B: 4, C: 3, D: 2, F: 1, '?': 0 }
 const _GC = { A: 'grade-a', 'A-': 'grade-am', B: 'grade-b', C: 'grade-c', D: 'grade-d', F: 'grade-f' }
 export function gradeClass(g) { return _GC[g] || '' }
 
+// Clasifica un formato como sin pérdida. 'aiff' queda porque lo es, aunque ya no se ofrezca
+// para descargar (yt-dlp no lo acepta como salida): clasificar no es ofrecer.
 const _LOSSLESS = ['wav', 'flac', 'aiff']
 
 // Íconos chicos inline (Phosphor-ish) para el botón de descarga.

@@ -202,7 +202,7 @@ def _buscar_mix(q: str, limite: int) -> list:
 
 def _rank_calidad(fuente: str, formato: str) -> int:
     """Prioridad de fuente según el formato de descarga pedido.
-    Para destinos lossless (wav/flac/aiff) conviene la mejor fuente convertible;
+    Para destinos lossless (wav/flac) conviene la mejor fuente convertible;
     las que ya vienen en MP3 fijo (scrapers) van al final porque convertir un MP3
     a WAV no recupera calidad. Para MP3 el orden casi no importa, se usa el mismo."""
     f = (fuente or "").lower()
