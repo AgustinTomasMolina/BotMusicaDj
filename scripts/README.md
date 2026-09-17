@@ -15,9 +15,7 @@ raíz del repo, así que funcionan sin importar desde dónde se los llame.
 | `install_deps.bat` | Solo instalar/actualizar dependencias desde `requirements.txt`. |
 | `iniciar_web.bat` | Levanta `uvicorn server:app` en el puerto 8000 y abre el navegador. |
 | `iniciar_api.bat` | Lo mismo, pero sin abrir el navegador (para consumir la API o ver `/docs`). |
-| `iniciar_discord_bot.bat` | Arranca `discord_bot.py` (instala `discord.py` si falta). |
-| `demo.bat` | Corre `quickstart.py`, el demo interactivo. |
-| `ejecutar_pruebas.bat` | `pytest motor/tests` + los chequeos de `test_bot.py`. |
+| `ejecutar_pruebas.bat` | `pytest motor/tests`. |
 | `recompilar-frontend.bat` | `npm run build` en `frontend/`; el build queda en `frontend/dist`. |
 
 `_entorno.bat` no se ejecuta directo: es el helper que usan los demás para

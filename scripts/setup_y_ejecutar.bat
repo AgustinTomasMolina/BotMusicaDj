@@ -23,8 +23,8 @@ echo [2/4] Actualizando pip...
 %PY% -m pip install --upgrade pip -q
 echo.
 
-echo [3/4] Instalando dependencias desde requirements.txt...
-%PY% -m pip install -r requirements.txt
+echo [3/4] Instalando dependencias desde requirements-dev.txt (incluye pytest)...
+%PY% -m pip install -r requirements-dev.txt
 echo.
 
 echo [4/4] Corriendo los tests del motor...
@@ -38,8 +38,6 @@ echo.
 echo Como seguir:
 echo   scripts\iniciar_web.bat           Servidor web + navegador
 echo   scripts\iniciar_api.bat           Solo la API (uvicorn server:app)
-echo   scripts\iniciar_discord_bot.bat   Bot de Discord
-echo   scripts\demo.bat                  Demo interactivo
 echo.
 echo Documentacion: README.md
 echo.
