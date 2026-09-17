@@ -802,7 +802,9 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .keyspread>i.is-peak{background:var(--color-accent)}
 
 /* — the crate row: .trk with a drag handle and a have/need state — */
-.results-crate{--trk-cols:26px 44px minmax(170px,1.5fr) minmax(140px,0.8fr) 52px 112px 72px /* @kind other */}
+/* Metadata pide 156px: las tres pills (BPM · KEY · formato) miden 153 y .trk-meta recorta.
+   Con 140 la pill del formato perdía hasta 13px entre 771 y 1122 de viewport. */
+.results-crate{--trk-cols:26px 44px minmax(170px,1.5fr) minmax(156px,0.8fr) 52px 112px 72px /* @kind other */}
 .drag{display:grid;place-items:center;color:var(--color-neutral-700);cursor:grab;touch-action:none}
 .trk:hover .drag{color:var(--color-neutral-400)}
 .drag:active{cursor:grabbing}
