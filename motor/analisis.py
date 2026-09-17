@@ -15,8 +15,9 @@ Qué se mide y qué NO:
 
 - BPM (`bpm_refinado`) y tonalidad (`tono`, o `tono_consenso` con `consenso=True`, el mismo
   flag y el mismo default que el benchmark y el pipeline). El acuerdo entre tramos de
-  `tono_consenso`, que es la confianza de la key, lo calcula `medir_bpm_y_tono` para el
-  benchmark y el pipeline; el scan no lo pide porque todavía no lo persiste (tarea 17).
+  `tono_consenso`, que es la confianza de la key, lo calcula `medir_bpm_y_tono` para TODOS
+  los caminos: el benchmark, el pipeline y —desde la tarea 17— también el scan del motor,
+  que lo persiste en `key_acuerdo` / `key_tramos` para poder marcar la key con `?` (§6).
 - `energy_raw` y `rms`: RMS de la señal completa (`energia_rms`). Son el mismo número a
   propósito: `energy_raw` es el escalar que el store convierte en percentil, y armarlo
   combinando RMS con onsets o ratio percusivo sería inventar pesos sin benchmark que los
@@ -118,14 +119,43 @@ def onsets_por_segundo(y: np.ndarray, sr: int = SR) -> float:
     return float(len(onsets)) / (y.size / sr)
 
 
+def acuerdo_y_tramos(det: dict) -> tuple[str | None, str | None]:
+    """La confianza de la key de una detección, como la guarda el store.
+
+    `(acuerdo, tramos)` = `("2/3", "8A|3B|9A")`, con los votos EN EL ORDEN en que salieron
+    los tramos: el primero es el del arranque del track. `info` los imprime tal cual, así
+    que reordenarlos sería mentir sobre qué tramo votó qué.
+
+    `(None, None)` si la detección no trae acuerdo, o sea si el consenso NO se corrió. Ese
+    caso NO lo produce `analizar_senal`, que siempre pide `con_acuerdo=True` (tarea 17); lo
+    produce `medir_bpm_y_tono(..., con_acuerdo=False)`, que sigue siendo parte del contrato
+    de esa función y devuelve una detección sin la clave `acuerdo`. Sin esta rama, componer
+    las dos revienta con `TypeError` al desempaquetar `None`
+    (`test_analisis.py::test_una_deteccion_sin_consenso_no_inventa_acuerdo` lo fija).
+
+    Distinto de `("0/0", "")`, que es el consenso corrido sobre un track demasiado corto
+    para comparar tramos — ahí tampoco hay confianza, pero reanalizar no la va a traer.
+
+    El `0/0` NO se colapsa a vacío como hace el CSV de la etapa A (`benchmark.analizar`):
+    ahí el vacío alcanza porque el CSV se regenera entero de una corrida, y acá la base
+    convive con filas analizadas por versiones distintas del código.
+    """
+    acuerdo = det.get("acuerdo")
+    if acuerdo is None:
+        return None, None
+    ganados, total = acuerdo
+    return f"{ganados}/{total}", "|".join(det.get("tramos", []))
+
+
 def analizar_senal(y: np.ndarray, sr: int = SR, consenso: bool = False) -> TrackFeatures:
     """Features de una señal ya cargada. `analizar_archivo` es esto más la carga."""
-    # con_acuerdo=False: `TrackFeatures` no tiene dónde guardar el acuerdo entre tramos y el
-    # store no lo persiste todavía (tarea 17). Calcularlo acá sería pagar el consenso para
-    # tirarlo. La key no cambia por esto: sale de `tono()` igual que en benchmark y pipeline.
-    # Cuando la tarea 17 lo persista, esto pasa a True.
-    bpm, det = medir_bpm_y_tono(y, sr, consenso=consenso, con_acuerdo=False)
+    # con_acuerdo=True (tarea 17): el store persiste el acuerdo entre tramos, así que el
+    # consenso que se corre acá NO se tira — es la confianza que `list`/`info`/`radio`
+    # muestran como `?`. La key no cambia por esto: sale de `tono()` igual que en el
+    # benchmark y el pipeline; el acuerdo nunca toca `camelot` (ver `medir_bpm_y_tono`).
+    bpm, det = medir_bpm_y_tono(y, sr, consenso=consenso, con_acuerdo=True)
     rms = energia_rms(y)
+    acuerdo, tramos = acuerdo_y_tramos(det)
     return TrackFeatures(
         bpm=bpm,
         key=det["camelot"],
@@ -135,6 +165,8 @@ def analizar_senal(y: np.ndarray, sr: int = SR, consenso: bool = False) -> Track
         rms=rms,
         onset_rate=onsets_por_segundo(y, sr),
         percussive_ratio=None,  # no medido: ver el docstring del módulo
+        key_acuerdo=acuerdo,
+        key_tramos=tramos,
     )
 
 

@@ -34,7 +34,13 @@ import numpy as np
 
 from motor.embeddings import DIM, normalize_matrix, normalize_one
 from motor.energia import percentil
-from motor.modelos import Track, TrackFeatures, require_finite_bpm, require_text
+from motor.modelos import (
+    Track,
+    TrackFeatures,
+    require_acuerdo_key,
+    require_finite_bpm,
+    require_text,
+)
 
 # Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
 # de una tabla, y agregar el paso a `_MIGRACIONES`. `CREATE TABLE IF NOT EXISTS` no altera
@@ -44,7 +50,8 @@ from motor.modelos import Track, TrackFeatures, require_finite_bpm, require_text
 #   0  sin versionar: cualquier base anterior a esta constante (commits 9440251 a df9819a)
 #   1  rms / onset_rate / percussive_ratio aceptan NULL (9440251 los tenía NOT NULL)
 #   2  columna path_key (ruta absoluta + normcase) con índice único
-VERSION_ESQUEMA = 2
+#   3  columnas key_acuerdo / key_tramos (la confianza de la key, tarea 17)
+VERSION_ESQUEMA = 3
 
 # Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está
 # migrando) antes de rendirse con `sqlite3.OperationalError: database is locked`. La CLI
@@ -69,6 +76,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     rms             REAL,
     onset_rate      REAL,
     percussive_ratio REAL,
+    -- Confianza de la KEY: el acuerdo entre tramos de `tono_consenso` ("2/3") y qué votó
+    -- cada tramo ("8A|3B|8A"). NULL en las dos = el consenso no se corrió (fila analizada
+    -- por un código anterior a la tarea 17), y la CLI muestra `?`. "0/0" con tramos "" es
+    -- distinto: el consenso SÍ corrió y el track no daba para comparar tramos.
+    key_acuerdo     TEXT,
+    key_tramos      TEXT,
     license         TEXT NOT NULL,      -- obligatorio (spec §5)
     source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
     analyzed_at     TEXT NOT NULL
@@ -108,8 +121,8 @@ EMB_DTYPE = np.float32
 STATS_DTYPE = np.float64
 
 _COLUMNAS = ("path", "path_key", "mtime", "duration", "artist", "title", "bpm", "key",
-             "energy_raw", "embedding", "rms", "onset_rate", "percussive_ratio", "license",
-             "source_url", "analyzed_at")
+             "energy_raw", "embedding", "rms", "onset_rate", "percussive_ratio",
+             "key_acuerdo", "key_tramos", "license", "source_url", "analyzed_at")
 
 
 def _opcional(valor: object) -> float | None:
@@ -171,6 +184,10 @@ class Store:
         require_text(license, "license")
         require_text(source_url, "source_url")
         require_finite_bpm(features.bpm)
+        # La confianza de la key se valida al ESCRIBIR y no al leer: acá el dato lo produce
+        # el análisis y tiene que ser coherente; al leer, una fila corrupta se degrada a `?`
+        # en vez de tirar la biblioteca entera (ver `require_acuerdo_key`).
+        require_acuerdo_key(features.key_acuerdo, features.key_tramos)
 
         key = self._key(path)
         mt = float(mtime) if mtime is not None else Path(path).stat().st_mtime
@@ -179,7 +196,8 @@ class Store:
         valores = (self._ruta(path), key, mt, float(duration), artist, title,
                    float(features.bpm), features.key, float(features.energy_raw), vec.astype(EMB_DTYPE).tobytes(),
                    _opcional(features.rms), _opcional(features.onset_rate),
-                   _opcional(features.percussive_ratio), license, source_url,
+                   _opcional(features.percussive_ratio),
+                   features.key_acuerdo, features.key_tramos, license, source_url,
                    datetime.now(UTC).isoformat())
         marcas = ", ".join("?" * len(_COLUMNAS))
         self._con.execute(
@@ -421,6 +439,24 @@ class Store:
         if filas:
             self._con.execute("DROP TABLE IF EXISTS norm_stats")   # se recrea vacía después
 
+    def _migrar_a_3_acuerdo_key(self) -> None:
+        """Agrega `key_acuerdo` y `key_tramos` (si faltan). Las filas viejas quedan en NULL.
+
+        NULL y NO un acuerdo inventado: esas filas se analizaron con `con_acuerdo=False`, o
+        sea que `tono_consenso` nunca corrió sobre ese audio. Desde la base no hay con qué
+        llenarlas — rellenarlas con "3/3" diría que la key es confiable sin que nadie la
+        haya medido, que es exactamente el dato que miente del §6. `list`/`info` las
+        muestran con `?` hasta que el archivo se vuelva a analizar.
+
+        Se mira la forma real de la tabla y no la versión, porque la migración a 1 recrea
+        `tracks` con el DDL ACTUAL: viniendo de una base 9440251 las columnas ya existen
+        cuando este paso corre, y un `ALTER TABLE ADD COLUMN` repetido falla.
+        """
+        columnas = {f["name"] for f in self._con.execute("PRAGMA table_info(tracks)")}
+        for col in ("key_acuerdo", "key_tramos"):
+            if col not in columnas:
+                self._con.execute(f"ALTER TABLE tracks ADD COLUMN {col} TEXT")
+
     def _rows(self) -> list[sqlite3.Row]:
         """Todas las filas, ORDENADAS POR CLAVE EN PYTHON — no por la collation de SQLite,
         que depende de cómo se compiló. Determinismo: mismo contenido, mismo orden. Se
@@ -445,7 +481,8 @@ class Store:
             bpm=float(fila["bpm"]), key=fila["key"], energy_raw=float(fila["energy_raw"]),
             embedding=self._embedding(fila), rms=_opcional(fila["rms"]),
             onset_rate=_opcional(fila["onset_rate"]),
-            percussive_ratio=_opcional(fila["percussive_ratio"]))
+            percussive_ratio=_opcional(fila["percussive_ratio"]),
+            key_acuerdo=fila["key_acuerdo"], key_tramos=fila["key_tramos"])
 
     @staticmethod
     def _track(fila: sqlite3.Row, embedding: np.ndarray, energias: Iterable[float]) -> Track:
@@ -454,7 +491,8 @@ class Store:
         return Track(path=Path(fila["path"]), duration=float(fila["duration"]),
                      bpm=float(fila["bpm"]), key=fila["key"], energy=pct, embedding=embedding,
                      license=fila["license"], source_url=fila["source_url"],
-                     artist=fila["artist"], title=fila["title"])
+                     artist=fila["artist"], title=fila["title"],
+                     key_acuerdo=fila["key_acuerdo"])
 
     def _energias(self) -> list[float]:
         """Las energías crudas de toda la biblioteca: el universo contra el que se percentila."""
@@ -500,4 +538,5 @@ class Store:
 _MIGRACIONES = (
     (1, Store._migrar_a_1_nulos),
     (2, Store._migrar_a_2_path_key),
+    (3, Store._migrar_a_3_acuerdo_key),
 )

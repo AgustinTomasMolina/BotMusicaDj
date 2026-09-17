@@ -18,6 +18,7 @@ no lleguen vacíos. El boceto viejo los declaraba `str | None = None` dos línea
 de un comentario que decía que eran obligatorios — o sea que no lo eran.
 """
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +68,52 @@ def require_finite_bpm(value: object) -> float:
     return value
 
 
+_FORMA_ACUERDO = re.compile(r"^(\d+)/(\d+)$")
+
+
+def require_acuerdo_key(acuerdo: object, tramos: object) -> None:
+    """Exige que la confianza de la key sea un par coherente, o que no esté. No devuelve
+    nada: o pasa o levanta `ValueError`.
+
+    Qué acepta: `(None, None)` —no se midió— o `("g/t", "8A|3B|9A")` con `g <= t` y
+    EXACTAMENTE `t` votos (ninguno si `t` es 0). Ese invariante es el que produce
+    `tono_consenso`, que devuelve `acuerdo=(ganados, len(votos))` junto a esos mismos votos.
+
+    Por qué existe: un `"3/3"` con los votos vacíos diría "los tres tramos coincidieron" sin
+    tener tramos, y un `"4/3"` o un `"abc"` no dicen nada — son datos inventados, y el
+    proyecto no los quiere (spec §6). Es la misma compuerta que `require_text` para la
+    licencia, en el mismo lugar: la frontera de ESCRITURA de la caché (`Store.upsert`).
+
+    Dónde NO se usa, a propósito: al LEER. `Store._features` arma un `TrackFeatures` con lo
+    que haya en la fila, y `Track` ni mira el formato. Si una base editada a mano tiene
+    `"abc"`, la CLI tiene que poder mostrar ese track con `?` (`cli.key_dudosa` atrapa el
+    `ValueError` de `acuerdo_unanime`); levantar acá haría que una fila corrupta tirara
+    `load_library` para la biblioteca entera.
+    """
+    if acuerdo is None and tramos is None:
+        return
+    if acuerdo is None or tramos is None:
+        raise ValueError(
+            f"`key_acuerdo` y `key_tramos` van juntos: o los dos None (no se midió) o los dos "
+            f"con valor; recibí acuerdo={acuerdo!r} y tramos={tramos!r}")
+    if not isinstance(acuerdo, str) or not (m := _FORMA_ACUERDO.match(acuerdo.strip())):
+        raise ValueError(
+            f"`key_acuerdo` tiene la forma 'ganados/total' de `tono_consenso` (ej. '2/3'); "
+            f"recibí {acuerdo!r}")
+    ganados, total = int(m.group(1)), int(m.group(2))
+    if ganados > total:
+        raise ValueError(
+            f"`key_acuerdo` {acuerdo!r}: no puede haber más tramos de acuerdo ({ganados}) que "
+            f"tramos ({total})")
+    if not isinstance(tramos, str):
+        raise ValueError(f"`key_tramos` tiene que ser texto ('8A|3B|9A'); recibí {tramos!r}")
+    votos = tramos.split("|") if tramos else []
+    if len(votos) != total:
+        raise ValueError(
+            f"`key_acuerdo` {acuerdo!r} dice {total} tramos y `key_tramos` {tramos!r} trae "
+            f"{len(votos)}: un acuerdo sin sus votos no se puede mostrar sin inventarlos")
+
+
 def _as_vector(value: object, field: str) -> np.ndarray:
     """Coerción a `np.ndarray` 1-D, sin tocar el dtype.
 
@@ -111,6 +158,19 @@ class TrackFeatures:
     onset_rate: float | None = None  # onsets por segundo
     percussive_ratio: float | None = None  # energía percusiva / total (HPSS) — no medido
 
+    # CONFIANZA de la key: el acuerdo entre tramos de `tono_consenso`, no el campo
+    # `confianza` de `tono()` (está medido que ese no predice nada, Pearson +0.02; el
+    # acuerdo sí: 3/3 → 55% exacta, 2/3 → 36%, 1/3 → 26% — A/B 2026-09-14). La key la
+    # sigue eligiendo `tono()`: esto es SOLO para poder mostrar `?` (spec §6).
+    #
+    # `key_acuerdo` es "ganados/total" en crudo ("3/3", "2/3", "0/0") y `key_tramos` lo que
+    # votó cada tramo ("8A|3B|8A"). `None` en los dos = el consenso NO se corrió, que es
+    # distinto de haberlo corrido sin evidencia ("0/0"): lo primero se arregla reanalizando,
+    # lo segundo no se arregla con nada porque el track es muy corto. Un "3/3" por defecto
+    # diría que la key es confiable sin que nadie la haya medido.
+    key_acuerdo: str | None = None   # "g/t" de `tono_consenso`; None = no se midió
+    key_tramos: str | None = None    # "8A|3B|8A"; "" si no hubo tramos; None = no se midió
+
     def __post_init__(self) -> None:
         self.embedding = _as_vector(self.embedding, "embedding")
 
@@ -121,9 +181,10 @@ class TrackFeatures:
         if not isinstance(other, TrackFeatures):
             return NotImplemented
         return (
-            (self.bpm, self.key, self.energy_raw, self.rms, self.onset_rate, self.percussive_ratio)
+            (self.bpm, self.key, self.energy_raw, self.rms, self.onset_rate,
+             self.percussive_ratio, self.key_acuerdo, self.key_tramos)
             == (other.bpm, other.key, other.energy_raw, other.rms, other.onset_rate,
-                other.percussive_ratio)
+                other.percussive_ratio, other.key_acuerdo, other.key_tramos)
             and self.embedding.dtype == other.embedding.dtype
             and np.array_equal(self.embedding, other.embedding)
         )
@@ -158,6 +219,11 @@ class Track:
     artist: str | None = None
     title: str | None = None
 
+    # Confianza de la key: ver `TrackFeatures.key_acuerdo`. Viaja hasta acá porque es lo
+    # que la CLI imprime al lado de la key (`list`, `similar`, `radio`), y sin el acuerdo
+    # esas tablas presentarían una key dudosa como si fuera segura (spec §6).
+    key_acuerdo: str | None = None
+
     def __post_init__(self) -> None:
         self.path = Path(self.path)
         self.embedding = _as_vector(self.embedding, "embedding")
@@ -185,9 +251,9 @@ class Track:
             return NotImplemented
         return (
             (self.path, self.duration, self.bpm, self.key, self.energy, self.license,
-             self.source_url, self.artist, self.title)
+             self.source_url, self.artist, self.title, self.key_acuerdo)
             == (other.path, other.duration, other.bpm, other.key, other.energy, other.license,
-                other.source_url, other.artist, other.title)
+                other.source_url, other.artist, other.title, other.key_acuerdo)
             and self.embedding.dtype == other.embedding.dtype
             and np.array_equal(self.embedding, other.embedding)
         )
