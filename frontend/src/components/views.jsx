@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { getBiblioteca, audioUrl } from '../api'
 import { fmtDur, FUENTE_CORTO, songKey, metaKey } from '../utils'
 import { DlButton, PreviewLayer, QualityBadge } from './common'
 import { AddToPlaylist } from './AddToPlaylist'
@@ -8,14 +9,101 @@ import { IconDownload, IconActivity, IconCompare, IconSparkles } from './icons'
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
 
 /* ---------- Pantalla de inicio ---------- */
-export function Home() {
+const NoteIcon = () => (
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg>
+)
+
+// Tarjeta de un track de la biblioteca: carátula (con play/pausa), título, artista y ＋ a playlist.
+function LibCard({ t, i, playing, onToggle }) {
+  const key = t.camelot || t.tonalidad || ''
+  const meta = [t.bpm ? String(t.bpm) : null, key || null].filter(Boolean).join(' · ')
   return (
-    <div className="empty">
-      <div className="empty-art">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="7" cy="17" r="3" /><path d="M10 17V5l9-2v3l-9 2" /></svg>
+    <div className="lib-card" style={{ animationDelay: `${Math.min(i, 12) * 0.04}s` }}>
+      <div className={`lib-cover g${(i % 6) + 1}`}>
+        <button type="button" className={`lib-play${playing ? ' on' : ''}`}
+          aria-label={playing ? 'Pausar' : 'Reproducir'} onClick={onToggle}>
+          {playing
+            ? <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" /><rect x="14" y="5" width="4" height="14" /></svg>
+            : <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>}
+        </button>
+        {meta && <span className="lib-meta">{meta}</span>}
       </div>
-      <h3>Buscá tu próximo track</h3>
-      <p>Escribí un tema, artista o género y compará la calidad de cada versión antes de bajar. O usá <b>Lista</b> (en el menú ☰) para pegar un set entero.</p>
+      <div className="lib-title" title={t.titulo}>{t.titulo}</div>
+      <div className="lib-artist" title={t.artista}>{t.artista || '—'}</div>
+      <div className="lib-actions">
+        <AddToPlaylist track={{ titulo: t.titulo, artista: t.artista, bpm: t.bpm, camelot: t.camelot, genero: t.genero }} />
+      </div>
+    </div>
+  )
+}
+
+/* ---------- Pantalla de inicio: estantes por género desde la biblioteca local ---------- */
+export function Home({ toast }) {
+  const [data, setData] = useState(null)      // {total, configurada, generos:[{genero,tracks}]}
+  const [gf, setGf] = useState('Todos')       // filtro de género
+  const [playing, setPlaying] = useState(null) // id del track sonando
+  const audioRef = useRef(null)
+
+  useEffect(() => {
+    let vivo = true
+    getBiblioteca()
+      .then((d) => {
+        if (!vivo) return
+        // Orden semi-aleatorio de los estantes: la home se siente distinta cada vez que entrás.
+        const gs = [...(d.generos || [])].sort(() => Math.random() - 0.5)
+        setData({ ...d, generos: gs })
+      })
+      .catch(() => vivo && setData({ total: 0, configurada: false, generos: [] }))
+    return () => { vivo = false; if (audioRef.current) audioRef.current.pause() }
+  }, [])
+
+  const toggle = (t) => {
+    const a = audioRef.current
+    if (!a) return
+    if (playing === t.id) { a.pause(); setPlaying(null); return }
+    a.src = audioUrl(t.id)
+    a.play().then(() => setPlaying(t.id)).catch(() => { if (toast) toast('No pude reproducir ese audio'); setPlaying(null) })
+  }
+
+  if (!data) return <div className="empty"><span className="spinner" /><p>Cargando tu biblioteca…</p></div>
+  if (!data.total) {
+    return (
+      <div className="empty">
+        <div className="empty-art"><NoteIcon /></div>
+        <h3>{data.configurada ? 'Tu biblioteca está vacía' : 'Conectá tu biblioteca'}</h3>
+        <p>{data.configurada
+          ? 'No encontré audios resueltos. Revisá las rutas de la biblioteca (MUSIFLIX_LIBRARY_ROOTS).'
+          : 'Definí MUSIFLIX_LIBRARY_XML y MUSIFLIX_LIBRARY_ROOTS para ver tus temas por género acá. Mientras tanto, buscá un tema arriba.'}</p>
+      </div>
+    )
+  }
+
+  const chips = ['Todos', ...data.generos.map((s) => s.genero)]
+  const shelves = gf === 'Todos' ? data.generos : data.generos.filter((s) => s.genero === gf)
+
+  return (
+    <div className="home">
+      <audio ref={audioRef} onEnded={() => setPlaying(null)} preload="none" />
+      <div className="home-head">
+        <h1>Para arrancar</h1>
+        <p className="muted">{data.total} temas en tu biblioteca · el orden cambia cada vez que entrás</p>
+      </div>
+      <div className="genre-chips" role="tablist" aria-label="Filtrar por género">
+        {chips.map((g) => (
+          <button key={g} type="button" role="tab" aria-selected={gf === g}
+            className={`chip${gf === g ? ' on' : ''}`} onClick={() => setGf(g)}>{g}</button>
+        ))}
+      </div>
+      {shelves.map((shelf, si) => (
+        <section className="shelf" style={{ animationDelay: `${Math.min(si, 8) * 0.06}s` }} key={shelf.genero}>
+          <div className="shelf-head"><h2>{shelf.genero}</h2><span className="muted">{shelf.tracks.length}</span></div>
+          <div className="shelf-row">
+            {shelf.tracks.slice(0, 18).map((t, i) => (
+              <LibCard key={t.id} t={t} i={i} playing={playing === t.id} onToggle={() => toggle(t)} />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   )
 }

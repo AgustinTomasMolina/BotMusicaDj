@@ -71,6 +71,11 @@ export async function calidad(c) {
   return json(r)
 }
 
+// Biblioteca local (colección analizada) agrupada por género, para la home.
+export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
+// URL de audio de un track de la biblioteca (para el <audio> del preview).
+export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
+
 // Historial persistido: búsquedas, playlists (modo lista) y descargas.
 export async function historial(limite = 20) {
   const r = await fetch(`/api/historial?limite=${limite}`)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
-import { buscar, buscarLista, parecidasLista, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva } from './api'
+import { buscar, buscarLista, parecidasLista, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
@@ -8,6 +8,7 @@ import ConsoleDrawer from './components/ConsoleDrawer'
 import HistorialDrawer from './components/HistorialDrawer'
 import Modal from './components/Modal'
 import Playlists from './components/Playlists'
+import PlaylistsRail from './components/PlaylistsRail'
 import { Home, ResultsView, ListForm, ListResults } from './components/views'
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
   const chooseFormat = (f) => { setFormato(f); saveFormat(f) }
   const [genero, setGenero] = useState('')   // filtro de género para las búsquedas
   const [activePlaylist, setActivePlaylist] = useState(null)  // crate activa (auto-add al descargar)
+  const [misPlaylists, setMisPlaylists] = useState([])        // para el rail lateral siempre visible
   const [previewEnabled, setPreviewEnabled] = useState(true)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [historialOpen, setHistorialOpen] = useState(false)
@@ -40,6 +42,8 @@ export default function App() {
 
   // Playlist activa (para el chip de la topbar + auto-add al descargar)
   useEffect(() => { playlistActiva().then((d) => setActivePlaylist(d.activa || null)).catch(() => {}) }, [])
+  // Rail lateral: la lista de playlists, siempre a la vista (se refresca si cambia la activa).
+  useEffect(() => { listarPlaylists().then((d) => setMisPlaylists(Array.isArray(d) ? d : (d.playlists || []))).catch(() => {}) }, [activePlaylist])
 
   /* ---------- Navegación / búsquedas ---------- */
   const goHome = () => { setModal(null); setView({ kind: 'home' }) }
@@ -192,7 +196,7 @@ export default function App() {
   /* ---------- Render ---------- */
   const shared = { formato, metaMap, preview, dl, onPlay: play, onSpek: openSpek, onDownload, onCompare: openCompare, onParecidas: doParecidas }
   let body
-  if (view.kind === 'home') body = <Home />
+  if (view.kind === 'home') body = <Home toast={toast} />
   else if (view.kind === 'loading') body = <div className="empty"><span className="spinner" /><p>{view.message}</p></div>
   else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p></div>
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
@@ -214,7 +218,12 @@ export default function App() {
         onHistorial={toggleHistorial} historialActive={historialOpen}
         onBrand={goHome}
       />
-      <main className="app-main"><div className="app-wrap">{body}</div></main>
+      <div className="app-body">
+        {view.kind === 'home' && (
+          <PlaylistsRail playlists={misPlaylists} activa={activePlaylist} onOpen={openPlaylists} />
+        )}
+        <main className="app-main"><div className="app-wrap">{body}</div></main>
+      </div>
       {drawerAbierto && <div className="scrim" onClick={() => { setConsoleOpen(false); setHistorialOpen(false) }} />}
       <ConsoleDrawer open={consoleOpen} onClose={() => setConsoleOpen(false)} connected={connected} lines={lines} />
       <HistorialDrawer open={historialOpen} onClose={() => setHistorialOpen(false)} data={historialData}

@@ -1000,6 +1000,69 @@ async def listar_descargas():
     return {"exito": True, "total": len(archivos), "archivos": archivos}
 
 
+# --- Biblioteca local (colección analizada): estantes por género + audio para el preview ---
+# Rutas por ENTORNO, sin hardcodear (#5.16): MUSIFLIX_LIBRARY_XML (el XML de Rekordbox) y
+# MUSIFLIX_LIBRARY_ROOTS (carpetas de audio separadas por os.pathsep). Sin config → vacía.
+_LIB_XML = os.getenv("MUSIFLIX_LIBRARY_XML", "")
+_LIB_ROOTS = [r for r in os.getenv("MUSIFLIX_LIBRARY_ROOTS", "").split(os.pathsep) if r]
+_lib_audio: dict[str, str] = {}          # id de track → ruta real (para /api/audio)
+
+
+def _cargar_biblioteca() -> list[dict]:
+    """Lee el XML de Rekordbox y resuelve cada track a su archivo. Devuelve solo los que
+    tienen audio (para poder escucharlos), con género/BPM/tonalidad. Cachea id→ruta."""
+    global _lib_audio
+    if not _LIB_XML or not _LIB_ROOTS:
+        return []
+    from ground_truth.rekordbox import parsear
+    from ground_truth.resolver import construir_indice, resolver
+    try:
+        tracks = parsear(Path(_LIB_XML))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ Biblioteca: no pude leer el XML: {e}")
+        return []
+    indice = construir_indice(_LIB_ROOTS)
+    audio, out = {}, []
+    for t in tracks:
+        r = resolver(t["location"], _LIB_ROOTS, indice)
+        if not r:                        # sin audio no se puede escuchar → fuera del browse
+            continue
+        tid = str(t["track_id"]) or str(len(out))
+        audio[tid] = r.ruta
+        out.append({
+            "id": tid, "titulo": t["name"] or Path(r.ruta).stem, "artista": t["artist"] or "",
+            "bpm": round(t["bpm"], 1) if t["bpm"] else None,
+            "camelot": t["camelot"] or None, "tonalidad": t["tonality"] or None,
+            "genero": (t["genre"] or "").strip() or "Sin género", "dur": t["duration_s"] or 0,
+        })
+    _lib_audio = audio
+    return out
+
+
+@app.get("/api/biblioteca")
+async def biblioteca():
+    """Estantes de la biblioteca local agrupados por género (para la home)."""
+    from collections import defaultdict
+    tracks = await asyncio.to_thread(_cargar_biblioteca)
+    por_genero: dict[str, list] = defaultdict(list)
+    for t in tracks:
+        por_genero[t["genero"]].append(t)
+    generos = [{"genero": g, "tracks": ts} for g, ts in por_genero.items()]
+    generos.sort(key=lambda s: -len(s["tracks"]))     # los géneros con más temas primero
+    return {"total": len(tracks), "configurada": bool(_LIB_XML and _LIB_ROOTS), "generos": generos}
+
+
+@app.get("/api/audio/{track_id}")
+async def audio(track_id: str):
+    """Sirve el archivo de un track de la biblioteca para el preview. Solo lee, nunca escribe."""
+    if not _lib_audio:
+        await asyncio.to_thread(_cargar_biblioteca)
+    ruta = _lib_audio.get(track_id)
+    if not ruta or not Path(ruta).exists():
+        return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
 @app.get("/api/historial")
 async def historial(limite: int = 20):
     """Historial persistido: búsquedas, playlists (modo lista) y descargas."""
