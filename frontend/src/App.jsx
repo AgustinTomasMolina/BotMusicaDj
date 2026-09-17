@@ -56,7 +56,9 @@ export default function App() {
   const goHome = () => { setModal(null); setView({ kind: 'home' }) }
   const openListaForm = () => { setModal(null); setView({ kind: 'listaForm' }) }
   // id opcional (desde el rail): abre esa playlist. Desde otros botones llega el evento → se ignora.
-  const openPlaylists = (id) => { setModal(null); setView({ kind: 'playlists', id: typeof id === 'number' ? id : null }) }
+  // `pick` cambia en cada click: volver a tocar en el rail la misma playlist después de elegir otra
+  // adentro de la vista tiene que volver a seleccionarla.
+  const openPlaylists = (id) => { setModal(null); setView({ kind: 'playlists', id: typeof id === 'number' ? id : null, pick: Date.now() }) }
 
   // Mensajes de error que dicen qué hacer, no solo qué pasó.
   const HINT_CONEXION = 'Revisá que el servidor esté corriendo y volvé a intentar.'
@@ -222,7 +224,7 @@ export default function App() {
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.
@@ -249,9 +251,10 @@ export default function App() {
         onBrand={goHome}
       />
       <div className="app-body">
-        {view.kind === 'home' && (
-          <PlaylistsRail playlists={misPlaylists} activa={activePlaylist} onOpen={openPlaylists} />
-        )}
+        {/* Siempre a la vista, en TODAS las pantallas (decisión del dueño 2026-09-17): antes solo
+            se dibujaba en la home y al entrar a Playlists o buscar desaparecía. */}
+        <PlaylistsRail playlists={misPlaylists} activa={activePlaylist} onOpen={openPlaylists} />
+
         <main className="app-main"><div className="app-wrap">{body}</div></main>
       </div>
       <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>
