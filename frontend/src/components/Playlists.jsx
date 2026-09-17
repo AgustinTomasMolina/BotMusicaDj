@@ -107,12 +107,19 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
     window.addEventListener('musiflix:playlists', recargar)
     return () => window.removeEventListener('musiflix:playlists', recargar)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // Qué playlist se muestra: la que pidió el rail (initialId + pick, que cambia en cada click),
-  // y si no hay ninguna válida elegida, la primera de la lista.
+  // Qué playlist se muestra. El pedido del rail se aplica SOLO cuando cambia `pick` (un click
+  // nuevo): si no, cualquier recarga de la lista (activar, renombrar, quitar, borrar, el evento
+  // 'musiflix:playlists') volvía a la del rail y pisaba lo elegido en la lista interna.
+  // Recargar la lista solo repara una selección nula o que ya no existe (la playlist borrada).
+  const pickAplicado = useRef(null)
   useEffect(() => {
     if (!lists || !lists.length) return
-    if (initialId != null && lists.some((p) => p.id === initialId)) setSelId(initialId)
-    else if (selId == null || !lists.some((p) => p.id === selId)) setSelId(lists[0].id)
+    if (pick !== pickAplicado.current && initialId != null && lists.some((p) => p.id === initialId)) {
+      pickAplicado.current = pick
+      setSelId(initialId)
+      return
+    }
+    if (selId == null || !lists.some((p) => p.id === selId)) setSelId(lists[0].id)
   }, [lists, initialId, pick]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { cargarCrate(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Cuál está abierta lo marca el rail, que en escritorio es la única lista: se lo avisamos.

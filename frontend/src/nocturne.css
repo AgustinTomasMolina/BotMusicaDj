@@ -840,7 +840,9 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    (30+44+180+140+52+160+128 + 6 huecos de 12 + 24 de padding; medido: a 830 no se corta nada).
    Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
    desaparecía hasta ~1360px de viewport. */
-@container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+/* El ocultado de Metadata es solo de resultados: el crate usa sus 7 columnas desde 729px y si
+   también se le escondía quedaba un hueco de 140px entre el título y la nota. */
+@container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta{display:none}}
 /* El crate ya no tiene la lista de playlists al lado (es el rail), así que su fila de escritorio
    —que pide 712px: 26+44+170+140+52+112+72 + 6 huecos de 12 + 24 de padding— entra en todo lo que
    no sea la tarjeta de 728px de abajo. Por eso tiene dos layouts y no tres; el bloque de 829
