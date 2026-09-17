@@ -239,6 +239,12 @@ export default function App() {
   const drawerAbierto = consoleOpen || historialOpen
   return (
     <div className="app">
+      {/* Con el rail siempre visible, con teclado había que pasar por todas las playlists antes de
+          llegar a los resultados. Primer foco de la página: salta directo a <main>. */}
+      <a className="skip-link" href="#contenido"
+        onClick={(e) => { e.preventDefault(); const m = document.getElementById('contenido'); if (m) m.focus() }}>
+        Saltar al contenido
+      </a>
       <TopBar
         formato={formato} setFormato={chooseFormat}
         genero={genero} setGenero={setGenero}
@@ -255,7 +261,7 @@ export default function App() {
             se dibujaba en la home y al entrar a Playlists o buscar desaparecía. */}
         <PlaylistsRail playlists={misPlaylists} activa={activePlaylist} onOpen={openPlaylists} />
 
-        <main className="app-main"><div className="app-wrap">{body}</div></main>
+        <main className="app-main" id="contenido" tabIndex={-1}><div className="app-wrap">{body}</div></main>
       </div>
       <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>
       {drawerAbierto && <div className="scrim" onClick={() => { setConsoleOpen(false); setHistorialOpen(false) }} />}

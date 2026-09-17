@@ -161,7 +161,9 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
   return (
     <div className="crates">
-      <aside className="crates-aside">
+      {/* Nombre propio: el rail lateral ya es "Mis playlists" y dos regiones con el mismo nombre
+          no se distinguen en la lista de regiones del lector de pantalla. */}
+      <aside className="crates-aside" aria-label="Elegir playlist">
         <div className="cluster" style={{ padding: 'var(--space-1) var(--space-2)' }}>
           <span className="eyebrow">Mis playlists</span>
           <button type="button" className="btn btn-icon-sm push" aria-label="Nueva playlist" title="Nueva playlist" onClick={nueva}><IcoPlus /></button>
