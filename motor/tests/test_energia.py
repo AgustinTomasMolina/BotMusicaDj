@@ -182,7 +182,7 @@ def test_spearman_exige_series_del_mismo_largo():
         spearman([1, 2, 3], [1, 2])
 
 
-def test_peak_seguida_perfecto_da_1_en_el_tramo_ascendente_y_071_en_el_set_entero():
+def test_peak_seguida_perfecto_da_1_en_el_tramo_ascendente_y_072_en_el_set_entero():
     """El caso que motivó el cambio de contrato (spec §4, 2026-09-14).
 
     El set sigue la propia curva 'peak' (energía = objetivo de cada posición), el mejor

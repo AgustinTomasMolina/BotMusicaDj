@@ -179,7 +179,8 @@ def acuerdo_unanime(acuerdo: str) -> bool | None:
     commit (que no tenía el acuerdo), o un track demasiado corto para 3 tramos disjuntos
     (< ~135 s: `tono_consenso` devuelve acuerdo (0, 0) y la etapa A lo escribe vacío). Un
     valor que no tiene la forma "g/t" es un CSV roto y levanta ValueError: adivinarlo sería
-    falsear el subconjunto sobre el que se mide el contrato.
+    falsear el subconjunto sobre el que se mide el contrato. `metricas` lo valida en todos
+    los tracks cruzados, tengan o no referencia de tonalidad.
     """
     texto = (acuerdo or "").strip()
     if not texto:
@@ -215,6 +216,11 @@ def metricas(cruces: list[Cruce]) -> dict:
     co = [1.0 if c.key_compatible == "si" else 0.0 for c in con_ref]
     ts = [c.t_total_s for c in cruces if c.t_total_s > 0]
 
+    # El formato del acuerdo se valida en TODOS los cruces, también en los sin referencia: la
+    # etapa A escribe "g/t" o vacío sin saber del GT, así que un valor roto en un track sin
+    # referencia es el mismo CSV roto, no un caso legítimo que se pueda saltear.
+    for c in cruces:
+        acuerdo_unanime(c.acuerdo)
     unanimidad = [acuerdo_unanime(c.acuerdo) for c in con_ref]
     hay_consenso = any(u is not None for u in unanimidad)
     unanimes = [c for c, u in zip(con_ref, unanimidad, strict=True) if u]
@@ -420,7 +426,7 @@ def informe(res: dict) -> None:
         elif f.umbral.a_calibrar:
             estado, val = "~ sin veredicto", f"{f.valor:.2f}{f.umbral.unidad}"
         else:
-            estado = "OK ✓" if f.ok else "ROTO ✗"
+            estado = {True: "OK ✓", False: "ROTO ✗", None: "· no definido (nan)"}[f.ok]
             val = f"{f.valor:.2f}{f.umbral.unidad}"
         extra_cob = ""
         if f.umbral.clave.startswith("tonalidad_") and e["hay_consenso"]:

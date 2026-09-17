@@ -64,7 +64,9 @@ class Playlist(Base):
 
 
 class Descarga(Base):
-    __tablename__ = "descargas_hist"  # no chocar con la 'descargas' de database.py (dead)
+    # El nombre evitaba chocar con la tabla 'descargas' del database.py del bot de Discord
+    # (ya borrado). Se conserva para no romper las DBs SQLite existentes.
+    __tablename__ = "descargas_hist"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     titulo: Mapped[str] = mapped_column(String(400), default="")

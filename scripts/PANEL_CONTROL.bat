@@ -18,26 +18,22 @@ echo.
 echo   1. Instalacion completa (primera vez)
 echo   2. Servidor web + navegador  (http://localhost:8000)
 echo   3. Solo la API REST          (uvicorn server:app)
-echo   4. Discord Bot
-echo   5. Demo interactivo
-echo   6. Ejecutar pruebas
-echo   7. Recompilar el frontend
-echo   8. Abrir la carpeta de descargas
-echo   9. Ver la documentacion (README)
+echo   4. Ejecutar pruebas
+echo   5. Recompilar el frontend
+echo   6. Abrir la carpeta de descargas
+echo   7. Ver la documentacion (README)
 echo   0. Salir
 echo.
 set "opcion="
-set /p opcion="Elegi una opcion (0-9): "
+set /p opcion="Elegi una opcion (0-7): "
 
 if "%opcion%"=="1" goto install
 if "%opcion%"=="2" goto web
 if "%opcion%"=="3" goto api
-if "%opcion%"=="4" goto discord
-if "%opcion%"=="5" goto demo
-if "%opcion%"=="6" goto tests
-if "%opcion%"=="7" goto frontend
-if "%opcion%"=="8" goto downloads
-if "%opcion%"=="9" goto docs
+if "%opcion%"=="4" goto tests
+if "%opcion%"=="5" goto frontend
+if "%opcion%"=="6" goto downloads
+if "%opcion%"=="7" goto docs
 if "%opcion%"=="0" goto salir
 goto menu
 
@@ -54,16 +50,6 @@ goto menu
 :api
 cls
 call "%AQUI%iniciar_api.bat"
-goto menu
-
-:discord
-cls
-call "%AQUI%iniciar_discord_bot.bat"
-goto menu
-
-:demo
-cls
-call "%AQUI%demo.bat"
 goto menu
 
 :tests

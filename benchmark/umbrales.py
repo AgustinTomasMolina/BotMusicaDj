@@ -19,6 +19,7 @@ número y se borra ``calibrar`` — y desde ahí bloquea como cualquier otra. `U
 rechaza las dos combinaciones inconsistentes (número y ``calibrar`` a la vez, o ninguno),
 así una calibración a medias no pasa en silencio.
 """
+import math
 from dataclasses import dataclass
 
 
@@ -88,14 +89,30 @@ class Fila:
     ok: bool | None          # None = sin medir, o umbral a calibrar (no hay contra qué)
 
 
+def no_definido(valor) -> bool:
+    """¿La métrica vino medida pero sin valor definido (nan)?
+
+    `ascending_spearman` devuelve nan legítimamente (curva flat, menos de 2 puntos, energía
+    constante). Eso no es un umbral roto: es una métrica que no se pudo medir."""
+    if valor is None:
+        return False
+    try:
+        return math.isnan(float(valor))
+    except (TypeError, ValueError):
+        return False
+
+
 def evaluar(metricas: dict) -> list[Fila]:
     """Compara un dict {clave: valor} contra los umbrales. Las métricas ausentes
-    quedan como 'sin medir' (ok=None), no como cumplidas. Las de umbral a calibrar
-    llevan su valor pero ok=None: no hay límite contra el cual compararlas."""
+    quedan como 'sin medir' (ok=None), no como cumplidas. Un nan también queda como 'sin
+    medir' (ok=None, con el nan en `valor`): comparar nan da False y lo reportaba como roto.
+    Las de umbral a calibrar llevan su valor pero ok=None: no hay límite contra el cual
+    compararlas."""
     filas = []
     for u in UMBRALES:
         v = metricas.get(u.clave)
-        ok = None if v is None or u.a_calibrar else _cumple(float(v), u.op, u.limite)
+        sin_veredicto = v is None or no_definido(v) or u.a_calibrar
+        ok = None if sin_veredicto else _cumple(float(v), u.op, u.limite)
         filas.append(Fila(u, v, ok))
     return filas
 
