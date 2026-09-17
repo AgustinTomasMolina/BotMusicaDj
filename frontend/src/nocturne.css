@@ -837,9 +837,10 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    (30+44+180+140+52+160+128 + 6 huecos de 12 + 24 de padding; medido: a 830 no se corta nada).
    Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
    desaparecía hasta ~1360px de viewport. */
-@container main (max-width:829px){.results{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
+@container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.trk>.trk-meta{display:none}}
 /* Crate: su fila de escritorio pide ~712px y la lista de crates al lado se come 280, así que
-   su corte queda en 1068. Va después del de .results para ganarle (.results-crate también es .results). */
+   su corte queda en 1068. El bloque de 829 excluye .results-crate con :not(), así el crate no
+   depende del orden de estos dos bloques en el archivo. */
 @container main (max-width:1068px){.results-crate{--trk-cols:26px 44px minmax(0,1fr) 52px 112px 72px /* @kind other */}.results-crate .trk>.trk-meta{display:none}}
 /* The crate view drops to one column before its row runs out of room. */
 @container main (max-width:968px){.crates{grid-template-columns:minmax(0,1fr)}.crates-aside{position:static}}
