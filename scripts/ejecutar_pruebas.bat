@@ -11,7 +11,7 @@ echo ============================================================
 echo.
 
 echo Instalando dependencias si hace falta...
-%PY% -m pip install -r requirements.txt -q
+%PY% -m pip install -r requirements-dev.txt -q
 
 echo.
 echo Tests del motor (motor\tests, via pytest)...
