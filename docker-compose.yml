@@ -35,10 +35,14 @@ services:
       # (motor/store.py); la música va `:ro` porque el proyecto nunca escribe el audio
       # original — es la regla, no una precaución.
       #
-      # DJRADIO_MUSICA_EN_CONTENEDOR es dónde se monta la música: la base guarda rutas
-      # ABSOLUTAS del scan, así que para poder reproducir tiene que montarse en la misma
-      # ruta con la que se escaneó. Si no coincide, la radio arma el set igual y el preview
-      # contesta 404 diciendo que el archivo no está en esta máquina.
+      # DJRADIO_MUSICA_EN_CONTENEDOR es dónde se monta la música. La base guarda rutas
+      # ABSOLUTAS del scan y el audio se sirve desde ellas: con una base escaneada en
+      # WINDOWS, adentro (Linux) esas rutas son `C:\...` y no existen ni se pueden montar,
+      # así que el set se arma bien pero NINGÚN preview funciona. No hay traducción de
+      # rutas: se re-escanea una vez desde adentro y la base queda con rutas de Linux —
+      #   docker compose exec web python -m motor scan /musica --licencia ... --origen ...
+      # (librosa está en la imagen y /djradio va con escritura, por eso se puede).
+      # Escaneando en Linux/WSL no hace falta: se monta en la misma ruta del scan.
       - ${DJRADIO_DB_DIR:-djradio-sin-configurar}:/djradio
       - ${DJRADIO_MUSICA:-djradio-sin-configurar}:${DJRADIO_MUSICA_EN_CONTENEDOR:-/musica}:ro
     depends_on:

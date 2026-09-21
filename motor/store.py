@@ -134,11 +134,25 @@ def _opcional(valor: object) -> float | None:
 class Store:
     """Caché de análisis + biblioteca en memoria para la búsqueda vectorial."""
 
-    def __init__(self, db_path: Path | str = "djradio.sqlite") -> None:
+    def __init__(self, db_path: Path | str = "djradio.sqlite", *,
+                 espera_bloqueo_s: float | None = None) -> None:
+        """`espera_bloqueo_s`: cuánto esperar a que otro proceso suelte la base antes de
+        rendirse. Sin pasarlo vale `ESPERA_BLOQUEO_S`, que es lo que quiere la CLI (esperar
+        30 s a que termine un scan es lo correcto en la terminal). Quien atiende pedidos
+        interactivos lo baja: una pantalla congelada medio minuto no es "paciente", es una
+        pantalla colgada (`server.py`, la radio).
+
+        El default es `None` y no `ESPERA_BLOQUEO_S` a propósito: un default en la firma se
+        evalúa al DEFINIR la función, así que `monkeypatch.setattr(store, "ESPERA_BLOQUEO_S",
+        0.2)` dejaría de tener efecto — y eso es lo que usa
+        `test_base_tomada_por_otra_instancia_es_error_de_uso` para no tardar 30 s. Leerlo
+        acá adentro lo resuelve en cada llamada.
+        """
         self.db_path = Path(db_path)
         if str(self.db_path.parent) not in ("", "."):
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._con = sqlite3.connect(str(self.db_path), timeout=ESPERA_BLOQUEO_S)
+        espera = ESPERA_BLOQUEO_S if espera_bloqueo_s is None else espera_bloqueo_s
+        self._con = sqlite3.connect(str(self.db_path), timeout=espera)
         self._con.row_factory = sqlite3.Row
         try:
             self._preparar_esquema()

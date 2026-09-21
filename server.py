@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Set
@@ -1105,6 +1106,17 @@ async def audio(track_id: str):
 # puede tirar un 500 ni, peor, devolver un set inventado.
 _RADIO_OK, _RADIO_SIN_MOTOR, _RADIO_SIN_BASE = "ok", "sin-motor", "sin-base"
 _RADIO_VACIA, _RADIO_ESQUEMA, _RADIO_ILEGIBLE = "base-vacia", "esquema-incompatible", "base-ilegible"
+_RADIO_OCUPADA = "base-ocupada"
+
+# Cuánto espera la API a que otro proceso suelte la base. La CLI espera
+# `store.ESPERA_BLOQUEO_S` (30 s) porque ahí esperar a que termine un scan es lo correcto;
+# una pantalla no puede quedarse congelada medio minuto por un GET. Se prefiere contestar
+# "la base está ocupada, reintentá" enseguida (hallazgo BAJA-1 de la auditoría).
+_RADIO_ESPERA_S = 2.0
+
+# Cada cuánto, como mucho, un id desconocido puede hacer recargar la biblioteca entera.
+# Sin esto, pedir ids inventados en loop hace un `load_library()` por pedido.
+_RADIO_RECARGA_MIN_S = 5.0
 
 # Cuáles cuentan como NO configurada: los dos casos en los que no hay nada que el usuario
 # haya apuntado todavía. Con la base vacía o ilegible SÍ configuró algo, y el motivo dice qué
@@ -1112,6 +1124,7 @@ _RADIO_VACIA, _RADIO_ESQUEMA, _RADIO_ILEGIBLE = "base-vacia", "esquema-incompati
 _RADIO_SIN_CONFIGURAR = (_RADIO_SIN_MOTOR, _RADIO_SIN_BASE)
 
 _radio_audio: dict[str, str] = {}        # id opaco → ruta real (para /api/radio/audio)
+_radio_recarga_ts: float = 0.0           # cuándo se recargó por última vez (ver _RADIO_RECARGA_MIN_S)
 
 
 def _radio_id(path) -> str:
@@ -1141,7 +1154,7 @@ def _num(valor) -> float | None:
 def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
     """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
     try:
-        from motor.cli import db_por_defecto
+        from motor.cli import db_por_defecto, esta_bloqueada
         from motor.store import EsquemaIncompatible, Store
     except ImportError as e:
         logger.warning(f"⚠️ Radio: falta el paquete motor ({e}); la radio queda desactivada.")
@@ -1156,12 +1169,25 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
             f"`python -m motor scan <carpeta> --licencia ... --origen ...`, o apuntá "
             f"DJRADIO_DB a la base que ya tengas.")
     try:
-        with Store(db) as store:
+        # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
+        with Store(db, espera_bloqueo_s=_RADIO_ESPERA_S) as store:
             biblioteca = store.load_library()
     except EsquemaIncompatible as e:
         return [], _RADIO_ESQUEMA, str(e)
+    except sqlite3.OperationalError as e:
+        # "Ocupada" se separa de "ilegible" con la MISMA condición que la CLI
+        # (`cli.esta_bloqueada`): no es una base rota, es que hay un scan corriendo, y se
+        # arregla esperando. Con el motivo crudo de SQLite ("database is locked") en
+        # pantalla, el DJ no tiene forma de saber que lo único que tiene que hacer es
+        # reintentar en un rato.
+        if not esta_bloqueada(e):
+            logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
+            return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return [], _RADIO_OCUPADA, (
+            f"La biblioteca del motor ({db}) está ocupada: hay un scan u otra instancia "
+            f"usándola (se esperó {_RADIO_ESPERA_S:g} s). Reintentá en un rato.")
     except (sqlite3.Error, ValueError) as e:
-        # sqlite3.Error: la base está tomada por otro proceso, no es SQLite o está corrupta.
+        # sqlite3.Error: la base no es SQLite o está corrupta.
         # ValueError: una fila sin licencia/origen o con un BPM infinito — `Track` la rechaza
         # al construirla y se lleva puesta la biblioteca entera. Ninguna de las dos es un bug
         # del server, y las dos son arreglables sabiendo qué base se está leyendo.
@@ -1181,9 +1207,10 @@ def _cargar_radio() -> tuple[list, str, str | None]:
     última carga buena, /api/radio/audio seguiría sirviendo archivos de una base que ya no
     es la configurada.
     """
-    global _radio_audio
+    global _radio_audio, _radio_recarga_ts
     tracks, estado, motivo = _leer_biblioteca_motor()
     _radio_audio = {_radio_id(t.path): str(t.path) for t in tracks}
+    _radio_recarga_ts = time.monotonic()
     return tracks, estado, motivo
 
 
@@ -1311,8 +1338,14 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
     por_id = {_radio_id(t.path): t for t in tracks}
     try:
         # El id primero: es lo que manda el front. Si no es un id, se resuelve con la MISMA
-        # función que la CLI, que acepta ruta o fragmento y se niega a elegir entre homónimos.
-        elegida = por_id.get(track) or resolver_track(track, tracks)
+        # función que la CLI, que acepta ruta o fragmento y se niega a elegir entre homónimos
+        # — pero con `consultar_disco=False`, porque `track` viene de afuera. Con el default,
+        # `resolver_track` le hace `is_file()` a la cadena del cliente: el endpoint no tiene
+        # CORS y escucha en localhost, así que cualquier página abierta en el navegador podía
+        # usarlo para saber qué archivos existen en la máquina (y, con una ruta UNC, para
+        # provocar un intento SMB saliente). Todo lo que la API mira es la biblioteca que ya
+        # está cargada en memoria.
+        elegida = por_id.get(track) or resolver_track(track, tracks, consultar_disco=False)
     except ErrorDeUso as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -1356,21 +1389,27 @@ async def radio_audio(track_id: str):
     que armó la base, así que no hay forma de pedir un archivo de afuera de la biblioteca.
     """
     ruta = _radio_audio.get(track_id)
-    if ruta is None:
-        # Puede ser un id nuevo (se escaneó algo desde el último pedido): se recarga UNA vez.
+    if ruta is None and (not _radio_audio
+                         or time.monotonic() - _radio_recarga_ts >= _RADIO_RECARGA_MIN_S):
+        # Puede ser un id nuevo (se escaneó algo desde el último pedido). Acotado: sin el
+        # mínimo entre recargas, una tanda de ids desconocidos hace un `load_library()` por
+        # pedido. Con el índice vacío se recarga igual — ahí no hay nada que proteger.
         await asyncio.to_thread(_cargar_radio)
-        ruta = _radio_audio.get(track_id)
-    if ruta is None:
         ruta = _radio_audio.get(track_id)
     if ruta is None:
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
     if not Path(ruta).exists():
-        # Distinto de "no encontrado" a propósito (§6): el track está en la base y el archivo
-        # no está donde lo dejó el scan — se movió, o la base se está leyendo en otra máquina
-        # (Docker) donde esa ruta no existe. Con un 404 mudo el DJ no puede saber cuál es.
+        # Distinto de "no encontrado" a propósito (§6): el track SÍ está en la base y el
+        # archivo no está donde lo dejó el scan. El caso más común no es que se haya movido:
+        # es Docker con una base escaneada en Windows, donde las rutas guardadas son `C:\...`
+        # y adentro del contenedor no existen ni pueden existir. El mensaje dice las dos
+        # cosas en una línea porque es lo único que se ve en pantalla.
         return JSONResponse(
-            {"error": "el archivo de este track no está donde lo dejó el scan (se movió, o "
-                      "esta máquina no ve esa carpeta)"}, status_code=404)
+            {"error": f"el archivo de este track no está en esta máquina: la base lo tiene "
+                      f"en {ruta}. Se movió, o la base se escaneó en otro sistema (típico en "
+                      f"Docker con una base de Windows): re-escaneá la música desde adentro "
+                      f"con `docker compose exec web python -m motor scan /musica "
+                      f"--licencia ... --origen ...`."}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
 
 

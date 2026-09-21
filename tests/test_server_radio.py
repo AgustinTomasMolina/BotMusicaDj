@@ -16,7 +16,9 @@ Dos aclaraciones sobre los datos, porque parecen chocar con reglas del proyecto:
   duración de la BASE, que es lo que se está probando.
 """
 import importlib
+import json
 import math
+import os
 import struct
 import sys
 import wave
@@ -185,6 +187,32 @@ def test_radio_base_vacia_dice_que_escanear(client, tmp_path, monkeypatch):
     assert "scan" in d["motivo"], f"no dice cómo llenarla: {d['motivo']}"
 
 
+def test_radio_base_ocupada_no_congela_la_pantalla(server, client, biblioteca, monkeypatch):
+    """Con un scan corriendo, la base está tomada. La CLI espera 30 s porque ahí esperar es
+    lo correcto; un GET no puede colgar la pantalla medio minuto, y "database is locked" en
+    crudo no le dice al DJ que lo único que tiene que hacer es reintentar."""
+    import sqlite3
+    import time as reloj
+
+    from motor.store import ESPERA_BLOQUEO_S
+
+    otro = sqlite3.connect(str(biblioteca["db"]), timeout=0.1)
+    otro.execute("BEGIN EXCLUSIVE")          # como un scan a mitad de camino
+    try:
+        t0 = reloj.monotonic()
+        d = client.get("/api/radio/biblioteca").json()
+        tardo = reloj.monotonic() - t0
+    finally:
+        otro.rollback()
+        otro.close()
+
+    assert d["estado"] == "base-ocupada", f"la clasificó mal: {d['estado']} / {d['motivo']}"
+    assert "ocupada" in d["motivo"] and "eintentá" in d["motivo"], d["motivo"]
+    assert "locked" not in d["motivo"], f"el motivo es el crudo de SQLite: {d['motivo']}"
+    assert tardo < ESPERA_BLOQUEO_S / 2, \
+        f"esperó {tardo:.1f} s: está usando la espera de la CLI ({ESPERA_BLOQUEO_S:g} s)"
+
+
 def test_radio_base_ilegible_degrada_sin_500(client, tmp_path, monkeypatch, caplog):
     """Un archivo que no es SQLite (un .sqlite a medio copiar, por ejemplo)."""
     db = tmp_path / "rota.sqlite"
@@ -332,6 +360,75 @@ def test_set_rechaza_una_semilla_que_no_es_un_track(server, client, biblioteca):
     assert "10.0 s" in d["error"], "no dice cuánto dura el archivo"
 
 
+def test_set_resuelve_la_semilla_por_su_ruta_real(client, biblioteca):
+    """Pasar la ruta del archivo tiene que seguir funcionando (es la forma que usa la CLI),
+    aunque la API no consulte el disco para resolverla."""
+    ruta = biblioteca["rutas"]["uno.wav"]
+    formas = [str(ruta), str(ruta).replace("\\", "/")]
+    if os.name == "nt":
+        formas.append(str(ruta).upper())   # en Windows la caja no cambia de qué track hablás
+    for forma in formas:
+        r = client.get("/api/radio/set", params={"track": forma, "largo": 2})
+        assert r.status_code == 200, f"la ruta {forma!r} no resolvió: {r.json()}"
+        assert r.json()["semilla"]["label"] == "Artista A — Uno", \
+            f"la ruta {forma!r} resolvió a otro track: {r.json()['semilla']}"
+
+
+def test_set_no_toca_el_disco_con_la_ruta_que_le_manden(server, client, biblioteca, monkeypatch):
+    """`track` viene de afuera: el endpoint no tiene CORS y escucha en localhost, así que
+    cualquier página abierta en el navegador puede disparar este GET.
+
+    Dos cosas que no pueden pasar, y las dos se verifican por separado:
+
+    1. Que la respuesta distinga un archivo que EXISTE en el host de uno que no: eso es un
+       oráculo de existencia de archivos, servido a quien sea.
+    2. Que el server le pegue al filesystem con esa cadena. Con una UNC (`\\\\host\\share\\x`)
+       un `stat` en Windows es un intento de conexión SMB saliente, o sea que la página de
+       enfrente elige a qué host se conecta el server.
+    """
+    # Las sondas se arman ANTES de poner los espías: `Path.resolve()` también le pega al
+    # disco, y si no, el test se acusa a sí mismo.
+    existe = str(Path(server.__file__).resolve())          # un archivo que SÍ está en el host
+    no_existe = str(Path(existe).parent / "no-existe-zz.ini")
+    unc = r"\\127.0.0.1\share\x.wav"
+    assert Path(existe).is_file() and not Path(no_existe).exists(), \
+        "las sondas no son lo que el test cree: una tiene que existir y la otra no"
+
+    espiados: list[str] = []
+    is_file_real, stat_real = Path.is_file, os.stat
+
+    def espiar_is_file(self, *a, **k):
+        espiados.append(str(self))
+        return is_file_real(self, *a, **k)
+
+    def espiar_stat(ruta, *a, **k):
+        espiados.append(str(ruta))
+        return stat_real(ruta, *a, **k)
+
+    monkeypatch.setattr(Path, "is_file", espiar_is_file)
+    monkeypatch.setattr(os, "stat", espiar_stat)
+
+    errores = {}
+    for sonda in (existe, no_existe, unc):
+        r = client.get("/api/radio/set", params={"track": sonda})
+        assert r.status_code == 400, f"{sonda!r} no tenía que resolver a nada"
+        errores[sonda] = r.json()["error"]
+        assert any(m in errores[sonda] for m in ("Ningún track", "no elijo uno")), \
+            f"{sonda!r} contestó algo que habla del disco: {errores[sonda]}"
+
+    def sin_la_sonda(mensaje: str, sonda: str) -> str:
+        """El mensaje sin la ruta que se preguntó, en crudo o escapada por `!r`."""
+        return mensaje.replace(repr(sonda), "<sonda>").replace(sonda, "<sonda>")
+
+    assert sin_la_sonda(errores[existe], existe) == sin_la_sonda(errores[no_existe], no_existe), \
+        ("la respuesta distingue un archivo que existe de uno que no: eso es un oráculo de "
+         f"existencia\n  existe:    {errores[existe]}\n  no existe: {errores[no_existe]}")
+
+    for sonda in (existe, no_existe, unc):
+        tocados = [p for p in espiados if sonda.casefold() in p.casefold()]
+        assert not tocados, f"el server le pegó al disco con {sonda!r}: {tocados}"
+
+
 def test_set_con_semilla_inexistente_o_ausente_no_inventa_una(client, biblioteca):
     r = client.get("/api/radio/set", params={"track": "no-esta-en-la-base"})
     assert r.status_code == 400
@@ -388,6 +485,52 @@ def test_audio_de_un_archivo_movido_no_se_confunde_con_un_id_invalido(server, cl
     assert r.status_code == 404
     assert r.json()["error"] != "track no encontrado"
     assert "scan" in r.json()["error"], r.json()
+
+
+def test_audio_deja_de_servir_un_id_de_una_base_que_ya_no_esta(server, client, biblioteca,
+                                                               tmp_path, monkeypatch):
+    """Si la carga de la biblioteca FALLA, el índice id→ruta se reemplaza igual (queda
+    vacío). Si no, el server seguiría sirviendo audio de una base que ya no es la
+    configurada: los archivos siguen en disco, así que el `exists()` no salva nada.
+    """
+    tid = server._radio_id(biblioteca["rutas"]["uno.wav"])
+    assert client.get(f"/api/radio/audio/{tid}").status_code == 200, "no cargó el índice"
+
+    # La base configurada desaparece (o DJRADIO_DB pasa a apuntar a otra cosa).
+    monkeypatch.setenv("DJRADIO_DB", str(tmp_path / "otra" / "biblioteca.sqlite"))
+    assert client.get("/api/radio/biblioteca").json()["estado"] == "sin-base"
+
+    assert biblioteca["rutas"]["uno.wav"].exists(), "el archivo sigue en disco: ese no es el filtro"
+    r = client.get(f"/api/radio/audio/{tid}")
+    assert r.status_code == 404, "sirvió audio de una base que ya no está configurada"
+    assert r.json() == {"error": "track no encontrado"}
+
+
+def test_un_valor_no_finito_viaja_como_null_y_no_como_NaN(server, biblioteca):
+    """`json.dumps` escribe `NaN`/`Infinity`, que son JSON inválido: `JSON.parse` en el
+    front explota con la respuesta entera. Y §6 pide el dato ausente antes que el que
+    miente — `bpm_delta_pct` es NaN justo cuando el BPM no se pudo medir.
+
+    Se prueba sobre el serializador, no solo sobre `_num`: `build_set` hoy no produce una
+    transición con NaN (la compuerta de ±8% saca a los de BPM inválido antes), así que el
+    caso no aparece armando un set, pero la forma del dato sí puede llegar de ahí.
+    """
+    from motor.radio import SetStep, Transition
+
+    t = _tracks_del_motor(biblioteca["db"])["uno.wav"]
+    tr = Transition(from_bpm=0.0, to_bpm=128.4, bpm_delta_pct=float("nan"), bpm_octave="",
+                    from_key="8A", to_key="8A", key_relation="mismo", key_compat=1.0,
+                    mixability=float("inf"), musical_fit=0.5, total=float("-inf"),
+                    energy=0.5, energy_goal=0.35)
+    paso = server._radio_paso(1, SetStep(t, tr))
+
+    assert paso["transicion"]["bpm_delta_pct"] is None, "un NaN llegó al JSON como NaN"
+    assert paso["transicion"]["mezclabilidad"] is None, "un inf llegó al JSON como Infinity"
+    assert paso["transicion"]["score"] is None, "un -inf llegó al JSON como -Infinity"
+    assert paso["transicion"]["encaje_musical"] == 0.5, "se comió un número que sí era válido"
+    # Y el JSON resultante tiene que ser JSON de verdad: un parser estricto no acepta NaN.
+    json.loads(json.dumps(paso),
+               parse_constant=lambda c: pytest.fail(f"el JSON trae la constante {c}"))
 
 
 def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, biblioteca):
