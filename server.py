@@ -12,10 +12,14 @@ Abrir:     http://localhost:8000
 """
 
 import asyncio
+import hashlib
 import logging
+import math
 import os
 import re
+import sqlite3
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Set
@@ -1079,6 +1083,333 @@ async def audio(track_id: str):
     ruta = _lib_audio.get(track_id)
     if not ruta or not Path(ruta).exists():
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# --- Radio DJ (motor/): biblioteca del motor, set armado por `motor.radio.build_set` y el
+#     audio de cada paso --------------------------------------------------------------
+# La biblioteca de acá NO es la de arriba: aquella sale del XML de Rekordbox
+# (MUSIFLIX_LIBRARY_*) y esta de la base SQLite del motor, que es la que tiene embeddings,
+# energía en percentil y la confianza de la key. Son dos colecciones distintas, con otras
+# rutas y otros ids, así que la radio tiene sus propios endpoints y no reusa /api/audio.
+#
+# Config por ENTORNO, sin rutas hardcodeadas (#5.16): la base sale de `DJRADIO_DB` y, si no
+# está, de `~/.djradio/biblioteca.sqlite` — vía `motor.cli.db_por_defecto`, o sea la MISMA
+# regla que la CLI. Una segunda variable propia del server haría que `python -m motor radio`
+# y la pantalla web pudieran mirar bases distintas sin que nadie se entere.
+#
+# Se lee en cada pedido y no al importar (a diferencia de _LIB_XML): así un scan nuevo se ve
+# sin reiniciar el server, y en Docker la variable la fija docker-compose.yml.
+#
+# Sin el paquete `motor`, sin base, con la base vacía o de otro esquema: 200 con
+# `configurada: false`/`motivo`, como /api/biblioteca. La radio es una pantalla más: no
+# puede tirar un 500 ni, peor, devolver un set inventado.
+_RADIO_OK, _RADIO_SIN_MOTOR, _RADIO_SIN_BASE = "ok", "sin-motor", "sin-base"
+_RADIO_VACIA, _RADIO_ESQUEMA, _RADIO_ILEGIBLE = "base-vacia", "esquema-incompatible", "base-ilegible"
+_RADIO_OCUPADA = "base-ocupada"
+
+# Cuánto espera la API a que otro proceso suelte la base. La CLI espera
+# `store.ESPERA_BLOQUEO_S` (30 s) porque ahí esperar a que termine un scan es lo correcto;
+# una pantalla no puede quedarse congelada medio minuto por un GET. Se prefiere contestar
+# "la base está ocupada, reintentá" enseguida (hallazgo BAJA-1 de la auditoría).
+_RADIO_ESPERA_S = 2.0
+
+# Cada cuánto, como mucho, un id desconocido puede hacer recargar la biblioteca entera.
+# Sin esto, pedir ids inventados en loop hace un `load_library()` por pedido.
+_RADIO_RECARGA_MIN_S = 5.0
+
+# Cuáles cuentan como NO configurada: los dos casos en los que no hay nada que el usuario
+# haya apuntado todavía. Con la base vacía o ilegible SÍ configuró algo, y el motivo dice qué
+# le pasa (mismo criterio que `_LIB_SIN_CONFIG` / `_LIB_XML_ILEGIBLE` arriba).
+_RADIO_SIN_CONFIGURAR = (_RADIO_SIN_MOTOR, _RADIO_SIN_BASE)
+
+_radio_audio: dict[str, str] = {}        # id opaco → ruta real (para /api/radio/audio)
+_radio_recarga_ts: float = 0.0           # cuándo se recargó por última vez (ver _RADIO_RECARGA_MIN_S)
+
+
+def _radio_id(path) -> str:
+    """Id opaco y estable de un track del motor.
+
+    Hash de la ruta canónica y NO la ruta: el id viaja en la URL de /api/radio/audio, y un
+    id que fuera una ruta convertiría ese endpoint en un lector de archivos arbitrarios. Es
+    estable entre reinicios (mismo archivo → mismo id) para que un enlace no se pudra, y
+    `normcase` lo hace insensible a mayúsculas como el resto del motor en Windows.
+    """
+    return hashlib.sha1(os.path.normcase(str(path)).encode("utf-8")).hexdigest()[:16]
+
+
+def _num(valor) -> float | None:
+    """float listo para JSON, o `None` si no es finito.
+
+    Dos motivos, y los dos importan: `json.dumps` escribe `NaN`/`Infinity`, que son JSON
+    inválido y hacen explotar a `JSON.parse` en el front; y §6 pide un dato ausente antes
+    que uno que miente — `bpm_delta_pct` es NaN justamente cuando el BPM no se pudo medir.
+    """
+    if valor is None:
+        return None
+    v = float(valor)
+    return v if math.isfinite(v) else None
+
+
+def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
+    """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
+    try:
+        from motor.cli import db_por_defecto, esta_bloqueada
+        from motor.store import EsquemaIncompatible, Store
+    except ImportError as e:
+        logger.warning(f"⚠️ Radio: falta el paquete motor ({e}); la radio queda desactivada.")
+        return [], _RADIO_SIN_MOTOR, (
+            "Esta instalación no incluye el motor de radio (motor/), así que la radio está "
+            "desactivada.")
+
+    db = db_por_defecto()
+    if not db.exists():
+        return [], _RADIO_SIN_BASE, (
+            f"No hay biblioteca del motor en {db}. Analizá una carpeta con "
+            f"`python -m motor scan <carpeta> --licencia ... --origen ...`, o apuntá "
+            f"DJRADIO_DB a la base que ya tengas.")
+    try:
+        # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
+        with Store(db, espera_bloqueo_s=_RADIO_ESPERA_S) as store:
+            biblioteca = store.load_library()
+    except EsquemaIncompatible as e:
+        return [], _RADIO_ESQUEMA, str(e)
+    except sqlite3.OperationalError as e:
+        # "Ocupada" se separa de "ilegible" con la MISMA condición que la CLI
+        # (`cli.esta_bloqueada`): no es una base rota, es que hay un scan corriendo, y se
+        # arregla esperando. Con el motivo crudo de SQLite ("database is locked") en
+        # pantalla, el DJ no tiene forma de saber que lo único que tiene que hacer es
+        # reintentar en un rato.
+        if not esta_bloqueada(e):
+            logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
+            return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return [], _RADIO_OCUPADA, (
+            f"La biblioteca del motor ({db}) está ocupada: hay un scan u otra instancia "
+            f"usándola (se esperó {_RADIO_ESPERA_S:g} s). Reintentá en un rato.")
+    except (sqlite3.Error, ValueError) as e:
+        # sqlite3.Error: la base no es SQLite o está corrupta.
+        # ValueError: una fila sin licencia/origen o con un BPM infinito — `Track` la rechaza
+        # al construirla y se lleva puesta la biblioteca entera. Ninguna de las dos es un bug
+        # del server, y las dos son arreglables sabiendo qué base se está leyendo.
+        logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
+        return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+    if not biblioteca:
+        return [], _RADIO_VACIA, (
+            f"La biblioteca del motor ({db}) no tiene ningún track analizado. Corré "
+            f"`python -m motor scan <carpeta> --licencia ... --origen ...`.")
+    return biblioteca, _RADIO_OK, None
+
+
+def _cargar_radio() -> tuple[list, str, str | None]:
+    """Igual que `_leer_biblioteca_motor`, y además deja el índice id→ruta al día.
+
+    El índice se REEMPLAZA siempre, también cuando la carga falla: si quedara el de la
+    última carga buena, /api/radio/audio seguiría sirviendo archivos de una base que ya no
+    es la configurada.
+    """
+    global _radio_audio, _radio_recarga_ts
+    tracks, estado, motivo = _leer_biblioteca_motor()
+    _radio_audio = {_radio_id(t.path): str(t.path) for t in tracks}
+    _radio_recarga_ts = time.monotonic()
+    return tracks, estado, motivo
+
+
+def _radio_track(t) -> dict:
+    """Un track del motor como lo muestra la CLI (§6): BPM con UN decimal, las dos
+    notaciones de key, el `?` de confianza y la energía.
+
+    El `?` sale de `motor.cli.key_dudosa` y la clásica de `motor.tonalidad.camelot_a_clasica`:
+    las mismas funciones que la terminal, no una copia de la regla. `es_track` viaja para que
+    el front pueda avisar antes de pedir el set que ese archivo no sirve de semilla.
+    """
+    from motor.cli import key_dudosa
+    from motor.modelos import es_track
+    from motor.tonalidad import camelot_a_clasica
+
+    clasica = camelot_a_clasica(t.key)
+    tid = _radio_id(t.path)
+    return {
+        "id": tid,
+        "label": t.label,
+        "titulo": t.title or t.path.stem,
+        "artista": t.artist or "",
+        "bpm": round(float(t.bpm), 1),
+        "camelot": t.key or None,
+        # "" = la key no es un código Camelot (silencio, "?"): dato ausente, no un "?" dibujado.
+        "tonalidad": clasica or None,
+        "key_dudosa": key_dudosa(t.key_acuerdo),
+        "energia": round(float(t.energy), 3),      # percentil 0..1 dentro de la biblioteca
+        "dur": round(float(t.duration), 1),
+        "es_track": es_track(t.duration),
+        "audio": f"/api/radio/audio/{tid}",
+    }
+
+
+def _radio_paso(n: int, paso) -> dict:
+    """Un paso del set: el track, el POR QUÉ tal cual lo escribe el motor y los números
+    con los que está hecho.
+
+    `motivo` es `Transition.reason()` sin tocar. Recalcular el porcentaje acá es
+    exactamente lo que el módulo de la radio prohíbe en su punto 2: la pantalla terminaría
+    diciendo "+7.9%" sobre una transición que la compuerta midió en 8.1%.
+    """
+    tr = paso.transition
+    return {
+        "n": n,
+        "track": _radio_track(paso.track),
+        "motivo": tr.reason(),
+        "es_semilla": tr.is_seed,
+        "transicion": {
+            "from_bpm": _num(tr.from_bpm), "to_bpm": _num(tr.to_bpm),
+            "bpm_delta_pct": _num(tr.bpm_delta_pct), "bpm_octava": tr.bpm_octave,
+            "from_key": tr.from_key, "to_key": tr.to_key,
+            "key_relacion": tr.key_relation, "key_compat": _num(tr.key_compat),
+            "mezclabilidad": _num(tr.mixability), "encaje_musical": _num(tr.musical_fit),
+            "score": _num(tr.total),
+            "energia": _num(tr.energy), "energia_objetivo": _num(tr.energy_goal),
+        },
+    }
+
+
+def _radio_envoltura(estado: str, motivo: str | None) -> dict:
+    """Los campos de estado que llevan TODAS las respuestas de la radio, configurada o no,
+    para que el front tenga una sola forma que leer."""
+    return {"configurada": estado not in _RADIO_SIN_CONFIGURAR, "estado": estado,
+            "motivo": motivo}
+
+
+@app.get("/api/radio/biblioteca")
+async def radio_biblioteca():
+    """La biblioteca del motor, para elegir la semilla del set.
+
+    Trae TODO lo que hay en la base, también lo que dura menos de 90 s (marcado con
+    `es_track: false`): es lo mismo que hace `python -m motor list`, y esconderlo haría que
+    el DJ no encuentre un archivo que sabe que escaneó. Lo que no puede es ser semilla.
+    """
+    tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
+    return {**_radio_envoltura(estado, motivo), "total": len(tracks),
+            "tracks": [_radio_track(t) for t in tracks]}
+
+
+@app.get("/api/radio/set")
+async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
+                    artist_gap: int | None = None, mmr_lambda: float | None = None,
+                    semilla: int | None = None, randomness: float | None = None):
+    """Arma un set desde `track` con `motor.radio.build_set`.
+
+    OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
+    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
+    la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
+    `randomness > 0`.
+
+    Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
+    `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
+    desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+    """
+    tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
+    vacio = {**_radio_envoltura(estado, motivo), "config": None, "semilla": None, "pasos": [],
+             "total": 0, "pedidos": None, "completo": False, "corte": None, "fragmentos": 0,
+             "aviso_fragmentos": None, "leyenda_key": None}
+    if estado != _RADIO_OK:
+        return vacio
+
+    from motor.cli import (
+        LEYENDA_KEY,
+        ErrorDeUso,
+        aviso_fragmentos,
+        motivo_semilla_no_track,
+        resolver_track,
+        titular_corte,
+    )
+    from motor.modelos import es_track
+    from motor.radio import RadioConfig, build_set
+
+    pedidos = {"length": largo, "curve": curva, "artist_gap": artist_gap,
+               "mmr_lambda": mmr_lambda, "seed": semilla, "randomness": randomness}
+    try:
+        config = RadioConfig(**{k: v for k, v in pedidos.items() if v is not None})
+    except ValueError as e:      # curva inexistente, largo 0, randomness fuera de 0..1...
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    if not track.strip():
+        return JSONResponse(
+            {"error": "Falta la semilla: pasá `track` con el id, la ruta o un fragmento del "
+                      "nombre (los ids salen de /api/radio/biblioteca)."}, status_code=400)
+    por_id = {_radio_id(t.path): t for t in tracks}
+    try:
+        # El id primero: es lo que manda el front. Si no es un id, se resuelve con la MISMA
+        # función que la CLI, que acepta ruta o fragmento y se niega a elegir entre homónimos
+        # — pero con `consultar_disco=False`, porque `track` viene de afuera. Con el default,
+        # `resolver_track` le hace `is_file()` a la cadena del cliente: el endpoint no tiene
+        # CORS y escucha en localhost, así que cualquier página abierta en el navegador podía
+        # usarlo para saber qué archivos existen en la máquina (y, con una ruta UNC, para
+        # provocar un intento SMB saliente). Todo lo que la API mira es la biblioteca que ya
+        # está cargada en memoria.
+        elegida = por_id.get(track) or resolver_track(track, tracks, consultar_disco=False)
+    except ErrorDeUso as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    # Una semilla que no es un track se rechaza, igual que en la CLI y por el mismo motivo:
+    # todo el set se arma contra su BPM y su key, y en 10 s de audio esos dos valores no son
+    # una medición. El texto sale del motor (`motivo_semilla_no_track`), no de acá.
+    if not es_track(elegida.duration):
+        return JSONResponse({"error": motivo_semilla_no_track(elegida),
+                             "semilla": _radio_track(elegida)}, status_code=400)
+
+    rset = await asyncio.to_thread(build_set, elegida, tracks, config)
+    corte = None if rset.is_complete else {
+        "codigo": rset.stop, "titular": titular_corte(rset.stop), "detalle": rset.stop_detail}
+    return {
+        **_radio_envoltura(estado, motivo),
+        # Lo que efectivamente se usó, leído del propio RadioConfig.
+        "config": {"largo": config.length, "curva": config.curve,
+                   "artist_gap": config.artist_gap, "mmr_lambda": config.mmr_lambda,
+                   "semilla": config.seed, "randomness": config.randomness},
+        "semilla": _radio_track(elegida),
+        "pasos": [_radio_paso(i, p) for i, p in enumerate(rset, 1)],
+        "total": len(rset),
+        "pedidos": config.length,
+        "completo": rset.is_complete,
+        "corte": corte,
+        # Se dice SIEMPRE, como en la CLI: es la resta entre lo que lista la biblioteca y
+        # entre lo que la radio eligió, y sin eso no se explica sola.
+        "fragmentos": rset.fragments,
+        "aviso_fragmentos": (aviso_fragmentos(rset.fragments, "La radio ignoró")
+                             if rset.fragments else None),
+        "leyenda_key": LEYENDA_KEY,
+    }
+
+
+@app.get("/api/radio/audio/{track_id}")
+async def radio_audio(track_id: str):
+    """Sirve el archivo de un track de la biblioteca del motor, para reproducir el set.
+    Solo LEE: nunca escribe ni mueve el original (regla del proyecto).
+
+    El id no es una ruta (`_radio_id`) y lo único que se sirve es lo que está en el índice
+    que armó la base, así que no hay forma de pedir un archivo de afuera de la biblioteca.
+    """
+    ruta = _radio_audio.get(track_id)
+    if ruta is None and (not _radio_audio
+                         or time.monotonic() - _radio_recarga_ts >= _RADIO_RECARGA_MIN_S):
+        # Puede ser un id nuevo (se escaneó algo desde el último pedido). Acotado: sin el
+        # mínimo entre recargas, una tanda de ids desconocidos hace un `load_library()` por
+        # pedido. Con el índice vacío se recarga igual — ahí no hay nada que proteger.
+        await asyncio.to_thread(_cargar_radio)
+        ruta = _radio_audio.get(track_id)
+    if ruta is None:
+        return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    if not Path(ruta).exists():
+        # Distinto de "no encontrado" a propósito (§6): el track SÍ está en la base y el
+        # archivo no está donde lo dejó el scan. El caso más común no es que se haya movido:
+        # es Docker con una base escaneada en Windows, donde las rutas guardadas son `C:\...`
+        # y adentro del contenedor no existen ni pueden existir. El mensaje dice las dos
+        # cosas en una línea porque es lo único que se ve en pantalla.
+        return JSONResponse(
+            {"error": f"el archivo de este track no está en esta máquina: la base lo tiene "
+                      f"en {ruta}. Se movió, o la base se escaneó en otro sistema (típico en "
+                      f"Docker con una base de Windows): re-escaneá la música desde adentro "
+                      f"con `docker compose exec web python -m motor scan /musica "
+                      f"--licencia ... --origen ...`."}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
 
 

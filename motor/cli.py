@@ -141,6 +141,36 @@ def aviso_fragmentos(cuantos: int, encabezado: str) -> str:
             f"(siguen en la biblioteca: `list` e `info` los muestran).")
 
 
+def motivo_semilla_no_track(t: Track) -> str:
+    """Por qué la radio no arma un set desde este archivo: no es un track.
+
+    El texto vive acá, y no adentro de `cmd_radio`, porque la MISMA decisión la toma la API
+    (`server.py`, `/api/radio/set`): la pantalla de radio rechaza la semilla con el mismo
+    criterio (`modelos.es_track`) y tiene que dar el mismo motivo. Dos textos para una sola
+    regla se leen como dos reglas distintas — es el mismo argumento que `aviso_fragmentos`.
+
+    Lo que NO va acá es el consejo de cómo elegir otra semilla: `djradio list` es una
+    instrucción de terminal y en una pantalla web no significa nada. Cada frontend agrega
+    el suyo; `cmd_radio` agrega el de la CLI.
+    """
+    return (f"{t.label} dura {t.duration:.1f} s y la radio necesita al menos "
+            f"{DURACION_MINIMA_TRACK_S:.0f} s: es un loop, un sample o una nota de voz, no "
+            f"un track. Su BPM y su key no son datos confiables, y el set entero se arma "
+            f"contra ellos.")
+
+
+def esta_bloqueada(e: Exception) -> bool:
+    """¿Este `sqlite3.OperationalError` es "otro proceso tiene la base tomada"?
+
+    Sale de `_abrir_store` para que la API pueda clasificar igual sin copiar la condición:
+    dos lugares decidiendo con dos listas de palabras distintas es cómo un "database is
+    locked" termina reportado como base corrupta en una pantalla y como "hay otra
+    instancia" en la terminal.
+    """
+    texto = str(e)
+    return "locked" in texto or "busy" in texto
+
+
 def _abrir_store(db: Path):
     """`Store(db)`, con una base de esquema desconocido o bloqueada convertida en error de uso.
 
@@ -162,7 +192,7 @@ def _abrir_store(db: Path):
     except EsquemaIncompatible as e:
         raise ErrorDeUso(str(e)) from e
     except sqlite3.OperationalError as e:
-        if "locked" not in str(e) and "busy" not in str(e):
+        if not esta_bloqueada(e):
             raise
         raise ErrorDeUso(
             f"La base {db} está ocupada: otra instancia de djradio la está usando o migrando "
@@ -188,16 +218,41 @@ def _abrir_existente(db: Path):
     return store
 
 
-def resolver_track(consulta: str, biblioteca: list[Track]) -> Track:
+def clave_lexica(ruta: Path | str) -> str:
+    """Clave para comparar dos rutas SIN tocar el disco: absoluta, normalizada y `normcase`.
+
+    `_clave` (con `Path.resolve()`) no sirve para esto: `resolve()` sigue symlinks, o sea
+    que le pega al filesystem con la cadena que le den. Acá todo es manipulación de texto —
+    `join` con el directorio de trabajo (que deja las absolutas como están), `normpath` y
+    `normcase` —, así que una ruta arbitraria, inexistente o una UNC no produce ni un
+    `stat`. Ver `resolver_track(consultar_disco=False)` para por qué importa.
+    """
+    return os.path.normcase(os.path.normpath(os.path.join(os.getcwd(), str(ruta))))
+
+
+def resolver_track(consulta: str, biblioteca: list[Track], *,
+                   consultar_disco: bool = True) -> Track:
     """Ruta exacta, o fragmento del nombre que coincida con UN solo track.
 
     Ambiguo → `ErrorDeUso` con TODOS los candidatos. No hay "el primero" ni "el más
     parecido": ver el docstring del módulo.
+
+    `consultar_disco=False` para quien recibe la consulta de AFUERA — la API
+    (`server.py`, `/api/radio/set`). Con el default, esta función le hace `is_file()` a la
+    cadena que le pasen: en la terminal eso es inocuo (la escribe el dueño de la máquina),
+    pero por HTTP convierte el endpoint en un oráculo de qué archivos existen en el host
+    ("existe pero no está en la base" vs "ningún track coincide") y, con una UNC
+    (`\\\\host\\share\\x`), en un `stat` que sale por SMB. El endpoint no tiene CORS y
+    escucha en localhost: cualquier página abierta en el navegador puede disparar ese GET.
+
+    Sin disco, una ruta se resuelve igual mientras esté EN la biblioteca (se compara con
+    `clave_lexica` contra las rutas ya guardadas); lo que no se puede es preguntar por una
+    que no está, que es justamente lo que había que sacar.
     """
     # `is_file` y no `exists`: con una carpeta `crate/` en el directorio de trabajo,
     # `info crate` se tomaba como ruta y contestaba "existe pero no está en la base" en vez
     # de buscar el fragmento. Un track es siempre un archivo.
-    if Path(consulta).is_file():
+    if consultar_disco and Path(consulta).is_file():
         clave = os.path.normcase(_clave(consulta))
         for t in biblioteca:
             if os.path.normcase(str(t.path)) == clave:
@@ -206,6 +261,13 @@ def resolver_track(consulta: str, biblioteca: list[Track]) -> Track:
             f"{consulta} existe pero no está en la base.\n"
             f"  Analizalo con: python -m motor scan <carpeta que lo contiene> "
             f"--licencia ... --origen ...")
+    if not consultar_disco:
+        clave = clave_lexica(consulta)
+        for t in biblioteca:
+            if clave_lexica(t.path) == clave:
+                return t
+        # Sin coincidencia NO se dice nada sobre el disco: sigue por fragmento, y si tampoco
+        # hay, el error es el mismo para una ruta que existe y para una que no.
 
     frag = consulta.casefold()
     candidatos = [t for t in biblioteca
@@ -576,11 +638,8 @@ def cmd_radio(args: argparse.Namespace) -> int:
     # alguien se lo pide a propósito (ver `test_la_semilla_corta_arma_set_igual`).
     if not es_track(semilla.duration):
         raise ErrorDeUso(
-            f"{semilla.label} dura {semilla.duration:.1f} s y la radio necesita al menos "
-            f"{DURACION_MINIMA_TRACK_S:.0f} s: es un loop, un sample o una nota de voz, no "
-            f"un track. Su BPM y su key no son datos confiables, y el set entero se arma "
-            f"contra ellos.\n  Elegí una semilla con `djradio list` (o `python -m motor "
-            f"list`), que muestra toda la biblioteca.")
+            f"{motivo_semilla_no_track(semilla)}\n  Elegí una semilla con `djradio list` "
+            f"(o `python -m motor list`), que muestra toda la biblioteca.")
 
     rset = build_set(semilla, biblioteca, config)
     print(f"Set desde: {semilla.label}  (curva {config.curve}, semilla {config.seed}, "

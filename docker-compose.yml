@@ -19,8 +19,32 @@ services:
       MUSIFLIX_DATA_DIR: /data
       MUSIFLIX_DOWNLOADS: /data/downloads
       REDIS_URL: redis://cache:6379/0
+      # Radio (/api/radio/*): la base del motor SIEMPRE se busca acá adentro. Qué se monta
+      # en /djradio lo decide DJRADIO_DB_DIR (abajo); sin esa variable no hay base y la
+      # radio contesta "sin configurar" — el resto de la web no se entera.
+      DJRADIO_DB: /djradio/biblioteca.sqlite
     volumes:
       - musiflix-data:/data
+      # --- Radio: base del motor + música. Las dos OPCIONALES -------------------------
+      # Sin las variables se monta el volumen vacío `djradio-sin-configurar`, así el stack
+      # levanta igual (quien no usa la radio no configura nada). Con ellas, cada una es una
+      # carpeta del host: DJRADIO_DB_DIR la que tiene `biblioteca.sqlite`, DJRADIO_MUSICA la
+      # de los audios. Rutas con / y absolutas, también en Windows (ver .env.example).
+      #
+      # La base va con ESCRITURA porque el store migra el esquema al abrir una base vieja
+      # (motor/store.py); la música va `:ro` porque el proyecto nunca escribe el audio
+      # original — es la regla, no una precaución.
+      #
+      # DJRADIO_MUSICA_EN_CONTENEDOR es dónde se monta la música. La base guarda rutas
+      # ABSOLUTAS del scan y el audio se sirve desde ellas: con una base escaneada en
+      # WINDOWS, adentro (Linux) esas rutas son `C:\...` y no existen ni se pueden montar,
+      # así que el set se arma bien pero NINGÚN preview funciona. No hay traducción de
+      # rutas: se re-escanea una vez desde adentro y la base queda con rutas de Linux —
+      #   docker compose exec web python -m motor scan /musica --licencia ... --origen ...
+      # (librosa está en la imagen y /djradio va con escritura, por eso se puede).
+      # Escaneando en Linux/WSL no hace falta: se monta en la misma ruta del scan.
+      - ${DJRADIO_DB_DIR:-djradio-sin-configurar}:/djradio
+      - ${DJRADIO_MUSICA:-djradio-sin-configurar}:${DJRADIO_MUSICA_EN_CONTENEDOR:-/musica}:ro
     depends_on:
       cache:
         condition: service_healthy
@@ -85,6 +109,11 @@ services:
 volumes:
   musiflix-data:
   redisdata:
+  # Volumen VACÍO a propósito: es el default de los montajes de la radio cuando
+  # DJRADIO_DB_DIR / DJRADIO_MUSICA no están definidas. Un volumen nombrado siempre existe
+  # (una ruta del host inventada, no: Docker la crearía como carpeta vacía en la máquina del
+  # usuario), así que el stack levanta sin ninguna variable y la radio queda "sin base".
+  djradio-sin-configurar:
   # pgdata:
 
 networks:

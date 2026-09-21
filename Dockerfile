@@ -39,6 +39,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Código de la app y el front ya buildeado
 COPY --chown=app:app *.py ./
 COPY --chown=app:app web ./web
+
+# El motor de radio (/api/radio/*). Estos tres paquetes son el CIERRE de imports real, no
+# una lista a ojo: `motor` importa `calidad.tags` (EXTS, leer_tags) y, perezosamente,
+# `benchmark.evaluar` (la regla del `?` de la key) y `benchmark.umbrales` (los números de
+# §4); `benchmark.evaluar` cierra sobre `benchmark.clasificacion` y `motor.tonalidad`, que
+# ya están acá. `ground_truth/` y `pipeline/` NO entran: nada de esto los importa.
+# Dependencias: ninguna nueva — numpy (lo único que se importa al levantar) y librosa,
+# soundfile y mutagen (solo para `scan`, que la API no hace) ya están en requirements.txt.
+# Los tests de cada paquete quedan afuera por .dockerignore.
+COPY --chown=app:app motor ./motor
+COPY --chown=app:app calidad ./calidad
+COPY --chown=app:app benchmark ./benchmark
 COPY --from=frontend-build --chown=app:app /front/dist ./frontend/dist
 
 # Carpeta de datos (DB + descargas) — se monta como volumen; owner = app
