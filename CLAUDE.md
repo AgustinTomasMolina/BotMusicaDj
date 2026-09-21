@@ -68,5 +68,10 @@ criterio del oído, no lo reemplazan.
 
 ## Convenciones
 - **Idioma:** docs y comentarios en **español**, nombres de código en **inglés**.
+- **Commits (decisión del dueño, 2026-09-21):** el repo es público y no tiene que decir con qué
+  herramienta se escribió, solo que hubo asistencia de IA. Los mensajes terminan con una única
+  línea `Co-Authored-By: Asistente IA <noreply@localhost>`, sin nombres de producto ni URLs de
+  la herramienta, ni en el mensaje ni en comentarios de código o docs. Los commits anteriores a
+  esa fecha quedan como están: reescribir historial ya publicado no vale la pena.
 - **Cómo hablarme:** explicaciones paso a paso, prácticas, sobre lo que veo en pantalla.
   Soy principiante en **producción musical**, no en programación (en código, hablá técnico).
