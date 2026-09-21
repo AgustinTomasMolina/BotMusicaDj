@@ -248,8 +248,9 @@ def test_list_muestra_lo_que_hay_en_la_base(capsys, biblioteca):
             f"{t.path.name}: clásica {clasica} y el generador hizo {nota} {modo}"
         assert int(energia) == round(t.energy * 100), \
             f"{t.path.name}: energía {energia} y el percentil en la base es {t.energy}"
-        # Los tracks del catálogo duran 10 s: no dan para tres tramos disjuntos, así que el
-        # acuerdo guardado es "0/0" y la key NO se puede mostrar como segura (§6).
+        # Los tracks del catálogo duran `DUR_BIBLIOTECA_S` (95 s): no dan para tres tramos
+        # disjuntos (hacen falta ~135 s), así que el acuerdo guardado es "0/0" y la key NO se
+        # puede mostrar como segura (§6).
         assert t.key_acuerdo == "0/0", \
             f"{t.path.name}: el acuerdo en la base es {t.key_acuerdo!r} y el caso necesita 0/0"
         assert marca == "?", \
@@ -278,8 +279,9 @@ def test_info_de_un_track(capsys, biblioteca):
     campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
     assert campos["archivo"] == str(t.path), campos
     assert campos["BPM"] == f"{t.bpm:.1f}", campos
-    # 10 s de audio: `tono_consenso` no arma tramos y el acuerdo guardado es "0/0". La key
-    # va con `?` y el renglón del acuerdo dice por qué (§6).
+    # 95 s de audio (`DUR_BIBLIOTECA_S`): `tono_consenso` no arma los tres tramos disjuntos
+    # que necesita (~135 s) y el acuerdo guardado es "0/0". La key va con `?` y el renglón
+    # del acuerdo dice por qué (§6).
     assert f.key_acuerdo == "0/0", f"el caso necesita acuerdo 0/0, la base tiene {f.key_acuerdo!r}"
     assert campos["key"] == f"{t.key} (Bm) ?", campos
     assert campos["acuerdo key"].startswith("0/0 — el track no da para comparar tramos"), \
@@ -380,7 +382,7 @@ def test_radio_marca_la_key_dudosa_en_cada_paso(tmp_path, capsys, biblioteca):
     assert marcas.get("click_128_Gmaj") == "?", f"un acuerdo 1/3 salió sin marcar:\n{out}"
     otros = {k: v for k, v in marcas.items() if k not in ("click_126_Cmaj", "click_128_Gmaj")}
     assert set(otros.values()) == {"?"}, \
-        f"tracks de 10 s (acuerdo 0/0) sin marcar: {otros}\n{out}"
+        f"tracks sin acuerdo medido (0/0) sin marcar: {otros}\n{out}"
     # El set es una salida que se lee sola (se exporta, se pega en un chat): sin la leyenda
     # el `?` es un símbolo mudo. Va DESPUÉS del aviso de set corto, que no se puede tapar.
     from motor.cli import LEYENDA_KEY
@@ -476,7 +478,8 @@ def test_un_acuerdo_que_no_es_texto_no_tira_la_biblioteca(tmp_path, capsys, bibl
     corrupto es dudoso, no una excusa para dejar al DJ sin tabla."""
     _, db_bib, _ = biblioteca
     # La fila sana es la precondición: sin ella el test no distingue "marca la corrupta" de
-    # "marca todo" (los clicks del fixture duran 12 s, así que su acuerdo real es "0/0").
+    # "marca todo" (los clicks del fixture no llegan a los ~135 s que necesitan tres tramos
+    # disjuntos, así que su acuerdo real es "0/0").
     db = _con_acuerdos(db_bib, tmp_path / "db.sqlite", {"click_120": ("3/3", "8A|8A|8A")})
     con = sqlite3.connect(str(db))
     n = con.execute("UPDATE tracks SET key_acuerdo = ?, key_tramos = ? WHERE path LIKE ?",
@@ -649,48 +652,146 @@ def test_radio_set_corto_dice_por_que(tmp_path, capsys, biblioteca):
         f"el motivo no explica: {m.group('detalle')}"
 
 
-def test_la_radio_no_propone_un_sample_de_la_carpeta(tmp_path, capsys):
-    """Punta a punta con audio de verdad: un loop de 10 s al MISMO BPM que la semilla.
+@pytest.fixture(scope="module")
+def con_fragmento(tmp_path_factory):
+    """Dos tracks de verdad + un loop de 10 s al MISMO BPM que uno de ellos, ya escaneados.
 
-    El loop se escanea y QUEDA en la biblioteca con su duración —no se pierde nada, `list` lo
-    sigue mostrando—, pero la radio no lo propone y dice en pantalla que lo ignoró. El caso
-    salió de la carpeta de descargas real: 11 de 64 archivos duran menos de 90 s y varios
-    caen justo en el BPM del resto, así que eran candidatos de primera fila.
+    El caso salió de la carpeta de descargas real: 11 de 64 archivos duran menos de 90 s y
+    varios caen justo en el BPM del resto, así que eran candidatos de primera fila. El loop
+    se escanea y QUEDA en la biblioteca con su duración medida; lo que cambia es que ni
+    `radio` ni `similar` lo proponen.
+
+    Módulo-scope y sin copiar la base: los tres tests que la usan solo leen.
     """
-    carpeta = tmp_path / "crate"
+    raiz = tmp_path_factory.mktemp("frag")
+    carpeta = raiz / "crate"
     carpeta.mkdir()
     _escribir(carpeta, 126.0, "C", "maj", dur=DUR_BIBLIOTECA_S, seed=0, ganancia=0.4)
     _escribir(carpeta, 128.0, "G", "maj", dur=DUR_BIBLIOTECA_S, seed=1, ganancia=0.8)
     y, sr = click_track(126.0, dur=10.0, nota="C", modo="maj", seed=2)
     sf.write(str(carpeta / "loop_126_Cmaj.wav"), (y * 0.6).astype(np.float32), sr,
              subtype="FLOAT")
-    db = tmp_path / "db.sqlite"
-    assert main([str(a) for a in _scan(db, carpeta)]) == 0, "el scan falló"
-    capsys.readouterr()
-
+    db = raiz / "db.sqlite"
+    assert main([str(a) for a in _scan(db, carpeta)]) == 0, "el scan del fixture falló"
     with Store(db) as store:
         por_nombre = {t.path.name: t for t in store.load_library()}
     loop = por_nombre["loop_126_Cmaj.wav"]
-    semilla = por_nombre["click_126_Cmaj.wav"]
     assert 0 < loop.duration < DURACION_MINIMA_TRACK_S, \
         f"el loop quedó con duración {loop.duration:.1f} s: el caso necesita un fragmento"
-    # Sin esto el test no probaría nada: si el loop no mezclara, lo sacaría la compuerta de
-    # ±8% y la exclusión por duración no se estaría ejerciendo.
-    assert _dist_bpm(semilla.bpm, loop.bpm) < 0.08, \
-        f"el loop ({loop.bpm}) no entra en ±8% de la semilla ({semilla.bpm}): no era candidato"
+    # Sin esto los tests no probarían nada: si el loop no mezclara con la semilla, lo sacaría
+    # la compuerta de ±8% y la exclusión por duración no se estaría ejerciendo.
+    assert _dist_bpm(por_nombre["click_126_Cmaj.wav"].bpm, loop.bpm) < 0.08, \
+        f"el loop ({loop.bpm}) no entra en ±8% de la semilla: no era candidato"
+    return db, por_nombre
 
-    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_126", "--largo", 3)
+
+def test_la_radio_no_propone_un_sample_de_la_carpeta(capsys, con_fragmento):
+    """Punta a punta con audio de verdad: el loop no entra al set, y la radio dice que lo
+    ignoró aunque el set llegue al largo pedido — esa línea es la única explicación de por
+    qué la biblioteca tiene 3 archivos y el set se armó entre 2."""
+    db, por_nombre = con_fragmento
+    loop, semilla = por_nombre["loop_126_Cmaj.wav"], por_nombre["click_126_Cmaj.wav"]
+
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_126", "--largo", 2)
     assert codigo == 0, out
     elegidos = [label for label, _ in _pasos(out)]
     assert loop.label not in elegidos, f"el loop de 10 s entró al set: {elegidos}\n{out}"
     assert elegidos == [semilla.label, por_nombre["click_128_Gmaj.wav"].label], \
         f"el set no eligió el único otro track de verdad: {elegidos}\n{out}"
-    assert (f"La radio ignoró 1 archivo de menos de {DURACION_MINIMA_TRACK_S:.0f} s") in out, \
+    assert _corte(out) is None, f"el set llegó a 2 de 2 y dice que se cortó:\n{out}"
+    assert f"La radio ignoró 1 archivo de menos de {DURACION_MINIMA_TRACK_S:.0f} s" in out, \
         f"ignoró un archivo y no lo dijo:\n{out}"
 
     codigo, listado, _ = _correr(capsys, "--db", db, "list")
     assert codigo == 0 and loop.label in listado, \
         f"el loop desapareció de la biblioteca; solo tenía que salir de la radio:\n{listado}"
+
+
+def test_radio_rechaza_una_semilla_que_no_es_un_track(capsys, con_fragmento):
+    """Pedir la radio DESDE el loop es un error de uso, no un set.
+
+    El BPM y la key de 10 s de audio no son una medición, y el set entero se arma contra
+    ellos (la compuerta de ±8%, `w_seed`, cada similitud): un set apoyado en un dato
+    inventado es peor que un error (§6). El mensaje tiene que traer los tres datos con los
+    que el DJ arregla la situación: cuánto dura, cuánto hace falta y qué hacer ahora.
+    """
+    db, por_nombre = con_fragmento
+    loop = por_nombre["loop_126_Cmaj.wav"]
+
+    codigo, out, err = _correr(capsys, "--db", db, "radio", "loop_126", "--largo", 5)
+    assert codigo == 2, f"la radio armó un set desde un loop de 10 s:\n{out}{err}"
+    assert not _pasos(out), f"imprimió pasos de un set que no tenía que armar:\n{out}"
+    assert f"{loop.duration:.1f} s" in err, f"no dice cuánto dura el archivo: {err}"
+    assert f"{DURACION_MINIMA_TRACK_S:.0f} s" in err, f"no dice cuánto hace falta: {err}"
+    assert "list" in err, f"no dice cómo elegir otra semilla: {err}"
+
+    # Y el mismo track sigue siendo consultable: lo que se rechaza es usarlo de semilla.
+    codigo, info, _ = _correr(capsys, "--db", db, "info", "loop_126")
+    assert codigo == 0 and "no es un track" in info, \
+        f"`info` no explica por qué la radio no lo propone:\n{info}"
+
+
+def test_titular_corte_no_confunde_un_motivo_con_otro():
+    """Los cuatro cortes se arreglan distinto, así que tienen que LEERSE distinto.
+
+    El titular es lo único que el DJ lee cuando el set queda corto. Decir "no hay más tracks
+    compatibles" cuando los hay y los tapó el `artist_gap` (se baja el gap y aparecen) es
+    exactamente el dato que miente de §6. Cada aserción busca la palabra con la que se
+    arregla ESE corte, no el texto entero: intercambiar dos titulares tiene que romper el
+    test aunque los dos sigan siendo frases correctas en castellano.
+    """
+    from motor.cli import titular_corte
+    from motor.radio import (
+        STOP_ARTIST_GAP,
+        STOP_BIBLIOTECA_AGOTADA,
+        STOP_BIBLIOTECA_VACIA,
+        STOP_SIN_MEZCLABLES,
+    )
+
+    titulares = {stop: titular_corte(stop) for stop in
+                 (STOP_SIN_MEZCLABLES, STOP_ARTIST_GAP, STOP_BIBLIOTECA_AGOTADA,
+                  STOP_BIBLIOTECA_VACIA)}
+    assert len(set(titulares.values())) == 4, \
+        f"dos cortes distintos se leen igual: {titulares}"
+
+    sin_mezclables = titulares[STOP_SIN_MEZCLABLES]
+    assert "tolerancia de BPM" in sin_mezclables and "artist_gap" not in sin_mezclables, \
+        f"el corte por ±8% no habla de la tolerancia: {sin_mezclables!r}"
+
+    gap = titulares[STOP_ARTIST_GAP]
+    assert "artist_gap" in gap and "SIN REPETIR ARTISTA" in gap, \
+        f"el corte por el gap no dice qué perilla bajar: {gap!r}"
+
+    agotada = titulares[STOP_BIBLIOTECA_AGOTADA]
+    assert "ya sonaron" in agotada and "artist_gap" not in agotada, \
+        f"la biblioteca agotada manda a tocar una perilla que no ayuda: {agotada!r}"
+
+    vacia = titulares[STOP_BIBLIOTECA_VACIA]
+    assert "no aporta otro track" in vacia and "tolerancia" not in vacia, \
+        f"una biblioteca sin otro track culpa a la tolerancia de BPM: {vacia!r}"
+
+    # Un código que esta CLI no conoce no se narra como si lo conociera.
+    assert titular_corte("motivo_del_futuro") == "EL SET SE CORTÓ"
+    assert titular_corte(None) == "EL SET SE CORTÓ"
+
+
+def test_similar_esconde_los_fragmentos_y_lo_dice(capsys, con_fragmento):
+    """`similar` usa el mismo criterio que la radio (decisión del dueño: consistencia entre
+    los dos comandos), y avisa cuántos archivos no está mostrando.
+
+    El loop es el candidato más parecido a la semilla por construcción —mismo generador,
+    mismo BPM, misma nota— así que si no aparece no es por el score.
+    """
+    db, por_nombre = con_fragmento
+    loop = por_nombre["loop_126_Cmaj.wav"]
+
+    codigo, out, _ = _correr(capsys, "--db", db, "similar", "click_126", "-n", 10)
+    assert codigo == 0, out
+    assert loop.label not in out, f"`similar` devolvió un fragmento:\n{out}"
+    assert por_nombre["click_128_Gmaj.wav"].label in out, \
+        f"`similar` no devolvió el otro track de verdad:\n{out}"
+    assert f"No se muestran 1 archivo de menos de {DURACION_MINIMA_TRACK_S:.0f} s" in out, \
+        f"escondió un archivo y no lo dijo:\n{out}"
 
 
 # --- dependencias y esquema: fallar ANTES de trabajar -----------------------------------

@@ -783,9 +783,13 @@ def test_una_biblioteca_de_puros_fragmentos_lo_dice():
 
 
 def test_la_semilla_corta_arma_set_igual():
-    """DECISIÓN ABIERTA (docstring de `motor.radio`, punto 4): el filtro es de CANDIDATOS.
-    Pedir la radio desde un sample de 4 s hoy arma el set igual, con el BPM del sample como
-    referencia de la primera transición. Si mañana se decide rechazarla, se cambia acá.
+    """El filtro es de CANDIDATOS: `build_set` arma el set desde la semilla que le pasen,
+    dure lo que dure (docstring de `motor.radio`, punto 4).
+
+    Quien rechaza una semilla que no es un track es la CLI (`cli.cmd_radio`, con un error de
+    uso), no la librería: un test o un experimento tienen que poder pedirlo igual. Este test
+    es la otra mitad de `test_radio_rechaza_una_semilla_que_no_es_un_track` — juntos dicen
+    dónde vive la decisión.
 
     Lo que sí está cerrado es que la semilla no puede volver como candidata.
     """
@@ -798,3 +802,52 @@ def test_la_semilla_corta_arma_set_igual():
         "la semilla se contó como fragmento ignorado, y no es un candidato que se descartó: "
         f"fragments={rset.fragments}")
     assert rset[1].transition.from_bpm == 128.0, "la transición no salió del BPM de la semilla"
+
+
+def test_los_fragmentos_se_cuentan_aunque_el_set_no_se_corte():
+    """`fragments` no es parte del corte: es la resta entre lo que hay en la biblioteca y lo
+    que la radio miró, y el DJ la necesita IGUAL cuando el set se completa (64 archivos en
+    `list`, un set de 20 elegido entre 53). Los dos caminos que devuelven un set completo
+    tienen que traerla: el atajo de `length == 1` y el return del final.
+    """
+    semilla = track("semilla.wav", 128.0, "8A", emb=(1.0, 0.0))
+    real = track("real.wav", 127.0, "8A", emb=(0.9, 0.436), duration=240.0)
+    loop = track("loop.wav", 128.0, "8A", emb=(1.0, 0.0), duration=8.0)
+
+    completo = build_set(semilla, [real, loop], RadioConfig(length=2))
+    assert rutas(completo) == ["semilla.wav", "real.wav"], rutas(completo)
+    assert completo.stop is None and completo.is_complete, (
+        f"el caso necesita un set COMPLETO para probar el camino del final: {completo.stop}")
+    assert completo.fragments == 1, (
+        f"el set se completó y perdió la cuenta de lo que ignoró: {completo.fragments}")
+
+    # `length == 1` sale por un atajo antes del loop: es otro return, y también cuenta.
+    solo_semilla = build_set(semilla, [real, loop], RadioConfig(length=1))
+    assert rutas(solo_semilla) == ["semilla.wav"] and solo_semilla.is_complete, solo_semilla
+    assert solo_semilla.fragments == 1, (
+        f"el atajo de length=1 perdió la cuenta de lo ignorado: {solo_semilla.fragments}")
+
+
+def test_similar_tampoco_devuelve_fragmentos():
+    """`similar` esconde lo mismo que la radio: dos comandos sobre la misma biblioteca no
+    pueden tener dos ideas de qué es un track.
+
+    Control adentro del test: el clon de 8 s es el MÁS parecido posible (mismo embedding),
+    así que si no sale es por la duración y no por el score — con la misma biblioteca y el
+    clon durando 240 s sale primero.
+    """
+    t = track("semilla.wav", 128.0, "8A", emb=(1.0, 0.0))
+    clon_corto = track("clon.wav", 128.0, "8A", emb=(1.0, 0.0), duration=8.0)
+    clon_largo = track("clon.wav", 128.0, "8A", emb=(1.0, 0.0), duration=240.0)
+    lejano = track("lejano.wav", 128.0, "8A", emb=(0.0, 1.0), duration=240.0)
+
+    nombres = [otro.path.name for otro, _ in similar(t, [clon_corto, lejano], n=10)]
+    assert nombres == ["lejano.wav"], f"un fragmento salió como parecido: {nombres}"
+
+    control = [otro.path.name for otro, _ in similar(t, [clon_largo, lejano], n=10)]
+    assert control[0] == "clon.wav", (
+        f"el control no pone al clon primero ni durando 240 s: {control}")
+
+    # Una biblioteca de puros fragmentos no tiene con qué comparar: lista vacía, no el
+    # fragmento "porque es lo único que hay".
+    assert similar(t, [clon_corto], n=10) == []

@@ -42,7 +42,7 @@ from motor.energia import (
     ascending_spearman,
     energy_curve_deviation,
 )
-from motor.modelos import DURACION_MINIMA_TRACK_S, Track, require_text
+from motor.modelos import DURACION_MINIMA_TRACK_S, Track, es_track, require_text
 from motor.tonalidad import camelot_a_clasica
 
 OK = 0
@@ -125,6 +125,20 @@ def marca_key(acuerdo: str | None) -> str:
 LEYENDA_KEY = ("? junto a la key = la detección no es confiable (los tramos del track no "
                "votaron todos lo mismo, o el acuerdo no se midió) · `info <track>` dice cuál "
                "de los dos")
+
+
+def aviso_fragmentos(cuantos: int, encabezado: str) -> str:
+    """El renglón que explica por qué faltan archivos en pantalla.
+
+    Lo usan `radio` y `similar`, que esconden los mismos archivos por el mismo criterio
+    (`modelos.es_track`): dos textos distintos para la misma resta harían pensar que son dos
+    filtros distintos. Cambia solo el encabezado, porque el verbo no es el mismo ("la radio
+    ignoró" / "no se muestran"). Dice que siguen en la biblioteca: el DJ tiene que saber
+    dónde están, no solo que no están acá.
+    """
+    return (f"{encabezado} {cuantos} archivo{'' if cuantos == 1 else 's'} de menos de "
+            f"{DURACION_MINIMA_TRACK_S:.0f} s: loops, samples y notas de voz no son tracks "
+            f"(siguen en la biblioteca: `list` e `info` los muestran).")
 
 
 def _abrir_store(db: Path):
@@ -410,7 +424,13 @@ def cmd_info(args: argparse.Namespace) -> int:
         ("archivo", str(t.path)),
         ("artista", t.artist if t.artist else "(sin tag)"),
         ("título", t.title if t.title else "(sin tag)"),
-        ("duración", f"{int(minutos)}:{segundos:04.1f} ({t.duration:.1f} s)"),
+        # Si no es un track, se dice DONDE se lee la duración y no en una nota al pie: es el
+        # único lugar donde el DJ puede enterarse de por qué ese archivo no aparece ni en
+        # `radio` ni en `similar` (§6: el dato dudoso se marca donde se lee).
+        ("duración", f"{int(minutos)}:{segundos:04.1f} ({t.duration:.1f} s)"
+                     + ("" if es_track(t.duration) else
+                        f" — menos de {DURACION_MINIMA_TRACK_S:.0f} s: no es un track (loop, "
+                        f"sample o nota de voz). `radio` y `similar` no lo proponen")),
         ("BPM", f"{t.bpm:.1f}"),
         # El `?` va pegado a la key y el porqué en el renglón de abajo: el dato dudoso se
         # marca donde se lee, no solo en una nota al pie (§6).
@@ -438,12 +458,19 @@ def cmd_similar(args: argparse.Namespace) -> int:
     print(f"Más parecidos por sonido a: {t.label}")
     print("(similitud coseno del timbre; NO mira BPM ni key — para eso está `radio`)\n")
     parecidos = similar(t, biblioteca, n=args.n)
+    # Cuántos escondió `similar`. Se cuenta con `es_track`, la MISMA regla que el filtro, no
+    # con una copia del número: si mañana el corte se mueve, el aviso se mueve con él.
+    saltados = sum(1 for otro in biblioteca
+                   if str(otro.path) != str(t.path) and not es_track(otro.duration))
     if not parecidos:
         print("  la biblioteca no tiene otro track con qué compararlo")
-        return OK
-    for i, (otro, sim) in enumerate(parecidos, 1):
-        print(f"  {i:>2}. {sim:+.3f}  {_fila(otro)}")
-    print(f"\n{LEYENDA_KEY}")
+    else:
+        for i, (otro, sim) in enumerate(parecidos, 1):
+            print(f"  {i:>2}. {sim:+.3f}  {_fila(otro)}")
+    if saltados:
+        print(f"\n{aviso_fragmentos(saltados, 'No se muestran')}")
+    if parecidos:
+        print(f"\n{LEYENDA_KEY}")
     return OK
 
 
@@ -541,6 +568,19 @@ def cmd_radio(args: argparse.Namespace) -> int:
     with _abrir_existente(args.db) as store:
         biblioteca = store.load_library()
     semilla = resolver_track(args.track, biblioteca)
+    # La semilla no puede ser un loop ni un sample. No es simetría con el filtro de
+    # candidatos: es que TODO el set se arma contra el BPM y la key de la semilla (la
+    # compuerta de ±8%, `w_seed`, cada similitud), y en 4 segundos de audio esos dos valores
+    # no son una medición. Un set entero apoyado en un dato inventado es peor que un error
+    # (§6). La decisión es de acá y no de `build_set`: la librería sigue armando el set si
+    # alguien se lo pide a propósito (ver `test_la_semilla_corta_arma_set_igual`).
+    if not es_track(semilla.duration):
+        raise ErrorDeUso(
+            f"{semilla.label} dura {semilla.duration:.1f} s y la radio necesita al menos "
+            f"{DURACION_MINIMA_TRACK_S:.0f} s: es un loop, un sample o una nota de voz, no "
+            f"un track. Su BPM y su key no son datos confiables, y el set entero se arma "
+            f"contra ellos.\n  Elegí una semilla con `djradio list` (o `python -m motor "
+            f"list`), que muestra toda la biblioteca.")
 
     rset = build_set(semilla, biblioteca, config)
     print(f"Set desde: {semilla.label}  (curva {config.curve}, semilla {config.seed}, "
@@ -555,10 +595,7 @@ def cmd_radio(args: argparse.Namespace) -> int:
     # `list` y entre lo que la radio eligió. Sin esto, con la biblioteca de descargas recién
     # escaneada el DJ ve 64 tracks y un set armado sobre 53, sin ninguna explicación.
     if rset.fragments:
-        print(f"La radio ignoró {rset.fragments} archivo"
-              f"{'' if rset.fragments == 1 else 's'} de menos de "
-              f"{DURACION_MINIMA_TRACK_S:.0f} s: loops, samples y notas de voz no son tracks "
-              f"y nunca entran al set (siguen en la biblioteca: `list` e `info` los muestran).")
+        print(aviso_fragmentos(rset.fragments, "La radio ignoró"))
     if not rset.is_complete:
         print(f"{titular_corte(rset.stop)}.")
         print(f"  El set quedó en {len(rset)} de {config.length} · por qué ({rset.stop}): "

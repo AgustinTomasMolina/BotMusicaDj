@@ -43,11 +43,15 @@ Cuatro decisiones que alguien va a querer "arreglar", y por qué no:
    medio de un set no es una transición floja: es un hueco. El criterio es el MISMO objeto
    que usa el pipeline para no mandarlos a iTunes, importado, no copiado.
 
+   `similar` esconde los mismos archivos, por consistencia: dos comandos que miran la
+   misma biblioteca no pueden tener dos ideas de qué es un track.
+
    Lo que SÍ sigue entrando es la SEMILLA: `build_set` arma el set desde el track que le
    pasen, dure lo que dure. Filtrar la semilla acá sería decidir por quien llama (¿error?,
-   ¿set vacío?) desde la capa que menos contexto tiene; la decisión es de la CLI, y hoy
-   está abierta. Lo que la semilla no puede hacer es volver como candidata: `_pool` ya la
-   saca por ruta.
+   ¿set vacío?) desde la capa que menos contexto tiene. Quien decide es la CLI, que
+   rechaza una semilla que no es un track con un error de uso (`cli.cmd_radio`); un test,
+   un experimento o un llamador con otro criterio siguen pudiendo armar el set. Lo que la
+   semilla no puede hacer es volver como candidata: `_pool` ya la saca por ruta.
 
    El corte de `RadioSet` dice cuántos archivos se ignoraron (`RadioSet.fragments`) y, si
    alguno de ellos ENTRABA en ±8%, lo dice también: si no, el usuario ve "no hay más
@@ -359,13 +363,20 @@ def similar(track: Track, biblioteca: Sequence[Track], n: int = 10) -> list[tupl
     veces del store son dos objetos distintos y devolverlo como "su propio similar" sería
     ruido garantizado.
 
+    Lo que no es un track tampoco sale (`modelos.es_track`, el mismo filtro que `build_set`,
+    punto 4 del docstring del módulo): el DJ mira estas filas para decidir qué poner, y dos
+    comandos sobre la misma biblioteca no pueden tener dos ideas de qué es un track. El
+    propio `track` puede ser un fragmento —se pregunta por lo que se pregunta—; lo que no
+    puede es venir un fragmento en la respuesta.
+
     Determinista: los empates de similitud se rompen por ruta ascendente, nunca por el
     orden en que vino la biblioteca. Dos scores exactamente iguales existen de verdad
     (tracks duplicados, o un embedding repetido), y ahí el resultado no puede depender de
     cómo se llenó una lista.
 
-    Biblioteca vacía, `n <= 0`, o una biblioteca que solo contiene al propio track →
-    lista vacía. `n` mayor que la biblioteca devuelve todo lo que hay, sin rellenar.
+    Biblioteca vacía, `n <= 0`, o una biblioteca que solo contiene al propio track (o
+    fragmentos) → lista vacía. `n` mayor que la biblioteca devuelve todo lo que hay, sin
+    rellenar.
 
     Una ruta repetida aparece una sola vez (`_unicos_por_ruta`): dos cargas del mismo
     archivo no son dos similares. Si las dos cargas DIFIEREN, `ValueError`.
@@ -374,7 +385,8 @@ def similar(track: Track, biblioteca: Sequence[Track], n: int = 10) -> list[tupl
         return []
 
     propia = str(track.path)
-    candidatos = _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
+    candidatos, _ = _separar_fragmentos(
+        _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia))
     if not candidatos:
         return []
 
@@ -507,9 +519,19 @@ def _pool(seed_track: Track, biblioteca: Sequence[Track]) -> tuple[list[Track], 
     corte (punto 4 del docstring del módulo).
     """
     propia = str(seed_track.path)
-    todos = _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
-    return ([t for t in todos if es_track(t.duration)],
-            [t for t in todos if not es_track(t.duration)])
+    return _separar_fragmentos(_unicos_por_ruta(t for t in biblioteca
+                                                if str(t.path) != propia))
+
+
+def _separar_fragmentos(tracks: list[Track]) -> tuple[list[Track], list[Track]]:
+    """Parte una lista en `(tracks, fragmentos)` con `modelos.es_track`, respetando el orden.
+
+    Un solo lugar para el filtro: lo usan `_pool` (el set) y `similar` (los parecidos). Si
+    cada uno tuviera el suyo, `radio` y `similar` podrían terminar con dos ideas distintas
+    de qué es un track mirando la misma biblioteca.
+    """
+    return ([t for t in tracks if es_track(t.duration)],
+            [t for t in tracks if not es_track(t.duration)])
 
 
 def _artist_blocked(candidato: Track, elegidos: list[Track], gap: int) -> bool:
