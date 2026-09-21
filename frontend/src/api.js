@@ -85,6 +85,22 @@ export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 // RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
 export const getRadioBiblioteca = () => fetch('/api/radio/biblioteca').then(json)
 
+// Cuerpo de una respuesta de la radio, sin asumir que es JSON.
+//
+// `r.json()` a secas era un error: FastAPI manda los 500 como text/plain ("Internal Server
+// Error"), así que el parseo explotaba, el await caía en el catch de la llamada y la
+// pantalla decía "no pude conectar con el servidor, revisá que esté corriendo" — cuando el
+// servidor SÍ contestó y lo que falló fue adentro. Un mensaje que miente sobre qué pasó
+// manda al usuario a arreglar lo que no está roto (§6).
+//
+// Devuelve el objeto parseado, o `{error_texto}` con el cuerpo crudo si no era JSON: son
+// dos claves distintas a propósito, para que quien lo muestre sepa si está leyendo el
+// motivo que escribió el motor o el texto suelto de un fallo del servidor.
+async function cuerpoRadio(r) {
+  const txt = await r.text()
+  try { return JSON.parse(txt) } catch { return { error_texto: txt.trim() } }
+}
+
 // El set. Solo viajan los parámetros que el usuario tocó: los que falten los pone
 // `RadioConfig` en el backend, que además contesta en `config` con los que usó. Escribir
 // los defaults acá sería un segundo juego que se desincroniza en silencio.
@@ -97,7 +113,7 @@ export async function getRadioSet(params) {
     qs.set(k, String(v))
   }
   const r = await fetch(`/api/radio/set?${qs.toString()}`)
-  return { ok: r.ok, status: r.status, data: await json(r) }
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
 
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
@@ -109,8 +125,11 @@ export async function radioAudioMotivo(id) {
   try {
     const r = await fetch(radioAudioUrl(id), { headers: { Range: 'bytes=0-0' } })
     if (r.ok) return null
-    const d = await r.json()
-    return (d && d.error) || null
+    const d = await cuerpoRadio(r)
+    // Mismo criterio que el set: el motivo del backend tal cual, y si el cuerpo no era JSON
+    // (un 500 en text/plain) se dice el código, que es lo único cierto que hay.
+    if (d.error) return d.error
+    return d.error_texto ? `El servidor falló al servir este audio (HTTP ${r.status}): ${d.error_texto}` : null
   } catch { return null }
 }
 

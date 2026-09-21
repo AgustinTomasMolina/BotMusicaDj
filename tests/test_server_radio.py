@@ -354,6 +354,19 @@ def test_biblioteca_sin_el_paquete_motor_no_inventa_curvas(client, biblioteca, m
     assert (d["estado"], d["opciones"]) == ("sin-motor", None)
 
 
+def test_las_opciones_sin_el_paquete_motor_son_none(server, monkeypatch):
+    """`_radio_opciones` con el import roto: None, ni explota ni inventa.
+
+    Va directo a la función porque el endpoint no la llama cuando el estado ya es
+    `sin-motor`, así que su `except ImportError` no lo ejecutaba ningún test: romperlo
+    pasaba la suite entera. Se rompe `motor.energia` y no `motor.store` a propósito —
+    `_radio_opciones` no importa `store`, y el caso real (una imagen sin `motor/`) los
+    voltea a todos.
+    """
+    monkeypatch.setitem(sys.modules, "motor.energia", None)
+    assert server._radio_opciones() is None
+
+
 # --------------------------------------------------------------- /api/radio/set
 
 def test_set_sin_parametros_usa_los_defaults_del_motor(client, biblioteca):

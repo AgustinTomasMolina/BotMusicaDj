@@ -74,6 +74,30 @@ function DatosTrack({ t, leyenda, conDuracion = true }) {
   )
 }
 
+/* El texto de un pedido rechazado. Tres fuentes, en este orden:
+
+   1. `error` — el motivo que escribió el motor (semilla que no es un track, curva que no
+      existe). Va TAL CUAL: inventar uno propio sería dar dos explicaciones para una regla.
+   2. `detail` — la validación de FastAPI. Llega, por ejemplo, con un largo de 2.5: antes
+      esto se veía como "El servidor rechazó el pedido (422)", que no dice qué arreglar.
+   3. El cuerpo crudo (un 500 en text/plain) o, si no hay nada, el código. Decir el número
+      no es lindo, pero es lo único cierto que hay y distingue "el servidor falló" de "no
+      hay servidor". */
+function motivoDelRechazo(status, data) {
+  const d = data || {}
+  if (typeof d.error === 'string' && d.error.trim()) return d.error
+  if (Array.isArray(d.detail)) {
+    const partes = d.detail.map((x) => {
+      const campo = Array.isArray(x.loc) && x.loc.length ? x.loc[x.loc.length - 1] : null
+      return campo ? `${campo}: ${x.msg}` : x.msg
+    }).filter(Boolean)
+    if (partes.length) return `El servidor no aceptó estos valores (HTTP ${status}) — ${partes.join(' · ')}`
+  }
+  if (typeof d.detail === 'string' && d.detail.trim()) return `${d.detail} (HTTP ${status})`
+  if (d.error_texto) return `El servidor falló al armar el set (HTTP ${status}): ${d.error_texto}`
+  return `El servidor rechazó el pedido con HTTP ${status} y sin explicación.`
+}
+
 /* ---------- 1. Elegir la semilla ---------- */
 function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
   const filtrados = useMemo(() => {
@@ -120,6 +144,12 @@ function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
           ? `Se dibujan ${visibles.length} de ${filtrados.length} — filtrá para ver el resto.`
           : `${filtrados.length} de ${tracks.length} tracks de la biblioteca del motor.`}
       </p>
+      {/* La leyenda del `?` va acá y no solo debajo del set: en esta lista ya hay keys
+          dudosas antes de armar nada, y un `?` que solo se explica en un `title` es un
+          símbolo mudo para quien no usa mouse (§6). Es el mismo texto del motor, y que
+          aparezca una vez por tabla es lo que hace la propia CLI (`list` y `radio` lo
+          imprimen cada una al pie). */}
+      {leyenda && <p className="rnota">{leyenda}</p>}
     </section>
   )
 }
@@ -157,12 +187,18 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
           </div>
         ))}
       </div>
-      <button type="button" className="btn btn-primary rarmar" onClick={onArmar} disabled={armando || !elegida}>
+      {/* aria-disabled y NO disabled: un botón que se deshabilita con el foco puesto hace
+          que Chrome mande el foco al <body>, y quien arma el set con teclado vuelve al
+          principio de la página en cada intento (WCAG 2.4.3). Así el botón sigue enfocado
+          mientras arma y el click se ignora acá. */}
+      <button type="button" className="btn btn-primary rarmar" aria-disabled={armando || !elegida}
+        aria-describedby={elegida ? undefined : 'r-armar-falta'}
+        onClick={() => { if (!armando && elegida) onArmar() }}>
         {armando
           ? <><span className="spinner" aria-hidden="true" /> Armando el set…</>
           : <><IconRadio size={16} /> Armar el set</>}
       </button>
-      {!elegida && <p className="rnota">Elegí primero un track semilla de la lista.</p>}
+      {!elegida && <p className="rnota" id="r-armar-falta">Elegí primero un track semilla de la lista.</p>}
     </section>
   )
 }
@@ -231,6 +267,13 @@ export default function Radio() {
   const [errorAudio, setErrorAudio] = useState(null)   // {id, mensaje}
   const [intento, setIntento] = useState(0)            // el botón «Reintentar» vuelve a pedir
   const audioRef = useRef(null)
+  // Qué track tiene cargado el <audio>. Sin esto, «Reproducir» después de «Pausar»
+  // reasignaba `src` y el track arrancaba de cero: el botón decía Pausar y actuaba como
+  // Detener.
+  const cargadoRef = useRef(null)
+  // Al volver de un «Reintentar» el bloque que tenía el foco ya no existe y Chrome lo manda
+  // al <body>. El foco va al encabezado de lo que acaba de aparecer (WCAG 2.4.3).
+  const tituloRef = useRef(null)
 
   useEffect(() => {
     let vivo = true
@@ -246,12 +289,30 @@ export default function Radio() {
         configurada: false, estado: 'sin-conexion', total: 0, tracks: [], opciones: null,
         motivo: 'No pude conectar con el servidor para leer la biblioteca del motor. Revisá que esté corriendo y volvé a intentar.',
       }))
-    const audio = audioRef.current
-    return () => { vivo = false; if (audio) audio.pause() }
+    // El ref se LEE en el cleanup, no al montar: cuando este efecto corre, el <audio>
+    // todavía no está en el DOM (se dibuja más abajo, con los datos ya cargados), así que
+    // capturarlo en una variable acá guardaba null y no pausaba nada. Mismo patrón que
+    // `views.jsx`.
+    return () => { vivo = false; if (audioRef.current) audioRef.current.pause() } // eslint-disable-line react-hooks/exhaustive-deps
   }, [intento])
+
+  // Al volver de un «Reintentar», el foco va al encabezado de lo que se acaba de dibujar.
+  useEffect(() => { if (intento > 0 && lib) tituloRef.current?.focus({ preventScroll: true }) }, [intento, lib])
+
+  // Corta lo que esté sonando y limpia su estado. El set que viene puede no tener ese paso.
+  const pararAudio = () => {
+    if (audioRef.current) audioRef.current.pause()
+    setSonando(null)
+    setErrorAudio(null)
+  }
 
   const armar = async () => {
     if (!elegida) return
+    // Antes esto no paraba el audio: con un paso sonando, armar otro set dejaba el track
+    // anterior sonando sin ningún botón en «Pausar», y si el armado fallaba (400) la lista
+    // desaparecía y el audio seguía sin un solo control en pantalla. También limpia el
+    // aviso de un 404 del set viejo, que si no quedaba pegado al set nuevo.
+    pararAudio()
     setArmando(true)
     setError('')
     try {
@@ -261,13 +322,15 @@ export default function Radio() {
         // texto lo escribe el motor y se muestra tal cual — inventar uno propio acá sería
         // dar dos explicaciones distintas para la misma regla.
         setSet(null)
-        setError(r.data && r.data.error ? r.data.error : `El servidor rechazó el pedido (${r.status}).`)
+        setError(motivoDelRechazo(r.status, r.data))
         return
       }
       setSet(r.data)
       // Lo que se USÓ, que puede no ser lo que se pidió (un campo vacío lo llenó el motor).
       if (r.data.config) setCfg({ ...r.data.config })
     } catch {
+      // Acá SÍ es un problema de red: el fetch no llegó a tener respuesta. Un servidor que
+      // contesta 500 ya no cae en esta rama (ver `cuerpoRadio` en api.js).
       setSet(null)
       setError('No pude conectar con el servidor para armar el set. Revisá que esté corriendo y volvé a intentar.')
     } finally {
@@ -281,13 +344,21 @@ export default function Radio() {
     if (!a) return
     setErrorAudio(null)
     if (sonando === t.id) { a.pause(); setSonando(null); return }
-    a.src = radioAudioUrl(t.id)
+    // Solo se recarga si es OTRO track: reasignar `src` al mismo reinicia la reproducción,
+    // así que «Pausar» y volver a darle play mandaba el tema al principio.
+    if (cargadoRef.current !== t.id) {
+      a.src = radioAudioUrl(t.id)
+      cargadoRef.current = t.id
+    }
     try {
       await a.play()
       setSonando(t.id)
     } catch (e) {
       if (e && e.name === 'AbortError') return   // se cambió de tema antes de arrancar
       setSonando(null)
+      // El elemento quedó con un error pegado: se olvida qué tenía cargado para que un
+      // segundo intento vuelva a pedir el archivo (puede haber vuelto a su lugar).
+      cargadoRef.current = null
       const motivo = await radioAudioMotivo(t.id)
       setErrorAudio({ id: t.id, mensaje: motivo || `No pude reproducir «${t.titulo}»: el navegador no pudo abrir ese audio.` })
     }
@@ -303,7 +374,7 @@ export default function Radio() {
     return (
       <div className="empty">
         <div className="empty-art"><IconRadio size={26} /></div>
-        <h3>{lib.configurada ? 'La radio no puede leer la biblioteca' : 'Conectá la biblioteca del motor'}</h3>
+        <h3 ref={tituloRef} tabIndex={-1}>{lib.configurada ? 'La radio no puede leer la biblioteca' : 'Conectá la biblioteca del motor'}</h3>
         <p>{lib.motivo}</p>
         <p className="rnota mono">estado: {lib.estado}</p>
         <button type="button" className="btn btn-secondary"
@@ -319,14 +390,16 @@ export default function Radio() {
   // El error ya se anuncia solo (role="alert" en el aviso), así que no se repite acá.
   const anuncio = armando
     ? 'Armando el set…'
-    : set_ ? `Set de ${set_.total} tracks desde ${set_.semilla ? set_.semilla.label : 'la semilla'}.` : ''
+    : set_
+      ? `Set de ${set_.total} track${set_.total === 1 ? '' : 's'} desde ${set_.semilla ? set_.semilla.label : 'la semilla'}.`
+      : ''
 
   return (
     <div className="radiodj">
       {/* onError: si el archivo falla a mitad de camino el botón no queda en "Pausar". */}
       <audio ref={audioRef} onEnded={() => setSonando(null)} onError={() => setSonando(null)} preload="none" />
       <div className="radiodj-head">
-        <h1>Radio DJ</h1>
+        <h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
         <p className="muted">
           {lib.total} tracks analizados por el motor · el set lo arma el motor y cada paso dice por qué está ahí
         </p>

@@ -961,6 +961,9 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .chip[aria-current=page]{color:var(--color-accent-200);border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 16%,transparent)}
 .radiodj{display:flex;flex-direction:column;gap:var(--space-4);padding:0 var(--space-3) var(--space-6)}
 .radiodj-head h1{margin:0;font-size:28px;letter-spacing:-0.02em}
+/* Encabezados que reciben el foco al volver de «Reintentar»: no son controles, así que no
+   llevan anillo (el lector los anuncia igual y el scroll ya los deja a la vista). */
+.radiodj-head h1:focus-visible,.empty h3:focus-visible{outline:none}
 .radiodj-head .muted{margin:4px 0 0;font-size:13px;color:var(--color-neutral-500)}
 .radiodj-grid{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
 .radiodj-col{display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
@@ -984,6 +987,12 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rsem{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);width:100%;min-height:44px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
 .rsem:hover{background:var(--color-well)}
 .rsem[aria-pressed=true]{background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 0 0 0 1px var(--color-accent)}
+/* a11y: sobre el fondo de la fila elegida, n500 daba 4.15:1 (pide 4.5) y el título atenuado
+   de "no es un track" lo mismo. n400 sube los dos por encima del umbral sin que la fila
+   elegida grite más que el resto. */
+.rsem[aria-pressed=true] .rsem-artista,
+.rsem[aria-pressed=true].is-notrack .rsem-titulo,
+.rsem[aria-pressed=true].is-notrack .rsem-artista{color:var(--color-neutral-400)}
 .rsem-id{display:flex;flex-direction:column;min-width:140px;flex:1}
 .rsem-titulo{font-size:13.5px;font-weight:500;line-height:1.25}
 .rsem-artista{font-size:11.5px;color:var(--color-neutral-500)}
@@ -1009,6 +1018,9 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rcfg .seg{align-self:flex-start;background:var(--color-well)}
 .rcfg .seg-opt{min-height:32px}
 .rarmar{align-self:flex-start;min-height:36px;margin-top:var(--space-1)}
+/* aria-disabled y no disabled (el botón sigue enfocable para no perder el foco al armar):
+   se ve igual que un .btn:disabled, pero el cursor dice que no hace nada. */
+.rarmar[aria-disabled=true]{opacity:.45;cursor:not-allowed}
 
 /* — 3. el set — */
 .rpanel-set{gap:var(--space-3)}
