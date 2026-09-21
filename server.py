@@ -1218,11 +1218,12 @@ def _radio_track(t) -> dict:
     """Un track del motor como lo muestra la CLI (§6): BPM con UN decimal, las dos
     notaciones de key, el `?` de confianza y la energía.
 
-    El `?` sale de `motor.cli.key_dudosa` y la clásica de `motor.tonalidad.camelot_a_clasica`:
-    las mismas funciones que la terminal, no una copia de la regla. `es_track` viaja para que
+    El `?` sale de `motor.cli.key_dudosa`, el percentil de energía de
+    `motor.cli.percentil_energia` y la clásica de `motor.tonalidad.camelot_a_clasica`: las
+    mismas funciones que la terminal, no una copia de la regla. `es_track` viaja para que
     el front pueda avisar antes de pedir el set que ese archivo no sirve de semilla.
     """
-    from motor.cli import key_dudosa
+    from motor.cli import key_dudosa, percentil_energia
     from motor.modelos import es_track
     from motor.tonalidad import camelot_a_clasica
 
@@ -1239,6 +1240,10 @@ def _radio_track(t) -> dict:
         "tonalidad": clasica or None,
         "key_dudosa": key_dudosa(t.key_acuerdo),
         "energia": round(float(t.energy), 3),      # percentil 0..1 dentro de la biblioteca
+        # El mismo percentil, 0-100 y redondeado por el motor: es EXACTAMENTE el número que
+        # imprimen `list`, `info` y `radio` en la terminal. Va calculado desde acá y no en el
+        # front porque redondear del otro lado son dos redondeos para un solo dato (§6).
+        "energia_pct": percentil_energia(t.energy),
         "dur": round(float(t.duration), 1),
         "es_track": es_track(t.duration),
         "audio": f"/api/radio/audio/{tid}",
@@ -1278,6 +1283,42 @@ def _radio_envoltura(estado: str, motivo: str | None) -> dict:
             "motivo": motivo}
 
 
+def _radio_config(config) -> dict:
+    """Un `RadioConfig` como lo lee la pantalla.
+
+    Una sola función para los dos lugares que lo devuelven —el que se usó en
+    /api/radio/set y los de fábrica en /api/radio/biblioteca—: dos copias de esta lista
+    de campos se desincronizan en silencio, que es lo mismo que evita no escribir los
+    defaults en la firma del endpoint.
+    """
+    return {"largo": config.length, "curva": config.curve, "artist_gap": config.artist_gap,
+            "mmr_lambda": config.mmr_lambda, "semilla": config.seed,
+            "randomness": config.randomness}
+
+
+def _radio_opciones() -> dict | None:
+    """Lo que la pantalla necesita del motor y no es un track: las curvas que acepta, los
+    valores de fábrica de `RadioConfig` y la leyenda del `?`.
+
+    Va acá por el mismo motivo por el que /api/radio/set no escribe los defaults en su
+    firma: un front con `['peak','warmup','flat']` y `largo: 20` escritos a mano es un
+    segundo juego de defaults que se desincroniza sin que nadie se entere, y una curva que
+    el motor ya no acepta se descubriría recién cuando el set vuelve 400. La leyenda viaja
+    con esto porque el `?` de la confianza también se dibuja en la lista para elegir la
+    semilla, y un `?` sin explicación al lado es un símbolo mudo (§6).
+
+    `None` si no está el paquete motor: ahí no hay radio que configurar.
+    """
+    try:
+        from motor.cli import LEYENDA_KEY
+        from motor.energia import CURVES
+        from motor.radio import RadioConfig
+    except ImportError:
+        return None
+    return {"curvas": list(CURVES), "config_default": _radio_config(RadioConfig()),
+            "leyenda_key": LEYENDA_KEY}
+
+
 @app.get("/api/radio/biblioteca")
 async def radio_biblioteca():
     """La biblioteca del motor, para elegir la semilla del set.
@@ -1288,7 +1329,10 @@ async def radio_biblioteca():
     """
     tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
     return {**_radio_envoltura(estado, motivo), "total": len(tracks),
-            "tracks": [_radio_track(t) for t in tracks]}
+            "tracks": [_radio_track(t) for t in tracks],
+            # Sin el paquete motor no hay curvas ni defaults que ofrecer: null, no un
+            # juego inventado (el `estado` ya dice por qué).
+            "opciones": _radio_opciones() if estado != _RADIO_SIN_MOTOR else None}
 
 
 @app.get("/api/radio/set")
@@ -1362,9 +1406,7 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
     return {
         **_radio_envoltura(estado, motivo),
         # Lo que efectivamente se usó, leído del propio RadioConfig.
-        "config": {"largo": config.length, "curva": config.curve,
-                   "artist_gap": config.artist_gap, "mmr_lambda": config.mmr_lambda,
-                   "semilla": config.seed, "randomness": config.randomness},
+        "config": _radio_config(config),
         "semilla": _radio_track(elegida),
         "pasos": [_radio_paso(i, p) for i, p in enumerate(rset, 1)],
         "total": len(rset),

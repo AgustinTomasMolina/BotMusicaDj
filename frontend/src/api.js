@@ -76,6 +76,77 @@ export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
 // URL de audio de un track de la biblioteca (para el <audio> del preview).
 export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 
+/* ---------- Radio DJ (motor/) ----------
+   OJO: esta biblioteca NO es la de la home. Aquella sale del XML de Rekordbox; esta, de la
+   base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
+   rutas distintos → endpoints distintos (ver el comentario de /api/radio/* en server.py). */
+
+// Biblioteca del motor: tracks para elegir semilla + `opciones` (curvas, defaults de
+// RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
+// Nunca `.then(json)` a secas, por lo mismo que `getRadioSet`: un 500 de FastAPI viene en
+// text/plain y el parseo explotaba, así que la pantalla decía "no pude conectar" cuando el
+// servidor sí había contestado. Un fallo del server se devuelve con la misma forma que usa
+// el backend para degradar (`estado`/`motivo`), así la pantalla lo muestra sin casos nuevos.
+export async function getRadioBiblioteca() {
+  const r = await fetch('/api/radio/biblioteca')
+  const data = await cuerpoRadio(r)
+  if (r.ok && Array.isArray(data?.tracks)) return data
+  const suelto = data?.error_texto || data?.error || data?.detail
+  return {
+    configurada: false, estado: `http-${r.status}`, total: 0, tracks: [], opciones: null,
+    motivo: `El servidor no pudo darme la biblioteca del motor (HTTP ${r.status})`
+      + (suelto ? `: ${typeof suelto === 'string' ? suelto : JSON.stringify(suelto)}` : '.'),
+  }
+}
+
+// Cuerpo de una respuesta de la radio, sin asumir que es JSON.
+//
+// `r.json()` a secas era un error: FastAPI manda los 500 como text/plain ("Internal Server
+// Error"), así que el parseo explotaba, el await caía en el catch de la llamada y la
+// pantalla decía "no pude conectar con el servidor, revisá que esté corriendo" — cuando el
+// servidor SÍ contestó y lo que falló fue adentro. Un mensaje que miente sobre qué pasó
+// manda al usuario a arreglar lo que no está roto (§6).
+//
+// Devuelve el objeto parseado, o `{error_texto}` con el cuerpo crudo si no era JSON: son
+// dos claves distintas a propósito, para que quien lo muestre sepa si está leyendo el
+// motivo que escribió el motor o el texto suelto de un fallo del servidor.
+async function cuerpoRadio(r) {
+  const txt = await r.text()
+  try { return JSON.parse(txt) } catch { return { error_texto: txt.trim() } }
+}
+
+// El set. Solo viajan los parámetros que el usuario tocó: los que falten los pone
+// `RadioConfig` en el backend, que además contesta en `config` con los que usó. Escribir
+// los defaults acá sería un segundo juego que se desincroniza en silencio.
+// Devuelve {ok, status, data} porque un 400 (semilla que no es track, curva inexistente)
+// trae el motivo del motor en `data.error` y hay que mostrarlo tal cual.
+export async function getRadioSet(params) {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  const r = await fetch(`/api/radio/set?${qs.toString()}`)
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}
+
+export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
+
+// El <audio> avisa que falló pero no deja leer el cuerpo de la respuesta, y el 404 de la
+// radio explica si el archivo se movió o si la base se escaneó en otra máquina. Se vuelve
+// a pedir el primer byte solo para leer ese motivo. null = no hay motivo del backend.
+export async function radioAudioMotivo(id) {
+  try {
+    const r = await fetch(radioAudioUrl(id), { headers: { Range: 'bytes=0-0' } })
+    if (r.ok) return null
+    const d = await cuerpoRadio(r)
+    // Mismo criterio que el set: el motivo del backend tal cual, y si el cuerpo no era JSON
+    // (un 500 en text/plain) se dice el código, que es lo único cierto que hay.
+    if (d.error) return d.error
+    return d.error_texto ? `El servidor falló al servir este audio (HTTP ${r.status}): ${d.error_texto}` : null
+  } catch { return null }
+}
+
 // Historial persistido: búsquedas, playlists (modo lista) y descargas.
 export async function historial(limite = 20) {
   const r = await fetch(`/api/historial?limite=${limite}`)

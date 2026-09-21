@@ -111,6 +111,22 @@ def key_dudosa(acuerdo: str | None) -> bool:
         return True
 
 
+def percentil_energia(energia: float) -> int:
+    """La energía de un track como se MUESTRA: percentil 0-100 dentro de la biblioteca.
+
+    `Track.energy` ya es ese percentil, pero en 0..1 (lo calcula `store._track` con
+    `energia.percentil`). Esto es solo cómo se escribe, y vive acá —al lado de `key_dudosa`
+    y `marca_key`, no adentro de `cmd_list`— por el mismo motivo que ellas: la pantalla de
+    radio de MusiFlix (`server.py`) muestra el MISMO número que esta terminal, y dos
+    redondeos distintos para un solo dato son dos datos (§6). Antes esta cuenta estaba
+    escrita tres veces en este archivo: `_fila`, `cmd_list` y `cmd_info`.
+
+    `round` y no `int`: es el mismo redondeo al par que hacía el `format(x, '.0f')` de esas
+    tres, así que las tablas imprimen exactamente lo que imprimían.
+    """
+    return round(energia * 100)
+
+
 def marca_key(acuerdo: str | None) -> str:
     """Lo que va pegado a la key en las tablas: `"?"` si es dudosa, un espacio si no.
 
@@ -286,7 +302,7 @@ def _fila(t: Track) -> str:
     """El renglón de un track: BPM con un decimal, las DOS notaciones de key y el `?` de
     confianza cuando la key es dudosa (spec §6)."""
     return (f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<3}{marca_key(t.key_acuerdo)} "
-            f"energía {t.energy * 100:3.0f}  {t.label}")
+            f"energía {percentil_energia(t.energy):3d}  {t.label}")
 
 
 # --- scan ------------------------------------------------------------------------------
@@ -430,7 +446,7 @@ def cmd_list(args: argparse.Namespace) -> int:
           f"artista — título (sin tags: el nombre del archivo)")
     for t in biblioteca:
         print(f"{t.bpm:6.1f} BPM  {t.key:>3} {_clasica(t.key):<4}{marca_key(t.key_acuerdo)} "
-              f"{t.energy * 100:7.0f}  {t.label}")
+              f"{percentil_energia(t.energy):7d}  {t.label}")
     print(f"\n{len(biblioteca)} tracks · energía = percentil dentro de esta biblioteca (0-100)")
     print(LEYENDA_KEY)
     return OK
@@ -498,7 +514,8 @@ def cmd_info(args: argparse.Namespace) -> int:
         # marca donde se lee, no solo en una nota al pie (§6).
         ("key", f"{t.key} ({_clasica(t.key)}) {marca_key(t.key_acuerdo)}".rstrip()),
         ("acuerdo key", _detalle_acuerdo(f.key_acuerdo, f.key_tramos)),
-        ("energía", f"percentil {t.energy * 100:.0f} de la biblioteca (RMS crudo {f.energy_raw:.4f})"),
+        ("energía", f"percentil {percentil_energia(t.energy)} de la biblioteca "
+                    f"(RMS crudo {f.energy_raw:.4f})"),
         ("rms", _o_no_medido(f.rms, ".4f")),
         ("onsets/s", _o_no_medido(f.onset_rate, ".2f")),
         ("ratio percusivo", _o_no_medido(f.percussive_ratio, ".2f")),
