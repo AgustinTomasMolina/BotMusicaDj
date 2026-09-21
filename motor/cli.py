@@ -141,6 +141,24 @@ def aviso_fragmentos(cuantos: int, encabezado: str) -> str:
             f"(siguen en la biblioteca: `list` e `info` los muestran).")
 
 
+def motivo_semilla_no_track(t: Track) -> str:
+    """Por qué la radio no arma un set desde este archivo: no es un track.
+
+    El texto vive acá, y no adentro de `cmd_radio`, porque la MISMA decisión la toma la API
+    (`server.py`, `/api/radio/set`): la pantalla de radio rechaza la semilla con el mismo
+    criterio (`modelos.es_track`) y tiene que dar el mismo motivo. Dos textos para una sola
+    regla se leen como dos reglas distintas — es el mismo argumento que `aviso_fragmentos`.
+
+    Lo que NO va acá es el consejo de cómo elegir otra semilla: `djradio list` es una
+    instrucción de terminal y en una pantalla web no significa nada. Cada frontend agrega
+    el suyo; `cmd_radio` agrega el de la CLI.
+    """
+    return (f"{t.label} dura {t.duration:.1f} s y la radio necesita al menos "
+            f"{DURACION_MINIMA_TRACK_S:.0f} s: es un loop, un sample o una nota de voz, no "
+            f"un track. Su BPM y su key no son datos confiables, y el set entero se arma "
+            f"contra ellos.")
+
+
 def _abrir_store(db: Path):
     """`Store(db)`, con una base de esquema desconocido o bloqueada convertida en error de uso.
 
@@ -576,11 +594,8 @@ def cmd_radio(args: argparse.Namespace) -> int:
     # alguien se lo pide a propósito (ver `test_la_semilla_corta_arma_set_igual`).
     if not es_track(semilla.duration):
         raise ErrorDeUso(
-            f"{semilla.label} dura {semilla.duration:.1f} s y la radio necesita al menos "
-            f"{DURACION_MINIMA_TRACK_S:.0f} s: es un loop, un sample o una nota de voz, no "
-            f"un track. Su BPM y su key no son datos confiables, y el set entero se arma "
-            f"contra ellos.\n  Elegí una semilla con `djradio list` (o `python -m motor "
-            f"list`), que muestra toda la biblioteca.")
+            f"{motivo_semilla_no_track(semilla)}\n  Elegí una semilla con `djradio list` "
+            f"(o `python -m motor list`), que muestra toda la biblioteca.")
 
     rset = build_set(semilla, biblioteca, config)
     print(f"Set desde: {semilla.label}  (curva {config.curve}, semilla {config.seed}, "

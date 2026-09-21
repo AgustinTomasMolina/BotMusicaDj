@@ -15,6 +15,9 @@ frontend/dist
 # Python
 **/__pycache__
 *.py[cod]
+# Los tests de los paquetes que sí entran a la imagen (motor/, calidad/, benchmark/):
+# el runtime no los corre y pesan más que el código.
+**/tests
 .venv/
 venv/
 .pytest_cache/
