@@ -35,6 +35,7 @@ from motor.cli import (  # noqa: E402
     aviso_fragmentos,
     key_dudosa,
     motivo_semilla_no_track,
+    percentil_energia,
     titular_corte,
 )
 from motor.embeddings import DIM  # noqa: E402
@@ -243,6 +244,7 @@ def test_biblioteca_del_motor_dice_lo_que_tiene_la_base(server, client, bibliote
         "label": "Artista A — Uno", "titulo": "Uno", "artista": "Artista A",
         "bpm": 128.4, "camelot": "8A", "tonalidad": "Am", "key_dudosa": False,
         "energia": round(float(tracks["uno.wav"].energy), 3),
+        "energia_pct": percentil_energia(tracks["uno.wav"].energy),
         "dur": 240.0, "es_track": True,
         "audio": f"/api/radio/audio/{server._radio_id(biblioteca['rutas']['uno.wav'])}",
     }
@@ -263,6 +265,62 @@ def test_biblioteca_del_motor_dice_lo_que_tiene_la_base(server, client, bibliote
     loop = por_id[server._radio_id(biblioteca["rutas"]["loop.wav"])]
     assert (loop["dur"], loop["es_track"]) == (10.0, False), \
         "el loop tiene que listarse marcado como lo que no es un track"
+
+
+def _energias_que_imprime_la_cli(db, capsys, labels) -> dict:
+    """El percentil de energía que la TERMINAL muestra para cada track, leído de la tabla
+    que imprime `python -m motor list` sobre esa base.
+
+    Se lee la salida real y no se llama a `percentil_energia`: lo que hay que proteger es
+    que la pantalla y la consola digan el MISMO número, y un test que llamara a la misma
+    función que llama el endpoint no se enteraría si la tabla de la CLI cambiara de cuenta.
+    """
+    from motor.cli import main
+
+    assert main(["--db", str(db), "list"]) == 0
+    impreso = capsys.readouterr().out
+    # La fila termina en `{percentil:7d}  {label}`: se corta el label y se toma el último
+    # número. El label lleva espacios y un guion largo, así que se busca por el final.
+    leidos = {}
+    for linea in impreso.splitlines():
+        for label in labels:
+            if linea.endswith(f"  {label}"):
+                leidos[label] = int(linea[:-len(label)].split()[-1])
+    assert len(leidos) == len(labels), f"no pude leer la tabla de `list`:\n{impreso}"
+    return leidos
+
+
+def test_la_energia_de_la_pantalla_es_la_que_imprime_la_terminal(server, client, biblioteca,
+                                                                 capsys):
+    """El percentil 0-100 de /api/radio/* contra el de `python -m motor list`, track por
+    track, en la biblioteca y en cada paso del set (decisión del dueño 2026-09-21: en
+    pantalla se muestra el percentil, no el 0..1 crudo)."""
+    d = client.get("/api/radio/biblioteca").json()
+    en_pantalla = {t["label"]: t["energia_pct"] for t in d["tracks"]}
+    en_consola = _energias_que_imprime_la_cli(biblioteca["db"], capsys, list(en_pantalla))
+
+    # 1) La terminal sigue imprimiendo lo de siempre. El valor esperado NO sale de
+    #    `percentil_energia` —sería la función bajo prueba comparándose consigo misma— sino
+    #    de la cuenta que estaba escrita a mano en las tres tablas de la CLI antes de que
+    #    fuera una función: `format(energy * 100, '.0f')`. Si el redondeo cambia (un `int()`
+    #    que trunca, por ejemplo), esto falla aunque el endpoint y la CLI sigan de acuerdo.
+    tracks = _tracks_del_motor(biblioteca["db"])
+    como_siempre = {t.label: int(format(t.energy * 100, ".0f")) for t in tracks.values()}
+    assert en_consola == como_siempre, "la tabla de `list` cambió el redondeo de la energía"
+
+    # 2) Y la pantalla dice exactamente ese número.
+    assert en_pantalla == en_consola, "la pantalla muestra otro percentil que la terminal"
+
+    # Que sea un percentil 0-100 y no el 0..1 disfrazado: con este catálogo el más
+    # energético queda arriba de 50 y el más tranquilo en 0.
+    assert (max(en_consola.values()) > 50 and min(en_consola.values()) == 0), en_consola
+
+    # Y el mismo número en cada paso del set, que es donde se lee mientras se arma.
+    id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
+    pasos = client.get("/api/radio/set", params={"track": id_uno}).json()["pasos"]
+    assert pasos, "sin pasos no hay nada que comparar"
+    assert {p["track"]["label"]: p["track"]["energia_pct"] for p in pasos} == \
+        {p["track"]["label"]: en_consola[p["track"]["label"]] for p in pasos}
 
 
 def test_biblioteca_trae_las_curvas_y_los_defaults_del_motor(client, biblioteca):

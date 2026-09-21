@@ -1218,11 +1218,12 @@ def _radio_track(t) -> dict:
     """Un track del motor como lo muestra la CLI (§6): BPM con UN decimal, las dos
     notaciones de key, el `?` de confianza y la energía.
 
-    El `?` sale de `motor.cli.key_dudosa` y la clásica de `motor.tonalidad.camelot_a_clasica`:
-    las mismas funciones que la terminal, no una copia de la regla. `es_track` viaja para que
+    El `?` sale de `motor.cli.key_dudosa`, el percentil de energía de
+    `motor.cli.percentil_energia` y la clásica de `motor.tonalidad.camelot_a_clasica`: las
+    mismas funciones que la terminal, no una copia de la regla. `es_track` viaja para que
     el front pueda avisar antes de pedir el set que ese archivo no sirve de semilla.
     """
-    from motor.cli import key_dudosa
+    from motor.cli import key_dudosa, percentil_energia
     from motor.modelos import es_track
     from motor.tonalidad import camelot_a_clasica
 
@@ -1239,6 +1240,10 @@ def _radio_track(t) -> dict:
         "tonalidad": clasica or None,
         "key_dudosa": key_dudosa(t.key_acuerdo),
         "energia": round(float(t.energy), 3),      # percentil 0..1 dentro de la biblioteca
+        # El mismo percentil, 0-100 y redondeado por el motor: es EXACTAMENTE el número que
+        # imprimen `list`, `info` y `radio` en la terminal. Va calculado desde acá y no en el
+        # front porque redondear del otro lado son dos redondeos para un solo dato (§6).
+        "energia_pct": percentil_energia(t.energy),
         "dur": round(float(t.duration), 1),
         "es_track": es_track(t.duration),
         "audio": f"/api/radio/audio/{tid}",

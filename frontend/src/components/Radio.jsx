@@ -22,11 +22,9 @@ import { IconRadio, IconPause, IconPlayFill, IconSearch } from './icons'
 // y el pie dice cuántos quedaron afuera (nunca se esconde en silencio).
 const MAX_LISTA = 200
 
-// El backend redondea el BPM a un decimal y la energía a tres: `toFixed` con esos mismos
-// decimales no redondea nada, solo evita que 128.0 se dibuje "128" (§6: redondear el BPM a
-// entero es mentir) y que la columna de energía baile entre "0.3" y "0.265".
+// El backend redondea el BPM a un decimal: `toFixed(1)` con ese mismo decimal no redondea
+// nada, solo evita que 128.0 se dibuje "128" (§6: redondear el BPM a entero es mentir).
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))
-const fmtEnergia = (v) => (v === null || v === undefined ? null : Number(v).toFixed(3))
 
 // Los controles de la radio. Los VALORES no están acá: salen de `opciones.config_default`
 // del backend, que los lee del propio RadioConfig.
@@ -42,7 +40,10 @@ const CAMPOS = [
    confianza y la energía. Lo que el backend manda `null` se dibuja como guion, no como 0. */
 function DatosTrack({ t, leyenda, conDuracion = true }) {
   const bpm = fmtBpm(t.bpm)
-  const energia = fmtEnergia(t.energia)
+  // El percentil ya viene redondeado por el motor (`energia_pct`, el MISMO número que
+  // imprime la terminal): se dibuja tal cual. El 0..1 crudo también viaja en la respuesta,
+  // pero no se muestra — el dueño eligió percentil, no los dos (2026-09-21).
+  const energia = t.energia_pct
   const hayKey = !!(t.camelot || t.tonalidad)
   // El `?` explica de qué duda: el texto es el del motor (`leyenda_key`), no uno de acá.
   const porQueDuda = leyenda || 'la detección de la key no es confiable'
@@ -63,7 +64,7 @@ function DatosTrack({ t, leyenda, conDuracion = true }) {
         // algo que no está). El motivo de que falte lo dice el motor en `info <track>`.
         <span className="mb mb-key" title="El motor no le reconoció una key"><span className="mb-label">Key</span><b>—</b></span>
       )}
-      <span className="mb" title="Energía: percentil dentro de la biblioteca (0 = la más baja, 1 = la más alta)">
+      <span className="mb" title="Energía: percentil dentro de la biblioteca (0-100) — ese porcentaje de tu biblioteca tiene menos energía que este track">
         <span className="mb-label">Energía</span><b>{energia ?? '—'}</b>
       </span>
       {conDuracion && (
@@ -203,13 +204,15 @@ function Paso({ paso, leyenda, sonando, onAudio, errorAudio }) {
    el desvío y el Spearman de la spec §4 los calcula el motor y la API todavía no los manda,
    así que no se muestran en vez de inventarlos. */
 function Curva({ pasos }) {
-  const hay = pasos.some((p) => p.track.energia !== null && p.track.energia !== undefined)
+  const hay = pasos.some((p) => p.track.energia_pct !== null && p.track.energia_pct !== undefined)
   if (!hay) return null
   return (
     <div className="rcurva" aria-hidden="true" title="Energía de cada paso (percentil dentro de la biblioteca)">
       {pasos.map((p) => {
-        const e = p.track.energia
-        return <i key={p.n} style={{ height: e == null ? '2px' : `${Math.max(2, e * 100)}%` }} className={e == null ? 'is-sin' : ''} />
+        // La altura sale del mismo percentil 0-100 que dice la fila: una barra y un número
+        // que salieran de cuentas distintas se contradicen en pantalla.
+        const e = p.track.energia_pct
+        return <i key={p.n} style={{ height: e == null ? '2px' : `${Math.max(2, e)}%` }} className={e == null ? 'is-sin' : ''} />
       })}
     </div>
   )
