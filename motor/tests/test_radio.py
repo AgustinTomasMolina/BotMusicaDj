@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from motor.energia import ascending_spearman, energy_target  # noqa: E402
-from motor.modelos import Track  # noqa: E402
+from motor.modelos import DURACION_MINIMA_TRACK_S, Track, es_track  # noqa: E402
 from motor.radio import (  # noqa: E402
     STOP_ARTIST_GAP,
     STOP_BIBLIOTECA_VACIA,
@@ -44,10 +44,11 @@ def unit(vec) -> np.ndarray:
 
 
 def track(nombre: str, bpm: float, key: str = "8A", energy: float = 0.5,
-          emb=(1.0, 0.0, 0.0, 0.0), artist: str | None = None) -> Track:
+          emb=(1.0, 0.0, 0.0, 0.0), artist: str | None = None,
+          duration: float = 300.0) -> Track:
     return Track(
         path=Path("/lib") / nombre,
-        duration=300.0,
+        duration=duration,
         bpm=bpm,
         key=key,
         energy=energy,
@@ -681,3 +682,172 @@ def test_musical_fit_vectorizado_es_bit_a_bit_el_escalar():
             assert malos.size == 0, (
                 f"{cfg} goal={goal}: {malos.size} encajes difieren; primero en "
                 f"{malos[0]}: escalar {esperado[malos[0]]!r} vs vector {obtenido[malos[0]]!r}")
+
+
+# ---------------------------------------------------------------------------
+# Lo que no es un track: loops, samples y notas de voz (menos de 90 s)
+# ---------------------------------------------------------------------------
+
+def test_es_track_toma_el_borde_y_descarta_la_duracion_ausente():
+    """El corte es `>=`: un track que dura EXACTAMENTE el mínimo es un track. Y una duración
+    que no está (None, 0.0, NaN) cae del lado de "no es un track": §6 dice que un dato
+    ausente no se presenta como si fuera bueno."""
+    assert es_track(DURACION_MINIMA_TRACK_S) is True, "el borde exacto tiene que ser un track"
+    assert es_track(DURACION_MINIMA_TRACK_S - 0.1) is False
+    assert es_track(DURACION_MINIMA_TRACK_S + 0.1) is True
+    for ausente in (0.0, None, float("nan")):
+        assert es_track(ausente) is False, f"{ausente!r} pasó por track"
+
+
+def test_una_sola_regla_de_que_es_un_track():
+    """La radio y el pipeline usan EL MISMO objeto, no dos copias iguales hoy. Si el corte
+    estuviera escrito dos veces, bajarlo en un lado dejaría un archivo que el pipeline manda
+    a iTunes y la radio no propone, o al revés. Es el mismo acuerdo que `calidad.tags.EXTS`
+    con los formatos de audio."""
+    import motor.modelos
+    import motor.radio
+    import pipeline.reporte
+
+    for modulo in (motor.radio, pipeline.reporte):
+        assert modulo.es_track is motor.modelos.es_track, f"{modulo.__name__} tiene su regla"
+    assert pipeline.reporte.DURACION_MINIMA_TRACK_S is motor.modelos.DURACION_MINIMA_TRACK_S
+
+
+def test_un_sample_no_entra_al_set_aunque_sea_el_mejor_candidato():
+    """Un loop de 8 s con el MISMO BPM, key y timbre que la semilla le gana el score a
+    cualquier track de verdad; igual no entra, y el set se queda con el track peor puntuado.
+
+    El control está adentro del test: la MISMA biblioteca con el loop durando 240 s sí lo
+    elige. Lo único que cambia entre las dos corridas es la duración, así que si el sample
+    aparece en la primera no puede ser "el score dio distinto".
+    """
+    semilla = track("semilla.wav", 128.0, "8A", energy=0.5, emb=(1.0, 0.0))
+    clon_corto = track("loop.wav", 128.0, "8A", energy=0.5, emb=(1.0, 0.0), duration=8.0)
+    clon_largo = track("loop.wav", 128.0, "8A", energy=0.5, emb=(1.0, 0.0), duration=240.0)
+    otro = track("real.wav", 127.0, "9A", energy=0.5, emb=(0.6, 0.8), duration=240.0)
+    config = RadioConfig(length=3, artist_gap=0)
+
+    rset = build_set(semilla, [clon_corto, otro], config)
+    assert rutas(rset) == ["semilla.wav", "real.wav"], (
+        f"un loop de {clon_corto.duration:.0f} s entró al set: {rutas(rset)}")
+    assert rset.fragments == 1, f"no contó el loop que ignoró: fragments={rset.fragments}"
+
+    control = build_set(semilla, [clon_largo, otro], config)
+    assert control[1].track.path.name == "loop.wav", (
+        "el control no elige el clon ni durando 240 s: el test no está probando el filtro "
+        f"de duración sino el score ({rutas(control)})")
+    assert control.fragments == 0
+
+
+def test_el_corte_dice_cuantos_fragmentos_entraban_en_la_tolerancia():
+    """El caso de la biblioteca chica: lo único que mezcla con el anterior son samples.
+
+    Sin la coletilla, la pantalla dice "ninguno de los 1 candidatos entra en ±8% de 150.0
+    BPM" y el DJ ve en `list` dos archivos de 151 BPM: parece que el motor miente. Con ella,
+    el motivo es completo y se puede verificar contra `list`.
+    """
+    semilla = track("semilla.wav", 150.0, "8A", emb=(1.0, 0.0))
+    lejano = track("lejano.wav", 100.0, "8A", emb=(0.6, 0.8))
+    fragmentos = [track("loop1.wav", 151.0, "8A", emb=(1.0, 0.0), duration=8.0),
+                  track("loop2.wav", 149.0, "8A", emb=(1.0, 0.0), duration=31.0)]
+
+    rset = build_set(semilla, [lejano, *fragmentos], RadioConfig(length=5))
+    assert rutas(rset) == ["semilla.wav"], f"entró un fragmento al set: {rutas(rset)}"
+    assert rset.stop == STOP_SIN_MEZCLABLES, rset.stop
+    assert rset.fragments == 2, rset.fragments
+    assert "2 archivos de menos de 90 s" in rset.stop_detail, rset.stop_detail
+    assert "2 de ellos entraban en ±8% de 150.0 BPM" in rset.stop_detail, rset.stop_detail
+
+    # Y si NINGUNO entraba, no se dice que entraban: sería mandar al DJ a mirar archivos que
+    # no le servían igual.
+    fuera = [track("loop3.wav", 100.0, "8A", emb=(1.0, 0.0), duration=8.0)]
+    otro = build_set(semilla, [lejano, *fuera], RadioConfig(length=5))
+    assert otro.stop == STOP_SIN_MEZCLABLES and otro.fragments == 1, otro
+    assert "1 archivo de menos de 90 s" in otro.stop_detail, otro.stop_detail
+    assert "entraban en" not in otro.stop_detail and "entraba en" not in otro.stop_detail, \
+        f"inventó que un fragmento de 100 BPM entraba en ±8% de 150: {otro.stop_detail}"
+
+
+def test_una_biblioteca_de_puros_fragmentos_lo_dice():
+    """64 archivos escaneados y ninguno es un track: "la biblioteca no aporta ningún track
+    distinto de la semilla" a secas mandaría a buscar un bug de la base."""
+    semilla = track("semilla.wav", 128.0, "8A", emb=(1.0, 0.0))
+    fragmentos = [track(f"loop{i}.wav", 128.0, "8A", emb=(1.0, 0.0), duration=5.0 * (i + 1))
+                  for i in range(3)]
+
+    rset = build_set(semilla, fragmentos, RadioConfig(length=10))
+    assert rutas(rset) == ["semilla.wav"] and rset.stop == STOP_BIBLIOTECA_VACIA, rset
+    assert rset.fragments == 3, rset.fragments
+    assert "3 archivos de la biblioteca duran menos de 90 s" in rset.stop_detail, \
+        rset.stop_detail
+
+
+def test_la_semilla_corta_arma_set_igual():
+    """El filtro es de CANDIDATOS: `build_set` arma el set desde la semilla que le pasen,
+    dure lo que dure (docstring de `motor.radio`, punto 4).
+
+    Quien rechaza una semilla que no es un track es la CLI (`cli.cmd_radio`, con un error de
+    uso), no la librería: un test o un experimento tienen que poder pedirlo igual. Este test
+    es la otra mitad de `test_radio_rechaza_una_semilla_que_no_es_un_track` — juntos dicen
+    dónde vive la decisión.
+
+    Lo que sí está cerrado es que la semilla no puede volver como candidata.
+    """
+    semilla = track("vocal_fx.wav", 128.0, "8A", emb=(1.0, 0.0), duration=3.8)
+    uno = track("uno.wav", 127.0, "8A", emb=(0.9, 0.436), duration=240.0)
+
+    rset = build_set(semilla, [semilla, uno], RadioConfig(length=5))
+    assert rutas(rset) == ["vocal_fx.wav", "uno.wav"], rutas(rset)
+    assert rset.fragments == 0, (
+        "la semilla se contó como fragmento ignorado, y no es un candidato que se descartó: "
+        f"fragments={rset.fragments}")
+    assert rset[1].transition.from_bpm == 128.0, "la transición no salió del BPM de la semilla"
+
+
+def test_los_fragmentos_se_cuentan_aunque_el_set_no_se_corte():
+    """`fragments` no es parte del corte: es la resta entre lo que hay en la biblioteca y lo
+    que la radio miró, y el DJ la necesita IGUAL cuando el set se completa (64 archivos en
+    `list`, un set de 20 elegido entre 53). Los dos caminos que devuelven un set completo
+    tienen que traerla: el atajo de `length == 1` y el return del final.
+    """
+    semilla = track("semilla.wav", 128.0, "8A", emb=(1.0, 0.0))
+    real = track("real.wav", 127.0, "8A", emb=(0.9, 0.436), duration=240.0)
+    loop = track("loop.wav", 128.0, "8A", emb=(1.0, 0.0), duration=8.0)
+
+    completo = build_set(semilla, [real, loop], RadioConfig(length=2))
+    assert rutas(completo) == ["semilla.wav", "real.wav"], rutas(completo)
+    assert completo.stop is None and completo.is_complete, (
+        f"el caso necesita un set COMPLETO para probar el camino del final: {completo.stop}")
+    assert completo.fragments == 1, (
+        f"el set se completó y perdió la cuenta de lo que ignoró: {completo.fragments}")
+
+    # `length == 1` sale por un atajo antes del loop: es otro return, y también cuenta.
+    solo_semilla = build_set(semilla, [real, loop], RadioConfig(length=1))
+    assert rutas(solo_semilla) == ["semilla.wav"] and solo_semilla.is_complete, solo_semilla
+    assert solo_semilla.fragments == 1, (
+        f"el atajo de length=1 perdió la cuenta de lo ignorado: {solo_semilla.fragments}")
+
+
+def test_similar_tampoco_devuelve_fragmentos():
+    """`similar` esconde lo mismo que la radio: dos comandos sobre la misma biblioteca no
+    pueden tener dos ideas de qué es un track.
+
+    Control adentro del test: el clon de 8 s es el MÁS parecido posible (mismo embedding),
+    así que si no sale es por la duración y no por el score — con la misma biblioteca y el
+    clon durando 240 s sale primero.
+    """
+    t = track("semilla.wav", 128.0, "8A", emb=(1.0, 0.0))
+    clon_corto = track("clon.wav", 128.0, "8A", emb=(1.0, 0.0), duration=8.0)
+    clon_largo = track("clon.wav", 128.0, "8A", emb=(1.0, 0.0), duration=240.0)
+    lejano = track("lejano.wav", 128.0, "8A", emb=(0.0, 1.0), duration=240.0)
+
+    nombres = [otro.path.name for otro, _ in similar(t, [clon_corto, lejano], n=10)]
+    assert nombres == ["lejano.wav"], f"un fragmento salió como parecido: {nombres}"
+
+    control = [otro.path.name for otro, _ in similar(t, [clon_largo, lejano], n=10)]
+    assert control[0] == "clon.wav", (
+        f"el control no pone al clon primero ni durando 240 s: {control}")
+
+    # Una biblioteca de puros fragmentos no tiene con qué comparar: lista vacía, no el
+    # fragmento "porque es lo único que hay".
+    assert similar(t, [clon_corto], n=10) == []

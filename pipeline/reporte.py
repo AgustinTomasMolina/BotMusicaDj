@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from benchmark.evaluar import acuerdo_unanime
+from motor.modelos import DURACION_MINIMA_TRACK_S, es_track
 
 # La confianza de la key NO es el campo `confianza`: con `tono()` —el default— es la
 # correlación Krumhansl, y está MEDIDO que no predice nada (Pearson +0.022). Lo que sí
@@ -29,10 +30,10 @@ from benchmark.evaluar import acuerdo_unanime
 # cualquier otra cosa —tramos en desacuerdo, o ningún tramo para comparar— va atenuada
 # y con '?'. Ver `_dato_key`.
 
-# Por debajo de esto no es un track: es un loop, un sample o una nota de voz. El corte sale
-# de la distribución real de la carpeta, no de una intuición: hay 8 archivos entre 8 y 52 s
-# y el siguiente salta a 96 s. Estos NO van a iTunes.
-DURACION_MINIMA_TRACK_S = 90.0
+# El corte de "esto no es un track" (`DURACION_MINIMA_TRACK_S` + `es_track`) vive en
+# `motor.modelos`, importado arriba: es el mismo criterio que usa la radio para no proponer
+# un sample como siguiente, y el número no puede estar escrito dos veces. Acá lo que hace es
+# dejar el archivo PENDIENTE y fuera de iTunes.
 
 APROBADO, DESCARTADO, PENDIENTE = "aprobado", "descartado", "pendiente"
 
@@ -76,10 +77,6 @@ class Fila:
 def sin_nombre(artista: str, titulo: str) -> bool:
     """Sin artista o sin título no se puede mandar a iTunes: entraría como '(sin título)'."""
     return not (artista or "").strip() or not (titulo or "").strip()
-
-
-def es_track(duracion_s: float) -> bool:
-    return (duracion_s or 0) >= DURACION_MINIMA_TRACK_S
 
 
 def motivos_pendiente(bandera: str, grupo_id: int, artista: str, titulo: str,
