@@ -12,7 +12,7 @@ gana en cada posición; cuánto vale una transición lo decide `scoring`.
 
 ---
 
-Tres decisiones que alguien va a querer "arreglar", y por qué no:
+Cuatro decisiones que alguien va a querer "arreglar", y por qué no:
 
 1. **Si no hay candidato mezclable, el set SE CORTA.** No se afloja la tolerancia de BPM.
    La spec §4 pide *0% de transiciones fuera de ±8%*: es un 0%, no un "casi siempre". Una
@@ -35,6 +35,24 @@ Tres decisiones que alguien va a querer "arreglar", y por qué no:
    `"artist_gap"`, que es distinto de `"sin_candidatos_mezclables"`, y quien llama puede
    bajar `artist_gap` a 0 y volver a pedir. Dice `"artist_gap"` exactamente cuando el gap
    tapó a algún candidato que SÍ mezclaba (`_motivo_de_corte`): es cuando bajarlo ayuda.
+
+4. **Lo que no es un track no se propone NUNCA, y no es configurable.** Por debajo de
+   `modelos.DURACION_MINIMA_TRACK_S` (90 s) hay loops, samples y notas de voz: la
+   biblioteca los guarda con su duración —no se pierde nada, `list` e `info` los siguen
+   mostrando— pero `build_set` no los pone en el pool (`_pool`). Un sample de 8 s en el
+   medio de un set no es una transición floja: es un hueco. El criterio es el MISMO objeto
+   que usa el pipeline para no mandarlos a iTunes, importado, no copiado.
+
+   Lo que SÍ sigue entrando es la SEMILLA: `build_set` arma el set desde el track que le
+   pasen, dure lo que dure. Filtrar la semilla acá sería decidir por quien llama (¿error?,
+   ¿set vacío?) desde la capa que menos contexto tiene; la decisión es de la CLI, y hoy
+   está abierta. Lo que la semilla no puede hacer es volver como candidata: `_pool` ya la
+   saca por ruta.
+
+   El corte de `RadioSet` dice cuántos archivos se ignoraron (`RadioSet.fragments`) y, si
+   alguno de ellos ENTRABA en ±8%, lo dice también: si no, el usuario ve "no hay más
+   tracks compatibles" con un `list` lleno de tracks del BPM correcto y no tiene forma de
+   entender la diferencia.
 """
 from __future__ import annotations
 
@@ -46,7 +64,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from motor.energia import CURVES, energy_target
-from motor.modelos import Track
+from motor.modelos import DURACION_MINIMA_TRACK_S, Track, es_track
 from motor.scoring import (
     FACTORES_OCTAVA,
     TOLERANCIA_BPM,
@@ -200,11 +218,17 @@ class RadioSet:
     `stop` es `None` cuando el set llegó al largo pedido. Si no, trae el código del corte
     (`STOP_*`) y `stop_detail` la explicación en castellano. Cortar en silencio sería
     devolver un set de 4 donde se pidieron 20 sin decir nada.
+
+    `fragments` son los archivos de la biblioteca que la radio ni miró por durar menos de
+    `modelos.DURACION_MINIMA_TRACK_S` (loops, samples, notas de voz). Va acá y no solo en
+    el texto del corte porque explica una resta que el usuario ve igual cuando el set se
+    completa: la biblioteca tiene 64 archivos y la radio eligió entre 53.
     """
 
     steps: tuple[SetStep, ...]
     stop: str | None = None
     stop_detail: str = ""
+    fragments: int = 0
 
     def __len__(self) -> int:
         return len(self.steps)
@@ -469,16 +493,23 @@ def _unicos_por_ruta(tracks: Iterable[Track]) -> list[Track]:
     return [por_ruta[k] for k in sorted(por_ruta)]
 
 
-def _pool(seed_track: Track, biblioteca: Sequence[Track]) -> list[Track]:
-    """Candidatos: la biblioteca sin la semilla y sin rutas repetidas, ordenada por ruta.
+def _pool(seed_track: Track, biblioteca: Sequence[Track]) -> tuple[list[Track], list[Track]]:
+    """`(candidatos, fragmentos)`: la biblioteca sin la semilla y sin rutas repetidas,
+    partida en lo que ES un track y lo que no (`modelos.es_track`), las dos ordenadas por
+    ruta.
 
     Ordenar por ruta acá es lo que hace determinista todo lo de abajo: el desempate de
     scores iguales pasa a ser "el de ruta menor" sin tener que ordenar de nuevo en cada
     posición. Las rutas repetidas las resuelve `_unicos_por_ruta` (iguales → una; distintas
     → `ValueError`).
+
+    Los `fragmentos` no vuelven nunca al set; se devuelven solo para poder explicar el
+    corte (punto 4 del docstring del módulo).
     """
     propia = str(seed_track.path)
-    return _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
+    todos = _unicos_por_ruta(t for t in biblioteca if str(t.path) != propia)
+    return ([t for t in todos if es_track(t.duration)],
+            [t for t in todos if not es_track(t.duration)])
 
 
 def _artist_blocked(candidato: Track, elegidos: list[Track], gap: int) -> bool:
@@ -558,8 +589,9 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
 
     En cada posición:
 
-    1. Candidatos = biblioteca − ya elegidos − los que repiten artista dentro de
-       `artist_gap`.
+    1. Candidatos = biblioteca − la semilla − lo que no es un track (menos de
+       `modelos.DURACION_MINIMA_TRACK_S`: loops, samples, notas de voz) − ya elegidos −
+       los que repiten artista dentro de `artist_gap`.
     2. Se descarta todo lo que tenga `mezclabilidad == 0` — o sea, todo lo que esté fuera
        de ±8% de BPM (spec §4).
     3. De lo que queda, gana el mayor `scoring.score(encaje, ...)`. Con `randomness>0` se
@@ -577,12 +609,18 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
     primera_meta = energy_target(0, config.length, config.curve)
     steps = [SetStep(seed_track, _transition(None, seed_track, primera_meta))]
 
-    pool = _pool(seed_track, biblioteca)
+    pool, fragmentos = _pool(seed_track, biblioteca)
     if not pool:
-        return RadioSet(tuple(steps), STOP_BIBLIOTECA_VACIA,
-                        "la biblioteca no aporta ningún track distinto de la semilla")
+        detalle = "la biblioteca no aporta ningún track distinto de la semilla"
+        if fragmentos:
+            n = len(fragmentos)
+            detalle += (f"; {_plural(n, 'archivo', 'archivos')} de la biblioteca "
+                        f"{'dura' if n == 1 else 'duran'} menos de "
+                        f"{DURACION_MINIMA_TRACK_S:.0f} s (loops, samples, notas de voz): no "
+                        f"son tracks y la radio no los propone")
+        return RadioSet(tuple(steps), STOP_BIBLIOTECA_VACIA, detalle, len(fragmentos))
     if config.length == 1:
-        return RadioSet(tuple(steps))
+        return RadioSet(tuple(steps), fragments=len(fragmentos))
 
     emb = _matrix(pool)
     v_seed = np.asarray(seed_track.embedding, dtype=np.float64)
@@ -635,7 +673,7 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
         candidatos = np.flatnonzero(libres_mask & mezclan)   # índices en pool, ascendentes
         if candidatos.size == 0:
             stop, detalle = _motivo_de_corte(anterior, int(np.count_nonzero(~usados)), libres,
-                                             tapados, config)
+                                             tapados, config, fragmentos)
             break
 
         encajes = _musical_fit_vector(sim_seed[candidatos], sim_prev[candidatos],
@@ -660,11 +698,12 @@ def build_set(seed_track: Track, biblioteca: Sequence[Track],
         steps.append(SetStep(elegido, _transition(anterior, elegido, goal, encaje)))
         redundancy = np.maximum(redundancy, emb @ np.asarray(elegido.embedding, dtype=np.float64))
 
-    return RadioSet(tuple(steps), stop, detalle)
+    return RadioSet(tuple(steps), stop, detalle, len(fragmentos))
 
 
 def _motivo_de_corte(anterior: Track, quedan: int, libres: int, tapados: int,
-                     config: RadioConfig) -> tuple[str, str]:
+                     config: RadioConfig,
+                     fragmentos: Sequence[Track] = ()) -> tuple[str, str]:
     """`(stop, stop_detail)` cuando ninguna posición tiene candidato.
 
     La pregunta que el corte le contesta al usuario es "¿bajar `artist_gap` ayudaría?":
@@ -679,17 +718,20 @@ def _motivo_de_corte(anterior: Track, quedan: int, libres: int, tapados: int,
       mandar al usuario a tocar la perilla equivocada.
 
     `quedan` son los no usados; `libres`, los que pasaron el gap; `tapados`, los que el gap
-    sacó y que sí mezclaban.
+    sacó y que sí mezclaban. `fragmentos` son los archivos que la radio nunca miró por no
+    ser tracks: no cambian NINGUNO de los tres motivos (no son candidatos y no van a serlo),
+    solo se agregan al texto para que el número de arriba cierre con lo que muestra `list`.
     """
     tol = f"±{TOLERANCIA_BPM:.0%}"
+    nota = _nota_fragmentos(anterior, fragmentos, tol)
     if quedan == 0:
-        return STOP_BIBLIOTECA_AGOTADA, "no quedan tracks sin usar en la biblioteca"
+        return STOP_BIBLIOTECA_AGOTADA, "no quedan tracks sin usar en la biblioteca" + nota
     bloqueados_total = quedan - libres
     if tapados > 0:
         return STOP_ARTIST_GAP, (
             f"de los {quedan} candidatos que quedan, los únicos que entran en {tol} de "
             f"{anterior.bpm:.1f} BPM ({tapados}) repiten artista dentro de "
-            f"artist_gap={config.artist_gap}; bajar artist_gap los habilita"
+            f"artist_gap={config.artist_gap}; bajar artist_gap los habilita" + nota
         )
     detalle = (
         f"ninguno de los {quedan} candidatos que quedan entra en {tol} de "
@@ -699,7 +741,37 @@ def _motivo_de_corte(anterior: Track, quedan: int, libres: int, tapados: int,
     if bloqueados_total:
         detalle += (f"; de esos, {bloqueados_total} además repiten artista dentro de "
                     f"artist_gap={config.artist_gap} (bajar el gap no ayuda)")
-    return STOP_SIN_MEZCLABLES, detalle
+    return STOP_SIN_MEZCLABLES, detalle + nota
+
+
+def _nota_fragmentos(anterior: Track, fragmentos: Sequence[Track], tol: str) -> str:
+    """La coletilla del corte sobre lo que la radio ignoró por no ser un track.
+
+    Sin ella, el usuario lee "ninguno de los 54 candidatos entra en ±8% de 94.0 BPM" y ve en
+    `list` un archivo de 86 BPM que sí entraría: la pantalla parecería estar mintiendo. Con
+    ella, el motivo es completo y verificable.
+
+    Cuántos "entraban" NO se estima: se mide con `mezclabilidad`, la misma función que la
+    compuerta, contra el mismo track anterior. Si ninguno entraba, no se dice cuántos
+    entraban —sería ruido—, solo que se ignoraron.
+    """
+    if not fragmentos:
+        return ""
+    entraban = sum(1 for f in fragmentos
+                   if mezclabilidad(anterior.bpm, f.bpm, anterior.key, f.key) > 0.0)
+    cuantos = _plural(len(fragmentos), "archivo", "archivos")
+    nota = (f"; además hay {cuantos} de menos de {DURACION_MINIMA_TRACK_S:.0f} s que la "
+            f"radio ignora (loops, samples, notas de voz: no son tracks)")
+    if entraban:
+        nota += (f", y {entraban} de ellos {'entraba' if entraban == 1 else 'entraban'} en "
+                 f"{tol} de {anterior.bpm:.1f} BPM")
+    return nota
+
+
+def _plural(n: int, singular: str, plural: str) -> str:
+    """`"1 archivo"` / `"11 archivos"`. Escribir "archivo(s)" en un mensaje que el usuario
+    lee cuando algo salió corto es ruido justo donde tiene que entender qué pasó."""
+    return f"{n} {singular if n == 1 else plural}"
 
 
 def _elegir(ranked: list[tuple[float, int, float]], config: RadioConfig,

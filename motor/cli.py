@@ -42,7 +42,7 @@ from motor.energia import (
     ascending_spearman,
     energy_curve_deviation,
 )
-from motor.modelos import Track, require_text
+from motor.modelos import DURACION_MINIMA_TRACK_S, Track, require_text
 from motor.tonalidad import camelot_a_clasica
 
 OK = 0
@@ -499,6 +499,35 @@ def linea_curva(energias: list[float], curva: str = "peak", largo: int | None = 
     return texto + f"{rho:+.2f}"
 
 
+def titular_corte(stop: str | None) -> str:
+    """El renglón que encabeza un set corto, uno por código de `RadioSet.stop`.
+
+    Los cuatro cortes se leen distinto porque se arreglan distinto, y decir "no hay más
+    tracks compatibles" cuando SÍ los hay y los tapó el `artist_gap` sería exactamente el
+    dato que miente de §6. El detalle (`stop_detail`) va abajo con los números; esto es el
+    titular, para que no haya que leer un párrafo para saber qué pasó.
+
+    Un código desconocido —una versión nueva de `radio.py` contra una CLI vieja— no se
+    inventa: se dice que el set se cortó y el detalle explica el resto.
+    """
+    from motor.radio import (
+        STOP_ARTIST_GAP,
+        STOP_BIBLIOTECA_AGOTADA,
+        STOP_BIBLIOTECA_VACIA,
+        STOP_SIN_MEZCLABLES,
+    )
+
+    return {
+        STOP_SIN_MEZCLABLES: "NO HAY MÁS TRACKS COMPATIBLES: ninguno de los que quedan "
+                             "entra en la tolerancia de BPM",
+        STOP_ARTIST_GAP: "NO HAY MÁS TRACKS COMPATIBLES SIN REPETIR ARTISTA: los que "
+                         "mezclan están tapados por artist_gap",
+        STOP_BIBLIOTECA_AGOTADA: "NO QUEDAN MÁS TRACKS: todos los compatibles ya sonaron",
+        STOP_BIBLIOTECA_VACIA: "NO HAY CON QUÉ SEGUIR: la biblioteca no aporta otro track "
+                               "además de la semilla",
+    }.get(stop, "EL SET SE CORTÓ")
+
+
 def cmd_radio(args: argparse.Namespace) -> int:
     from motor.export import write_m3u8
     from motor.radio import RadioConfig, build_set
@@ -522,8 +551,17 @@ def cmd_radio(args: argparse.Namespace) -> int:
 
     print(f"\n{len(rset)} de {config.length} tracks pedidos · "
           f"{linea_curva(rset.energies, config.curve, config.length)}")
+    # Se dice SIEMPRE, no solo cuando el set queda corto: es la resta entre lo que muestra
+    # `list` y entre lo que la radio eligió. Sin esto, con la biblioteca de descargas recién
+    # escaneada el DJ ve 64 tracks y un set armado sobre 53, sin ninguna explicación.
+    if rset.fragments:
+        print(f"La radio ignoró {rset.fragments} archivo"
+              f"{'' if rset.fragments == 1 else 's'} de menos de "
+              f"{DURACION_MINIMA_TRACK_S:.0f} s: loops, samples y notas de voz no son tracks "
+              f"y nunca entran al set (siguen en la biblioteca: `list` e `info` los muestran).")
     if not rset.is_complete:
-        print(f"SET CORTO: quedó en {len(rset)} de {config.length}. Motivo ({rset.stop}): "
+        print(f"{titular_corte(rset.stop)}.")
+        print(f"  El set quedó en {len(rset)} de {config.length} · por qué ({rset.stop}): "
               f"{rset.stop_detail}")
     print(LEYENDA_KEY)
 

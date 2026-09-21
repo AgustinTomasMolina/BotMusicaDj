@@ -22,6 +22,7 @@ import pytest  # noqa: E402
 import soundfile as sf  # noqa: E402
 
 from motor.cli import main  # noqa: E402
+from motor.modelos import DURACION_MINIMA_TRACK_S  # noqa: E402
 from motor.radio import bpm_delta_pct, key_relation  # noqa: E402
 from motor.sintetico import click_track  # noqa: E402
 from motor.store import Store  # noqa: E402
@@ -62,6 +63,17 @@ def _scan(db, carpeta, *extra):
     return ["--db", db, "scan", carpeta, "--licencia", LICENCIA, "--origen", ORIGEN, *extra]
 
 
+# Duración de los tracks de la biblioteca compartida. Cinco segundos POR ENCIMA del corte de
+# `es_track`: abajo de ese corte la radio no los propondría nunca (son loops y samples) y
+# `radio` devolvería siempre un set de un solo track. Sale del mismo objeto que el motor, no
+# de un 95.0 escrito a mano, para que mover el corte no deje estos tests probando otra cosa.
+# Lo más corto posible a propósito: analizar 90 s cuesta ~3 s por archivo contra ~0.6 s de un
+# clip de 10 s, y esta fixture analiza siete. Sigue estando por debajo de los ~135 s que
+# necesita `tono_consenso` para tres tramos disjuntos, así que la key sigue viniendo sin
+# acuerdo ("0/0" → `?`), que es lo que asumen los tests de la marca de la key.
+DUR_BIBLIOTECA_S = DURACION_MINIMA_TRACK_S + 5.0
+
+
 @pytest.fixture(scope="module")
 def biblioteca(tmp_path_factory):
     """Carpeta con el catálogo + base ya escaneada. Devuelve (carpeta, db, spec por nombre)."""
@@ -71,7 +83,8 @@ def biblioteca(tmp_path_factory):
     spec = {}
     for i, (bpm, nota, modo) in enumerate(CATALOGO):
         # Ganancia distinta por track: la energía no puede empatar en toda la biblioteca.
-        ruta = _escribir(carpeta, bpm, nota, modo, seed=i, ganancia=0.3 + 0.1 * ((i * 3) % 7))
+        ruta = _escribir(carpeta, bpm, nota, modo, dur=DUR_BIBLIOTECA_S, seed=i,
+                         ganancia=0.3 + 0.1 * ((i * 3) % 7))
         spec[ruta.name] = (bpm, nota, modo)
     db = raiz / "biblio.sqlite"
     assert main([str(a) for a in _scan(db, carpeta)]) == 0, "el scan de la biblioteca falló"
@@ -537,6 +550,16 @@ def _marcas_de_key(out: str) -> dict[str, str]:
             for m in (PASO.match(linea) for linea in out.splitlines()) if m}
 
 
+def _corte(out: str):
+    """El bloque de dos renglones que `radio` imprime cuando el set no llegó al largo pedido:
+    el titular (qué pasó, en una línea) y abajo los números con el código y el motivo.
+    `None` si el set se completó. Los grupos son `titular`, `largo`, `pedido`, `stop` y
+    `detalle`."""
+    return re.search(r"^(?P<titular>.+)\.\n {2}El set quedó en (?P<largo>\d+) de "
+                     r"(?P<pedido>\d+) · por qué \((?P<stop>\w+)\): (?P<detalle>.+)$",
+                     out, re.M)
+
+
 def _dist_bpm(a, b):
     """±8% de §4 como pitch real: `1 - lento / rápido` en la mejor de las tres lecturas.
 
@@ -584,10 +607,11 @@ def test_radio_punta_a_punta(tmp_path, capsys, biblioteca):
                   if linea and not linea.startswith("#")]
     assert rutas_m3u8 == [str(t.path) for t in tracks], f"el M3U8 no tiene el set en orden: {rutas_m3u8}"
     if len(tracks) < 7:
-        assert f"SET CORTO: quedó en {len(tracks)} de 7." in out, \
-            f"el set tiene {len(tracks)} de 7 y no lo dice:\n{out}"
+        m = _corte(out)
+        assert m, f"el set tiene {len(tracks)} de 7 y no lo dice:\n{out}"
+        assert (m.group("largo"), m.group("pedido")) == (str(len(tracks)), "7"), m.groups()
     else:
-        assert "SET CORTO" not in out, f"llegó al largo pedido y dice que quedó corto:\n{out}"
+        assert _corte(out) is None, f"llegó al largo pedido y dice que quedó corto:\n{out}"
 
 
 def test_radio_misma_semilla_misma_salida(tmp_path, capsys, biblioteca):
@@ -603,17 +627,70 @@ def test_radio_misma_semilla_misma_salida(tmp_path, capsys, biblioteca):
 
 
 def test_radio_set_corto_dice_por_que(tmp_path, capsys, biblioteca):
-    """170 BPM no tiene nada a ±8% en el catálogo: el set queda en 1 y lo tiene que decir."""
+    """170 BPM no tiene nada a ±8% en el catálogo: el set queda en 1 y lo tiene que decir.
+
+    El titular tiene que decir que NO HAY MÁS TRACKS COMPATIBLES en una línea: el corte mudo
+    (un set de 1 donde se pidieron 5, con el motivo escondido en un párrafo) es lo que se
+    vino a arreglar.
+    """
     _, db_bib, _ = biblioteca
     db = tmp_path / "db.sqlite"
     shutil.copy(db_bib, db)
     codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_170", "--largo", 5)
     assert codigo == 0, out
     assert len(_pasos(out)) == 1, f"con 170 BPM no hay nada mezclable y el set tiene más:\n{out}"
-    m = re.search(r"SET CORTO: quedó en (\d+) de (\d+)\. Motivo \((\w+)\): (.+)", out)
+    m = _corte(out)
     assert m, f"el set quedó corto y no lo dijo:\n{out}"
-    assert m.groups()[:3] == ("1", "5", "sin_candidatos_mezclables"), m.groups()
-    assert "170.0 BPM" in m.group(4) and "±8%" in m.group(4), f"el motivo no explica: {m.group(4)}"
+    assert m.group("titular") == ("NO HAY MÁS TRACKS COMPATIBLES: ninguno de los que quedan "
+                                 "entra en la tolerancia de BPM"), m.group("titular")
+    assert (m.group("largo"), m.group("pedido"), m.group("stop")) == \
+        ("1", "5", "sin_candidatos_mezclables"), m.groups()
+    assert "170.0 BPM" in m.group("detalle") and "±8%" in m.group("detalle"), \
+        f"el motivo no explica: {m.group('detalle')}"
+
+
+def test_la_radio_no_propone_un_sample_de_la_carpeta(tmp_path, capsys):
+    """Punta a punta con audio de verdad: un loop de 10 s al MISMO BPM que la semilla.
+
+    El loop se escanea y QUEDA en la biblioteca con su duración —no se pierde nada, `list` lo
+    sigue mostrando—, pero la radio no lo propone y dice en pantalla que lo ignoró. El caso
+    salió de la carpeta de descargas real: 11 de 64 archivos duran menos de 90 s y varios
+    caen justo en el BPM del resto, así que eran candidatos de primera fila.
+    """
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    _escribir(carpeta, 126.0, "C", "maj", dur=DUR_BIBLIOTECA_S, seed=0, ganancia=0.4)
+    _escribir(carpeta, 128.0, "G", "maj", dur=DUR_BIBLIOTECA_S, seed=1, ganancia=0.8)
+    y, sr = click_track(126.0, dur=10.0, nota="C", modo="maj", seed=2)
+    sf.write(str(carpeta / "loop_126_Cmaj.wav"), (y * 0.6).astype(np.float32), sr,
+             subtype="FLOAT")
+    db = tmp_path / "db.sqlite"
+    assert main([str(a) for a in _scan(db, carpeta)]) == 0, "el scan falló"
+    capsys.readouterr()
+
+    with Store(db) as store:
+        por_nombre = {t.path.name: t for t in store.load_library()}
+    loop = por_nombre["loop_126_Cmaj.wav"]
+    semilla = por_nombre["click_126_Cmaj.wav"]
+    assert 0 < loop.duration < DURACION_MINIMA_TRACK_S, \
+        f"el loop quedó con duración {loop.duration:.1f} s: el caso necesita un fragmento"
+    # Sin esto el test no probaría nada: si el loop no mezclara, lo sacaría la compuerta de
+    # ±8% y la exclusión por duración no se estaría ejerciendo.
+    assert _dist_bpm(semilla.bpm, loop.bpm) < 0.08, \
+        f"el loop ({loop.bpm}) no entra en ±8% de la semilla ({semilla.bpm}): no era candidato"
+
+    codigo, out, _ = _correr(capsys, "--db", db, "radio", "click_126", "--largo", 3)
+    assert codigo == 0, out
+    elegidos = [label for label, _ in _pasos(out)]
+    assert loop.label not in elegidos, f"el loop de 10 s entró al set: {elegidos}\n{out}"
+    assert elegidos == [semilla.label, por_nombre["click_128_Gmaj.wav"].label], \
+        f"el set no eligió el único otro track de verdad: {elegidos}\n{out}"
+    assert (f"La radio ignoró 1 archivo de menos de {DURACION_MINIMA_TRACK_S:.0f} s") in out, \
+        f"ignoró un archivo y no lo dijo:\n{out}"
+
+    codigo, listado, _ = _correr(capsys, "--db", db, "list")
+    assert codigo == 0 and loop.label in listado, \
+        f"el loop desapareció de la biblioteca; solo tenía que salir de la radio:\n{listado}"
 
 
 # --- dependencias y esquema: fallar ANTES de trabajar -----------------------------------

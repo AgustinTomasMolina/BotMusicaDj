@@ -24,6 +24,30 @@ from pathlib import Path
 
 import numpy as np
 
+# Por debajo de esto no es un track: es un loop, un sample o una nota de voz. El corte sale
+# de la distribución real de la carpeta de descargas, no de una intuición: había 8 archivos
+# entre 8 y 52 s y el siguiente saltaba a 96 s.
+#
+# UNA sola definición para todo el repo, como `calidad.tags.EXTS` con los formatos de audio.
+# Vive acá —en el módulo que define qué ES un track— y no en `pipeline.reporte`, que es
+# donde nació, porque ahora la usan dos capas que no se conocen entre sí:
+#   · el pipeline no lo manda a iTunes y lo deja PENDIENTE (`pipeline.reporte`);
+#   · la radio no lo propone nunca como siguiente (`motor.radio._pool`).
+# Dos copias del número harían que bajarlo en un lado y no en el otro dejara un archivo que
+# el pipeline trata como track y la radio no. NO es configurable a propósito: es el criterio
+# de "esto no es un track", no una preferencia del usuario.
+DURACION_MINIMA_TRACK_S = 90.0
+
+
+def es_track(duracion_s: float) -> bool:
+    """¿Este archivo es un track, o un fragmento (loop, sample, nota de voz)?
+
+    Una duración ausente (`None`, 0.0) cae del lado de "no es un track": no se sabe cuánto
+    dura, y tratar un dato que falta como si fuera largo es justo lo que §6 llama un dato
+    que miente. NaN también cae de ese lado (ninguna comparación con NaN es verdadera).
+    """
+    return (duracion_s or 0) >= DURACION_MINIMA_TRACK_S
+
 
 def require_text(value: object, field: str) -> str:
     """Exige un texto con contenido. Devuelve el valor tal cual (no lo reescribe: recortar
