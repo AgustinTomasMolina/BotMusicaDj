@@ -325,6 +325,14 @@ export default function Radio() {
         setError(motivoDelRechazo(r.status, r.data))
         return
       }
+      if (!Array.isArray(r.data?.pasos)) {
+        // 200 con un cuerpo que no es un set (un proxy que devuelve HTML, por ejemplo).
+        // Sin esto, `set_.pasos.map` más abajo tira y la pantalla queda en blanco: la app no
+        // tiene ErrorBoundary, así que un cuerpo raro se llevaba puesta toda la vista.
+        setSet(null)
+        setError('El servidor contestó algo que no es un set. Revisá que estés hablando con MusiFlix y no con otra cosa.')
+        return
+      }
       setSet(r.data)
       // Lo que se USÓ, que puede no ser lo que se pidió (un campo vacío lo llenó el motor).
       if (r.data.config) setCfg({ ...r.data.config })

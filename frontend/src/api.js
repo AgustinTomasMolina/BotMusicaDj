@@ -83,7 +83,21 @@ export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 
 // Biblioteca del motor: tracks para elegir semilla + `opciones` (curvas, defaults de
 // RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
-export const getRadioBiblioteca = () => fetch('/api/radio/biblioteca').then(json)
+// Nunca `.then(json)` a secas, por lo mismo que `getRadioSet`: un 500 de FastAPI viene en
+// text/plain y el parseo explotaba, así que la pantalla decía "no pude conectar" cuando el
+// servidor sí había contestado. Un fallo del server se devuelve con la misma forma que usa
+// el backend para degradar (`estado`/`motivo`), así la pantalla lo muestra sin casos nuevos.
+export async function getRadioBiblioteca() {
+  const r = await fetch('/api/radio/biblioteca')
+  const data = await cuerpoRadio(r)
+  if (r.ok && Array.isArray(data?.tracks)) return data
+  const suelto = data?.error_texto || data?.error || data?.detail
+  return {
+    configurada: false, estado: `http-${r.status}`, total: 0, tracks: [], opciones: null,
+    motivo: `El servidor no pudo darme la biblioteca del motor (HTTP ${r.status})`
+      + (suelto ? `: ${typeof suelto === 'string' ? suelto : JSON.stringify(suelto)}` : '.'),
+  }
+}
 
 // Cuerpo de una respuesta de la radio, sin asumir que es JSON.
 //
