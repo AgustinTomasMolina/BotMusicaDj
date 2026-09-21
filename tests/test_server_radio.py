@@ -265,6 +265,37 @@ def test_biblioteca_del_motor_dice_lo_que_tiene_la_base(server, client, bibliote
         "el loop tiene que listarse marcado como lo que no es un track"
 
 
+def test_biblioteca_trae_las_curvas_y_los_defaults_del_motor(client, biblioteca):
+    """La pantalla dibuja los controles con esto: tiene que ser lo que dice el motor y no
+    una copia en el server (mismo argumento que `test_set_sin_parametros_...`, y el mismo
+    valor: `config_default` se compara contra el `config` que devuelve /api/radio/set)."""
+    from motor.cli import LEYENDA_KEY
+    from motor.energia import CURVES
+
+    d = client.get("/api/radio/biblioteca").json()
+    por_defecto = RadioConfig()
+    assert d["opciones"] == {
+        "curvas": list(CURVES),
+        "config_default": {"largo": por_defecto.length, "curva": por_defecto.curve,
+                           "artist_gap": por_defecto.artist_gap,
+                           "mmr_lambda": por_defecto.mmr_lambda,
+                           "semilla": por_defecto.seed,
+                           "randomness": por_defecto.randomness},
+        "leyenda_key": LEYENDA_KEY,
+    }
+    usado = client.get("/api/radio/set", params={"track": "uno"}).json()["config"]
+    assert d["opciones"]["config_default"] == usado, \
+        "los defaults que dibuja la pantalla no son los que el motor termina usando"
+
+
+def test_biblioteca_sin_el_paquete_motor_no_inventa_curvas(client, biblioteca, monkeypatch):
+    """Sin motor no hay curvas ni defaults que ofrecer: `null`, no un juego escrito a mano
+    (§6 — un dato que miente es peor que uno ausente)."""
+    monkeypatch.setitem(sys.modules, "motor.store", None)
+    d = client.get("/api/radio/biblioteca").json()
+    assert (d["estado"], d["opciones"]) == ("sin-motor", None)
+
+
 # --------------------------------------------------------------- /api/radio/set
 
 def test_set_sin_parametros_usa_los_defaults_del_motor(client, biblioteca):
