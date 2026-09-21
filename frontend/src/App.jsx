@@ -10,6 +10,7 @@ import HistorialDrawer from './components/HistorialDrawer'
 import Modal from './components/Modal'
 import Playlists from './components/Playlists'
 import PlaylistsRail from './components/PlaylistsRail'
+import Radio from './components/Radio'
 import { Home, ResultsView, ListForm, ListResults } from './components/views'
 
 export default function App() {
@@ -57,6 +58,9 @@ export default function App() {
   /* ---------- Navegación / búsquedas ---------- */
   const goHome = () => { setModal(null); setView({ kind: 'home' }) }
   const openListaForm = () => { setModal(null); setView({ kind: 'listaForm' }) }
+  // Radio DJ (motor/): misma navegación que Playlists — chip en la barra y entrada en el menú.
+  // preview.stop(): el fragmento que quedó sonando del hover no puede pisar el audio del set.
+  const openRadio = () => { setModal(null); preview.cancel(); preview.stop(); setView({ kind: 'radio' }) }
   // id opcional (desde el rail): abre esa playlist. Desde otros botones llega el evento → se ignora.
   // `pick` cambia en cada click: volver a tocar en el rail la misma playlist después de elegir otra
   // adentro de la vista tiene que volver a seleccionarla.
@@ -230,6 +234,7 @@ export default function App() {
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
+  else if (view.kind === 'radio') body = <Radio />
   else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
@@ -258,6 +263,7 @@ export default function App() {
         previewEnabled={previewEnabled} togglePreview={togglePreview}
         onLista={openListaForm}
         onPlaylists={openPlaylists} activePlaylist={activePlaylist}
+        onRadio={openRadio} radioActive={view.kind === 'radio'}
         onConsola={() => setConsoleOpen((o) => !o)} consoleActive={consoleOpen}
         onHistorial={toggleHistorial} historialActive={historialOpen}
         onBrand={goHome}

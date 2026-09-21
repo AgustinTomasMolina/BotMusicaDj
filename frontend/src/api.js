@@ -76,6 +76,44 @@ export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
 // URL de audio de un track de la biblioteca (para el <audio> del preview).
 export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 
+/* ---------- Radio DJ (motor/) ----------
+   OJO: esta biblioteca NO es la de la home. Aquella sale del XML de Rekordbox; esta, de la
+   base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
+   rutas distintos → endpoints distintos (ver el comentario de /api/radio/* en server.py). */
+
+// Biblioteca del motor: tracks para elegir semilla + `opciones` (curvas, defaults de
+// RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
+export const getRadioBiblioteca = () => fetch('/api/radio/biblioteca').then(json)
+
+// El set. Solo viajan los parámetros que el usuario tocó: los que falten los pone
+// `RadioConfig` en el backend, que además contesta en `config` con los que usó. Escribir
+// los defaults acá sería un segundo juego que se desincroniza en silencio.
+// Devuelve {ok, status, data} porque un 400 (semilla que no es track, curva inexistente)
+// trae el motivo del motor en `data.error` y hay que mostrarlo tal cual.
+export async function getRadioSet(params) {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  const r = await fetch(`/api/radio/set?${qs.toString()}`)
+  return { ok: r.ok, status: r.status, data: await json(r) }
+}
+
+export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
+
+// El <audio> avisa que falló pero no deja leer el cuerpo de la respuesta, y el 404 de la
+// radio explica si el archivo se movió o si la base se escaneó en otra máquina. Se vuelve
+// a pedir el primer byte solo para leer ese motivo. null = no hay motivo del backend.
+export async function radioAudioMotivo(id) {
+  try {
+    const r = await fetch(radioAudioUrl(id), { headers: { Range: 'bytes=0-0' } })
+    if (r.ok) return null
+    const d = await r.json()
+    return (d && d.error) || null
+  } catch { return null }
+}
+
 // Historial persistido: búsquedas, playlists (modo lista) y descargas.
 export async function historial(limite = 20) {
   const r = await fetch(`/api/historial?limite=${limite}`)

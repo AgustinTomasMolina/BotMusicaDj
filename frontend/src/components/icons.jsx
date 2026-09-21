@@ -24,3 +24,8 @@ export const IconSparkles = (p) => <S {...p}><path d="m12 3 1.9 4.1L18 9l-4.1 1.
 export const IconTrash = (p) => <S {...p}><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6" /><path d="M10 11v6" /><path d="M14 11v6" /></S>
 export const IconSearch = (p) => <S {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></S>
 export const IconFilter = (p) => <S {...p}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></S>
+// Emisión (ondas saliendo de un punto) y no un ▶: la radio ARMA un set, no lo reproduce sola.
+// Mismo criterio que el mockup de design/dj-radio (README, 2026-09-16).
+export const IconRadio = (p) => <S {...p}><circle cx="12" cy="12" r="2" /><path d="M7.8 16.2a6 6 0 0 1 0-8.4" /><path d="M16.2 7.8a6 6 0 0 1 0 8.4" /><path d="M4.9 19.1a10 10 0 0 1 0-14.2" /><path d="M19.1 4.9a10 10 0 0 1 0 14.2" /></S>
+export const IconPause = (p) => <S {...p} fill="currentColor" stroke="none"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></S>
+export const IconPlayFill = (p) => <S {...p} fill="currentColor" stroke="none"><path d="M8 5v14l11-7z" /></S>
