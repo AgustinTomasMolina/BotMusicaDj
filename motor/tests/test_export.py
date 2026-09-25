@@ -171,6 +171,33 @@ def test_fin_de_linea_crlf_fijo_y_salto_final(tmp_path):
     assert b"\xef\xbb\xbf" not in crudo, "el BOM le rompe la cabecera a algunos parsers"
 
 
+def test_un_salto_de_linea_en_el_titulo_no_rompe_la_estructura(tmp_path):
+    """Un tag con saltos adentro (pasa con descripciones pegadas de Bandcamp o YouTube)
+    partía el #EXTINF en dos, y el pedazo de abajo quedaba como un renglón suelto que el
+    reproductor lee como RUTA: un archivo roto en la playlist (anotado en la tarea #15).
+    Se prueban los saltos de Windows, Unix y Mac viejo y el separador Unicode, cada uno
+    en el artista o en el título."""
+    tracks = [_track("a.mp3", title="Real Love\r\n(ONYX002)"),
+              _track("b.mp3", artist="Cuatro\nMil", title="Hz"),
+              _track("c.mp3", artist=None, title="Linea\runo dos"),
+              _track("d.mp3", title=" Normal  con  dobles   espacios")]
+    destino = write_m3u8(tracks, tmp_path / "set.m3u8")
+    crudo = _crudo(destino)
+
+    assert _parse_m3u8(destino) == [str(t.path) for t in tracks], \
+        "un salto en un título metió un renglón suelto que se lee como ruta"
+    assert _extinf(destino) == ["#EXTINF:300,Artista — Real Love (ONYX002)",
+                                "#EXTINF:300,Cuatro Mil — Hz",
+                                "#EXTINF:300,Linea uno dos",
+                                "#EXTINF:300,Artista —  Normal  con  dobles   espacios"]
+    # Un título SIN saltos sale tal cual, espacios incluidos (el parser de arriba strippea,
+    # por eso se mira el crudo).
+    assert "\r\n#EXTINF:300,Artista —  Normal  con  dobles   espacios\r\n" in crudo
+    # 1 cabecera + 3 renglones por track, y ningún salto que no sea el CRLF del formato.
+    assert crudo.splitlines() == crudo.split("\r\n")[:-1], "quedó un salto suelto adentro"
+    assert len(crudo.splitlines()) == 1 + 3 * len(tracks)
+
+
 def test_set_vacio_escribe_solo_la_cabecera(tmp_path):
     destino = write_m3u8([], tmp_path / "vacio.m3u8")
     assert destino.read_bytes() == b"#EXTM3U\r\n"
