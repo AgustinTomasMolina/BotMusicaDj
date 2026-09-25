@@ -712,7 +712,12 @@ def cmd_puente(args: argparse.Namespace) -> int:
     un track, A y B iguales, rango de intermedios inválido).
     """
     from motor.export import write_m3u8
-    from motor.puente import STOP_EXTREMO_NO_TRACK, STOP_MISMO_TRACK, build_bridge
+    from motor.puente import (
+        STOP_EXTREMO_NO_TRACK,
+        STOP_EXTREMO_SIN_BPM,
+        STOP_MISMO_TRACK,
+        build_bridge,
+    )
 
     with _abrir_existente(args.db) as store:
         biblioteca = store.load_library()
@@ -723,17 +728,25 @@ def cmd_puente(args: argparse.Namespace) -> int:
                               args.max_intermedios)
     except ValueError as e:
         raise ErrorDeUso(str(e)) from e
-    if puente.stop == STOP_EXTREMO_NO_TRACK:
+    if puente.stop in (STOP_EXTREMO_NO_TRACK, STOP_EXTREMO_SIN_BPM):
         raise ErrorDeUso(f"{puente.stop_detail}.\n  Elegí otro extremo con `djradio list` "
                          f"(o `python -m motor list`), que muestra toda la biblioteca.")
     if puente.stop == STOP_MISMO_TRACK:
-        raise ErrorDeUso(f"El {puente.stop_detail}.")
+        detalle = puente.stop_detail
+        raise ErrorDeUso(f"{detalle[:1].upper()}{detalle[1:]}.")
 
     rango = (f"{args.min_intermedios}" if args.min_intermedios == args.max_intermedios
              else f"entre {args.min_intermedios} y {args.max_intermedios}")
     print(f"Puente desde: {origen.label}")
     print(f"       hasta: {destino.label}")
     print(f"({rango} intermedios; cada salto dentro de ±8% de BPM)\n")
+    if puente.direct is not None and (not puente.found or puente.intermediates):
+        # Decisión del dueño: el puente sigue dando los intermedios pedidos, pero el DJ
+        # tiene que saber que el rodeo es opcional. El motivo es el del motor, el mismo
+        # renglón que mostraría la radio para ese salto.
+        cierre = "el puente de abajo es un rodeo opcional · " if puente.found else ""
+        print(f"A y B ya mezclan directo: {puente.direct.reason()} · {cierre}"
+              f"`--min-intermedios 0` da el salto directo\n")
     if not puente.found:
         print(f"{titular_puente(puente.stop)}.")
         print(f"  Por qué ({puente.stop}): {puente.stop_detail}")

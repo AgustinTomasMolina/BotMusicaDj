@@ -1122,6 +1122,36 @@ def test_puente_con_un_extremo_que_no_es_track_es_error_de_uso(capsys, con_fragm
     assert f"dura {loop.duration:.1f} s" in err and "list" in err, err
 
 
+def test_puente_avisa_si_los_extremos_ya_mezclan(tmp_path, capsys, biblioteca):
+    """126 y 128 mezclan directo: el puente igual trae 3-4 intermedios (criterio de la
+    tarea) y arriba avisa que el rodeo es opcional, con el motivo del motor para ese salto.
+    120 → 134 no mezcla directo (10.4%) y no lleva aviso."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    codigo, out, _ = _correr(capsys, "--db", db, "puente", "click_126", "click_128")
+    assert codigo == 0, out
+    with Store(db) as store:
+        por_nombre = {t.path.name: t for t in store.load_library()}
+    a, b = por_nombre["click_126_Cmaj.wav"], por_nombre["click_128_Gmaj.wav"]
+    pct, _ = bpm_delta_pct(a.bpm, b.bpm)
+    motivo = f"{pct:+.1f}% BPM | {a.key} → {b.key} ({key_relation(a.key, b.key)})"
+    assert (f"A y B ya mezclan directo: {motivo} · el puente de abajo es un rodeo opcional"
+            in out), out
+    assert out.index("ya mezclan directo") < out.index(" 1. "), \
+        f"el aviso tiene que ir ARRIBA del puente:\n{out}"
+    assert 3 <= len(_pasos(out)) - 2 <= 4, out
+    _, lejos, _ = _correr(capsys, "--db", db, "puente", "click_120", "click_134")
+    assert "ya mezclan directo" not in lejos, lejos
+
+
+def test_puente_mismo_track_dice_bien_el_motivo(capsys, biblioteca):
+    _, db, _ = biblioteca
+    codigo, _, err = _correr(capsys, "--db", db, "puente", "click_120", "click_120")
+    assert codigo == 2, err
+    assert err.strip().startswith("El origen y el destino son el mismo track (click_120"), err
+
+
 @pytest.mark.parametrize("argv", [("click_120", "click_120"),
                                   ("click_120", "click_134", "--min-intermedios", "5",
                                    "--max-intermedios", "4"),

@@ -23,11 +23,13 @@ from motor.modelos import DURACION_MINIMA_TRACK_S  # noqa: E402
 from motor.puente import (  # noqa: E402
     MAX_INTERMEDIATES_CAP,
     STOP_EXTREMO_NO_TRACK,
+    STOP_EXTREMO_SIN_BPM,
     STOP_LARGO,
     STOP_MISMO_TRACK,
     STOP_SIN_CAMINO,
     _cheapest_path,
     _Graph,
+    _hops,
     build_bridge,
 )
 from motor.radio import bpm_delta_pct, key_relation  # noqa: E402
@@ -165,18 +167,39 @@ def test_sin_camino_no_afloja_la_compuerta():
     p = build_bridge(a, b, biblio)
     assert (p.stop, p.steps, p.cost) == (STOP_SIN_CAMINO, (), None), (p.stop, p.reasons())
     assert "128.0 BPM y 174.0 BPM" in p.stop_detail and "±8%" in p.stop_detail, p.stop_detail
-    assert "a 174.0 BPM solo se llega desde 1 track, y ninguno mezcla con 128.0 BPM" \
-        in p.stop_detail, p.stop_detail
+    assert ("desde 128.0 BPM, saltando dentro de ±8%, se llega a 3 tracks; a 174.0 BPM se "
+            "llega desde 1 track; los dos grupos no se tocan") in p.stop_detail, p.stop_detail
 
 
-def test_desde_el_origen_se_dice_cuanto_se_alcanza():
-    """Si el lado de A se agota primero, el motivo cuenta desde A."""
+def test_sin_camino_cuenta_los_dos_grupos():
+    """Al revés que el anterior: los números de cada lado son los de ESE lado."""
     a, b = track("a.wav", 174.0), track("b.wav", 128.0)
     biblio = [track("d1.wav", 173.0), *(track(f"h{i}.wav", 126.0 + i) for i in range(4))]
     p = build_bridge(a, b, biblio)
     assert p.stop == STOP_SIN_CAMINO, p.stop
-    assert "desde 174.0 BPM se alcanzan 1 track saltando dentro de ±8%, y ninguno llega a " \
-        "128.0 BPM" in p.stop_detail, p.stop_detail
+    assert ("desde 174.0 BPM, saltando dentro de ±8%, se llega a 1 track; a 128.0 BPM se "
+            "llega desde 4 tracks; los dos grupos no se tocan") in p.stop_detail, p.stop_detail
+
+
+def test_sin_camino_con_un_extremo_aislado():
+    """Nadie entra en ±8% de B: el motivo lo dice así, sin contar grupos."""
+    a, b = track("a.wav", 128.0), track("b.wav", 200.0)
+    p = build_bridge(a, b, _biblio_128())
+    assert p.stop == STOP_SIN_CAMINO, p.stop
+    assert "ningún track de la biblioteca entra en ±8% de 200.0 BPM" in p.stop_detail, \
+        p.stop_detail
+
+
+@pytest.mark.parametrize("cual", ["origen", "destino"])
+def test_un_extremo_sin_bpm_medido_tiene_corte_propio(cual):
+    """BPM 0.0 = el análisis no encontró pulso. Decir "ningún track entra en ±8% de 0.0 BPM"
+    es cierto pero esconde la causa: el corte lo dice."""
+    mudo = track("mudo.wav", 0.0)
+    otro = track("otro.wav", 128.0)
+    a, b = (mudo, otro) if cual == "origen" else (otro, mudo)
+    p = build_bridge(a, b, _biblio_128())
+    assert (p.stop, p.steps) == (STOP_EXTREMO_SIN_BPM, ()), (p.stop, p.stop_detail)
+    assert "mudo.wav no tiene BPM medido (0.0" in p.stop_detail, p.stop_detail
 
 
 def test_sin_intermedios_suficientes_dice_cuantos_necesita():
@@ -337,17 +360,36 @@ def test_el_costo_es_el_minimo_contra_busqueda_exhaustiva():
     assert comparados >= 30, comparados
 
 
-def test_la_busqueda_sin_repetidos_es_exacta_por_si_sola():
+# Keys concentradas en una región de la rueda (1A..6A) y BPM con clones y octavas (62/64
+# ↔ 125-131 ↔ 256): es donde el camino más barato cambia de key de a un vecino por vez
+# (8A → 9A → 10A cuesta 0.268, el salto directo 0.416) y donde la poda por dominancia
+# tiene que mirar varios pasos hacia adelante. La auditoría de 35ce676 encontró acá las
+# dos mutaciones que la versión anterior de estos tests no veía.
+BPM_CADENA = [62.0, 64.0, 124.0, 125.0, 126.0, 126.0, 128.0, 131.0, 256.0]
+KEYS_CADENA = ["1A", "2A", "3A", "4A", "5A", "6A", "3B", "8B"]
+
+
+def _biblio_cadena(rng: random.Random, n: int, pref: str = "k"):
+    return [track(f"{pref}{i}.wav", rng.choice(BPM_CADENA), rng.choice(KEYS_CADENA))
+            for i in range(n)]
+
+
+@pytest.mark.parametrize("distribucion", ["clones_keys_repetidas", "cadena_de_keys"])
+def test_la_busqueda_sin_repetidos_es_exacta_por_si_sola(distribucion):
     """`_cheapest_path` (la que corre cuando la relajación repite un track) contra la
     exhaustiva, directo: si no, casi nunca se ejercitaría y una poda mal hecha pasaría
-    desapercibida. Con clones y keys repetidas para que la poda por dominancia trabaje."""
+    desapercibida. Con clones y keys repetidas para que la poda por dominancia trabaje, y
+    con keys encadenadas + octavas para que tenga que mirar varios pasos adelante."""
     rng = random.Random(11)
-    for _ in range(40):
-        biblio = [track(f"q{i}.wav", rng.choice([124.0, 125.0, 126.0, 128.0, 131.0]),
-                        rng.choice(["8A", "9A", "3B"])) for i in range(9)]
+    for _ in range(60):
+        if distribucion == "cadena_de_keys":
+            biblio = _biblio_cadena(rng, 8, "q")
+        else:
+            biblio = [track(f"q{i}.wav", rng.choice([124.0, 125.0, 126.0, 128.0, 131.0]),
+                            rng.choice(["8A", "9A", "3B"])) for i in range(9)]
         a, b = biblio[0], biblio[1]
         resto = biblio[2:]
-        lo, hi = rng.choice([(3, 4), (2, 2), (0, 4), (4, 5)])
+        lo, hi = rng.choice([(3, 4), (2, 2), (0, 4), (4, 5), (3, 3)])
         costo, _ = costo_exhaustivo(a, b, resto, lo, hi)
         hallado = _cheapest_path(a, _Graph(sorted(resto, key=lambda t: str(t.path)), b, hi), lo, hi)
         if costo is None:
@@ -370,8 +412,9 @@ def test_la_cota_nunca_supera_el_costo_real():
     rng = random.Random(5)
     hi = 4
     positivas = 0
-    for _ in range(30):
-        biblio = _biblio_azar(rng, 7, 60.0, 190.0, fragmentos=False)
+    for i in range(60):
+        biblio = (_biblio_azar(rng, 7, 60.0, 190.0, fragmentos=False) if i % 2 else
+                  _biblio_cadena(rng, 7))
         b, pool = biblio[0], sorted(biblio[1:], key=lambda t: str(t.path))
         cota = _Graph(pool, b, hi).bound
 
@@ -392,6 +435,178 @@ def test_la_cota_nunca_supera_el_costo_real():
                 assert cota[h, j] <= real + 1e-12, (w.bpm, w.key, b.bpm, b.key, r, cota[h, j], real)
                 positivas += 0.0 < cota[h, j] < math.inf
     assert positivas > 100, f"la cota fue positiva y finita solo {positivas} veces: no poda nada"
+
+
+def test_regresion_cota_de_key_por_la_rueda():
+    """Caso de la auditoría: si la cota de key solo mirara el salto directo de key (y no el
+    camino por vecinos), dejaría de ser una cota y el puente saldría 0.5943 en vez de 0.5830."""
+    a, b = track("a.wav", 125.0, "2A"), track("b.wav", 126.0, "3B")
+    pool = [track(f"p{i}.wav", bpm, key) for i, (bpm, key) in enumerate(
+        [(125.0, "7A"), (125.0, "2A"), (256.0, "1A"), (64.0, "1A"), (62.0, "2A"),
+         (125.0, "4A"), (126.0, "3A")])]
+    costo, _ = costo_exhaustivo(a, b, pool, 3, 4)
+    p = build_bridge(a, b, pool, 3, 4)
+    assert p.cost == pytest.approx(costo, abs=1e-12), (p.cost, costo, nombres(p.tracks))
+    assert costo == pytest.approx(0.5830, abs=1e-4), costo
+
+
+def test_regresion_poda_mira_todo_lo_que_falta():
+    """Caso de la auditoría: si la poda por dominancia contara un intermedio menos del que
+    queda, descartaría el camino bueno y `_cheapest_path` daría 1.8358 en vez de 1.4555."""
+    a, b = track("a.wav", 128.0, "1A"), track("b.wav", 131.0, "3A")
+    pool = [track(f"p{i}.wav", bpm, key) for i, (bpm, key) in enumerate(
+        [(124.0, "6A"), (256.0, "3A"), (126.0, "4A"), (126.0, "2A"), (64.0, "8B")])]
+    costo, _ = costo_exhaustivo(a, b, pool, 3, 3)
+    _, c = _cheapest_path(a, _Graph(pool, b, 3), 3, 3)
+    assert c == pytest.approx(costo, abs=1e-12), (c, costo)
+    assert costo == pytest.approx(1.4555, abs=1e-4), costo
+
+
+def test_hops_es_el_bfs_de_la_compuerta():
+    """`_hops` (BFS por intervalos en log2 del BPM) contra un BFS escrito acá con
+    `mezclabilidad` escalar, par por par. Con BPM pegados al borde del 8% (en las tres
+    lecturas) para que la franja donde decide `bpm_score` trabaje, BPM 0 y octavas."""
+    rng = random.Random(3)
+    for _ in range(40):
+        base = rng.uniform(80.0, 160.0)
+        bpms = [base]
+        for _ in range(25):
+            x = rng.choice(bpms) * rng.choice([1.0, 2.0, 0.5])
+            bpms.append(rng.choice([x / 0.92, x * 0.92, x / 0.92 * (1 + 1e-12),
+                                    x / 0.92 * (1 - 1e-11), x * 0.92 * (1 + 1e-11),
+                                    x * rng.uniform(0.9, 1.1), 0.0]))
+        centro, resto = bpms[0], np.array(bpms[1:])
+        esperado = [math.inf] * len(resto)
+        frontera, d = [centro], 0
+        while frontera:
+            d += 1
+            nueva = []
+            for u in frontera:
+                for j, w in enumerate(resto):
+                    if esperado[j] == math.inf and mezclabilidad(u, float(w), "8A", "8A") > 0:
+                        esperado[j] = d
+                        nueva.append(float(w))
+            frontera = nueva
+        assert list(_hops([centro], resto)) == esperado, (centro, list(resto))
+
+
+class _Contador:
+    """Cuenta las expansiones (`_Graph.costs_from`: una operación de numpy contra toda la
+    biblioteca, el costo dominante de la búsqueda) y los `heappop` de `_cheapest_path`, y
+    corta con error si pasan de `tope`: una regresión de rendimiento tiene que fallar
+    rápido y diciendo cuánto, no colgar la suite."""
+
+    def __init__(self, monkeypatch, tope: int = 100_000):
+        import heapq
+
+        from motor import puente
+        self.expansiones = self.pops = 0
+        original_costs, original_pop = puente._Graph.costs_from, heapq.heappop
+
+        def costs_from(graph, t, key):
+            self.expansiones += 1
+            assert self.expansiones <= tope, f"más de {tope} expansiones"
+            return original_costs(graph, t, key)
+
+        def heappop(heap):
+            self.pops += 1
+            assert self.pops <= tope, f"más de {tope} caminos sacados del heap"
+            return original_pop(heap)
+
+        monkeypatch.setattr(puente._Graph, "costs_from", costs_from)
+        monkeypatch.setattr(puente.heapq, "heappop", heappop)
+
+
+def test_clones_exactos_no_disparan_la_busqueda_lenta(monkeypatch):
+    """A y B a 128.0/8A con 300 clones exactos y 6 intermedios: la relajación da un
+    recorrido de costo 0 que repite clones, y se repara cambiando cada repetido por otro
+    clone (mismo BPM y key = mismas aristas, mismo costo). Antes esto caía a la búsqueda
+    sobre caminos y tardaba minutos. Y como la relajación va en profundidad a igual
+    prioridad, completa el camino sin asentar los 1.800 estados empatados a costo 0."""
+    clones = [track(f"c{i:03d}.wav", 128.0, "8A") for i in range(300)]
+    a, b = track("a.wav", 128.0, "8A"), track("b.wav", 128.0, "8A")
+    cuenta = _Contador(monkeypatch)
+    p = build_bridge(a, b, clones, 6, 6)
+    assert p.cost == 0.0 and len(p.intermediates) == 6, (p.cost, nombres(p.intermediates))
+    assert len({t.path for t in p.intermediates}) == 6, nombres(p.intermediates)
+    assert cuenta.pops == 0, f"cayó a la búsqueda sobre caminos ({cuenta.pops} pops)"
+    assert cuenta.expansiones <= 20, f"{cuenta.expansiones} expansiones para 6 clones"
+
+
+def test_la_busqueda_sin_repetidos_no_degenera_con_empates(monkeypatch):
+    """`_cheapest_path` sola, con 150 clones a costo 0 y 6 intermedios: a igual prioridad
+    tiene que ir en profundidad (si no, recorre todos los caminos de un largo antes de uno
+    más largo) y descartar los caminos dominados antes de meterlos al heap."""
+    clones = [track(f"c{i:03d}.wav", 128.0, "8A") for i in range(150)]
+    a, b = track("a.wav", 128.0, "8A"), track("b.wav", 128.0, "8A")
+    cuenta = _Contador(monkeypatch, tope=5_000)
+    indices, c = _cheapest_path(a, _Graph(clones, b, 6), 6, 6)
+    assert c == 0.0 and len(set(indices)) == 6, (c, indices)
+    assert cuenta.pops <= 50, f"{cuenta.pops} caminos sacados del heap para 6 clones"
+
+
+def test_la_busqueda_sin_repetidos_poda_antes_de_empujar(monkeypatch):
+    """200 tracks densos (127-129 BPM con un decimal, keys 1A-6A) y 6 intermedios, con
+    `_cheapest_path` directo: descartar los caminos dominados ANTES de meterlos al heap los
+    saca 350 veces; sin esa poda, 616 (mismo óptimo, medido)."""
+    rng = random.Random(1)
+    pool = sorted((track(f"d{i:03d}.wav", round(rng.uniform(127, 129), 1),
+                         rng.choice(CAMELOT[:6])) for i in range(200)),
+                  key=lambda t: str(t.path))
+    a, b = track("a.wav", 127.2, "1A"), track("b.wav", 128.8, "3A")
+    cuenta = _Contador(monkeypatch, tope=5_000)
+    indices, c = _cheapest_path(a, _Graph(pool, b, 6), 6, 6)
+    assert len(set(indices)) == 6 and c == pytest.approx(0.4257, abs=1e-4), (indices, c)
+    assert cuenta.pops <= 450, f"{cuenta.pops} caminos sacados del heap (con la poda: 350)"
+
+
+def _dos_generos(rng: random.Random, hueco: tuple[float, float], n: int = 300):
+    """House 118 hasta el hueco y dnb desde el hueco hasta 178, BPM con un decimal."""
+    lo, hi = hueco
+    return ([track(f"h{i:03d}.wav", round(rng.uniform(118.0, lo), 1), rng.choice(CAMELOT))
+             for i in range(n)] +
+            [track(f"d{i:03d}.wav", round(rng.uniform(hi, 178.0), 1), rng.choice(CAMELOT))
+             for i in range(n)])
+
+
+def test_sin_camino_se_contesta_sin_buscar(monkeypatch):
+    """Conectividad antes que costo: con un hueco que la compuerta no cruza (141-159 entre
+    house y dnb, y 170/2 = 85 no llega al house), `sin_camino` sale de `_hops` sin expandir
+    un solo estado. Antes la búsqueda recorría todo el house (12.7 s con 10.000 tracks)."""
+    biblio = _dos_generos(random.Random(9), (140.0, 160.0))
+    a, b = track("a.wav", 128.0), track("b.wav", 170.0)
+    cuenta = _Contador(monkeypatch)
+    p = build_bridge(a, b, biblio, 6, 6)
+    assert p.stop == STOP_SIN_CAMINO, p.stop
+    assert cuenta.expansiones == 0, f"{cuenta.expansiones} expansiones para decir sin_camino"
+
+
+def test_la_cota_sabe_cuantos_saltos_faltan(monkeypatch):
+    """Con un hueco que SÍ se cruza (140 → 152, 7.9%): la cota vale `inf` para los tracks
+    que no llegan a B con los saltos que quedan (`_hops`), y eso no deja expandir el house
+    lejano. Medido con estos 600 tracks: 134 expansiones con esa condición, 253 sin ella."""
+    biblio = _dos_generos(random.Random(9), (140.0, 152.0))
+    a, b = track("a.wav", 128.0), track("b.wav", 170.0)
+    cuenta = _Contador(monkeypatch)
+    p = build_bridge(a, b, biblio, 3, 4)
+    assert p.found, p.stop_detail
+    assert not saltos_en_tolerancia(p), saltos_en_tolerancia(p)
+    assert cuenta.expansiones <= 180, f"{cuenta.expansiones} expansiones (con la cota: 134)"
+
+
+def test_si_a_y_b_ya_mezclan_se_avisa():
+    """Decisión del dueño: el puente sigue dando 3-4 intermedios, pero avisa que A y B ya
+    mezclan directo, con el motivo del motor, para que el DJ sepa que el rodeo es opcional.
+    Si no mezclan directo, no hay aviso."""
+    a, b = track("a.wav", 128.0, "8A"), track("b.wav", 128.5, "8A")
+    p = build_bridge(a, b, _biblio_128())
+    assert p.found and len(p.intermediates) >= 3, p.reasons()
+    pct, _ = bpm_delta_pct(128.0, 128.5)
+    assert p.direct is not None and p.direct.reason() == f"{pct:+.1f}% BPM | 8A → 8A (mismo)", \
+        p.direct
+    lejos = build_bridge(a, track("b.wav", 140.0, "8A"), _biblio_128() +
+                         [track("x.wav", 133.0), track("y.wav", 136.0)])
+    assert lejos.found and lejos.direct is None, (lejos.reasons(), lejos.direct)
 
 
 def test_el_embedding_no_importa():
