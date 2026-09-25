@@ -6,6 +6,8 @@
     python -m motor similar <track> [-n 10]
     python -m motor radio <track> [--largo 20] [--curva peak] [--semilla N]
                                   [--randomness 0] [--m3u8 set.m3u8]
+    python -m motor puente <origen> <destino> [--min-intermedios 3] [--max-intermedios 4]
+                                              [--m3u8 puente.m3u8]
 
 (Instalado con `pip install -e .`, `djradio <comando>` es lo mismo.)
 
@@ -19,7 +21,8 @@ Si el fragmento coincide con más de un track NO se elige uno: se listan los can
 sale con error. Es la misma regla que `ground_truth.resolver` con los homónimos — elegir a
 la suerte hace que el motor trabaje sobre otro track y el resultado se ve igual de bien.
 
-Códigos de salida: 0 hecho · 1 algo no se pudo hacer (archivos que no se analizaron) ·
+Códigos de salida: 0 hecho · 1 algo no se pudo hacer (archivos que no se analizaron, un
+puente que la biblioteca no tiene) ·
 2 error de uso (falta licencia/origen, base vacía o de un esquema que este código no conoce,
 track inexistente o ambiguo, mutagen sin instalar).
 
@@ -684,6 +687,78 @@ def cmd_radio(args: argparse.Namespace) -> int:
     return OK
 
 
+# --- puente ----------------------------------------------------------------------------
+
+
+def titular_puente(stop: str | None) -> str:
+    """El renglón que encabeza un puente que no se pudo armar, uno por código de
+    `Bridge.stop` — mismo criterio que `titular_corte`: los motivos se arreglan distinto,
+    así que se leen distinto."""
+    from motor.puente import STOP_LARGO, STOP_SIN_CAMINO
+
+    return {
+        STOP_SIN_CAMINO: "NO HAY PUENTE: ninguna cadena de tracks une los dos BPM dentro de "
+                         "la tolerancia",
+        STOP_LARGO: "NO HAY PUENTE DE ESE LARGO: hay camino dentro de la tolerancia, pero no "
+                    "con esa cantidad de intermedios",
+    }.get(stop, "NO HAY PUENTE")
+
+
+def cmd_puente(args: argparse.Namespace) -> int:
+    """`puente <A> <B>`: los temas que llevan de A a B sin un salto fuera de ±8%.
+
+    Salidas: 0 hay puente · 1 no hay (no es un error de uso: la biblioteca no lo tiene, y el
+    motivo dice por qué) · 2 error de uso (track inexistente o ambiguo, un extremo que no es
+    un track, A y B iguales, rango de intermedios inválido).
+    """
+    from motor.export import write_m3u8
+    from motor.puente import STOP_EXTREMO_NO_TRACK, STOP_MISMO_TRACK, build_bridge
+
+    with _abrir_existente(args.db) as store:
+        biblioteca = store.load_library()
+    origen = resolver_track(args.origen, biblioteca)
+    destino = resolver_track(args.destino, biblioteca)
+    try:
+        puente = build_bridge(origen, destino, biblioteca, args.min_intermedios,
+                              args.max_intermedios)
+    except ValueError as e:
+        raise ErrorDeUso(str(e)) from e
+    if puente.stop == STOP_EXTREMO_NO_TRACK:
+        raise ErrorDeUso(f"{puente.stop_detail}.\n  Elegí otro extremo con `djradio list` "
+                         f"(o `python -m motor list`), que muestra toda la biblioteca.")
+    if puente.stop == STOP_MISMO_TRACK:
+        raise ErrorDeUso(f"El {puente.stop_detail}.")
+
+    rango = (f"{args.min_intermedios}" if args.min_intermedios == args.max_intermedios
+             else f"entre {args.min_intermedios} y {args.max_intermedios}")
+    print(f"Puente desde: {origen.label}")
+    print(f"       hasta: {destino.label}")
+    print(f"({rango} intermedios; cada salto dentro de ±8% de BPM)\n")
+    if not puente.found:
+        print(f"{titular_puente(puente.stop)}.")
+        print(f"  Por qué ({puente.stop}): {puente.stop_detail}")
+        return FALLO
+
+    for i, (paso, motivo) in enumerate(zip(puente.steps, puente.reasons(), strict=True), 1):
+        if i == 1:
+            # El primero no viene de ninguna parte: no es la "semilla" de una radio, es el
+            # origen que eligió el DJ. Mismo formato que el renglón de la semilla.
+            motivo = f"origen | {paso.track.key} | {paso.track.bpm:.1f} BPM"
+        print(f"  {i:>2}. {_fila(paso.track)}")
+        print(f"      └ {motivo}")
+
+    flojo = min(p.transition.mixability for p in puente.steps[1:])
+    print(f"\n{len(puente.intermediates)} intermedios · costo {puente.cost:.3f} "
+          f"(Σ -log mezclabilidad; 0 = todos los saltos perfectos) · el salto más flojo "
+          f"mezcla {flojo:.2f}")
+    if puente.fragments:
+        print(aviso_fragmentos(puente.fragments, "El puente ignoró"))
+    print(LEYENDA_KEY)
+    if args.m3u8:
+        print(f"M3U8: {write_m3u8(puente.tracks, args.m3u8)}")
+    return OK
+
+
 # --- main ------------------------------------------------------------------------------
 
 
@@ -734,6 +809,18 @@ def construir_parser() -> argparse.ArgumentParser:
                    help="Mínimo de tracks entre dos del mismo artista (default 4).")
     p.add_argument("--m3u8", type=Path, default=None, help="Exporta el set a este .m3u8.")
     p.set_defaults(func=cmd_radio)
+
+    p = sub.add_parser("puente", parents=[comun],
+                       help="Los temas que llevan de un track a otro sin salirse de ±8% de BPM.")
+    p.add_argument("origen", help="Track de salida: ruta o fragmento del nombre.")
+    p.add_argument("destino", help="Track de llegada: ruta o fragmento del nombre.")
+    p.add_argument("--min-intermedios", type=int, default=3,
+                   help="Mínimo de temas entre origen y destino, sin contarlos (default 3; "
+                        "0 permite el salto directo).")
+    p.add_argument("--max-intermedios", type=int, default=4,
+                   help="Máximo de temas entre origen y destino (default 4).")
+    p.add_argument("--m3u8", type=Path, default=None, help="Exporta el puente a este .m3u8.")
+    p.set_defaults(func=cmd_puente)
     return ap
 
 
