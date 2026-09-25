@@ -130,6 +130,36 @@ export async function getRadioSet(params) {
   return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
 
+// El set como .m3u8 para Rekordbox (/api/radio/set.m3u8). Mismos parámetros que
+// `getRadioSet` —el backend lo vuelve a armar con la misma función— más `esperado`: los ids
+// que la pantalla muestra, para que el backend se niegue (409) si el set re-armado ya no es
+// ese. Se baja con fetch y no con un <a href> directo porque un error (400/409) tiene que
+// verse en la pantalla con su motivo, no terminar guardado en Descargas como si fuera el
+// archivo. Devuelve {ok, blob, nombre} o {ok: false, status, data}.
+export async function exportarRadioM3u8(params, esperado) {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  if (esperado && esperado.length) qs.set('esperado', esperado.join(','))
+  const r = await fetch(`/api/radio/set.m3u8?${qs.toString()}`)
+  const disp = r.headers.get('Content-Disposition') || ''
+  if (!r.ok || !/^attachment/i.test(disp)) {
+    return { ok: false, status: r.status, data: await cuerpoRadio(r) }
+  }
+  return { ok: true, blob: await r.blob(), nombre: nombreDeDescarga(disp) }
+}
+
+// El nombre que eligió el backend (ya saneado para Windows). `filename*` primero porque
+// trae el nombre real en UTF-8; `filename` es la versión ASCII de respaldo.
+function nombreDeDescarga(disp) {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disp)
+  if (utf8) { try { return decodeURIComponent(utf8[1]) } catch { /* cae al ASCII */ } }
+  const ascii = /filename="([^"]+)"/i.exec(disp)
+  return ascii ? ascii[1] : 'DJ Radio.m3u8'
+}
+
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
 
 // El <audio> avisa que falló pero no deja leer el cuerpo de la respuesta, y el 404 de la

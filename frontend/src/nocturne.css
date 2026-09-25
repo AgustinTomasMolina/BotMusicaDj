@@ -1028,6 +1028,12 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rpanel-set{gap:var(--space-3)}
 .rset-head{display:flex;align-items:baseline;gap:var(--space-3);flex-wrap:wrap}
 .rset-cuenta{margin-left:auto;font-size:12px;color:var(--color-neutral-400)}
+/* Exportar a Rekordbox: va a la derecha del encabezado del set. Sin set sigue enfocable
+   (aria-disabled, como «Armar el set») y se ve apagado. */
+.rexportar{min-height:32px;margin-left:auto}
+.rset-cuenta+.rexportar{margin-left:0}
+.rexportar[aria-disabled=true]{opacity:.45;cursor:not-allowed}
+.rexportar-ok{color:var(--color-neutral-300)}
 .rset{display:flex;flex-direction:column;gap:2px}
 .rpaso{padding:var(--space-1) 0}
 /* El porqué del motor, sobre la fila y con el hilo que la conecta con la anterior. */
