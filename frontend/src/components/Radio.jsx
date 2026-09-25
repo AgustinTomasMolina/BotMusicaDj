@@ -444,8 +444,11 @@ export default function Radio() {
 
   return (
     <div className="radiodj">
-      {/* onError: si el archivo falla a mitad de camino el botón no queda en "Pausar". */}
-      <audio ref={audioRef} onEnded={() => setSonando(null)} onError={() => setSonando(null)} preload="none" />
+      {/* onError: si el archivo falla a mitad de camino el botón no queda en "Pausar".
+          onPause: si lo pausa otro (la barra de reproducción, que es el único audio de la app),
+          el botón vuelve a "Reproducir" en vez de quedar en "Pausar" con un click muerto. */}
+      <audio ref={audioRef} onEnded={() => setSonando(null)} onError={() => setSonando(null)}
+        onPause={() => setSonando(null)} preload="none" />
       <div className="radiodj-head">
         <h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
         <p className="muted">

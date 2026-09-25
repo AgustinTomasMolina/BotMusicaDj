@@ -731,7 +731,9 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 /* — hover preview: autoplay over the artwork after a 0.4s dwell —
    The dwell is CSS (transition-delay), so a passing cursor never triggers it;
    the script only has to start the media when .is-preview lands. */
-.thumb-prev{position:absolute;inset:0;opacity:0;transition:opacity .18s var(--ease)}
+/* pointer-events:none: el preview es un adorno del mouse. Encima del botón de play se comía el
+   click (el iframe del preview lo recibía) y no se podía reproducir el tema que sonaba en preview. */
+.thumb-prev{position:absolute;inset:0;opacity:0;transition:opacity .18s var(--ease);pointer-events:none}
 .thumb-prev>video,.thumb-prev>img{width:100%;height:100%;object-fit:cover}
 .thumb:hover .thumb-prev,.thumb.is-preview .thumb-prev{opacity:1;transition-delay:.4s}
 .thumb:hover .thumb-play{transition-delay:.4s}
@@ -1053,3 +1055,175 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rcurva{display:flex;align-items:flex-end;gap:2px;height:44px;padding:var(--space-1);border-radius:var(--radius-sm);background:var(--color-well)}
 .rcurva>i{flex:1;min-width:2px;border-radius:2px 2px 0 0;background:var(--color-accent-500)}
 .rcurva>i.is-sin{background:var(--color-neutral-700)}
+
+
+/* ===== Carátulas (2026-09-25) =====
+   La imagen real llena su marco; sin imagen, un placeholder "white label" (el disco promo sin
+   arte): colores del sistema elegidos por hash del título+artista (src/cover.js) y una nota
+   chica que dice "sin carátula". Antes el marco quedaba en --color-well, casi el fondo. */
+/* Placeholder siempre abajo, imagen encima que aparece al cargar: nunca se ve el marco vacío. */
+.cover{display:block;width:100%;height:100%}
+.cover-stack{position:relative;overflow:hidden}
+.cover-stack>.cover-ph,.cover-stack>.cover-img{position:absolute;inset:0;width:100%;height:100%}
+.cover-img{display:block;object-fit:cover;opacity:0;transition:opacity .2s var(--ease)}
+.cover-img.is-loaded{opacity:1}
+.cover-ph{display:grid;place-items:center;color:color-mix(in srgb,var(--color-text) 62%,transparent);
+  background:
+    radial-gradient(circle at var(--ph-x) var(--ph-y),color-mix(in srgb,var(--ph-c1) 60%,transparent) 0 16%,transparent 16.5%),
+    repeating-linear-gradient(var(--ph-ang),color-mix(in srgb,var(--ph-c2) 26%,transparent) 0 2px,transparent 2px 8px),
+    linear-gradient(var(--ph-ang2),color-mix(in srgb,var(--ph-c1) 42%,var(--color-well)),color-mix(in srgb,var(--ph-c2) 34%,var(--color-well)));
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ph-c1) 40%,transparent)}
+.cover-ph-note{width:40%;max-width:30px;height:auto;opacity:.75;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))}
+.lib-cover{background:var(--color-well)}
+.lib-cover>.cover{position:absolute;inset:0}
+.lib-play{position:relative;z-index:1}
+.lib-meta{z-index:1}
+.lib-cover.is-playing{box-shadow:0 0 0 2px var(--color-accent)}
+/* La fila del tema que está en la barra: anillo de acento y el botón (pausa) siempre a la vista. */
+.thumb.is-current{box-shadow:inset 0 0 0 1.5px var(--color-accent)}
+.thumb.is-current .thumb-play{opacity:1;background:color-mix(in srgb,#05060c 45%,transparent)}
+
+
+/* ===== El deck: reproductor fijo al pie (2026-09-25) =====
+   Barra quieta, con los tokens de siempre. La audacia va en UN lugar: el plato. La carátula
+   es la etiqueta de un disco con surcos y el anillo de puntos de estroboscopio de las
+   bandejas de vinilo; gira a 33⅓ (1,8 s por vuelta) mientras suena y el reflejo de luz queda
+   fijo encima, como en una bandeja de verdad. Con prefers-reduced-motion no gira.
+   --player-h y --monitor-h los publica el reproductor con la altura real (0 sin barra): el
+   contenido, el rail y los avisos se corren para no quedar debajo. */
+:root{--player-h:0px;--monitor-h:0px}
+html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
+.app{padding-bottom:calc(var(--player-h) + var(--monitor-h))}
+.pl-rail{max-height:calc(100vh - var(--topbar-h) - var(--player-h))}
+.toasts{bottom:calc(var(--space-4) + var(--player-h) + var(--monitor-h))}
+
+.deck{position:fixed;left:0;right:0;bottom:0;z-index:45;display:grid;align-items:center;
+  grid-template-columns:60px minmax(150px,1.05fr) auto minmax(220px,1.7fr) auto auto;
+  grid-template-areas:'disc id transport pos data acts' 'msg msg msg msg msg msg';
+  column-gap:var(--space-4);row-gap:var(--space-1);padding:10px var(--space-4) 10px var(--space-3);
+  box-shadow:0 -12px 30px rgba(0,0,0,.35);animation:deck-in .32s var(--ease) backwards}
+/* Fondo opaco y sin backdrop-filter, animación sin fill final: tanto backdrop-filter como un
+   transform que queda puesto convierten a la barra en el contenedor de lo position:fixed, y
+   el menú "agregar a playlist" (fixed) se iba de lugar. Con fondo translúcido, además, el
+   texto de abajo se leía a través de la barra (medido en la captura). */
+.deck{background:var(--color-well)}
+/* Borde de arriba: la regla que se desvanece de Nocturne, no una línea dura. */
+.deck::before{content:'';position:absolute;left:0;right:0;top:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,var(--color-divider) 48px,var(--color-divider) calc(100% - 48px),transparent)}
+@keyframes deck-in{from{transform:translateY(100%);opacity:0}}
+
+/* — el plato — */
+.deck-disc{grid-area:disc;position:relative;width:56px;height:56px;border-radius:50%;justify-self:center;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--color-text) 10%,transparent),0 6px 16px rgba(0,0,0,.5);transition:box-shadow .4s var(--ease)}
+.deck-disc.is-spinning{box-shadow:0 0 0 1px color-mix(in srgb,var(--color-accent) 55%,transparent),0 0 22px -4px color-mix(in srgb,var(--color-accent) 70%,transparent),0 6px 16px rgba(0,0,0,.5)}
+.deck-platter{position:absolute;inset:0;border-radius:50%;
+  background:repeating-radial-gradient(circle,#0d0e17 0 1.1px,#191b2a 1.1px 2.3px);
+  animation:deck-spin 1.8s linear infinite;animation-play-state:paused}
+.deck-disc.is-spinning .deck-platter{animation-play-state:running}
+/* Estroboscopio: 48 puntos en el borde, del color del acento; se encienden al girar. */
+.deck-platter::before{content:'';position:absolute;inset:0;border-radius:50%;
+  background:repeating-conic-gradient(color-mix(in srgb,var(--color-accent-300) 55%,transparent) 0 2.2deg,transparent 2.2deg 7.5deg);
+  -webkit-mask:radial-gradient(circle,transparent calc(50% - 4px),#000 calc(50% - 3.5px) calc(50% - 1px),transparent 50%);
+  mask:radial-gradient(circle,transparent calc(50% - 4px),#000 calc(50% - 3.5px) calc(50% - 1px),transparent 50%);transition:filter .4s var(--ease)}
+.deck-disc.is-spinning .deck-platter::before{background:repeating-conic-gradient(var(--color-accent-300) 0 2.2deg,transparent 2.2deg 7.5deg);filter:drop-shadow(0 0 2px var(--color-accent))}
+.deck-label{position:absolute;inset:27%;border-radius:50%;overflow:hidden;background:var(--color-well);box-shadow:0 0 0 1px rgba(0,0,0,.55),0 0 0 2.5px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.deck-label .cover-ph-note{display:none}
+/* Reflejo fijo: la luz no gira con el disco. */
+.deck-sheen{position:absolute;inset:0;border-radius:50%;pointer-events:none;mix-blend-mode:screen;
+  background:conic-gradient(from 205deg,transparent 0deg,rgba(255,255,255,.16) 16deg,transparent 38deg,transparent 180deg,rgba(255,255,255,.07) 196deg,transparent 218deg)}
+.deck-spindle{position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--color-neutral-300);box-shadow:0 0 0 1.5px rgba(0,0,0,.6)}
+@keyframes deck-spin{to{transform:rotate(360deg)}}
+/* (prefers-reduced-motion del deck: al final del archivo, después de .deck-monitor, para que
+   gane por orden; acá arriba el monitor lo pisaba y conservaba su animación de entrada.) */
+
+/* — tema — */
+.deck-id{grid-area:id;min-width:0}
+.deck-title{font-size:14.5px;font-weight:500;line-height:1.3;letter-spacing:-0.006em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.deck-sub{display:flex;align-items:center;gap:6px;min-width:0;margin-top:2px;font-size:12px;color:var(--color-neutral-400)}
+.deck-src{display:inline-flex;align-items:center;gap:5px;flex:none;height:18px;padding:0 7px;border-radius:5px;font-size:10.5px;font-weight:500;
+  color:color-mix(in srgb,var(--pf,var(--color-neutral-400)) 72%,var(--color-neutral-100));background:color-mix(in srgb,var(--pf,var(--color-neutral-500)) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--pf,var(--color-neutral-500)) 30%,transparent)}
+.deck-src>i{width:5px;height:5px;border-radius:50%;background:var(--pf,var(--color-neutral-400))}
+.deck-count{flex:none;font-size:11px;color:var(--color-neutral-500)}
+
+/* — transporte — */
+.deck-transport{grid-area:transport;display:flex;align-items:center;gap:6px}
+.deck-btn{display:grid;place-items:center;width:34px;height:34px;flex:none;padding:0;border:0;border-radius:50%;background:transparent;color:var(--color-neutral-300);cursor:pointer;transition:background .15s var(--ease),color .15s var(--ease)}
+.deck-btn:hover:not(:disabled){background:color-mix(in srgb,var(--color-text) 10%,transparent);color:var(--color-text)}
+.deck-btn:disabled{opacity:.38;cursor:not-allowed}
+.deck-btn-sm{width:30px;height:30px;border-radius:7px}
+.deck-btn[aria-pressed=true]{color:var(--color-accent-300)}
+.deck-play{display:grid;place-items:center;width:42px;height:42px;flex:none;padding:0;border:0;border-radius:50%;cursor:pointer;color:var(--color-bg);background:var(--color-accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--color-accent) 16%,transparent);transition:background .15s var(--ease),transform .1s var(--ease)}
+.deck-play:hover:not(:disabled){background:var(--color-accent-400)}
+.deck-play:active:not(:disabled){transform:scale(.95)}
+.deck-play:disabled{opacity:.4;cursor:not-allowed}
+.deck-play .spinner{border-color:color-mix(in srgb,var(--color-bg) 30%,transparent);border-top-color:var(--color-bg)}
+
+/* — posición — */
+.deck-pos{grid-area:pos;display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.deck-time{flex:none;min-width:38px;font-size:11.5px;color:var(--color-neutral-400)}
+.deck-time:first-child{text-align:right}
+.deck-seek{position:relative;flex:1;min-width:0;height:24px;display:flex;align-items:center}
+.deck-seek-track{position:absolute;left:0;right:0;top:50%;height:4px;margin-top:-2px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well));pointer-events:none}
+.deck-seek-fill{position:absolute;left:0;top:0;bottom:0;width:var(--pct,0%);border-radius:inherit;background:linear-gradient(to right,var(--color-accent-600),var(--color-accent))}
+/* Marcas de compás: HOY NO SE DIBUJAN (sin el primer downbeat se leían como inicio de frase;
+   ver el comentario en PlayerBar.jsx). El estilo queda para cuando se anclen al TEMPO de
+   Rekordbox: cada 16 compases, más fuerte cada 64. */
+.deck-seek-track>i{position:absolute;top:-3px;bottom:-3px;width:1px;margin-left:-.5px;background:color-mix(in srgb,var(--color-text) 30%,transparent)}
+.deck-seek-track>i.is-major{top:-5px;bottom:-5px;background:color-mix(in srgb,var(--color-text) 55%,transparent)}
+.deck-range{position:relative;width:100%;height:24px;margin:0;padding:0;background:transparent;cursor:pointer;-webkit-appearance:none;appearance:none}
+.deck-range:disabled{cursor:not-allowed}
+.deck-range:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px;border-radius:6px}
+.deck-range::-webkit-slider-runnable-track{height:4px;background:transparent;border:0}
+.deck-range::-moz-range-track{height:4px;background:transparent;border:0}
+.deck-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border:0;border-radius:50%;background:var(--color-accent-200);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 35%,transparent),0 2px 6px rgba(0,0,0,.5)}
+.deck-range::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:var(--color-accent-200);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 35%,transparent)}
+.deck-range:disabled::-webkit-slider-thumb{background:var(--color-neutral-600);box-shadow:none}
+.deck-range:disabled::-moz-range-thumb{background:var(--color-neutral-600);box-shadow:none}
+/* Volumen: el mismo control, relleno con --pct desde el propio input. */
+.deck-range-vol{width:84px;flex:none}
+.deck-range-vol::-webkit-slider-runnable-track{border-radius:var(--radius-pill);background:linear-gradient(to right,var(--color-accent) var(--pct),color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well)) var(--pct))}
+.deck-range-vol::-moz-range-track{border-radius:var(--radius-pill);background:linear-gradient(to right,var(--color-accent) var(--pct),color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well)) var(--pct))}
+
+/* — datos de DJ y acciones — */
+.deck-data{grid-area:data;display:flex;align-items:center;gap:5px;min-width:0}
+.deck-data:empty{display:none}
+.deck-acts{grid-area:acts;display:flex;align-items:center;gap:4px}
+.deck-vol{display:flex;align-items:center;gap:4px}
+.deck-dl{width:30px;height:30px;padding:0}
+.deck-msg{grid-area:msg;display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2);font-size:12px;line-height:1.4;color:var(--color-warn)}
+.deck.is-embed .deck-msg{color:var(--color-neutral-300)}
+.deck-msg .btn{color:var(--color-accent-400)}
+
+/* — monitor: el reproductor de YouTube/SoundCloud, visible y controlado desde la barra — */
+/* z 44: debajo de la barra (45), así el menú "agregar a playlist" que abre la barra hacia
+   arriba no queda tapado por el video. */
+.deck-monitor{position:fixed;right:var(--space-4);bottom:calc(var(--player-h) + 8px);z-index:44;display:flex;flex-direction:column;width:min(356px,calc(100vw - 2 * var(--space-4)));border-radius:var(--radius-lg);overflow:hidden;background:var(--color-surface);box-shadow:var(--shadow-md);animation:deck-in .32s var(--ease) backwards}
+.deck-monitor[hidden],.deck-monitor [hidden]{display:none}
+.deck-monitor-head{display:flex;align-items:center;gap:6px;height:28px;padding:0 var(--space-3);font-size:11px;color:var(--color-neutral-300)}
+.deck-monitor-dot{width:6px;height:6px;border-radius:50%;background:var(--color-pf-yt)}
+.deck-monitor.is-soundcloud .deck-monitor-dot{background:var(--color-pf-sc)}
+.deck-monitor-note{margin-left:auto;font-size:10.5px;color:var(--color-neutral-500)}
+.deck-monitor-yt{position:relative;aspect-ratio:16/9;background:#000}
+.deck-monitor-yt>iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.deck-monitor-sc>iframe{display:block;width:100%;height:166px;border:0}
+/* El widget de SoundCloud necesita más ancho que el video para no cortar título y artista. */
+.deck-monitor.is-soundcloud{width:min(440px,calc(100vw - 2 * var(--space-4)))}
+
+/* Tablet / escritorio angosto: dos renglones (posición y datos abajo). */
+@media (max-width:1080px){
+.deck{grid-template-columns:60px minmax(0,1fr) auto auto;grid-template-areas:'disc id transport acts' 'disc pos pos data' 'msg msg msg msg';row-gap:2px}
+}
+/* Teléfono: tres renglones compactos, sin scroll de costado. El volumen queda en el botón de
+   silencio (el del teléfono manda) y el monitor ocupa el ancho. */
+@media (max-width:620px){
+.deck{grid-template-columns:44px minmax(0,1fr) auto;grid-template-areas:'disc id transport' 'pos pos pos' 'data data acts' 'msg msg msg';column-gap:var(--space-2);padding:8px var(--space-3)}
+.deck-disc{width:44px;height:44px}
+.deck-btn{width:32px;height:32px}
+.deck-play{width:40px;height:40px}
+.deck-range-vol{display:none}
+.deck-data{flex-wrap:wrap}
+.deck-monitor,.deck-monitor.is-soundcloud{left:var(--space-3);right:var(--space-3);width:auto}
+.toasts{bottom:calc(var(--space-3) + var(--player-h) + var(--monitor-h))}
+}
+/* Sin movimiento: el plato no gira y ni la barra, ni el monitor, ni la carátula animan su
+   entrada. Al final del archivo a propósito (gana por orden sobre las reglas de arriba). */
+@media (prefers-reduced-motion:reduce){.deck-platter,.deck,.deck-monitor{animation:none}.cover-img{transition:none}}

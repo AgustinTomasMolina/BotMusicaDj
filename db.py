@@ -7,12 +7,13 @@ envueltas en try/except: si la DB falla, la búsqueda/descarga NO se rompe.
 """
 import json
 import logging
+import math
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import (Boolean, DateTime, ForeignKey, Integer, String, Text,
+from sqlalchemy import (Boolean, DateTime, Float, ForeignKey, Integer, String, Text,
                         create_engine, desc, func, select)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -108,7 +109,11 @@ class MiPlaylistItem(Base):
     url: Mapped[str] = mapped_column(Text, default="")
     thumbnail: Mapped[str | None] = mapped_column(Text, nullable=True)
     duracion: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    bpm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Float y no Integer: el BPM va con su decimal (§6; antes `int()` guardaba 127.9 como 127).
+    # Sin migración: create_all no toca una tabla existente y en una base vieja la columna
+    # sigue siendo INTEGER, pero SQLite guarda igual 127.9 como REAL (afinidad: solo pasa a
+    # entero lo que es entero sin perder nada). Las filas viejas ya truncadas no se recuperan.
+    bpm: Mapped[float | None] = mapped_column(Float, nullable=True)
     camelot: Mapped[str | None] = mapped_column(String(8), nullable=True)
     genero: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # campos de descarga: nullable → si ruta está vacía el item está "por bajar"
@@ -248,6 +253,15 @@ def _ident(fuente, url, titulo, artista) -> str:
     return f"{(fuente or '').lower()}|{url or ''}|{(titulo or '').lower()}|{(artista or '').lower()}"
 
 
+def _bpm_decimal(v) -> float | None:
+    """BPM con un decimal (el que usa toda la app), o None si no hay o no es un número > 0."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(x, 1) if math.isfinite(x) and x > 0 else None
+
+
 def _snapshot(track: dict) -> dict:
     return {
         "titulo": (track.get("titulo") or "")[:400],
@@ -256,7 +270,7 @@ def _snapshot(track: dict) -> dict:
         "url": track.get("url") or "",
         "thumbnail": track.get("thumbnail"),
         "duracion": int(track["duracion"]) if track.get("duracion") else None,
-        "bpm": int(track["bpm"]) if track.get("bpm") else None,
+        "bpm": _bpm_decimal(track.get("bpm")),
         "camelot": track.get("camelot"),
         "genero": track.get("genero"),
     }
