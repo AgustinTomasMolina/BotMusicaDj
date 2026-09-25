@@ -764,6 +764,16 @@ def test_content_disposition_con_unicode_tiene_las_dos_formas(server):
                   "filename*=UTF-8''DJ%20Radio%20-%20Se%C3%B1or%20Coconut%20-%20peak.m3u8")
 
 
+def test_content_disposition_ascii_no_trae_caracteres_que_windows_rechaza(server):
+    """"＜" y "：" de ancho completo son válidos en un nombre de Windows, pero NFKD los vuelve
+    "<" y ":". El nombre de respaldo ASCII se sacaba antes de normalizar y los dejaba pasar."""
+    nombre = server._nombre_m3u8("＜x＞ ：y", "peak")
+    cd = server._content_disposition(nombre)
+    ascii_ = cd.split('filename="', 1)[1].split('"', 1)[0]
+    assert ascii_ == "DJ Radio - x y - peak.m3u8", ascii_
+    assert not set(ascii_) & set('<>:"/\\|?*'), ascii_
+
+
 def test_m3u8_semilla_que_no_es_track_es_400_con_el_motivo_del_motor(server, client,
                                                                      biblioteca):
     id_loop = server._radio_id(biblioteca["rutas"]["loop.wav"])

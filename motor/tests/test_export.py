@@ -102,6 +102,17 @@ def test_cabecera_y_estructura_de_tres_lineas_por_track(tmp_path):
     assert len(lines) == 7
 
 
+def test_la_duracion_del_extinf_se_redondea_no_se_trunca(tmp_path):
+    """301.6 s son 302 s, no 301. Los casos de arriba (301.4, 180.0) dan lo mismo redondeando
+    que truncando, así que no distinguían `round` de `int`: el cambio pasaba la suite."""
+    tracks = [_track("a.mp3", duration=301.6), _track("b.mp3", duration=59.5)]
+    extinf = _extinf(write_m3u8(tracks, tmp_path / "set.m3u8"))
+
+    assert extinf[0].startswith("#EXTINF:302,"), extinf[0]
+    # 59.5 → 60 con el redondeo de Python (al par); truncando daría 59.
+    assert extinf[1].startswith("#EXTINF:60,"), extinf[1]
+
+
 def test_el_bpm_sale_con_un_decimal(tmp_path):
     """spec §6: redondear el BPM a entero es mentir. 128.0 y 128.4 no mezclan igual."""
     tracks = [_track("a.mp3", bpm=128.0), _track("b.mp3", bpm=128.4),

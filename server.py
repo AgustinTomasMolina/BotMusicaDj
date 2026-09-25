@@ -1485,6 +1485,9 @@ def _content_disposition(nombre: str) -> str:
                      for c in unicodedata.normalize("NFKD", nombre)
                      if not unicodedata.combining(c))
     ascii_ = re.sub(r'["\\]', "", ascii_)
+    # Después de NFKD: un "＜" o "：" de ancho completo es válido en Windows, pero al
+    # normalizarse vuelve a ser "<" o ":", que no. Se sacan también acá, no solo en el nombre.
+    ascii_ = re.sub(r"\s+", " ", _NOMBRE_INVALIDO.sub(" ", ascii_)).strip()
     return f"attachment; filename=\"{ascii_}\"; filename*=UTF-8''{quote(nombre, safe='')}"
 
 
