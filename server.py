@@ -1055,6 +1055,9 @@ def _cargar_biblioteca() -> tuple[list[dict], str]:
             "bpm": round(t["bpm"], 1) if t["bpm"] else None,
             "camelot": t["camelot"] or None, "tonalidad": t["tonality"] or None,
             "genero": (t["genre"] or "").strip() or "Sin género", "dur": t["duration_s"] or 0,
+            # Contenedor real del archivo (la extensión del que se resolvió), para que el
+            # reproductor diga qué suena. Sin extensión → None, no un formato adivinado.
+            "formato": Path(r.ruta).suffix.lstrip(".").lower() or None,
         })
     _lib_audio = audio
     return out, _LIB_OK
@@ -1084,6 +1087,73 @@ async def audio(track_id: str):
     if not ruta or not Path(ruta).exists():
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# Firmas de los formatos de imagen que se embeben en audio: el MIME declarado en el tag no
+# siempre es cierto (hay APIC con "image/jpg" o vacío), así que se mira el contenido.
+_FIRMAS_IMAGEN = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"),
+                  (b"GIF8", "image/gif"))
+
+
+def _mime_imagen(data: bytes, declarado: str | None) -> str | None:
+    for firma, mime in _FIRMAS_IMAGEN:
+        if data.startswith(firma):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return declarado if (declarado or "").startswith("image/") else None
+
+
+def _caratula_embebida(ruta: str) -> tuple[bytes, str] | None:
+    """Carátula embebida en el archivo de audio: APIC de ID3 (MP3, y el chunk ID3 de WAV y
+    AIFF), PICTURE de FLAC o `covr` de MP4/M4A. Prefiere la de tipo 3 (tapa). Solo lee: el
+    archivo original no se toca. None si no trae (o no se puede leer)."""
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(ruta)
+    except Exception as e:  # noqa: BLE001 — archivo raro o ilegible: sin carátula, no un 500
+        logger.debug(f"Carátula: no pude leer {ruta}: {e}")
+        return None
+    if audio is None:
+        return None
+    candidatos: list[tuple[int, bytes, str | None]] = []   # (tipo, datos, MIME declarado)
+    for p in getattr(audio, "pictures", None) or []:       # FLAC
+        candidatos.append((p.type, p.data, p.mime))
+    tags = audio.tags
+    if tags is not None:
+        if hasattr(tags, "getall"):                          # ID3
+            candidatos += [(a.type, a.data, a.mime) for a in tags.getall("APIC")]
+        else:
+            try:
+                covr = tags.get("covr")                      # MP4
+            except Exception:  # noqa: BLE001
+                covr = None
+            candidatos += [(3, bytes(c), None) for c in covr or []]
+    candidatos.sort(key=lambda c: c[0] != 3)                 # la tapa primero
+    for _, data, declarado in candidatos:
+        data = bytes(data or b"")
+        mime = _mime_imagen(data, declarado)
+        if data and mime:
+            return data, mime
+    return None
+
+
+@app.get("/api/cover/{track_id}")
+async def caratula(track_id: str):
+    """Carátula EMBEBIDA en el archivo de un track de la biblioteca (el XML de Rekordbox no
+    trae imágenes, así que la home no mostraba ninguna). 404 con motivo cuando el track no
+    existe o el archivo no trae carátula: el front dibuja su placeholder, nunca una imagen
+    inventada. Mismo criterio que /api/audio: el id no es una ruta."""
+    if not _lib_audio:
+        await asyncio.to_thread(_cargar_biblioteca)
+    ruta = _lib_audio.get(track_id)
+    if not ruta or not Path(ruta).exists():
+        return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    art = await asyncio.to_thread(_caratula_embebida, ruta)
+    if not art:
+        return JSONResponse({"error": "el archivo no trae carátula"}, status_code=404)
+    data, mime = art
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
 
 # --- Radio DJ (motor/): biblioteca del motor, set armado por `motor.radio.build_set` y el

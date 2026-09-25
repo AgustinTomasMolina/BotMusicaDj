@@ -144,10 +144,12 @@ def test_biblioteca_agrupa_por_genero_y_excluye_los_que_no_resuelven(client, bib
     ]
     techno = d["generos"][0]["tracks"]
     assert techno[0] == {"id": "11", "titulo": "Uno", "artista": "Artista A", "bpm": 128.0,
-                         "camelot": "8A", "tonalidad": "Am", "genero": "Techno", "dur": 245}
+                         "camelot": "8A", "tonalidad": "Am", "genero": "Techno", "dur": 245,
+                         "formato": "wav"}
     # BPM 0 = sin analizar → None (no un 0 que miente); sin Tonality → None.
     assert techno[1] == {"id": "12", "titulo": "Dos", "artista": "Artista B", "bpm": None,
-                         "camelot": None, "tonalidad": None, "genero": "Techno", "dur": 180}
+                         "camelot": None, "tonalidad": None, "genero": "Techno", "dur": 180,
+                         "formato": "wav"}
     sin_genero = d["generos"][2]["tracks"][0]
     assert (sin_genero["bpm"], sin_genero["camelot"], sin_genero["tonalidad"]) == (140.3, None, "4A")
 
@@ -194,3 +196,121 @@ def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, bibliote
         r = client.get(f"/api/audio/{intento}")
         assert r.status_code == 404, f"{intento!r} respondió {r.status_code}"
         assert r.content not in prohibidos, f"{intento!r} filtró un archivo"
+
+
+# --------------------------------------------------------------------------- /api/cover/{id}
+# La home no mostraba carátulas porque el XML de Rekordbox no trae imágenes. La carátula que
+# existe de verdad es la que viene EMBEBIDA en el archivo: se escribe acá con mutagen (como
+# lo hace tagger.py al descargar) y el endpoint tiene que devolver esos mismos bytes.
+
+def _png(ancho: int = 2, alto: int = 2, rgb=(200, 30, 90)) -> bytes:
+    """PNG real y chico (con CRC válidos), para no depender de Pillow."""
+    import zlib
+
+    def chunk(tipo: bytes, datos: bytes) -> bytes:
+        return (struct.pack(">I", len(datos)) + tipo + datos
+                + struct.pack(">I", zlib.crc32(tipo + datos) & 0xFFFFFFFF))
+    fila = b"\x00" + bytes(rgb) * ancho
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", ancho, alto, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(fila * alto)) + chunk(b"IEND", b""))
+
+
+# Cabecera JFIF + relleno: el endpoint no decodifica la imagen, solo la devuelve tal cual.
+_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + bytes(range(64))
+
+
+def _wav_con_apic(ruta: Path, imagen: bytes, mime: str, antes: bytes | None = None) -> None:
+    """WAV con la carátula como APIC tipo 3 (tapa). `antes`: otra imagen de tipo 0 (otra)
+    escrita PRIMERO, para ver que se elige la tapa y no la primera que aparece."""
+    from mutagen.id3 import APIC
+    from mutagen.wave import WAVE
+    _wav(ruta, 300.0)
+    audio = WAVE(str(ruta))
+    audio.add_tags()
+    if antes is not None:
+        audio.tags.add(APIC(encoding=3, mime="image/png", type=0, desc="Otra", data=antes))
+    audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=imagen))
+    audio.save()
+
+
+def _flac_con_picture(ruta: Path, imagen: bytes) -> None:
+    import numpy as np
+    import soundfile as sf
+    from mutagen.flac import FLAC, Picture
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(ruta), (0.2 * np.sin(np.linspace(0, 200, 4410))).astype("float32"), 22050,
+             format="FLAC")
+    f = FLAC(str(ruta))
+    pic = Picture()
+    pic.type, pic.mime, pic.data = 3, "image/jpeg", imagen
+    f.add_picture(pic)
+    f.save()
+
+
+@pytest.fixture
+def biblioteca_caratulas(server, tmp_path, monkeypatch):
+    """4 tracks: WAV con APIC PNG, WAV con APIC cuyo MIME declarado miente, FLAC con
+    PICTURE JPEG y WAV sin carátula."""
+    raiz = tmp_path / "musica"
+    png, png_otro = _png(), _png(3, 1, (10, 220, 40))
+    _wav_con_apic(raiz / "con_png.wav", png, "image/png", antes=_png(1, 1, (0, 0, 255)))
+    # Hay APIC con MIME vacío o "image/jpg": el tipo sale del contenido, no del tag.
+    _wav_con_apic(raiz / "mime_miente.wav", png_otro, "image/jpg")
+    _flac_con_picture(raiz / "con_jpeg.flac", _JPEG)
+    _wav(raiz / "sin_tapa.wav", 500.0)
+    tracks = [
+        dict(id="1", name="Con PNG", artist="A", genre="Techno", bpm="128.00", ton="Am", dur="1",
+             loc=_location(raiz / "con_png.wav")),
+        dict(id="2", name="Mime", artist="B", genre="Techno", bpm="128.00", ton="Am", dur="1",
+             loc=_location(raiz / "mime_miente.wav")),
+        dict(id="3", name="Con JPEG", artist="C", genre="House", bpm="124.00", ton="C", dur="1",
+             loc=_location(raiz / "con_jpeg.flac")),
+        dict(id="4", name="Sin tapa", artist="D", genre="House", bpm="124.00", ton="C", dur="1",
+             loc=_location(raiz / "sin_tapa.wav")),
+    ]
+    xml = tmp_path / "rekordbox.xml"
+    xml.write_text(_xml(tracks), encoding="utf-8")
+    monkeypatch.setattr(server, "_LIB_XML", str(xml))
+    monkeypatch.setattr(server, "_LIB_ROOTS", [str(raiz)])
+    monkeypatch.setattr(server, "_lib_audio", {})
+    return {"raiz": raiz, "png": png, "png_otro": png_otro}
+
+
+def test_cover_devuelve_la_caratula_embebida_de_ese_track(client, biblioteca_caratulas):
+    b = biblioteca_caratulas
+    esperado = {"1": (b["png"], "image/png"), "2": (b["png_otro"], "image/png"),
+                "3": (_JPEG, "image/jpeg")}
+    for tid, (bytes_esperados, mime) in esperado.items():
+        r = client.get(f"/api/cover/{tid}")
+        assert r.status_code == 200, f"track {tid}: {r.status_code} {r.text[:80]}"
+        assert r.content == bytes_esperados, f"track {tid}: devolvió otra imagen que la embebida"
+        assert r.headers["content-type"] == mime, f"track {tid}: MIME {r.headers['content-type']}"
+
+
+def test_cover_sin_caratula_o_sin_track_da_404_con_motivo(client, biblioteca_caratulas):
+    r = client.get("/api/cover/4")
+    assert r.status_code == 404
+    assert r.json() == {"error": "el archivo no trae carátula"}
+    r = client.get("/api/cover/99")
+    assert r.status_code == 404
+    assert r.json() == {"error": "track no encontrado"}
+    # El id no es una ruta: ni relativa ni absoluta al archivo que SÍ tiene carátula.
+    ruta_real = quote(str(biblioteca_caratulas["raiz"] / "con_png.wav"), safe="")
+    for tid in ("..%2Fserver.py", ruta_real, "con_png.wav"):
+        r = client.get(f"/api/cover/{tid}")
+        assert r.status_code == 404, f"{tid!r} respondió {r.status_code}"
+        assert biblioteca_caratulas["png"] not in r.content, f"{tid!r} filtró la carátula"
+
+
+def test_cover_no_modifica_el_archivo_original(client, biblioteca_caratulas):
+    ruta = biblioteca_caratulas["raiz"] / "con_png.wav"
+    antes = ruta.read_bytes()
+    assert client.get("/api/cover/1").status_code == 200
+    assert ruta.read_bytes() == antes, "leer la carátula tocó el archivo original"
+
+
+def test_biblioteca_informa_el_formato_real_de_cada_archivo(client, biblioteca_caratulas):
+    d = client.get("/api/biblioteca").json()
+    formatos = {t["id"]: t["formato"] for g in d["generos"] for t in g["tracks"]}
+    assert formatos == {"1": "wav", "2": "wav", "3": "flac", "4": "wav"}

@@ -34,6 +34,30 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# Tamaños de carátula de SoundCloud, del preferido al último recurso. t500x500 alcanza para
+# el tag del archivo descargado (tagger.py la embebe) y para la pantalla con densidad 2x.
+_SC_THUMB_PREFERIDOS = ('t500x500', 't300x300')
+
+
+def _thumbnail_soundcloud(video: dict) -> Optional[str]:
+    """Carátula de un resultado de SoundCloud.
+
+    Con `extract_flat` yt-dlp deja `thumbnail` en None y la carátula viene solo en la lista
+    `thumbnails` (mini, tiny, small, …, t300x300, t500x500, original). Leer solo `thumbnail`
+    dejaba a TODOS los resultados de SoundCloud sin imagen. Medido con yt-dlp 2026.08.19.
+    Sin ninguna → None (el front dibuja el placeholder, no una imagen inventada)."""
+    if video.get('thumbnail'):
+        return video['thumbnail']
+    thumbs = [t for t in (video.get('thumbnails') or []) if isinstance(t, dict) and t.get('url')]
+    if not thumbs:
+        return None
+    for preferido in _SC_THUMB_PREFERIDOS:
+        for t in thumbs:
+            if t.get('id') == preferido:
+                return t['url']
+    return max(thumbs, key=lambda t: t.get('width') or 0)['url']
+
+
 class SearchAgent:
     """
     Agente inteligente para búsqueda de canciones
@@ -182,7 +206,7 @@ class SearchAgent:
                             'url': video.get('url') or video.get('webpage_url', ''),
                             'fuente': 'soundcloud',
                             'video_id': video.get('id', ''),
-                            'thumbnail': video.get('thumbnail'),
+                            'thumbnail': _thumbnail_soundcloud(video),
                         }
                         if cancion['url']:  # Solo agregar si tiene URL válida
                             canciones.append(cancion)
