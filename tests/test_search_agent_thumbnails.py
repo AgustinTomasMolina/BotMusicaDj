@@ -6,7 +6,6 @@ llegaban al front sin imagen (medido contra yt-dlp 2026.08.19 con `scsearch`). L
 de acá copian la forma real que devuelve yt-dlp (ids y tamaños de SoundCloud).
 """
 import pytest
-
 import search_agent
 from search_agent import SearchAgent, _thumbnail_soundcloud
 

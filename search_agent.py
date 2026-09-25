@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _SC_THUMB_PREFERIDOS = ('t500x500', 't300x300')
 
 
-def _thumbnail_soundcloud(video: dict) -> Optional[str]:
+def _thumbnail_soundcloud(video: dict) -> str | None:
     """Carátula de un resultado de SoundCloud.
 
     Con `extract_flat` yt-dlp deja `thumbnail` en None y la carátula viene solo en la lista

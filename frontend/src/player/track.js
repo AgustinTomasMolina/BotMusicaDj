@@ -10,7 +10,8 @@
 //   titulo, artista, fuente, duracion
 //   audioSrc   URL de audio directo servida por el backend (biblioteca/radio)
 //   bpm        número tal cual vino; bpmMedido=true si se midió sobre ESTE archivo (Rekordbox
-//              o el motor) — solo entonces el reproductor dibuja marcas de compás
+//              o el motor) — se muestra con un decimal; si viene de una fuente externa,
+//              con la precisión que trae (ver fmtBpm)
 //   camelot, tonalidad, keyDudosa, formato, grade
 //   raw        el objeto original de la pantalla (para descargar y agregar a playlist)
 //   paraPlaylist  lo que se manda a AddToPlaylist

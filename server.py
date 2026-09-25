@@ -22,6 +22,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Set
 
@@ -33,7 +34,7 @@ except Exception:
     pass
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -1090,33 +1091,87 @@ async def audio(track_id: str):
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
 
 
-# Firmas de los formatos de imagen que se embeben en audio: el MIME declarado en el tag no
-# siempre es cierto (hay APIC con "image/jpg" o vacío), así que se mira el contenido.
-_FIRMAS_IMAGEN = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"),
-                  (b"GIF8", "image/gif"))
+# Motivos de /api/cover cuando no hay imagen que servir. El front dibuja el placeholder en
+# todos los casos; el motivo es para quien mire la respuesta (y los tests).
+_SIN_CARATULA = "el archivo no trae carátula"
+_CARATULA_GRANDE = "carátula demasiado grande"
+_CARATULA_FORMATO = "la carátula no es JPEG, PNG, GIF ni WebP"
+_ARCHIVO_ILEGIBLE = "no pude leer el archivo"
+_SIN_MUTAGEN = "esta instalación no tiene mutagen: no se pueden leer carátulas"
+# Tope de lo que se devuelve: una tapa normal pesa < 1 MB. Un APIC de 40 MB iba entero a
+# memoria y a la red (medido en la auditoría de f28).
+_CARATULA_MAX_BYTES = 10 * 1024 * 1024
+# Cuántos archivos se abren a la vez: la home pide ~18 carátulas juntas.
+_caratulas_sem = asyncio.Semaphore(4)
+_aviso_sin_mutagen = False
 
 
-def _mime_imagen(data: bytes, declarado: str | None) -> str | None:
-    for firma, mime in _FIRMAS_IMAGEN:
-        if data.startswith(firma):
-            return mime
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return declarado if (declarado or "").startswith("image/") else None
+def _cabeceras_plausibles(ruta: str) -> bool:
+    """¿Los tamaños que DECLARA el archivo entran en el archivo? Se mira antes de mutagen.
+
+    Medido en la auditoría de f28: un MP3 de 3 KB con la cabecera ID3 corrupta (tamaño
+    declarado de 256 MB) hacía que mutagen pidiera `read(256 MB)`, y Python reserva el búfer
+    entero antes de leer. Se revisan las dos cabeceras que mutagen lee de una: la ID3 del
+    principio (MP3) y los chunks de RIFF/FORM (WAV/AIFF, donde vive el chunk 'id3 ').
+    FLAC no lo necesita (sus bloques declaran 24 bits: ≤ 16 MB). MP4/M4A no se revisa acá:
+    sus átomos se leen de a partes y no se midió el mismo problema."""
+    try:
+        total = os.path.getsize(ruta)
+        with open(ruta, "rb") as f:
+            cab = f.read(12)
+            if cab[:3] == b"ID3" and len(cab) >= 10:
+                b = cab[6:10]
+                if any(x & 0x80 for x in b):             # syncsafe: el bit alto va en 0
+                    return False
+                tam = (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+                return 10 + tam <= total
+            if cab[:4] in (b"RIFF", b"FORM"):
+                orden = "little" if cab[:4] == b"RIFF" else "big"
+                pos = 12
+                for _ in range(10_000):                  # tope de chunks: un archivo real tiene pocos
+                    if pos + 8 > total:
+                        return True
+                    f.seek(pos)
+                    h = f.read(8)
+                    tam = int.from_bytes(h[4:8], orden)
+                    if pos + 8 + tam > total:
+                        return False
+                    pos += 8 + tam + (tam & 1)           # los chunks se alinean a 2 bytes
+                return False
+        return True
+    except OSError:
+        return False
 
 
-def _caratula_embebida(ruta: str) -> tuple[bytes, str] | None:
+def _caratula_embebida(ruta: str) -> tuple[bytes, str] | str:
     """Carátula embebida en el archivo de audio: APIC de ID3 (MP3, y el chunk ID3 de WAV y
     AIFF), PICTURE de FLAC o `covr` de MP4/M4A. Prefiere la de tipo 3 (tapa). Solo lee: el
-    archivo original no se toca. None si no trae (o no se puede leer)."""
+    archivo original no se toca.
+
+    Devuelve (bytes, mime) o el MOTIVO por el que no hay nada que servir. El MIME sale SOLO
+    del contenido (tagger.mime_por_contenido: JPEG/PNG/GIF/WebP), nunca del tag: un APIC
+    "image/svg+xml" con <script> ejecutaba en el origen de la app (auditoría de f28).
+    No se leen carátulas de OGG/Opus (METADATA_BLOCK_PICTURE en base64) ni de APEv2: esos
+    archivos responden "no trae carátula" aunque tengan una."""
+    global _aviso_sin_mutagen
     try:
         from mutagen import File as MutagenFile
+    except ImportError:
+        if not _aviso_sin_mutagen:
+            logger.warning("⚠️ Carátulas: falta mutagen; /api/cover no puede leer ninguna.")
+            _aviso_sin_mutagen = True
+        return _SIN_MUTAGEN
+    from tagger import mime_por_contenido
+    if not _cabeceras_plausibles(ruta):
+        logger.debug(f"Carátula: cabeceras que no entran en el archivo, no se parsea {ruta}")
+        return _ARCHIVO_ILEGIBLE
+    try:
         audio = MutagenFile(ruta)
     except Exception as e:  # noqa: BLE001 — archivo raro o ilegible: sin carátula, no un 500
         logger.debug(f"Carátula: no pude leer {ruta}: {e}")
-        return None
+        return _ARCHIVO_ILEGIBLE
     if audio is None:
-        return None
+        return _SIN_CARATULA
     candidatos: list[tuple[int, bytes, str | None]] = []   # (tipo, datos, MIME declarado)
     for p in getattr(audio, "pictures", None) or []:       # FLAC
         candidatos.append((p.type, p.data, p.mime))
@@ -1131,30 +1186,60 @@ def _caratula_embebida(ruta: str) -> tuple[bytes, str] | None:
                 covr = None
             candidatos += [(3, bytes(c), None) for c in covr or []]
     candidatos.sort(key=lambda c: c[0] != 3)                 # la tapa primero
-    for _, data, declarado in candidatos:
-        data = bytes(data or b"")
-        mime = _mime_imagen(data, declarado)
-        if data and mime:
-            return data, mime
-    return None
+    motivo = _SIN_CARATULA
+    for _, data, _declarado in candidatos:
+        if not data:
+            continue
+        if len(data) > _CARATULA_MAX_BYTES:
+            motivo = _CARATULA_GRANDE
+            continue
+        mime = mime_por_contenido(bytes(data))              # el declarado NO se usa
+        if not mime:
+            if motivo == _SIN_CARATULA:
+                motivo = _CARATULA_FORMATO
+            continue
+        return bytes(data), mime
+    return motivo
+
+
+# La respuesta es una imagen y nada más: sin sniffing del navegador y, si algo se colara
+# igual, sin permiso para ejecutar ni cargar nada (CSP con sandbox).
+_CABECERAS_CARATULA = {
+    "Cache-Control": "private, max-age=3600",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+}
 
 
 @app.get("/api/cover/{track_id}")
-async def caratula(track_id: str):
+async def caratula(track_id: str, request: Request):
     """Carátula EMBEBIDA en el archivo de un track de la biblioteca (el XML de Rekordbox no
     trae imágenes, así que la home no mostraba ninguna). 404 con motivo cuando el track no
-    existe o el archivo no trae carátula: el front dibuja su placeholder, nunca una imagen
-    inventada. Mismo criterio que /api/audio: el id no es una ruta."""
+    existe o no hay imagen que servir: el front dibuja su placeholder, nunca una imagen
+    inventada. Mismo criterio que /api/audio: el id no es una ruta.
+
+    `Last-Modified` = mtime del archivo: re-taggear un tema cambia la tapa al recargar (con
+    solo max-age se veía la vieja una hora). `If-Modified-Since` igual o posterior → 304."""
     if not _lib_audio:
         await asyncio.to_thread(_cargar_biblioteca)
     ruta = _lib_audio.get(track_id)
     if not ruta or not Path(ruta).exists():
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
-    art = await asyncio.to_thread(_caratula_embebida, ruta)
-    if not art:
-        return JSONResponse({"error": "el archivo no trae carátula"}, status_code=404)
+    mtime = int(os.path.getmtime(ruta))
+    cabeceras = {**_CABECERAS_CARATULA, "Last-Modified": formatdate(mtime, usegmt=True)}
+    ims = request.headers.get("if-modified-since")
+    if ims:
+        try:
+            if int(parsedate_to_datetime(ims).timestamp()) >= mtime:
+                return Response(status_code=304, headers=cabeceras)
+        except (TypeError, ValueError):
+            pass                                          # fecha ilegible: se sirve entera
+    async with _caratulas_sem:
+        art = await asyncio.to_thread(_caratula_embebida, ruta)
+    if isinstance(art, str):
+        return JSONResponse({"error": art}, status_code=404)
     data, mime = art
-    return Response(content=data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+    return Response(content=data, media_type=mime, headers=cabeceras)
 
 
 # --- Radio DJ (motor/): biblioteca del motor, set armado por `motor.radio.build_set` y el

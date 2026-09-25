@@ -1061,7 +1061,12 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
    La imagen real llena su marco; sin imagen, un placeholder "white label" (el disco promo sin
    arte): colores del sistema elegidos por hash del título+artista (src/cover.js) y una nota
    chica que dice "sin carátula". Antes el marco quedaba en --color-well, casi el fondo. */
-.cover{display:block;width:100%;height:100%;object-fit:cover}
+/* Placeholder siempre abajo, imagen encima que aparece al cargar: nunca se ve el marco vacío. */
+.cover{display:block;width:100%;height:100%}
+.cover-stack{position:relative;overflow:hidden}
+.cover-stack>.cover-ph,.cover-stack>.cover-img{position:absolute;inset:0;width:100%;height:100%}
+.cover-img{display:block;object-fit:cover;opacity:0;transition:opacity .2s var(--ease)}
+.cover-img.is-loaded{opacity:1}
 .cover-ph{display:grid;place-items:center;color:color-mix(in srgb,var(--color-text) 62%,transparent);
   background:
     radial-gradient(circle at var(--ph-x) var(--ph-y),color-mix(in srgb,var(--ph-c1) 60%,transparent) 0 16%,transparent 16.5%),
@@ -1127,7 +1132,8 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   background:conic-gradient(from 205deg,transparent 0deg,rgba(255,255,255,.16) 16deg,transparent 38deg,transparent 180deg,rgba(255,255,255,.07) 196deg,transparent 218deg)}
 .deck-spindle{position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:var(--color-neutral-300);box-shadow:0 0 0 1.5px rgba(0,0,0,.6)}
 @keyframes deck-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.deck-platter{animation:none}.deck{animation:none}}
+/* (prefers-reduced-motion del deck: al final del archivo, después de .deck-monitor, para que
+   gane por orden; acá arriba el monitor lo pisaba y conservaba su animación de entrada.) */
 
 /* — tema — */
 .deck-id{grid-area:id;min-width:0}
@@ -1158,7 +1164,9 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .deck-seek{position:relative;flex:1;min-width:0;height:24px;display:flex;align-items:center}
 .deck-seek-track{position:absolute;left:0;right:0;top:50%;height:4px;margin-top:-2px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well));pointer-events:none}
 .deck-seek-fill{position:absolute;left:0;top:0;bottom:0;width:var(--pct,0%);border-radius:inherit;background:linear-gradient(to right,var(--color-accent-600),var(--color-accent))}
-/* Marcas de compás (solo con BPM medido sobre el archivo): cada 16, más fuerte cada 64. */
+/* Marcas de compás: HOY NO SE DIBUJAN (sin el primer downbeat se leían como inicio de frase;
+   ver el comentario en PlayerBar.jsx). El estilo queda para cuando se anclen al TEMPO de
+   Rekordbox: cada 16 compases, más fuerte cada 64. */
 .deck-seek-track>i{position:absolute;top:-3px;bottom:-3px;width:1px;margin-left:-.5px;background:color-mix(in srgb,var(--color-text) 30%,transparent)}
 .deck-seek-track>i.is-major{top:-5px;bottom:-5px;background:color-mix(in srgb,var(--color-text) 55%,transparent)}
 .deck-range{position:relative;width:100%;height:24px;margin:0;padding:0;background:transparent;cursor:pointer;-webkit-appearance:none;appearance:none}
@@ -1216,3 +1224,6 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .deck-monitor,.deck-monitor.is-soundcloud{left:var(--space-3);right:var(--space-3);width:auto}
 .toasts{bottom:calc(var(--space-3) + var(--player-h) + var(--monitor-h))}
 }
+/* Sin movimiento: el plato no gira y ni la barra, ni el monitor, ni la carátula animan su
+   entrada. Al final del archivo a propósito (gana por orden sobre las reglas de arriba). */
+@media (prefers-reduced-motion:reduce){.deck-platter,.deck,.deck-monitor{animation:none}.cover-img{transition:none}}

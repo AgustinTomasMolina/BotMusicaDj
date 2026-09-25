@@ -34,21 +34,14 @@ const IcoVol = ({ off }) => S(off
 const IcoX = () => S(<path d="M6 6l12 12M18 6L6 18" />, 16)
 const IcoExt = () => S(<><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></>, 14)
 
-/* Marcas de compás: SOLO con BPM medido sobre este mismo archivo (biblioteca, radio). Con un
-   BPM de una fuente externa sobre un rip de YouTube (intro de video, otra versión) las
-   marcas caerían en cualquier lado. Se cuentan desde el segundo 0: sin la grilla de beats
-   de Rekordbox no se sabe dónde cae el primer tiempo, y eso lo dice el texto. */
-function compases(track, duration) {
-  if (!track?.bpmMedido || !duration) return null
-  const bpm = Number(track.bpm)
-  if (!(bpm > 0)) return null
-  let barras = 16
-  let paso = (barras * 4 * 60) / bpm
-  if (duration / paso > 40) { barras = 32; paso *= 2 }       // tema larguísimo: menos marcas
-  const n = Math.floor(duration / paso)
-  if (n < 1) return null
-  return { barras, marcas: Array.from({ length: n }, (_, k) => ((k + 1) * paso) / duration) }
-}
+/* Marcas de compás: SACADAS por ahora (decisión del dueño por §6, auditoría de f28).
+   Contadas desde el segundo 0 se leían como "acá empieza la frase", y el primer downbeat casi
+   nunca está en 0 s. Vuelven cuando haya ancla: el XML de Rekordbox trae la grilla de beats
+   por track (`<TEMPO Inizio="0.025" Bpm="128.00" Metro="4/4" Battito="1"/>`; Inizio = segundo
+   del primer tiempo, Battito = qué tiempo del compás es). Pasos: leer TEMPO en
+   ground_truth/rekordbox.parsear, mandarlo en /api/biblioteca (p. ej. `primer_beat`) y en
+   fromLibrary (src/player/track.js), y dibujar acá las marcas desde el primer Battito="1"
+   cada 16 compases, dentro de .deck-seek-track (el CSS de `.deck-seek-track>i` sigue). */
 
 export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
   const p = usePlayer()
@@ -77,7 +70,6 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
   const dur = duration && duration > 0 ? duration : null
   const pos = scrub ?? Math.min(time || 0, dur || 0)
   const bpm = fmtBpm(t)
-  const grid = compases(t, dur)
   const fuente = NOMBRE_FUENTE[t.fuente] || t.fuente || null
   const formatoTrack = t.formato ? t.formato.toLowerCase() : null
   const dlState = t.descargable ? dl[songKey(t.raw)] : null
@@ -94,12 +86,16 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
     setScrub(null)
   }
 
-  // Región viva sobria: cambia con el tema o con un error, nunca con el tiempo.
+  // Región viva sobria: cambia con el tema, el estado o un error, nunca con el tiempo.
+  // "Cargando" no se anuncia distinto de "Sonando" (sería un anuncio por cada buffering).
+  const quien = `${t.titulo}${t.artista ? ` — ${t.artista}` : ''}`
   const anuncio = p.error
     ? `No se pudo reproducir ${t.titulo}. ${p.error}`
     : p.status === 'embed'
       ? `${t.titulo}: Spotify no deja controlar su reproductor desde la barra.`
-      : `Sonando: ${t.titulo}${t.artista ? ` — ${t.artista}` : ''}`
+      : p.status === 'paused' ? `En pausa: ${quien}`
+        : p.status === 'ended' ? `Terminó: ${quien}`
+          : `Sonando: ${quien}`
 
   const vol = p.muted ? 0 : Math.round(p.volume * 100)
   const pct = dur ? (pos / dur) * 100 : 0
@@ -137,20 +133,17 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
 
       <div className="deck-pos">
         <span className="deck-time mono" aria-hidden="true">{fmtT(dur ? pos : null)}</span>
-        <div className="deck-seek" style={{ '--pct': `${pct}%` }} title={grid ? `Marcas cada ${grid.barras} compases a ${bpm} BPM, contadas desde el inicio del archivo` : undefined}>
+        <div className="deck-seek" style={{ '--pct': `${pct}%` }}>
           <span className="deck-seek-track" aria-hidden="true">
             <span className="deck-seek-fill" />
-            {grid && grid.marcas.map((x, k) => <i key={k} className={(k + 1) % 4 === 0 ? 'is-major' : ''} style={{ left: `${x * 100}%` }} />)}
           </span>
           <input type="range" className="deck-range" min="0" max={dur ? Math.floor(dur) : 0} step="1"
             value={Math.floor(pos)} disabled={!dur || !controlable}
             aria-label="Posición en el tema"
             aria-valuetext={dur ? `${fmtT(pos)} de ${fmtT(dur)}` : 'Duración desconocida'}
-            aria-describedby={grid ? 'deck-grid-desc' : undefined}
             onPointerDown={() => { arrastrando.current = true }}
             onPointerUp={soltar} onPointerCancel={soltar} onKeyDown={onSeekKey}
             onChange={(e) => { const v = Number(e.target.value); if (arrastrando.current) setScrub(v); else p.seek(v) }} />
-          {grid && <span id="deck-grid-desc" className="sr-only">Marcas cada {grid.barras} compases a {bpm} BPM, contadas desde el inicio del archivo.</span>}
         </div>
         <span className="deck-time mono" aria-hidden="true">{fmtT(dur)}</span>
       </div>
