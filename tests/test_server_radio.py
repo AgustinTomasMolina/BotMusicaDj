@@ -655,3 +655,170 @@ def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, bibliote
         r = client.get(f"/api/radio/audio/{intento}")
         assert r.status_code == 404, f"{intento!r} respondió {r.status_code}"
         assert r.content not in prohibidos, f"{intento!r} filtró un archivo"
+
+
+# ------------------------------------------------------ export del set (/api/radio/set.m3u8)
+#
+# El .m3u8 es lo que el DJ se lleva a Rekordbox: tiene que ser EL set que la pantalla
+# mostró, en ese orden y con rutas que resuelvan en su PC. Los esperados se escriben acá a
+# mano (renglón por renglón, con CRLF) a partir de lo que armó `build_set` y de las rutas
+# reales del fixture — no con `motor.export.m3u8_text`, que es el código bajo prueba.
+
+
+def _m3u8_esperado(tracks) -> bytes:
+    """El archivo que tiene que salir para esos tracks, escrito a mano: cabecera, y por track
+    EXTINF (segundos enteros, label), DJRADIO (BPM a un decimal) y la ruta ABSOLUTA."""
+    renglones = ["#EXTM3U"]
+    for t in tracks:
+        renglones += [f"#EXTINF:{round(t.duration)},{t.artist} — {t.title}",
+                      f"#DJRADIO:bpm={t.bpm:.1f} key={t.key} energy={t.energy:.2f}",
+                      str(t.path)]
+    return "".join(f"{r}\r\n" for r in renglones).encode("utf-8")
+
+
+def test_m3u8_es_el_set_de_la_pantalla_byte_a_byte(server, client, biblioteca):
+    """Mismo set que /api/radio/set, en el mismo orden, con CRLF, sin BOM y con las rutas
+    absolutas del scan, que existen en disco (lo que pide la #15: sin archivos rotos)."""
+    tracks = _tracks_del_motor(biblioteca["db"])
+    id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
+    params = {"track": id_uno, "largo": 4, "curva": "warmup"}
+
+    pantalla = client.get("/api/radio/set", params=params).json()
+    r = client.get("/api/radio/set.m3u8", params=params)
+    assert r.status_code == 200, r.text
+
+    orden = [p["track"]["id"] for p in pantalla["pasos"]]
+    por_id = {server._radio_id(t.path): t for t in tracks.values()}
+    armado = [por_id[i] for i in orden]
+    assert [t.path.name for t in armado] != sorted(t.path.name for t in armado), \
+        "el set salió en orden alfabético: así el test no ve un export que reordena"
+
+    assert r.content == _m3u8_esperado(armado), \
+        f"el .m3u8 no es el set de la pantalla:\n{r.content.decode('utf-8')}"
+    assert not r.content.startswith(b"\xef\xbb\xbf"), "BOM pegado al #EXTM3U"
+    rutas = [ln for ln in r.content.decode("utf-8").split("\r\n") if ln and not ln.startswith("#")]
+    assert all(Path(ruta).is_absolute() and Path(ruta).is_file() for ruta in rutas), \
+        f"hay rutas que no resuelven a un archivo: {rutas}"
+
+
+def test_m3u8_es_el_mismo_archivo_que_escribe_la_cli(server, client, biblioteca, tmp_path,
+                                                    capsys):
+    """`python -m motor radio --m3u8` y el botón de la pantalla tienen que dar el mismo
+    archivo para el mismo set: si no, el DJ tiene dos exports que dicen cosas distintas."""
+    from motor.cli import main
+
+    salida = tmp_path / "cli.m3u8"
+    ruta_uno = biblioteca["rutas"]["uno.wav"]
+    codigo = main(["--db", str(biblioteca["db"]), "radio", str(ruta_uno), "--largo", "4",
+                   "--m3u8", str(salida)])
+    assert codigo == 0, capsys.readouterr().out
+
+    r = client.get("/api/radio/set.m3u8",
+                   params={"track": server._radio_id(ruta_uno), "largo": 4})
+    assert r.status_code == 200, r.text
+    assert r.content == salida.read_bytes(), \
+        (f"la API y la CLI exportan distinto.\nAPI:\n{r.content!r}\n"
+         f"CLI:\n{salida.read_bytes()!r}")
+
+
+def test_m3u8_cabeceras_de_descarga(server, client, biblioteca):
+    """Texto UTF-8 (no se interpreta), que el navegador lo BAJE con un nombre que diga qué
+    set es, y que no quede cacheado: el mismo pedido puede dar otro set tras un scan."""
+    id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
+    r = client.get("/api/radio/set.m3u8", params={"track": id_uno, "curva": "flat"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "text/plain; charset=utf-8"
+    assert r.headers["content-disposition"] == (
+        "attachment; filename=\"DJ Radio - Artista A - Uno - flat.m3u8\"; "
+        "filename*=UTF-8''DJ%20Radio%20-%20Artista%20A%20%E2%80%94%20Uno%20-%20flat.m3u8")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("label, esperado", [
+    # Todo lo que Windows no acepta en un nombre se va, y la barra NO arma una carpeta.
+    ('AC/DC: "Back" <In> Black?*|\\x', "DJ Radio - AC DC Back In Black x - peak.m3u8"),
+    # Un salto de línea en el título no llega al nombre ni a la cabecera HTTP.
+    ("Uno\r\nDos", "DJ Radio - Uno Dos - peak.m3u8"),
+    # Rutas relativas disfrazadas de título: sin separadores no hay a dónde subir.
+    ("../../Windows/system32", "DJ Radio - .. .. Windows system32 - peak.m3u8"),
+    # Unicode se conserva: es un nombre válido en Windows y es el título real.
+    ("Señor Coconut", "DJ Radio - Señor Coconut - peak.m3u8"),
+])
+def test_nombre_del_m3u8_es_seguro_en_windows(server, label, esperado):
+    assert server._nombre_m3u8(label, "peak") == esperado
+
+
+def test_nombre_del_m3u8_sin_punto_final_ni_largo_infinito(server):
+    """Windows le borra al nombre el punto o espacio final (el archivo "cambia de nombre"
+    solo) y no acepta rutas más largas que MAX_PATH."""
+    assert server._nombre_m3u8("x", "peak. .") == "DJ Radio - x - peak.m3u8"
+    nombre = server._nombre_m3u8("y" * 500, "peak")
+    assert nombre == "DJ Radio - " + "y" * (server._NOMBRE_MAX - len("DJ Radio - ")) + ".m3u8"
+
+
+def test_content_disposition_con_unicode_tiene_las_dos_formas(server):
+    """`filename` ASCII para clientes viejos, `filename*` UTF-8 con el nombre real."""
+    cd = server._content_disposition("DJ Radio - Señor Coconut - peak.m3u8")
+    assert cd == ("attachment; filename=\"DJ Radio - Senor Coconut - peak.m3u8\"; "
+                  "filename*=UTF-8''DJ%20Radio%20-%20Se%C3%B1or%20Coconut%20-%20peak.m3u8")
+
+
+def test_content_disposition_ascii_no_trae_caracteres_que_windows_rechaza(server):
+    """"＜" y "：" de ancho completo son válidos en un nombre de Windows, pero NFKD los vuelve
+    "<" y ":". El nombre de respaldo ASCII se sacaba antes de normalizar y los dejaba pasar."""
+    nombre = server._nombre_m3u8("＜x＞ ：y", "peak")
+    cd = server._content_disposition(nombre)
+    ascii_ = cd.split('filename="', 1)[1].split('"', 1)[0]
+    assert ascii_ == "DJ Radio - x y - peak.m3u8", ascii_
+    assert not set(ascii_) & set('<>:"/\\|?*'), ascii_
+
+
+def test_m3u8_semilla_que_no_es_track_es_400_con_el_motivo_del_motor(server, client,
+                                                                     biblioteca):
+    id_loop = server._radio_id(biblioteca["rutas"]["loop.wav"])
+    r = client.get("/api/radio/set.m3u8", params={"track": id_loop})
+    assert r.status_code == 400, f"exportó un set armado desde un loop: {r.text}"
+    assert r.json()["error"] == motivo_semilla_no_track(
+        _tracks_del_motor(biblioteca["db"])["loop.wav"]), "el motivo no es el del motor"
+    assert "content-disposition" not in r.headers, "un error no se baja como archivo"
+
+
+def test_m3u8_pedidos_invalidos_son_400_y_no_un_archivo(client, biblioteca):
+    for params, pista in (({}, "semilla"), ({"track": "no-existe-este-track"}, None),
+                          ({"track": "Uno", "curva": "montaña"}, "montaña")):
+        r = client.get("/api/radio/set.m3u8", params=params)
+        assert r.status_code == 400, f"{params}: {r.status_code} {r.text}"
+        assert r.json()["error"], f"{params}: 400 sin motivo"
+        if pista:
+            assert pista in r.json()["error"], f"{params}: el motivo no dice qué falló"
+        assert "content-disposition" not in r.headers
+
+
+def test_m3u8_sin_base_es_409_con_el_motivo_y_no_un_200(client, tmp_path, monkeypatch):
+    """Sin base no hay set: un 200 con JSON el navegador lo guardaría como `.m3u8`."""
+    fantasma = tmp_path / "no-existe" / "biblioteca.sqlite"
+    monkeypatch.setenv("DJRADIO_DB", str(fantasma))
+    r = client.get("/api/radio/set.m3u8", params={"track": "Uno"})
+    assert r.status_code == 409, r.text
+    d = r.json()
+    assert (d["configurada"], d["estado"]) == (False, "sin-base")
+    assert str(fantasma) in d["error"] and d["error"] == d["motivo"], d
+    assert "content-disposition" not in r.headers
+
+
+def test_m3u8_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca):
+    """`esperado` son los ids que la pantalla muestra. Si el re-armado da otro set (un scan
+    entre medio), 409: bajar otro set con el mismo nombre sería un dato que miente (§6)."""
+    id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
+    params = {"track": id_uno, "largo": 3}
+    ids = [p["track"]["id"] for p in client.get("/api/radio/set", params=params).json()["pasos"]]
+
+    ok = client.get("/api/radio/set.m3u8", params={**params, "esperado": ",".join(ids)})
+    assert ok.status_code == 200, ok.text
+
+    otro = [ids[0], ids[2], ids[1]]
+    r = client.get("/api/radio/set.m3u8", params={**params, "esperado": ",".join(otro)})
+    assert r.status_code == 409, "exportó un set distinto del que se le dijo que se mostró"
+    assert (r.json()["esperado"], r.json()["armado"]) == (otro, ids)
+    assert "content-disposition" not in r.headers

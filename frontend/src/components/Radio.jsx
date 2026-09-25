@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getRadioBiblioteca, getRadioSet, radioAudioUrl, radioAudioMotivo } from '../api'
+import { getRadioBiblioteca, getRadioSet, exportarRadioM3u8, radioAudioUrl, radioAudioMotivo } from '../api'
 import { fmtDur, normalizeText } from '../utils'
-import { IconRadio, IconPause, IconPlayFill, IconSearch } from './icons'
+import { IconRadio, IconPause, IconPlayFill, IconSearch, IconDownload } from './icons'
 
 /* ============================================================================
    Pantalla de Radio DJ: elegir semilla → ajustar la radio → el set.
@@ -266,6 +266,8 @@ export default function Radio() {
   const [sonando, setSonando] = useState(null)
   const [errorAudio, setErrorAudio] = useState(null)   // {id, mensaje}
   const [intento, setIntento] = useState(0)            // el botón «Reintentar» vuelve a pedir
+  const [exportando, setExportando] = useState(false)
+  const [avisoExport, setAvisoExport] = useState(null) // {tipo: 'ok'|'err', texto}
   const audioRef = useRef(null)
   // Qué track tiene cargado el <audio>. Sin esto, «Reproducir» después de «Pausar»
   // reasignaba `src` y el track arrancaba de cero: el botón decía Pausar y actuaba como
@@ -315,6 +317,7 @@ export default function Radio() {
     pararAudio()
     setArmando(true)
     setError('')
+    setAvisoExport(null)   // el aviso era del set anterior
     try {
       const r = await getRadioSet({ track: elegida.id, ...cfg })
       if (!r.ok) {
@@ -343,6 +346,43 @@ export default function Radio() {
       setError('No pude conectar con el servidor para armar el set. Revisá que esté corriendo y volvé a intentar.')
     } finally {
       setArmando(false)
+    }
+  }
+
+  // Baja el set que está EN PANTALLA como .m3u8 para Rekordbox. Se piden los parámetros que
+  // el set dice que usó (`set_.config`), no los de los controles: si el DJ tocó un control
+  // después de armar, el archivo igual tiene que ser la lista que está viendo. Y viajan los
+  // ids en pantalla: si el backend re-arma otra cosa (un scan entre medio), contesta 409 con
+  // el motivo en vez de bajar otro set.
+  const exportar = async () => {
+    if (!set_ || !set_.semilla || exportando || armando) return
+    setExportando(true)
+    setAvisoExport(null)
+    try {
+      const r = await exportarRadioM3u8({ track: set_.semilla.id, ...set_.config },
+        set_.pasos.map((p) => p.track.id))
+      if (!r.ok) {
+        setAvisoExport({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data) })
+        return
+      }
+      // Descarga real: un <a download> con el blob. El nombre es el que eligió el backend
+      // (ya saneado para Windows); el navegador lo deja en la carpeta de descargas.
+      const url = URL.createObjectURL(r.blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = r.nombre
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
+      setAvisoExport({
+        tipo: 'ok',
+        texto: `Se bajó «${r.nombre}» con los ${set_.total} tracks en este orden. En Rekordbox: File → Import → Import Playlist, y elegí ese archivo.`,
+      })
+    } catch {
+      setAvisoExport({ tipo: 'err', texto: 'No pude conectar con el servidor para exportar el set. Revisá que esté corriendo y volvé a intentar.' })
+    } finally {
+      setExportando(false)
     }
   }
 
@@ -430,7 +470,28 @@ export default function Radio() {
                 {set_.pedidos != null && ` · ${set_.total} de ${set_.pedidos} pedidos`}
               </span>
             )}
+            {/* aria-disabled y no disabled, por lo mismo que «Armar el set»: el botón no
+                pierde el foco mientras exporta ni cuando todavía no hay set. */}
+            <button type="button" className="btn btn-secondary rexportar"
+              aria-disabled={!set_ || exportando || armando}
+              aria-describedby={set_ ? undefined : 'r-exportar-falta'}
+              onClick={exportar}>
+              {exportando
+                ? <><span className="spinner" aria-hidden="true" /> Exportando…</>
+                : <><IconDownload size={15} /> Exportar a Rekordbox</>}
+            </button>
+            {!set_ && <span className="sr-only" id="r-exportar-falta">Todavía no hay set: armá uno para poder exportarlo.</span>}
           </div>
+
+          {avisoExport && avisoExport.tipo === 'err' && (
+            <div className="alert alert-warn" role="alert">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
+              <div><div className="alert-title">No se exportó el set</div><p>{avisoExport.texto}</p></div>
+            </div>
+          )}
+          {avisoExport && avisoExport.tipo === 'ok' && (
+            <p className="rnota rexportar-ok" role="status">{avisoExport.texto}</p>
+          )}
 
           {error && (
             <div className="alert alert-warn" role="alert">
