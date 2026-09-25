@@ -17,19 +17,19 @@ Dos aclaraciones sobre los datos, porque parecen chocar con reglas del proyecto:
 """
 import importlib
 import json
-import math
 import os
-import struct
 import sys
-import wave
 from pathlib import Path
 from urllib.parse import quote
 
-import numpy as np
 import pytest
 
 pytest.importorskip("httpx")  # lo necesita el TestClient de Starlette
 from fastapi.testclient import TestClient  # noqa: E402
+
+# El CATALOGO y los WAVs viven en tests/sinteticos.py: el E2E del front (frontend/e2e) arma
+# la misma base del motor y compara la pantalla contra esta API.
+from sinteticos import CATALOGO, armar_base_radio  # noqa: E402
 
 from motor.cli import (  # noqa: E402
     aviso_fragmentos,
@@ -38,33 +38,9 @@ from motor.cli import (  # noqa: E402
     percentil_energia,
     titular_corte,
 )
-from motor.embeddings import DIM  # noqa: E402
-from motor.modelos import DURACION_MINIMA_TRACK_S, TrackFeatures  # noqa: E402
+from motor.modelos import DURACION_MINIMA_TRACK_S  # noqa: E402
 from motor.radio import RadioConfig, build_set  # noqa: E402
 from motor.store import Store  # noqa: E402
-
-LICENCIA = "compra personal"
-ORIGEN = "biblioteca personal"
-
-# (nombre, bpm, camelot, acuerdo, tramos, duración declarada, artista, título, energía cruda)
-# Los BPM de los tres primeros caen adentro del ±8% entre sí (§4), así que un set los puede
-# encadenar. `cuatro` tiene BPM 0.0 —lo que devuelve el análisis sobre silencio— y por eso
-# nunca mezcla: es el track que hace cortar al set sin que la biblioteca esté agotada.
-# `loop` dura menos de DURACION_MINIMA_TRACK_S: no es un track.
-CATALOGO = [
-    # El BPM de la semilla NO es redondo a propósito: §6 dice que redondearlo a entero es
-    # mentir, y con un 128.0 un `round(bpm)` pasaría el test igual.
-    ("uno.wav", 128.4, "8A", "3/3", "8A|8A|8A", 240.0, "Artista A", "Uno", 0.30),
-    ("dos.wav", 130.0, "9A", "2/3", "9A|8A|9A", 300.0, "Artista B", "Dos", 0.20),
-    ("tres.wav", 126.0, "8B", None, None, 210.0, "Artista C", "Tres", 0.10),
-    ("cuatro.wav", 0.0, "", "0/0", "", 195.0, "Artista D", "Cuatro", 0.05),
-    ("loop.wav", 126.0, "8B", "3/3", "8B|8B|8B", 10.0, "Artista E", "Loop", 0.40),
-    # La MITAD del BPM de la semilla: el motor lo considera mezclable leyéndolo a doble
-    # tiempo (64.2 × 2 = 128.4) y lo dice en el motivo. Está acá para que el test distinga
-    # "el motivo lo da el motor" de "el motivo se recalcula en el server": una resta cruda
-    # de BPM sobre esta transición diría -50%, y el motor dice +0.0% (doble tiempo).
-    ("cinco.wav", 64.2, "8A", "3/3", "8A|8A|8A", 280.0, "Artista F", "Cinco", 0.25),
-]
 
 
 @pytest.fixture(scope="module")
@@ -95,41 +71,12 @@ def indice_limpio(server, monkeypatch):
     monkeypatch.setattr(server, "_radio_audio", {})
 
 
-def _wav(ruta: Path, freq: float, segundos: float = 0.25, sr: int = 22050) -> bytes:
-    """WAV mono 16 bit con un seno: chico, determinista y distinto por frecuencia."""
-    n = int(sr * segundos)
-    frames = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * freq * i / sr)))
-                      for i in range(n))
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(ruta), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(frames)
-    return ruta.read_bytes()
-
-
-def _embedding(i: int) -> np.ndarray:
-    """Vector de timbre determinista y distinto por track (la semilla del RNG es el índice)."""
-    return np.random.default_rng(i).normal(size=DIM).astype(np.float32)
-
-
 @pytest.fixture
 def biblioteca(tmp_path, monkeypatch):
     """Base del motor con el CATALOGO + los WAVs. Devuelve rutas, bytes y la base."""
     raiz = tmp_path / "musica"
     db = tmp_path / "djradio" / "biblioteca.sqlite"
-    audios, rutas = {}, {}
-    with Store(db) as store:
-        for i, (nombre, bpm, key, ac, tr, dur, artista, titulo, e) in enumerate(CATALOGO):
-            ruta = raiz / nombre
-            audios[nombre] = _wav(ruta, 220.0 + 110.0 * i)
-            rutas[nombre] = ruta
-            store.upsert(ruta,
-                         TrackFeatures(bpm=bpm, key=key, energy_raw=e, embedding=_embedding(i),
-                                       key_acuerdo=ac, key_tramos=tr),
-                         duration=dur, license=LICENCIA, source_url=ORIGEN,
-                         artist=artista, title=titulo)
+    audios, rutas = armar_base_radio(raiz, db)
     monkeypatch.setenv("DJRADIO_DB", str(db))
     return {"raiz": raiz, "db": db, "audios": audios, "rutas": rutas}
 

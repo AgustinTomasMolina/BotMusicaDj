@@ -76,3 +76,20 @@ forma débil. Detectó los 4 que se reforzaron en #5.67.
 Tiene falsos positivos: `assert not agrupa` tiene forma débil pero afirma la decisión real
 bajo prueba, y `assert "myfreemp3" in motivos` afirma qué motivo se detectó. La lista es
 para mirar con criterio, no para arreglar a ciegas.
+
+---
+
+## El front también tiene tests: `npm run e2e`
+
+La suite de Python prueba la API; lo que la pantalla hace con esos datos lo prueba el E2E de
+`frontend/e2e/` en un Chrome de verdad (el instalado, vía `puppeteer-core`; otra ruta con
+`PUPPETEER_EXECUTABLE_PATH`). Desde `frontend/`: `npm install` una vez y después
+`npm run e2e` (con el Node que pide Vite: 20.19+ o 22.12+). Buildea el front, arma una
+base de juguete en un directorio temporal con los catálogos de `tests/sinteticos.py`,
+levanta `uvicorn server:app` en un puerto libre (nunca el 8000, sin Redis), compara la
+pantalla contra la API y al final apaga todo y borra el temporal, también si falla. Tarda
+~15 s. Python: `E2E_PYTHON`, o el `.venv` de la raíz, o `python`. Sin Chrome se saltea con
+un aviso y exit 0 (`E2E_EXIGIR_CHROME=1` lo convierte en error). `npm run e2e -- --sin-build`
+reusa el `frontend/dist` que haya y `-- --solo=texto` corre solo los casos cuyo nombre lo
+contiene. No corre con `pytest`: la suite de Python sigue sin necesitar Node. La misma regla
+de arriba vale acá: cada caso se validó rompiendo a propósito lo que tiene que detectar.

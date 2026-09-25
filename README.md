@@ -67,6 +67,7 @@ pip install -r requirements-dev.txt   # producción + pytest y ruff (pytest NO e
 python -m pytest                  # toda la suite: motor, benchmark, ground_truth, calidad, pipeline
 python -m pytest motor/tests      # solo el motor (BPM, tonalidad, energía, scoring)
 python -m benchmark               # umbrales de calidad del motor (spec §4)
+cd frontend && npm run e2e        # la pantalla contra la API en Chrome (ver CONTRIBUTING.md)
 ```
 
 ## Configuración
