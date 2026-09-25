@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Set
 
@@ -1335,36 +1336,34 @@ async def radio_biblioteca():
             "opciones": _radio_opciones() if estado != _RADIO_SIN_MOTOR else None}
 
 
-@app.get("/api/radio/set")
-async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
-                    artist_gap: int | None = None, mmr_lambda: float | None = None,
-                    semilla: int | None = None, randomness: float | None = None):
-    """Arma un set desde `track` con `motor.radio.build_set`.
+@dataclass(frozen=True)
+class _SetArmado:
+    """Lo que devuelve `_armar_set_radio` cuando el pedido no fue inválido.
 
-    OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
-    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
-    la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
-    `randomness > 0`.
+    Con `estado != ok` (sin base, base ocupada...) `config`, `elegida` y `rset` son None:
+    no hay set, y cada endpoint degrada a su manera (ver `radio_set` y `radio_set_m3u8`).
+    """
+    estado: str
+    motivo: str | None
+    config: object = None
+    elegida: object = None
+    rset: object = None
 
-    Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
-    `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
-    desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+
+async def _armar_set_radio(track: str, largo, curva, artist_gap, mmr_lambda, semilla,
+                           randomness) -> "_SetArmado | JSONResponse":
+    """Arma el set que piden /api/radio/set y /api/radio/set.m3u8, o el 400 que corresponda.
+
+    UNA sola función para los dos endpoints a propósito: el .m3u8 tiene que ser el MISMO
+    set que la pantalla acaba de mostrar, y dos copias de esta lógica (defaults, cómo se
+    resuelve la semilla, qué se rechaza) se desincronizan en silencio — el día que una
+    cambie, el archivo que se lleva el DJ sería otro set que el que escuchó.
     """
     tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
-    vacio = {**_radio_envoltura(estado, motivo), "config": None, "semilla": None, "pasos": [],
-             "total": 0, "pedidos": None, "completo": False, "corte": None, "fragmentos": 0,
-             "aviso_fragmentos": None, "leyenda_key": None}
     if estado != _RADIO_OK:
-        return vacio
+        return _SetArmado(estado, motivo)
 
-    from motor.cli import (
-        LEYENDA_KEY,
-        ErrorDeUso,
-        aviso_fragmentos,
-        motivo_semilla_no_track,
-        resolver_track,
-        titular_corte,
-    )
+    from motor.cli import ErrorDeUso, motivo_semilla_no_track, resolver_track
     from motor.modelos import es_track
     from motor.radio import RadioConfig, build_set
 
@@ -1401,6 +1400,37 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
                              "semilla": _radio_track(elegida)}, status_code=400)
 
     rset = await asyncio.to_thread(build_set, elegida, tracks, config)
+    return _SetArmado(estado, motivo, config, elegida, rset)
+
+
+@app.get("/api/radio/set")
+async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
+                    artist_gap: int | None = None, mmr_lambda: float | None = None,
+                    semilla: int | None = None, randomness: float | None = None):
+    """Arma un set desde `track` con `motor.radio.build_set`.
+
+    OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
+    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
+    la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
+    `randomness > 0`.
+
+    Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
+    `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
+    desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+    """
+    armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
+                                    randomness)
+    if isinstance(armado, JSONResponse):
+        return armado
+    estado, motivo = armado.estado, armado.motivo
+    if armado.rset is None:
+        return {**_radio_envoltura(estado, motivo), "config": None, "semilla": None,
+                "pasos": [], "total": 0, "pedidos": None, "completo": False, "corte": None,
+                "fragmentos": 0, "aviso_fragmentos": None, "leyenda_key": None}
+
+    from motor.cli import LEYENDA_KEY, aviso_fragmentos, titular_corte
+
+    config, elegida, rset = armado.config, armado.elegida, armado.rset
     corte = None if rset.is_complete else {
         "codigo": rset.stop, "titular": titular_corte(rset.stop), "detalle": rset.stop_detail}
     return {
@@ -1420,6 +1450,94 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
                              if rset.fragments else None),
         "leyenda_key": LEYENDA_KEY,
     }
+
+
+# Caracteres que Windows no acepta en un nombre de archivo, más los de control. El nombre
+# del .m3u8 sale del título de la semilla, que es texto de un tag: puede traer cualquiera.
+_NOMBRE_INVALIDO = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]+')
+_NOMBRE_MAX = 120        # sin la extensión: holgado para MAX_PATH con la carpeta Descargas
+
+
+def _nombre_m3u8(semilla_label: str, curva: str) -> str:
+    r"""Nombre del archivo que baja el navegador: seguro en Windows y sin rutas.
+
+    Lleva la semilla y la curva porque es lo que distingue un set de otro en la carpeta
+    Descargas ("DJ Radio - 4000Hz - Real Love - peak.m3u8"). Todo lo que Windows rechaza
+    (``<>:"/\|?*``, controles, un punto o espacio al final) se saca: la barra en
+    particular, porque un título con "/" no puede volverse una carpeta del nombre. El
+    prefijo fijo "DJ Radio - " hace que nunca quede vacío ni sea un nombre reservado
+    (CON, NUL, ...), así que esos dos casos no necesitan código.
+    """
+    base = _NOMBRE_INVALIDO.sub(" ", f"DJ Radio - {semilla_label} - {curva}")
+    base = re.sub(r"\s+", " ", base).strip()[:_NOMBRE_MAX].rstrip(" .")
+    return f"{base}.m3u8"
+
+
+def _content_disposition(nombre: str) -> str:
+    """`attachment` con el nombre en las dos formas de RFC 6266: `filename` en ASCII para
+    los clientes viejos y `filename*` en UTF-8, para que "Señor Coconut" no llegue roto."""
+    import unicodedata
+    from urllib.parse import quote
+
+    # "ñ" → "n" (se descarta el acento suelto); lo que no tiene letra base, como la raya del
+    # label ("Artista — Título"), pasa a "-" en vez de desaparecer y pegar las palabras.
+    ascii_ = "".join(c if c.isascii() else "-"
+                     for c in unicodedata.normalize("NFKD", nombre)
+                     if not unicodedata.combining(c))
+    ascii_ = re.sub(r'["\\]', "", ascii_)
+    return f"attachment; filename=\"{ascii_}\"; filename*=UTF-8''{quote(nombre, safe='')}"
+
+
+@app.get("/api/radio/set.m3u8")
+async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str | None = None,
+                         artist_gap: int | None = None, mmr_lambda: float | None = None,
+                         semilla: int | None = None, randomness: float | None = None,
+                         esperado: str = ""):
+    r"""El set de /api/radio/set como .m3u8, para llevarlo a Rekordbox.
+
+    Mismos parámetros y mismo armado (`_armar_set_radio`), y el archivo lo escribe
+    `motor.export.m3u8_text`, que es lo que usa `python -m motor radio --m3u8`: el mismo
+    contenido byte a byte (CRLF, sin BOM, ``#DJRADIO`` con el BPM a un decimal).
+
+    RUTAS: absolutas, tal cual las guardó el scan (`Store._ruta`), igual que la CLI. No se
+    relativizan: el archivo termina en la carpeta Descargas, y una ruta relativa se
+    resolvería contra ESA carpeta. Con una base escaneada en Windows salen como
+    ``C:\...\x.wav`` también si el server corre en Docker: el .m3u8 es para la PC donde
+    está la música, no para el contenedor, así que acá no se chequea que existan.
+
+    `esperado`: los ids del set que muestra la pantalla, separados por coma. Si el set
+    re-armado no es ese (se escaneó algo entre medio y la radio ahora elige otra cosa), 409
+    en vez de bajar otro set: el DJ se llevaría a Rekordbox una lista que nunca escuchó (§6).
+
+    Errores con la misma forma que /set: 400 con el motivo del motor. Sin base (o base
+    ocupada, ilegible...) no hay set que exportar: 409 con `estado`/`motivo`, y NO un 200,
+    porque un 200 con JSON el navegador lo guardaría como si fuera el .m3u8.
+    """
+    armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
+                                    randomness)
+    if isinstance(armado, JSONResponse):
+        return armado
+    if armado.rset is None:
+        return JSONResponse({**_radio_envoltura(armado.estado, armado.motivo),
+                             "error": armado.motivo}, status_code=409)
+
+    from motor.export import m3u8_text
+
+    rset = armado.rset
+    ids = [_radio_id(t.path) for t in rset.tracks]
+    pedidos = [i.strip() for i in esperado.split(",") if i.strip()]
+    if pedidos and pedidos != ids:
+        return JSONResponse(
+            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
+                      "la misma (¿un scan nuevo?). Armalo de nuevo y exportá ese.",
+             "esperado": pedidos, "armado": ids}, status_code=409)
+
+    nombre = _nombre_m3u8(armado.elegida.label, armado.config.curve)
+    return Response(
+        content=m3u8_text(rset.tracks).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": _content_disposition(nombre),
+                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 @app.get("/api/radio/audio/{track_id}")
