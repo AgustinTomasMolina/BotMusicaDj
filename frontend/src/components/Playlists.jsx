@@ -7,6 +7,9 @@ import {
   borrarPlaylistMia, quitarItemPlaylist, exportarPlaylist, avisarPlaylists,
 } from '../api'
 import { crearPlaylistConPrompt } from '../playlists'
+import Cover from './Cover'
+import { usePlayer } from '../player/context'
+import { fromCrateItem } from '../player/track'
 
 /* Iconos inline (Phosphor-ish) */
 const S = (p, sz = 16) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>
@@ -17,6 +20,7 @@ const IcoItunes = () => S(<><path d="M9 18V5l10-2v13" /><circle cx="6.5" cy="18"
 const IcoTrash = () => S(<><path d="M4 7h16M9 7V5h6v2M7 7v13h10V7" /></>, 15)
 const IcoX = () => S(<path d="M6 6l12 12M18 6L6 18" />, 15)
 const IcoPlay = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" /></svg>
+const IcoPause = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /><rect x="13.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /></svg>
 const IcoDrag = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" /><circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" /><circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" /></svg>
 const IcoCheck = () => S(<path d="M5 13l4.5 4.5L19 7" />, 12)
 const IcoWarn = () => S(<><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></>, 17)
@@ -95,6 +99,9 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
   const [exportOpen, setExportOpen] = useState(false)
+  const player = usePlayer()
+  // Cola de la barra: los temas de esta playlist, en su orden.
+  const reproducir = (k) => onPlay?.((crate?.items || []).map(fromCrateItem), k)
 
   const cargarLista = async () => { try { const d = await listarPlaylists(); const ps = d.playlists || []; setLists(ps); return ps } catch { setLists([]); return [] } }
   const cargarCrate = async (id) => { if (!id) { setCrate(null); return } try { const d = await getPlaylist(id); setCrate(d.exito ? d.data : null) } catch { setCrate(null) } }
@@ -237,13 +244,16 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                   <p>{crate.activa ? 'Descargá temas con esta playlist activa y aparecen acá.' : 'Marcá esta playlist como activa y bajá temas para llenarla.'}</p>
                 </div>
               )}
-              {(crate.items || []).map((it) => (
+              {(crate.items || []).map((it, k) => {
+                const tk = fromCrateItem(it).key
+                const suena = player.isPlaying(tk)
+                return (
                 <div className="trk" key={it.id}>
                   {/* Reordenar no está implementado: el ícono es decorativo (antes anunciaba "Reordenar" sin hacer nada). */}
                   <div className="drag" aria-hidden="true"><IcoDrag /></div>
-                  <div className="thumb" onClick={() => onPlay?.(it)}>
-                    {it.thumbnail ? <img src={it.thumbnail} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
-                    <button type="button" className="thumb-play" aria-label={`Reproducir ${it.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay?.(it) }}><IcoPlay /></button>
+                  <div className={`thumb${player.current?.key === tk ? ' is-current' : ''}`} onClick={() => reproducir(k)}>
+                    <Cover track={it} />
+                    <button type="button" className="thumb-play" aria-label={`${suena ? 'Pausar' : 'Reproducir'} ${it.titulo}`} onClick={(e) => { e.stopPropagation(); reproducir(k) }}>{suena ? <IcoPause /> : <IcoPlay />}</button>
                   </div>
                   <div className="trk-id">
                     <div className="trk-title" title={it.titulo}>{it.titulo}</div>
@@ -264,7 +274,8 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     <button type="button" className="btn btn-icon-sm" aria-label={`Quitar ${it.titulo} de la playlist`} title="Quitar" onClick={() => quitar(it.id)}><IcoX /></button>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </>
         )}

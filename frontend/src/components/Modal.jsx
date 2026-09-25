@@ -3,6 +3,7 @@ import { spectroUrl } from '../api'
 import { SRC_COLOR, FUENTE_CORTO } from '../utils'
 import { getCalidad, GRADE_RANK, gradeClass } from './common'
 import { useDialog } from '../hooks'
+import Cover from './Cover'
 
 const IcoX = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
 const IcoDown = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v10M8 11l4 4 4-4M5 19h14" /></svg>
@@ -169,7 +170,7 @@ export default function Modal({ modal, onClose, onDownload }) {
     <div className="dialog-backdrop" onClick={stop}>
       <div className="sheet player" {...dlg(`Reproductor: ${c.titulo}`)}>
         <div className="sheet-head rule-b">
-          <span className="thumb" style={{ width: 34, height: 34 }}>{c.thumbnail ? <img src={c.thumbnail} alt="" /> : <span className="thumb-ph" />}</span>
+          <span className="thumb" style={{ width: 34, height: 34 }}><Cover track={c} /></span>
           <div style={{ minWidth: 0 }}><div className="trk-title truncate">{c.titulo}</div><div className="trk-artist"><span className="truncate">{c.artista}</span></div></div>
           <button type="button" className="btn btn-icon btn-icon-sm push" onClick={onClose} aria-label="Cerrar" data-autofocus><IcoX /></button>
         </div>
