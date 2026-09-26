@@ -180,6 +180,7 @@ function leerBarra(page) {
       estado: (d.className.match(/\bis-(\w+)/) || [])[1] || null,
       chips,
       boton: d.querySelector('.deck-play')?.getAttribute('aria-label') ?? null,
+      anuncio: d.querySelector('[role=status][aria-live]')?.textContent ?? null,
     }
   })
 }
@@ -203,6 +204,9 @@ function esperadoDatos(t, leyenda) {
   }
 }
 
+// "Título — Artista" (sin artista, solo el título) para los anuncios de la barra.
+const quien = (t) => `${t.titulo}${t.artista ? ` — ${t.artista}` : ''}`
+
 async function semillaUno(ctx) {
   const lib = await api(ctx, '/api/radio/biblioteca')
   const uno = lib.tracks.find((t) => t.titulo === 'Uno')
@@ -217,7 +221,9 @@ const CASOS = [
   ['home: cada tarjeta muestra el BPM (un decimal) y la key de /api/biblioteca', async (page, ctx) => {
     const lib = await api(ctx, '/api/biblioteca')
     await abrirHome(page, ctx)
-    const esperado = lib.generos.flatMap((g) => g.tracks.slice(0, 18)).map((t) => ({
+    // Sin copiar el tope de tarjetas por estante del front: la base de juguete tiene pocos
+    // tracks por género, así que la home tiene que mostrarlos TODOS.
+    const esperado = lib.generos.flatMap((g) => g.tracks).map((t) => ({
       titulo: t.titulo,
       artista: t.artista || '—',
       // Sin BPM no hay BPM (ni un 0 ni un guion inventado en la tarjeta).
@@ -233,7 +239,7 @@ const CASOS = [
 
   ['carátulas: la embebida se ve, sin carátula queda el placeholder, nunca un marco vacío', async (page, ctx) => {
     const lib = await api(ctx, '/api/biblioteca')
-    const tracks = lib.generos.flatMap((g) => g.tracks.slice(0, 18))
+    const tracks = lib.generos.flatMap((g) => g.tracks)
     await abrirHome(page, ctx)
     const leer = (titulo) => page.evaluate((t) => {
       const card = [...document.querySelectorAll('.lib-card')].find((c) => c.querySelector('.lib-title')?.textContent === t)
@@ -244,17 +250,30 @@ const CASOS = [
       const phCs = ph && getComputedStyle(ph)
       return {
         card: true,
-        img: img ? { cargada: img.complete && img.naturalWidth > 0, opacidad: getComputedStyle(img).opacity } : null,
+        img: img
+          ? {
+              cargada: img.complete && img.naturalWidth > 0,
+              opacidad: getComputedStyle(img).opacity,
+              // De dónde salió y qué tamaño tiene: una tarjeta con la carátula de OTRO tema
+              // también "carga" y se ve.
+              ruta: new URL(img.currentSrc || img.src, location.href).pathname,
+              tamano: [img.naturalWidth, img.naturalHeight],
+            }
+          : null,
         // El placeholder se "ve" si está visible y tiene su dibujo (el degradado), no el
         // fondo liso del recuadro.
         placeholder: !!ph && window.__visible(ph) && phCs.opacity === '1' && /gradient/.test(phCs.backgroundImage),
       }
     }, titulo)
-    const conImagen = new Set(ctx.base.caratula_dibujable)
+    const conImagen = ctx.base.caratula_dibujable   // id → [ancho, alto] de su PNG
+    afirmar(new Set(Object.values(conImagen).map(json)).size === Object.keys(conImagen).length,
+      'las carátulas de la base de juguete tienen el mismo tamaño: no se distinguiría una de otra')
     for (const t of tracks) {
-      if (conImagen.has(t.id)) {
-        await hasta(() => leer(t.titulo), (v) => v.img && v.img.cargada && v.img.opacidad === '1',
+      if (t.id in conImagen) {
+        const v = await hasta(() => leer(t.titulo), (x) => x.img && x.img.cargada && x.img.opacidad === '1',
           `«${t.titulo}» trae carátula (/api/cover/${t.id}) y la tarjeta no la termina mostrando`)
+        igual({ ruta: v.img.ruta, tamano: v.img.tamano }, { ruta: `/api/cover/${encodeURIComponent(t.id)}`, tamano: conImagen[t.id] },
+          `la tarjeta de «${t.titulo}» muestra una carátula que no es la suya`)
       } else {
         // Sin carátula (404) o con una que el navegador no puede dibujar (el id 3): la <img>
         // tiene que irse y quedar el placeholder visible.
@@ -280,7 +299,13 @@ const CASOS = [
       const suenan = await hasta(() => sonando(page), (s) => s.length === 1 && s[0] === `/api/audio/${t.id}`,
         `con «${titulo}» en la barra tendría que sonar un solo audio, el suyo`)
       igual(suenan, [`/api/audio/${t.id}`], 'audios sonando')
+      // La región viva (lector de pantalla) dice qué suena, con los datos de la API.
+      igual(barra.anuncio, `Sonando: ${quien(t)}`, `el anuncio aria-live de la barra con «${titulo}»`)
     }
+    const uno = porTitulo.Uno
+    await page.click('.deck-play')
+    const pausada = await hasta(() => leerBarra(page), (d) => d && d.estado === 'paused', 'pausa desde la barra: no quedó en pausa')
+    igual(pausada.anuncio, `En pausa: ${quien(uno)}`, 'el anuncio aria-live de la barra en pausa')
   }],
 
   ['radio: cada semilla de la lista = /api/radio/biblioteca (BPM, Camelot y clásica, ?, energía)', async (page, ctx) => {
@@ -329,7 +354,10 @@ const CASOS = [
       })(),
       notas: [...document.querySelectorAll('.rpanel-set > .rnota')].map((p) => p.textContent),
       curva: [...document.querySelectorAll('.rcurva i')].map((i) => i.style.height),
+      anuncio: document.querySelector('.radiodj [role=status][aria-live]')?.textContent ?? null,
     }))
+    igual(real.anuncio, `Set de ${set.total} track${set.total === 1 ? '' : 's'} desde ${set.semilla.label}.`,
+      'el anuncio aria-live de la radio después de armar el set')
     const esperado = set.pasos.map((p) => ({
       n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo,
       semilla: p.es_semilla, datos: esperadoDatos(p.track, leyenda),
@@ -455,16 +483,19 @@ const CASOS = [
   ['400 px: sin scroll horizontal ni contenido cortado (home con la barra y radio con un set)', async (page, ctx) => {
     // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del
     // ancho queda cortado e invisible (peor que un scroll). Por eso no alcanza con mirar
-    // scrollWidth: se busca cualquier elemento visible que se salga del viewport. Lo que
-    // está adentro de un contenedor que recorta o scrollea (los estantes de la home, que se
-    // deslizan de costado a propósito, o un texto truncado) se juzga por su contenedor.
+    // scrollWidth: se busca cualquier elemento visible que se salga de la caja que lo
+    // recorta. Dos clases de contenedor:
+    //  - overflow-x auto|scroll: se desliza de costado A PROPÓSITO (los estantes de la home):
+    //    lo de adentro se alcanza scrolleando, se excusa.
+    //  - overflow-x hidden|clip: RECORTA. Lo que se sale de ese contenedor queda cortado e
+    //    invisible, igual que lo que se sale del viewport: es un fallo.
+    // Cada elemento se juzga contra su ancestro más cercano de alguno de los dos tipos (o el
+    // viewport); el contenedor, a su vez, contra el suyo.
     const desborde = () => page.evaluate(() => {
       const ancho = document.documentElement.clientWidth
-      const recorta = (e) => /auto|scroll|hidden|clip/.test(getComputedStyle(e).overflowX)
       const fuera = [...document.querySelectorAll('body *')].filter((e) => {
         const r = e.getBoundingClientRect()
         if (r.width <= 1 || r.height <= 1 || !window.__visible(e)) return false
-        if (r.right <= ancho + 1 && r.left >= -1) return false
         // Un panel fijo que está entero fuera de la pantalla es un cajón cerrado (off-canvas),
         // no contenido cortado.
         for (let a = e; a && a !== document.body; a = a.parentElement) {
@@ -474,10 +505,22 @@ const CASOS = [
             break
           }
         }
-        for (let a = e.parentElement; a && !a.classList.contains('app') && a !== document.body; a = a.parentElement) {
-          if (recorta(a)) return false
+        let caja = { left: 0, right: ancho }
+        if (getComputedStyle(e).position !== 'fixed') {
+          for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) {
+            const cs = getComputedStyle(a)
+            if (/auto|scroll/.test(cs.overflowX)) return false
+            if (/hidden|clip/.test(cs.overflowX)) {
+              const ra = a.getBoundingClientRect()
+              // La caja del contenedor, sin recortarla al viewport: si el contenedor está en
+              // un estante que se desliza, lo juzga su propio ancestro.
+              caja = { left: ra.left, right: ra.right }
+              break
+            }
+            if (cs.position === 'fixed') break    // lo fijo solo lo recorta el viewport
+          }
         }
-        return true
+        return r.right > caja.right + 1 || r.left < caja.left - 1
       }).slice(0, 4).map((e) => `${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} (${Math.round(e.getBoundingClientRect().left)}..${Math.round(e.getBoundingClientRect().right)})`)
       return { scroll: document.documentElement.scrollWidth, ancho, fuera }
     })

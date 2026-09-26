@@ -91,5 +91,8 @@ pantalla contra la API y al final apaga todo y borra el temporal, también si fa
 ~15 s. Python: `E2E_PYTHON`, o el `.venv` de la raíz, o `python`. Sin Chrome se saltea con
 un aviso y exit 0 (`E2E_EXIGIR_CHROME=1` lo convierte en error). `npm run e2e -- --sin-build`
 reusa el `frontend/dist` que haya y `-- --solo=texto` corre solo los casos cuyo nombre lo
-contiene. No corre con `pytest`: la suite de Python sigue sin necesitar Node. La misma regla
+contiene. Exit 0 = todo ok, 1 = algún caso falló (o el setup), 3 = los casos pasaron pero
+el temporal no se pudo borrar (queda la ruta en el mensaje; al arrancar avisa si hay
+`musiflix-e2e-*` viejos en el temporal del sistema). En Linux como root (contenedor, CI)
+Chrome arranca con `--no-sandbox`; en cualquier otro caso, con sandbox. No corre con `pytest`: la suite de Python sigue sin necesitar Node. La misma regla
 de arriba vale acá: cada caso se validó rompiendo a propósito lo que tiene que detectar.

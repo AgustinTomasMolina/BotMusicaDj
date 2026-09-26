@@ -30,24 +30,32 @@ from sinteticos import (  # noqa: E402
 SEGUNDOS = 60.0
 
 
+def _tamano_png(datos: bytes) -> list[int]:
+    """[ancho, alto] de un PNG, de su chunk IHDR (bytes 16..24)."""
+    return [int.from_bytes(datos[16:20], "big"), int.from_bytes(datos[20:24], "big")]
+
+
 def main(destino: Path) -> dict:
     db = destino / "djradio" / "biblioteca.sqlite"
     armar_base_radio(destino / "radio", db, SEGUNDOS)
 
     raiz = destino / "musica"
     _, pistas = pistas_biblioteca(raiz, destino / "no-existe" / "fantasma.wav", SEGUNDOS)
-    _, caratulas = pistas_caratulas(raiz, SEGUNDOS)
+    imagenes, caratulas = pistas_caratulas(raiz, SEGUNDOS)
     xml = destino / "rekordbox.xml"
     xml.write_text(xml_rekordbox(pistas + caratulas), encoding="utf-8")
     return {
         "djradio_db": str(db),
         "library_xml": str(xml),
         "library_roots": [str(raiz)],
-        # Qué tiene que terminar mostrando cada tarjeta de la home. Los ids 1 y 2 traen un PNG
-        # que el navegador puede dibujar; el 3 trae un "JPEG" que es solo la cabecera (la API
-        # lo sirve con 200 y el navegador no lo puede decodificar: onError → placeholder); el
-        # resto no trae carátula (404).
-        "caratula_dibujable": ["1", "2"],
+        # Qué tiene que terminar mostrando cada tarjeta de la home: id → [ancho, alto] de SU
+        # imagen. Los ids 1 y 2 traen PNG de tamaños distintos (2×2 y 3×1, leídos de la
+        # cabecera de los bytes que se embebieron), así una tarjeta que muestra la carátula de
+        # otro tema no pasa. El 3 trae un "JPEG" que es solo la cabecera (la API lo sirve con
+        # 200 y el navegador no lo puede decodificar: onError → placeholder); el resto no trae
+        # carátula (404).
+        "caratula_dibujable": {"1": _tamano_png(imagenes["png"]),
+                               "2": _tamano_png(imagenes["png_otro"])},
     }
 
 

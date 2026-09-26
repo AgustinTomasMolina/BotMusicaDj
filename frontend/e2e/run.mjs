@@ -14,6 +14,7 @@
 //
 // Uso (desde frontend/):  npm run e2e            opciones: --sin-build  --solo=texto
 // Python: E2E_PYTHON, o el .venv de la raíz del repo, o `python` del PATH.
+// Exit: 0 ok · 1 falló un caso o el setup · 3 casos ok pero quedó el temporal sin borrar.
 
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -28,6 +29,9 @@ const REPO = path.resolve(FRONT, '..')
 const ARGS = process.argv.slice(2)
 const SIN_BUILD = ARGS.includes('--sin-build')
 const SOLO = (ARGS.find((a) => a.startsWith('--solo=')) || '').slice('--solo='.length)
+
+// Exit 3: todos los casos pasaron pero el temporal no se pudo borrar (quedó basura en disco).
+const EXIT_BASURA = 3
 
 // Sin Chrome el E2E no se puede correr, pero eso no es un fallo del front: se sale con 0 y un
 // mensaje que lo dice. Con E2E_EXIGIR_CHROME=1 (por ejemplo en una máquina de CI que sí debe
@@ -54,12 +58,45 @@ function buscarChrome() {
 }
 
 function buscarPython() {
-  if (process.env.E2E_PYTHON) return process.env.E2E_PYTHON
+  if (process.env.E2E_PYTHON) return { ruta: process.env.E2E_PYTHON, origen: 'E2E_PYTHON' }
   const venv = process.platform === 'win32'
     ? path.join(REPO, '.venv', 'Scripts', 'python.exe')
     : path.join(REPO, '.venv', 'bin', 'python')
-  if (fs.existsSync(venv)) return venv
-  return process.platform === 'win32' ? 'python' : 'python3'
+  if (fs.existsSync(venv)) return { ruta: venv, origen: '.venv de la raíz del repo' }
+  return { ruta: process.platform === 'win32' ? 'python' : 'python3', origen: 'el del PATH: no hay .venv en la raíz ni E2E_PYTHON' }
+}
+
+const esperar = (ms) => new Promise((res) => setTimeout(res, ms))
+
+// Borra el temporal. En Windows un Chrome que tarda en soltar el perfil deja archivos
+// tomados (EBUSY) un rato: se reintenta hasta `limiteMs`. Devuelve false si quedó algo.
+async function borrar(dir, limiteMs = 30000) {
+  const t0 = Date.now()
+  let ultimo = null
+  while (Date.now() - t0 < limiteMs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    } catch (e) {
+      ultimo = e
+    }
+    if (!fs.existsSync(dir)) return true
+    await esperar(500)
+  }
+  console.error(`E2E: no pude borrar el temporal ${dir}${ultimo ? ` (${ultimo.code || ultimo.message})` : ''}. Borralo a mano.`)
+  return false
+}
+
+// Temporales de corridas anteriores que no se pudieron borrar (o de un E2E que está
+// corriendo en paralelo en esta máquina): se avisa, no se tocan.
+function avisarTemporalesViejos() {
+  let viejos = []
+  try {
+    viejos = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('musiflix-e2e-'))
+  } catch { /* sin permiso para listar el temporal: no hay nada que avisar */ }
+  if (viejos.length) {
+    console.warn(`OJO: hay ${viejos.length} temporal(es) de corridas anteriores en ${os.tmpdir()}: ${viejos.join(', ')}. ` +
+      'Si no hay otro E2E corriendo, se pueden borrar.')
+  }
 }
 
 // Un puerto que el sistema da por libre. Nunca el 8000: ahí vive el server de uso diario.
@@ -134,29 +171,45 @@ async function main() {
   }
   if (!fs.existsSync(path.join(FRONT, 'dist', 'index.html'))) throw new Error('No hay frontend/dist: corré sin --sin-build.')
 
-  const python = buscarPython()
+  const { ruta: python, origen: pythonOrigen } = buscarPython()
+  console.log(`Python: ${python} (${pythonOrigen})`)
+  avisarTemporalesViejos()
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'musiflix-e2e-'))
   let server = null
   let browser = null
+  let codigo = 1
   const log = []
   // Ctrl+C a mitad de camino: igual se apaga el server y se borra el temporal.
   const alCortar = () => { limpiar().finally(() => process.exit(130)) }
   process.once('SIGINT', alCortar)
   const limpiar = async () => {
     process.removeListener('SIGINT', alCortar)
-    if (browser) await Promise.race([browser.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))])
-    browser = null
+    if (browser) {
+      const b = browser
+      browser = null
+      const cerro = await Promise.race([b.close().then(() => true, () => false), esperar(10000).then(() => false)])
+      // Plan B: un Chrome que no cierra (máquina cargada) se mata con todo su árbol; si no,
+      // sigue con el perfil tomado y el temporal no se puede borrar.
+      if (!cerro) {
+        console.error('E2E: Chrome no cerró en 10 s; lo mato.')
+        await matarArbol(b.process())
+      }
+    }
     await matarArbol(server)
     server = null
-    try {
-      fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-    } catch (e) {
-      console.error(`OJO: no pude borrar el temporal ${tmp}: ${e.message}`)
-    }
+    return borrar(tmp)
   }
 
   try {
-    const base = JSON.parse(correrSync(python, [path.join(AQUI, 'base_juguete.py'), tmp], { cwd: REPO }, 'base_juguete.py'))
+    let base
+    try {
+      base = JSON.parse(correrSync(python, [path.join(AQUI, 'base_juguete.py'), tmp], { cwd: REPO }, 'base_juguete.py'))
+    } catch (e) {
+      // El caso típico: sin .venv en la raíz cae al python del PATH, que no tiene numpy ni
+      // mutagen (ModuleNotFoundError). Se dice cuál se usó y cómo elegir otro.
+      e.message += `\n→ Python usado: ${python} (${pythonOrigen}). Apuntá E2E_PYTHON al Python que tiene requirements.txt instalado.`
+      throw e
+    }
     const puerto = await puertoLibre()
     const url = `http://127.0.0.1:${puerto}`
     fs.mkdirSync(path.join(tmp, 'datos'), { recursive: true })
@@ -184,7 +237,12 @@ async function main() {
       executablePath: chrome.ruta,
       headless: true,
       userDataDir: path.join(tmp, 'perfil-chrome'),
-      args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-first-run', '--no-default-browser-check'],
+      args: [
+        '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-first-run', '--no-default-browser-check',
+        // Como root (un contenedor o una CI en Linux) Chrome se niega a arrancar con sandbox.
+        // Solo ahí se apaga: en una PC normal el sandbox se queda.
+        ...(process.platform === 'linux' && process.getuid?.() === 0 ? ['--no-sandbox'] : []),
+      ],
     })
     const { correr } = await import('./pantalla.mjs')
     const resultados = await correr({ browser, url, base, tmp, solo: SOLO })
@@ -197,10 +255,11 @@ async function main() {
     }
     console.log(`\n${resultados.length - fallas.length}/${resultados.length} casos ok en ${((Date.now() - t0) / 1000).toFixed(1)} s`)
     if (fallas.length && log.length) console.log(`\nlog del server:\n${log.join('').slice(-3000)}`)
-    return fallas.length ? 1 : 0
+    codigo = fallas.length ? 1 : 0
   } finally {
-    await limpiar()
+    if (!(await limpiar()) && codigo === 0) codigo = EXIT_BASURA
   }
+  return codigo
 }
 
 main().then((code) => process.exit(code), (e) => {
