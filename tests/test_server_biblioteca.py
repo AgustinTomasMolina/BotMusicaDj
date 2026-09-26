@@ -12,10 +12,7 @@ TestClient se usa sin `with`, así no corre el lifespan (que inicializa la base 
 historial): estos endpoints no la usan.
 """
 import importlib
-import math
-import struct
 import sys
-import wave
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,6 +20,16 @@ import pytest
 
 pytest.importorskip("httpx")  # lo necesita el TestClient de Starlette
 from fastapi.testclient import TestClient  # noqa: E402
+
+# Los catálogos y los generadores viven en tests/sinteticos.py porque el E2E del front
+# (frontend/e2e) arma la misma biblioteca. Los alias mantienen los nombres de siempre acá.
+from sinteticos import JPEG as _JPEG  # noqa: E402
+from sinteticos import location as _location  # noqa: E402
+from sinteticos import pistas_biblioteca, pistas_caratulas  # noqa: E402
+from sinteticos import png as _png  # noqa: E402
+from sinteticos import wav as _wav  # noqa: E402
+from sinteticos import wav_con_apic as _wav_con_apic  # noqa: E402
+from sinteticos import xml_rekordbox as _xml  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -44,60 +51,12 @@ def client(server):
     return TestClient(server.app)
 
 
-def _wav(ruta: Path, freq: float, segundos: float = 0.25, sr: int = 22050) -> bytes:
-    """WAV mono 16 bit con un seno: chico, determinista y distinto por frecuencia."""
-    n = int(sr * segundos)
-    frames = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * freq * i / sr)))
-                      for i in range(n))
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(ruta), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(frames)
-    return ruta.read_bytes()
-
-
-def _location(ruta: Path) -> str:
-    """Location como la exporta Rekordbox: file://localhost/<ruta con /, url-encoded>."""
-    return "file://localhost/" + quote(ruta.as_posix().lstrip("/"))
-
-
-def _xml(tracks: list[dict]) -> str:
-    filas = "\n".join(
-        '    <TRACK TrackID="{id}" Name="{name}" Artist="{artist}" Genre="{genre}" '
-        'AverageBpm="{bpm}" Tonality="{ton}" TotalTime="{dur}" Kind="WAV File" '
-        'Location="{loc}"/>'.format(**t)
-        for t in tracks)
-    return ('<?xml version="1.0" encoding="UTF-8"?>\n<DJ_PLAYLISTS Version="1.0.0">\n'
-            f'  <COLLECTION Entries="{len(tracks)}">\n{filas}\n  </COLLECTION>\n</DJ_PLAYLISTS>\n')
-
-
 @pytest.fixture
 def biblioteca(server, tmp_path, monkeypatch):
     """Biblioteca de 5 tracks: 4 con audio (2 Techno, 1 House, 1 sin género) y 1 Techno
     cuyo archivo no existe en ninguna raíz → no resuelve y tiene que quedar afuera."""
     raiz = tmp_path / "musica"
-    audios = {
-        "11": _wav(raiz / "techno" / "uno.wav", 220.0),
-        "12": _wav(raiz / "techno" / "dos.wav", 330.0),
-        "21": _wav(raiz / "house" / "tres.wav", 440.0),
-        "31": _wav(raiz / "otros" / "cuatro.wav", 550.0),
-    }
-    # House va primero en el XML a propósito: así el orden "más temas primero" no coincide
-    # con el orden de aparición y el test detecta si se pierde el sort.
-    tracks = [
-        dict(id="21", name="Tres", artist="Artista C", genre="House", bpm="124.50", ton="C",
-             dur="200", loc=_location(raiz / "house" / "tres.wav")),
-        dict(id="11", name="Uno", artist="Artista A", genre="Techno", bpm="128.00", ton="Am",
-             dur="245", loc=_location(raiz / "techno" / "uno.wav")),
-        dict(id="99", name="Fantasma", artist="Nadie", genre="Techno", bpm="130.00", ton="Fm",
-             dur="300", loc=_location(tmp_path / "no-existe" / "fantasma.wav")),
-        dict(id="12", name="Dos", artist="Artista B", genre="Techno", bpm="0.00", ton="",
-             dur="180", loc=_location(raiz / "techno" / "dos.wav")),
-        dict(id="31", name="Cuatro", artist="", genre="", bpm="140.26", ton="4A",
-             dur="90", loc=_location(raiz / "otros" / "cuatro.wav")),
-    ]
+    audios, tracks = pistas_biblioteca(raiz, tmp_path / "no-existe" / "fantasma.wav")
     xml = tmp_path / "rekordbox.xml"
     xml.write_text(_xml(tracks), encoding="utf-8")
     monkeypatch.setattr(server, "_LIB_XML", str(xml))
@@ -200,75 +159,17 @@ def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, bibliote
 
 # --------------------------------------------------------------------------- /api/cover/{id}
 # La home no mostraba carátulas porque el XML de Rekordbox no trae imágenes. La carátula que
-# existe de verdad es la que viene EMBEBIDA en el archivo: se escribe acá con mutagen (como
-# lo hace tagger.py al descargar) y el endpoint tiene que devolver esos mismos bytes.
-
-def _png(ancho: int = 2, alto: int = 2, rgb=(200, 30, 90)) -> bytes:
-    """PNG real y chico (con CRC válidos), para no depender de Pillow."""
-    import zlib
-
-    def chunk(tipo: bytes, datos: bytes) -> bytes:
-        return (struct.pack(">I", len(datos)) + tipo + datos
-                + struct.pack(">I", zlib.crc32(tipo + datos) & 0xFFFFFFFF))
-    fila = b"\x00" + bytes(rgb) * ancho
-    return (b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", ancho, alto, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(fila * alto)) + chunk(b"IEND", b""))
-
-
-# Cabecera JFIF + relleno: el endpoint no decodifica la imagen, solo la devuelve tal cual.
-_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00" + bytes(range(64))
-
-
-def _wav_con_apic(ruta: Path, imagen: bytes, mime: str, antes: bytes | None = None) -> None:
-    """WAV con la carátula como APIC tipo 3 (tapa). `antes`: otra imagen de tipo 0 (otra)
-    escrita PRIMERO, para ver que se elige la tapa y no la primera que aparece."""
-    from mutagen.id3 import APIC
-    from mutagen.wave import WAVE
-    _wav(ruta, 300.0)
-    audio = WAVE(str(ruta))
-    audio.add_tags()
-    if antes is not None:
-        audio.tags.add(APIC(encoding=3, mime="image/png", type=0, desc="Otra", data=antes))
-    audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=imagen))
-    audio.save()
-
-
-def _flac_con_picture(ruta: Path, imagen: bytes) -> None:
-    import numpy as np
-    import soundfile as sf
-    from mutagen.flac import FLAC, Picture
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(ruta), (0.2 * np.sin(np.linspace(0, 200, 4410))).astype("float32"), 22050,
-             format="FLAC")
-    f = FLAC(str(ruta))
-    pic = Picture()
-    pic.type, pic.mime, pic.data = 3, "image/jpeg", imagen
-    f.add_picture(pic)
-    f.save()
-
+# existe de verdad es la que viene EMBEBIDA en el archivo: se escribe con mutagen (como lo
+# hace tagger.py al descargar, ver tests/sinteticos.py) y el endpoint tiene que devolver esos
+# mismos bytes.
 
 @pytest.fixture
 def biblioteca_caratulas(server, tmp_path, monkeypatch):
     """4 tracks: WAV con APIC PNG, WAV con APIC cuyo MIME declarado miente, FLAC con
     PICTURE JPEG y WAV sin carátula."""
     raiz = tmp_path / "musica"
-    png, png_otro = _png(), _png(3, 1, (10, 220, 40))
-    _wav_con_apic(raiz / "con_png.wav", png, "image/png", antes=_png(1, 1, (0, 0, 255)))
-    # Hay APIC con MIME vacío o "image/jpg": el tipo sale del contenido, no del tag.
-    _wav_con_apic(raiz / "mime_miente.wav", png_otro, "image/jpg")
-    _flac_con_picture(raiz / "con_jpeg.flac", _JPEG)
-    _wav(raiz / "sin_tapa.wav", 500.0)
-    tracks = [
-        dict(id="1", name="Con PNG", artist="A", genre="Techno", bpm="128.00", ton="Am", dur="1",
-             loc=_location(raiz / "con_png.wav")),
-        dict(id="2", name="Mime", artist="B", genre="Techno", bpm="128.00", ton="Am", dur="1",
-             loc=_location(raiz / "mime_miente.wav")),
-        dict(id="3", name="Con JPEG", artist="C", genre="House", bpm="124.00", ton="C", dur="1",
-             loc=_location(raiz / "con_jpeg.flac")),
-        dict(id="4", name="Sin tapa", artist="D", genre="House", bpm="124.00", ton="C", dur="1",
-             loc=_location(raiz / "sin_tapa.wav")),
-    ]
+    imagenes, tracks = pistas_caratulas(raiz)
+    png, png_otro = imagenes["png"], imagenes["png_otro"]
     xml = tmp_path / "rekordbox.xml"
     xml.write_text(_xml(tracks), encoding="utf-8")
     monkeypatch.setattr(server, "_LIB_XML", str(xml))
