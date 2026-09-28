@@ -39,6 +39,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from urllib3.util import parse_url
 
 logger = logging.getLogger("bot_web")
 router = APIRouter()
@@ -56,6 +57,8 @@ _SC_NOT_TRACK = {"sets", "likes", "reposts", "tracks", "albums", "popular-tracks
 # CDNs de las que puede venir el audio. Cualquier otro host (incluido localhost, una IP o un
 # esquema que no sea https) se rechaza aunque venga de yt-dlp.
 _ALLOWED_HOST_SUFFIXES = (".googlevideo.com", ".sndcdn.com")
+# Un nombre DNS en minúsculas: letras, dígitos, punto y guion. Ver `host_allowed`.
+_HOST_DNS = re.compile(r"[a-z0-9.-]+")
 
 # Formato: solo audio, por HTTP directo (no HLS: un <audio> de Chrome no abre .m3u8 y el
 # proxy no reescribe listas). webm/opus y m4a los reproduce cualquier navegador moderno.
@@ -115,12 +118,20 @@ def canonical_url(source: str, ref: str) -> str | None:
 
 
 def host_allowed(url: str) -> bool:
+    # Dos cerrojos contra la diferencia de parsers: `urlparse` (que valida) y urllib3 (con el
+    # que `requests` se CONECTA) no cortan la autoridad igual. Con
+    # "https://127.0.0.1\.googlevideo.com/x", `urlparse` ve un host que termina en el sufijo
+    # permitido y urllib3 se conecta a 127.0.0.1. Por eso: (1) el host solo puede tener los
+    # caracteres de un nombre DNS —fuera `\`, `%`, `@`…— y (2) el host que ve urllib3 tiene
+    # que ser exactamente el validado.
     try:
         u = urlparse(url)
+        host_conexion = (parse_url(url).host or "").lower()
     except ValueError:
         return False
     host = (u.hostname or "").lower()
     return u.scheme == "https" and not u.username and not u.password and u.port in (None, 443) \
+        and _HOST_DNS.fullmatch(host) is not None and host_conexion == host \
         and any(host.endswith(s) and len(host) > len(s) for s in _ALLOWED_HOST_SUFFIXES)
 
 

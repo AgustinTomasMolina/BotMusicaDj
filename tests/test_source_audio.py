@@ -254,6 +254,11 @@ def test_url_vencida_se_resuelve_de_nuevo_una_vez(client, fakes):
     "https://evilgooglevideo.com/x",
     "https://user:pw@rr7.googlevideo.com/x",
     "https://rr7.googlevideo.com:8080/x",
+    # Diferencia de parsers: urlparse ve un host terminado en .googlevideo.com; urllib3 (el
+    # que conecta) corta en la barra y se conecta a 127.0.0.1.
+    "https://127.0.0.1\\.googlevideo.com/x",
+    "https://evil.example%00.googlevideo.com/x",
+    "https://evil.example%40.googlevideo.com/x",
     "file:///etc/passwd",
     "",
 ])
@@ -265,11 +270,15 @@ def test_url_directa_fuera_de_la_cdn_no_se_pide(client, fakes, directa):
     assert FakeCDN.pedidos == [], f"se pidió {directa!r}, que no es de la CDN de la fuente"
 
 
-def test_redireccion_a_otro_host_no_se_sigue(client, fakes):
-    FakeCDN.rutas = {CDN_YT: lambda h: FakeResp(302, {"Location": "http://127.0.0.1:8000/api/historial"})}
+@pytest.mark.parametrize("destino", [
+    "http://127.0.0.1:8000/api/historial",
+    "https://127.0.0.1\\.googlevideo.com/x",   # pasa urlparse, urllib3 conecta a 127.0.0.1
+])
+def test_redireccion_a_otro_host_no_se_sigue(client, fakes, destino):
+    FakeCDN.rutas = {CDN_YT: lambda h: FakeResp(302, {"Location": destino})}
     r = client.get("/api/fuente/audio", params={"fuente": "youtube", "ref": YT_ID})
     assert r.status_code == 502, r.text
-    assert [p["url"] for p in FakeCDN.pedidos] == [CDN_YT], "el salto a localhost no se pidió"
+    assert [p["url"] for p in FakeCDN.pedidos] == [CDN_YT], f"se siguió el salto a {destino!r}"
 
 
 def test_redireccion_dentro_de_la_cdn_si_se_sigue(client, fakes):

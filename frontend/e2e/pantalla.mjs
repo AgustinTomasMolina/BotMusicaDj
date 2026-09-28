@@ -1204,6 +1204,58 @@ const CASOS = [
     igual(await sonando(page), [], 'con el tema roto no puede quedar sonando otro audio')
     igual(afuera, [], 'se pidió algo a YouTube/SoundCloud directo (¿se cargó el reproductor embebido?)')
   }],
+
+  ['resultados: mientras la versión carga, la pastilla dice "cargando" y no "sonando" (§6)', async (page, ctx) => {
+    // En frío YouTube/SoundCloud tardan 2-5 s en empezar y la barra está en "Cargando". En ese
+    // lapso la pastilla no puede decir "sonando ahora" ni animar las barritas: sería mostrar
+    // que suena algo que todavía no suena. El audio del backend se RETIENE hasta que el test lo
+    // suelta, así el estado de carga no depende de la velocidad de la máquina.
+    const lib = await api(ctx, '/api/biblioteca')
+    const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
+    afirmar(uno, '/api/biblioteca no trae «Uno»')
+    const wav = Buffer.from(await (await fetch(`${ctx.url}/api/audio/${uno.id}`)).arrayBuffer())
+    const grupos = [{ opciones: [{ titulo: 'Tema Lento', artista: 'Artista S', duracion: 200, fuente: 'youtube',
+      thumbnail: null, url: 'https://www.youtube.com/watch?v=ccccccccccc', video_id: 'ccccccccccc' }] }]
+    const retenidos = []
+    let libre = false
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const json = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return json({ exito: true, grupos })
+      if (u.pathname === '/api/calidad') return json({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return json({ bpm: null, genero: null })
+      if (u.pathname === '/api/fuente/audio/info') return json({ preview: false, duracion: 200 })
+      if (u.pathname === '/api/fuente/audio') {
+        const responder = () => req.respond({ status: 200, contentType: 'audio/wav', body: wav })
+        return libre ? responder() : retenidos.push(responder)
+      }
+      if (u.origin !== new URL(ctx.url).origin) return req.abort()
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'tema lento')
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('.trk .vchip', { timeout: ESPERA_MS })
+
+    const pastilla = () => page.evaluate(() => {
+      const b = document.querySelector('.trk .vchip')
+      const row = b.closest('.trk')
+      const eq = b.querySelector('.eq')
+      return { texto: row.querySelector('.trk-now')?.textContent ?? null, nombre: b.getAttribute('aria-label'),
+        animada: !!eq && !eq.classList.contains('is-quieto') }
+    })
+    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
+    const cargando = await hasta(pastilla, (v) => /^Cargando/.test(v.texto || ''), 'la fila no llegó a decir "Cargando"')
+    igual(cargando, { texto: 'Cargando: opción 1 · YouTube', nombre: 'Opción 1: YouTube (elegida, cargando)', animada: false },
+      'mientras carga, la pastilla no puede decir que suena ni animar las barritas')
+
+    libre = true
+    retenidos.splice(0).forEach((responder) => responder())
+    const suena = await hasta(pastilla, (v) => /^Sonando/.test(v.texto || ''), 'soltado el audio, la fila no quedó sonando')
+    igual(suena, { texto: 'Sonando: opción 1 · YouTube', nombre: 'Opción 1: YouTube (elegida, sonando ahora)', animada: true },
+      'ya sonando, la pastilla tiene que decirlo')
+  }],
 ]
 
 // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del

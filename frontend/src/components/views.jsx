@@ -135,7 +135,10 @@ const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fu
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
 function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
   const c = g.opciones[sel]
-  const isLive = loadedIdx >= 0 && (playerStatus === 'playing' || playerStatus === 'loading')
+  // "Sonando" (barritas animadas, aro) SOLO cuando suena de verdad. Mientras carga —2 a 5 s
+  // en frío en YouTube/SoundCloud— decirlo sería mentir (§6); la pastilla dice "cargando"
+  // con las barritas quietas, igual que la fila ("Cargando: opción…").
+  const isLive = loadedIdx >= 0 && playerStatus === 'playing'
   const thumbKey = `t${i}`
   const rowPrev = preview.current && (preview.current.key === thumbKey || preview.current.key.startsWith(`o${i}:`))
     ? preview.current.song : null
@@ -186,7 +189,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           const sounding = k === loadedIdx
           // Nombre accesible completo: aria-pressed dice "elegida"; lo que suena va en el texto
           // (y en aria-current), porque un lector no ve las barritas.
-          const stateText = [chosen ? 'elegida' : null, sounding ? (isLive ? 'sonando ahora' : 'cargada en la barra') : null].filter(Boolean).join(', ')
+          const stateText = [chosen ? 'elegida' : null, sounding ? (isLive ? 'sonando ahora' : playerStatus === 'loading' ? 'cargando' : 'cargada en la barra') : null].filter(Boolean).join(', ')
           return (
             <button key={k} type="button" className={`vchip ${PF[f] || ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
               aria-pressed={chosen} aria-current={sounding ? 'true' : undefined}
