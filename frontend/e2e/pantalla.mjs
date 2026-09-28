@@ -322,6 +322,45 @@ async function calificacionApi(ctx, id, n) {
 
 const clickNivel = (page, n, nivel) => page.click(`.rcal[data-n="${n}"] .rcal-opt.is-${nivel}`)
 
+// Intercepta los pedidos de la página: `manejar(req)` devuelve true si se ocupó de ese pedido
+// (abortarlo, retenerlo, contestarlo); el resto sigue de largo.
+async function interceptar(page, manejar) {
+  await page.setRequestInterception(true)
+  page.on('request', (req) => {
+    if (req.isInterceptResolutionHandled()) return
+    Promise.resolve(manejar(req)).then((hecho) => { if (!hecho) req.continue().catch(() => {}) })
+  })
+}
+const esPut = (req, id, n) => req.method() === 'PUT' && new URL(req.url()).pathname === `/api/radio/sets/${id}/transiciones/${n}`
+
+// Lo que muestra el control de la transición `n`: el nivel marcado, su clase y el estado.
+const controlDe = (page, n) => page.evaluate((i) => {
+  const c = document.querySelector(`.rcal[data-n="${i}"]`)
+  return c ? {
+    sel: c.querySelector('input[type=radio]:checked')?.value ?? null,
+    clase: (c.className.match(/\bis-(ok|regular|mala)\b/) || [])[1] ?? null,
+    estado: c.querySelector('.rcal-estado')?.textContent ?? null,
+    error: c.querySelector('.rcal-error')?.textContent ?? null,
+    motivo: !!c.querySelector('.rcal-motivo input'),
+    falta: !!c.querySelector('.rcal-falta'),
+  } : null
+}, n)
+
+// Toca «Exportar a Rekordbox» y devuelve lo que bajó el navegador (nombre y bytes).
+async function exportarConBoton(page, ctx) {
+  const dir = fs.mkdtempSync(path.join(ctx.tmp, 'descargas-'))
+  const cdp = await page.createCDPSession()
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, eventsEnabled: true })
+  const descargas = []
+  cdp.on('Browser.downloadWillBegin', (e) => descargas.push({ guid: e.guid, nombre: e.suggestedFilename, estado: 'empezó' }))
+  cdp.on('Browser.downloadProgress', (e) => { const d = descargas.find((x) => x.guid === e.guid); if (d) d.estado = e.state })
+  await page.click('.rexportar')
+  const [d] = await hasta(async () => descargas, (ds) => ds.length > 0 && ds.every((x) => x.estado === 'completed' || x.estado === 'canceled'),
+    'tocar «Exportar a Rekordbox» no terminó ninguna descarga')
+  igual(d.estado, 'completed', 'estado de la descarga')
+  return { nombre: d.nombre, bytes: fs.readFileSync(path.join(dir, d.nombre)) }
+}
+
 const CASOS_SETS = [
 
   ['sets: guardar el set que se ve = GET /api/radio/sets/{id} y la cabecera dice cuál es', async (page, ctx) => {
@@ -414,6 +453,7 @@ const CASOS_SETS = [
     })), (v) => v.foco && v.falta, 'elegí Mala sin motivo y no se abrió el campo con el foco ni el aviso de qué falta')
     afirmar(/motivo/.test(pendiente.falta), `el aviso de «mala» no habla del motivo: ${json(pendiente.falta)}`)
     igual(pendiente.foco, `rcal-${s.id}-3-motivo`, 'el foco al elegir Mala')
+    igual((await controlDe(page, 3)).estado, 'sin guardar', 'una Mala que espera motivo no puede decir «guardada» ni «sin calificar»')
     await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
     igual(puts, [], 'elegir Mala sin motivo mandó la calificación igual')
     // Enter con el campo vacío: la API la rechaza y la pantalla muestra SU motivo.
@@ -424,9 +464,11 @@ const CASOS_SETS = [
       (v) => v !== null, 'Enter con el motivo vacío no mostró por qué no se guardó')
     igual(err, `No se guardó: ${esperadoError}`, 'el error de mala sin motivo no es el de la API')
     igual((await calificacionApi(ctx, s.id, 3)).calificacion, null, 'mala sin motivo quedó guardada')
-    // Con motivo sí.
-    await page.type(`#rcal-${s.id}-3-motivo`, 'choque de bajos')
+    // Con motivo sí. Los espacios de las puntas no viajan (el front recorta; la API también).
+    await page.type(`#rcal-${s.id}-3-motivo`, '  choque de bajos  ')
+    const put3 = page.waitForRequest((q) => esPut(q, s.id, 3), { timeout: ESPERA_MS })
     await page.keyboard.press('Enter')
+    igual(JSON.parse((await put3).postData() || '{}').motivo, 'choque de bajos', 'el motivo viajó sin recortar')
     const t3 = await hasta(() => calificacionApi(ctx, s.id, 3), (v) => v.calificacion === 'mala', 'mala con motivo no quedó guardada')
     igual(t3.motivo, 'choque de bajos', 'el motivo guardado')
 
@@ -549,6 +591,13 @@ const CASOS_SETS = [
     await abrirRadio(page, ctx)
     await elegirSemilla(page, 'Uno')
     const visto = await armarSet(page)
+    // Después de armar se toca un control: «Re-armar» tiene que usar lo que el set USÓ, no
+    // lo que hoy dicen los controles.
+    const largoHoy = String(Math.max(1, Number(visto.config.largo) - 17))
+    afirmar(largoHoy !== String(visto.config.largo), 'el largo de los controles no difiere del del set: el caso no probaría nada')
+    await page.click('#r-cfg-largo', { clickCount: 3 })
+    await page.type('#r-cfg-largo', largoHoy)
+    await hasta(() => page.$eval('#r-cfg-largo', (i) => i.value), (v) => v === largoHoy, 'no pude cambiar el largo de los controles')
     const paso = visto.pasos[1].track
     const nuevo = Math.round((paso.bpm + 0.3) * 10) / 10
     const antesLista = (await api(ctx, '/api/radio/sets')).sets.map((x) => x.id)
@@ -571,7 +620,12 @@ const CASOS_SETS = [
       // Re-armar muestra el set de hoy, y ese sí se guarda.
       const hoy = page.waitForResponse((x) => new URL(x.url()).pathname === '/api/radio/set', { timeout: ESPERA_MS })
       await page.click('.rrearmar')
-      const rearmado = await (await hoy).json()
+      const respHoy = await hoy
+      const qs = new URL(respHoy.url()).searchParams
+      igual({ track: qs.get('track'), largo: qs.get('largo'), curva: qs.get('curva') },
+        { track: visto.semilla.id, largo: String(visto.config.largo), curva: visto.config.curva },
+        '«Re-armar el set» no pidió el set con la config que el set usó (usó la de los controles)')
+      const rearmado = await respHoy.json()
       const fila = rearmado.pasos.find((p) => p.track.titulo === paso.titulo)
       afirmar(fila, `el set re-armado ya no tiene «${paso.titulo}»`)
       await hasta(() => leerGuardado(page), (v) => v.pasos.some((p) => p.titulo === paso.titulo && p.datos.BPM === bpm1(nuevo)),
@@ -588,6 +642,148 @@ const CASOS_SETS = [
     } finally {
       mutarBase(ctx, 'bpm', paso.titulo, String(antes))
     }
+  }],
+
+  ['sets: exportar un set guardado baja su FOTO aunque la base haya cambiado, y avisa lo que falta', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Exportar ${Date.now()}`)
+    afirmar(s.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
+    const cambia = s.pasos[1].track
+    const falta = s.pasos[2].track
+    const respaldo = path.join(ctx.tmp, `respaldo-exp-${Date.now()}.json`)
+    const { antes } = mutarBase(ctx, 'bpm', cambia.titulo, String(Math.round((cambia.bpm + 0.7) * 10) / 10))
+    try {
+      mutarBase(ctx, 'ocultar', falta.titulo, respaldo)
+      try {
+        const r = await fetch(`${ctx.url}/api/radio/sets/${s.id}/m3u8`)
+        afirmar(r.ok, `/api/radio/sets/${s.id}/m3u8 contestó ${r.status}`)
+        const esperado = Buffer.from(await r.arrayBuffer())
+        const nombre = decodeURIComponent((/filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') || '') || [])[1] || '')
+        igual(r.headers.get('x-djradio-faltan'), '1', 'la API no cuenta el track que falta')
+        // Que el caso tenga dientes: el set de HOY ya no es la foto.
+        const hoy = await fetch(`${ctx.url}/api/radio/set.m3u8?track=${encodeURIComponent(s.pasos[0].track.id)}&largo=${s.config.largo}`)
+        const hoyBytes = hoy.ok ? Buffer.from(await hoy.arrayBuffer()) : Buffer.alloc(0)
+        afirmar(Buffer.compare(hoyBytes, esperado) !== 0, 'el .m3u8 del set de hoy es igual al de la foto: el caso no probaría nada')
+        afirmar(esperado.toString('utf8').includes(`bpm=${bpm1(cambia.bpm)} `), 'el .m3u8 de la foto no trae el BPM que se guardó')
+        await abrirRadio(page, ctx)
+        await abrirGuardado(page, s.id)
+        const bajado = await exportarConBoton(page, ctx)
+        igual(bajado.nombre, nombre, 'nombre del archivo bajado')
+        afirmar(Buffer.compare(bajado.bytes, esperado) === 0,
+          `con un set guardado abierto, el .m3u8 bajado no es su foto\n  bajado:   ${json(bajado.bytes.toString('utf8').slice(0, 300))}\n  esperado: ${json(esperado.toString('utf8').slice(0, 300))}`)
+        const aviso = await page.$eval('.rexportar-ok', (p) => p.textContent).catch(() => null)
+        afirmar(aviso && aviso.includes(nombre) && aviso.includes('1 ya no está en la biblioteca'), `el aviso no dice que falta un track: ${json(aviso)}`)
+      } finally {
+        mutarBase(ctx, 'restaurar', respaldo)
+      }
+    } finally {
+      mutarBase(ctx, 'bpm', cambia.titulo, String(antes))
+    }
+  }],
+
+  ['sets: abrir un set guardado para el audio del set armado', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Audio ${Date.now()}`)
+    const { uno } = await semillaUno(ctx)
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    await page.click('.rpaso .rplay')
+    await hasta(async () => ({ suenan: await sonando(page), pausar: await pasosEnPausar(page) }),
+      (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && v.pausar.length === 1, 'el paso 1 del set armado no quedó sonando')
+    await abrirGuardado(page, s.id)
+    await hasta(async () => ({ suenan: await sonando(page), pausar: await pasosEnPausar(page) }),
+      (v) => v.suenan.length === 0 && v.pausar.length === 0,
+      'abrí un set guardado y el audio del set armado sigue sonando (o un botón sigue en «Pausar»)')
+  }],
+
+  ['sets: al cambiar de set guardado, una calificación a medio escribir no pasa al otro', async (page, ctx) => {
+    const a = await guardarUnoPorApi(ctx, `A ${Date.now()}`)
+    const b = await guardarUnoPorApi(ctx, `B ${Date.now()}`)
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, a.id)
+    await clickNivel(page, 1, 'mala')
+    await page.waitForSelector('.rcal[data-n="1"] .rcal-motivo input', { timeout: ESPERA_MS })
+    await page.type('.rcal[data-n="1"] .rcal-motivo input', 'a medio escribir')
+    await abrirGuardado(page, b.id)
+    const c = await controlDe(page, 1)
+    igual({ sel: c.sel, motivo: c.motivo, falta: c.falta, estado: c.estado }, { sel: null, motivo: false, falta: false, estado: 'sin calificar' },
+      `el set #${b.id} muestra la «mala» a medio escribir del set #${a.id}`)
+    igual((await calificacionApi(ctx, b.id, 1)).calificacion, null, 'la API del set B')
+  }],
+
+  ['sets: si no se puede guardar una calificación, la pantalla vuelve a lo que tiene la API', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Rollback ${Date.now()}`)
+    await apiPedir(ctx, `/api/radio/sets/${s.id}/transiciones/1`, 'PUT', { calificacion: 'ok' })
+    let fallar = true
+    await interceptar(page, (req) => {
+      if (fallar && esPut(req, s.id, 1)) { req.abort('failed'); return true }
+      return false
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'regular')
+    const c = await hasta(() => controlDe(page, 1), (v) => v && v.error, 'el PUT falló y la pantalla no lo dijo')
+    igual({ sel: c.sel, clase: c.clase, estado: c.estado }, { sel: 'ok', clase: 'ok', estado: 'guardada' },
+      'con el PUT caído la pantalla tiene que volver a mostrar lo que tiene la API (ok), no «Regular guardada»')
+    igual((await calificacionApi(ctx, s.id, 1)).calificacion, 'ok', 'la API')
+    // Volver a elegir Regular manda el pedido otra vez (el radio no quedó marcado).
+    fallar = false
+    await clickNivel(page, 1, 'regular')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'regular', 'el segundo clic en Regular no se mandó')
+    const d = await hasta(() => controlDe(page, 1), (v) => v.estado === 'guardada' && v.sel === 'regular', 'la pantalla no terminó en Regular guardada')
+    igual(d.error, null, 'quedó el error del intento anterior')
+  }],
+
+  ['sets: dos clics seguidos en la misma transición: se guarda el último', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Dos clics ${Date.now()}`)
+    let retenido = null
+    await interceptar(page, (req) => {
+      if (!retenido && esPut(req, s.id, 1)) { retenido = req; return true }
+      return false
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'ok')
+    await hasta(async () => !!retenido, (v) => v, 'el primer clic no mandó el PUT')
+    await clickNivel(page, 1, 'regular')          // mientras el primero sigue viajando
+    await hasta(() => controlDe(page, 1), (v) => v.sel === 'regular' && v.estado === 'Guardando…',
+      'mientras viaja el primero, la pantalla tiene que mostrar el último pedido y que se está guardando')
+    retenido.continue()
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'regular', 'el segundo clic se perdió: la API quedó con el primero')
+    await hasta(() => controlDe(page, 1), (v) => v.sel === 'regular' && v.estado === 'guardada', 'la pantalla no terminó en Regular guardada')
+  }],
+
+  ['sets: respuestas fuera de orden no hacen retroceder el resumen', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Orden ${Date.now()}`)
+    // El PUT de la transición 1 llega al server PRIMERO, pero su respuesta llega a la página
+    // DESPUÉS que la de la transición 2: trae el resumen viejo (1 calificada).
+    let soltar
+    const suelta = new Promise((r) => { soltar = r })
+    let tomado = false
+    await interceptar(page, async (req) => {
+      if (tomado || !esPut(req, s.id, 1)) return false
+      tomado = true
+      const r = await fetch(req.url(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: req.postData() })
+      const cuerpo = await r.text()
+      await suelta
+      await req.respond({ status: r.status, contentType: 'application/json', body: cuerpo })
+      return true
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'ok')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'ok', 'el PUT de la transición 1 no llegó al server')
+    const r2 = page.waitForResponse((x) => esPut(x.request(), s.id, 2), { timeout: ESPERA_MS })
+    await clickNivel(page, 2, 'ok')
+    await r2
+    const r1 = page.waitForResponse((x) => esPut(x.request(), s.id, 1), { timeout: ESPERA_MS })
+    soltar()
+    await r1
+    // Una vuelta más por la red de la página: la respuesta vieja ya se procesó.
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    const api2 = await setGuardadoApi(ctx, s.id)
+    igual(api2.resumen.ok, 2, 'la API después de las dos')
+    await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(api2.resumen) && v.calificadas === `2 de ${s.transiciones.length} transiciones calificadas`,
+      'el resumen en pantalla retrocedió con la respuesta vieja')
   }],
 
   ['sets: 400 px con un set guardado, calificaciones y el campo de motivo abierto', async (page, ctx) => {

@@ -240,24 +240,43 @@ export function Calificar({ setId, t, desdeTitulo, hastaTitulo, onGuardar, onQui
   // Cuando la API cambia lo guardado (otra calificación, «Quitar»), el campo muestra lo guardado.
   useEffect(() => { setMotivo(t.motivo || '') }, [t.motivo, t.calificacion])
 
-  const guardar = async (nivel, texto) => {
+  // Los pedidos de ESTA transición van en serie. Si llega un clic mientras otro viaja, queda
+  // esperando y al volver se manda el ÚLTIMO pedido: un segundo clic nunca se pierde en
+  // silencio (el estado dice «Guardando…» y después lo que quedó).
+  const enVuelo = useRef(false)
+  const siguiente = useRef(null)      // {tipo: 'guardar'|'quitar', nivel, texto}
+
+  const ejecutar = async (accion) => {
+    if (enVuelo.current) { siguiente.current = accion; return }
+    enVuelo.current = true
     setOcupado(true)
     setError('')
-    const r = await onGuardar(t.n, nivel, texto)
-    setOcupado(false)
-    if (r.ok) {
-      setElegida(null)
-      setConMotivo(false)
-    } else {
-      setError(r.error)
+    let a = accion
+    for (;;) {
+      const r = a.tipo === 'quitar' ? await onQuitar(t.n) : await onGuardar(t.n, a.nivel, a.texto)
+      if (siguiente.current) { a = siguiente.current; siguiente.current = null; continue }
+      if (r.ok) {
+        // Lo elegido ya es lo guardado. Una «mala» esperando motivo se respeta, salvo que
+        // lo que se acaba de guardar sea justamente esa «mala».
+        setElegida((e) => (e === 'mala' && !(a.tipo === 'guardar' && a.nivel === 'mala') ? e : null))
+        setConMotivo(false)
+      } else {
+        // No se guardó: la pantalla vuelve a mostrar lo que tiene la API (así un segundo clic
+        // en el mismo nivel vuelve a mandarlo). Solo una «mala» queda elegida, para que el
+        // campo del motivo siga abierto.
+        setElegida((e) => (e === 'mala' ? 'mala' : null))
+        setError(r.error)
+      }
+      break
     }
-    return r.ok
+    enVuelo.current = false
+    setOcupado(false)
   }
 
   const elegir = (nivel) => {
-    if (ocupado) return
     setError('')
-    const texto = motivo.trim() ? motivo : null
+    // El motivo viaja recortado: espacios al principio o al final no son parte de él.
+    const texto = motivo.trim() || null
     if (nivel === 'mala' && !texto) {
       // Sin motivo no se manda: la API lo rechazaría, y lo que se quiere es escribirlo.
       setElegida('mala')
@@ -265,23 +284,19 @@ export function Calificar({ setId, t, desdeTitulo, hastaTitulo, onGuardar, onQui
       return
     }
     setElegida(nivel)
-    guardar(nivel, texto)
+    ejecutar({ tipo: 'guardar', nivel, texto })
   }
 
   const enviarMotivo = (e) => {
     e.preventDefault()
-    if (ocupado || !sel) return
+    if (!sel) return
     // Se manda también vacío: si es «mala», el motivo por el que no se guarda lo escribe la API.
-    guardar(sel, motivo)
+    ejecutar({ tipo: 'guardar', nivel: sel, texto: motivo.trim() })
   }
 
-  const quitar = async () => {
-    if (ocupado) return
-    setOcupado(true)
+  const quitar = () => {
     setError('')
-    const r = await onQuitar(t.n)
-    setOcupado(false)
-    if (r.ok) { setElegida(null); setConMotivo(false) } else setError(r.error)
+    ejecutar({ tipo: 'quitar' })
   }
 
   const pendienteMala = elegida === 'mala' && guardada !== 'mala'
@@ -311,7 +326,8 @@ export function Calificar({ setId, t, desdeTitulo, hastaTitulo, onGuardar, onQui
         {/* Para la vista: el lector de pantalla ya oye el radio marcado y el aviso de la
             región viva de la pantalla al guardar. */}
         <span className="rcal-estado" aria-hidden="true">
-          {ocupado ? 'Guardando…' : guardada ? 'guardada' : 'sin calificar'}
+          {/* Nunca «guardada» si lo que se ve no es lo que tiene la API. */}
+          {ocupado ? 'Guardando…' : elegida && elegida !== guardada ? 'sin guardar' : guardada ? 'guardada' : 'sin calificar'}
         </span>
       </div>
       {verMotivo && sel && (

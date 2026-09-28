@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  getRadioBiblioteca, getRadioSet, exportarRadioM3u8, radioAudioUrl, radioAudioMotivo,
+  getRadioBiblioteca, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
   guardarRadioSet, listarRadioSets, getRadioSetGuardado, renombrarRadioSet, borrarRadioSet,
   calificarTransicion, descalificarTransicion,
 } from '../api'
@@ -389,17 +389,18 @@ export default function Radio() {
   // ids en pantalla: si el backend re-arma otra cosa (un scan entre medio), contesta 409 con
   // el motivo en vez de bajar otro set.
   //
-  // Con un set guardado abierto se exporta ESE: su config y sus ids. Si la biblioteca cambió
-  // desde que se guardó, el backend contesta 409 con el motivo, igual que con un set armado.
+  // Con un set guardado abierto se exporta SU FOTO (decisión del dueño): las rutas y los
+  // datos que se guardaron, en su orden, sin re-armar. Si alguna ruta ya no está en la
+  // biblioteca va igual (es la que había) y el aviso dice cuántas.
   const exportar = async () => {
     const v = guardado || set_
-    const semillaId = v && (v.semilla ? v.semilla.id : v.pasos[0]?.track.id)
-    if (!v || !semillaId || exportando || armando) return
+    if (!v || (!guardado && !set_.semilla) || exportando || armando) return
     setExportando(true)
     setAvisoExport(null)
     try {
-      const r = await exportarRadioM3u8({ track: semillaId, ...v.config },
-        v.pasos.map((p) => p.track.id))
+      const r = guardado
+        ? await exportarSetGuardadoM3u8(guardado.id)
+        : await exportarRadioM3u8({ track: set_.semilla.id, ...set_.config }, set_.pasos.map((p) => p.track.id))
       if (!r.ok) {
         setAvisoExport({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data) })
         return
@@ -416,7 +417,9 @@ export default function Radio() {
       setTimeout(() => URL.revokeObjectURL(url), 30000)
       setAvisoExport({
         tipo: 'ok',
-        texto: `Se bajó «${r.nombre}» con los ${v.total} tracks en este orden. En Rekordbox: File → Import → Import Playlist, y elegí ese archivo.`,
+        texto: `Se bajó «${r.nombre}» con los ${v.total} tracks en este orden.`
+          + (r.faltan ? ` Ojo: ${r.faltan} ya no está${r.faltan === 1 ? '' : 'n'} en la biblioteca del motor; el archivo trae la ruta que tenía${r.faltan === 1 ? '' : 'n'} al guardar el set y Rekordbox puede no encontrarla${r.faltan === 1 ? '' : 's'}.` : '')
+          + ' En Rekordbox: File → Import → Import Playlist, y elegí ese archivo.',
       })
     } catch {
       setAvisoExport({ tipo: 'err', texto: 'No pude conectar con el servidor para exportar el set. Revisá que esté corriendo y volvé a intentar.' })
@@ -429,9 +432,14 @@ export default function Radio() {
 
   // La lista con sus resúmenes. Se vuelve a pedir después de cada escritura: el resumen de
   // cada set lo cuenta la API, no esta pantalla.
+  // Solo se aplica la respuesta de la ÚLTIMA lectura pedida: una más vieja que llega tarde
+  // traería resúmenes de antes.
+  const lecturaSets = useRef(0)
   const cargarSets = async () => {
+    const mia = ++lecturaSets.current
     try {
       const r = await listarRadioSets()
+      if (mia !== lecturaSets.current) return
       if (r.ok && Array.isArray(r.data?.sets)) {
         // Sin base (o base ocupada) la API contesta 200 con `estado`/`motivo` y la lista vacía.
         setSets({ cargando: false, sets: r.data.sets, motivo: r.data.estado === 'ok' ? null : r.data.motivo })
@@ -439,6 +447,7 @@ export default function Radio() {
         setSets({ cargando: false, sets: [], motivo: `No pude leer los sets guardados: ${motivoDelRechazo(r.status, r.data)}` })
       }
     } catch {
+      if (mia !== lecturaSets.current) return
       setSets({ cargando: false, sets: [], motivo: 'No pude conectar con el servidor para leer los sets guardados. Revisá que esté corriendo y volvé a intentar.' })
     }
   }
@@ -553,41 +562,81 @@ export default function Radio() {
     }
   }
 
-  // Aplica al set abierto lo que contestó la API al calificar: la transición y el resumen.
+  // Aplica al set abierto lo que contestó la API al calificar: la transición (y el resumen
+  // solo si viene, ver `terminarEscritura`).
   const aplicarCalificacion = (id, n, cambios, resumen) => {
     setGuardado((g) => (g && g.id === id
-      ? { ...g, resumen, transiciones: g.transiciones.map((t) => (t.n === n ? { ...t, ...cambios } : t)) }
+      ? { ...g, ...(resumen ? { resumen } : {}), transiciones: g.transiciones.map((t) => (t.n === n ? { ...t, ...cambios } : t)) }
       : g))
+  }
+
+  // Calificaciones en vuelo. Las de transiciones distintas viajan en paralelo y sus
+  // respuestas pueden llegar en cualquier orden: el `resumen` de una respuesta vieja haría
+  // retroceder la cuenta ("4 de 19" → "3 de 19"). Regla: el resumen de una respuesta se
+  // aplica solo si ese pedido viajó SOLO; si hubo otro a la vez, cuando terminan todos se
+  // relee el set y se aplica el resumen de esa lectura (la última pedida, y si no empezó otra
+  // escritura mientras tanto).
+  const vuelo = useRef({ n: 0, solape: false, lectura: 0 })
+  const empezarEscritura = () => {
+    const v = vuelo.current
+    if (v.n > 0) v.solape = true
+    v.n += 1
+  }
+  const terminarEscritura = async (id, resumen) => {
+    const v = vuelo.current
+    v.n -= 1
+    if (v.n > 0) return
+    if (!v.solape) {
+      if (resumen) setGuardado((g) => (g && g.id === id ? { ...g, resumen } : g))
+      return
+    }
+    v.solape = false
+    const mia = ++v.lectura
+    try {
+      const r = await getRadioSetGuardado(id)
+      if (mia !== v.lectura || v.n > 0 || !r.ok || !r.data?.set) return
+      setGuardado((g) => (g && g.id === id ? { ...g, resumen: r.data.set.resumen } : g))
+    } catch { /* sin red: queda el último resumen aplicado; la próxima escritura lo corrige */ }
   }
 
   const calificar = async (n, calificacion, motivo) => {
     if (!guardado) return { ok: false, error: 'no hay un set guardado abierto.' }
     const id = guardado.id
+    empezarEscritura()
+    let resumen = null
     try {
       const r = await calificarTransicion(id, n, calificacion, motivo)
       if (!r.ok) return { ok: false, error: motivoDelRechazo(r.status, r.data) }
       const t = r.data.transicion
-      aplicarCalificacion(id, n, { calificacion: t.calificacion, motivo: t.motivo, calificada: t.calificada }, r.data.resumen)
+      resumen = r.data.resumen
+      aplicarCalificacion(id, n, { calificacion: t.calificacion, motivo: t.motivo, calificada: t.calificada })
       setAviso(`Transición ${t.desde} → ${t.hasta}: ${t.calificacion}${t.motivo ? ` (${t.motivo})` : ''}, guardada.`)
       cargarSets()
       return { ok: true }
     } catch {
       return { ok: false, error: 'no pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.' }
+    } finally {
+      terminarEscritura(id, resumen)
     }
   }
 
   const descalificar = async (n) => {
     if (!guardado) return { ok: false, error: 'no hay un set guardado abierto.' }
     const id = guardado.id
+    empezarEscritura()
+    let resumen = null
     try {
       const r = await descalificarTransicion(id, n)
       if (!r.ok) return { ok: false, error: motivoDelRechazo(r.status, r.data) }
-      aplicarCalificacion(id, n, { calificacion: null, motivo: null, calificada: null }, r.data.resumen)
+      resumen = r.data.resumen
+      aplicarCalificacion(id, n, { calificacion: null, motivo: null, calificada: null })
       setAviso(`Transición ${n} → ${n + 1}: sin calificar.`)
       cargarSets()
       return { ok: true }
     } catch {
       return { ok: false, error: 'no pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.' }
+    } finally {
+      terminarEscritura(id, resumen)
     }
   }
 

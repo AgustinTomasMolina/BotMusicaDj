@@ -143,7 +143,23 @@ export async function exportarRadioM3u8(params, esperado) {
     qs.set(k, String(v))
   }
   if (esperado && esperado.length) qs.set('esperado', esperado.join(','))
-  const r = await fetch(`/api/radio/set.m3u8?${qs.toString()}`)
+  return descargaM3u8(await fetch(`/api/radio/set.m3u8?${qs.toString()}`))
+}
+
+// El .m3u8 de un set GUARDADO: la foto, en su orden, sin re-armar nada
+// (/api/radio/sets/{id}/m3u8). `faltan` = cuántas rutas de la foto ya no están en la
+// biblioteca del motor (el archivo las trae igual: son las que había).
+export async function exportarSetGuardadoM3u8(id) {
+  const r = await fetch(`/api/radio/sets/${encodeURIComponent(id)}/m3u8`)
+  const d = await descargaM3u8(r)
+  if (d.ok) {
+    const f = Number(r.headers.get('X-DJRadio-Faltan'))
+    d.faltan = Number.isFinite(f) ? f : null
+  }
+  return d
+}
+
+async function descargaM3u8(r) {
   const disp = r.headers.get('Content-Disposition') || ''
   if (!r.ok || !/^attachment/i.test(disp)) {
     return { ok: false, status: r.status, data: await cuerpoRadio(r) }
