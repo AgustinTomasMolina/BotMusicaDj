@@ -103,9 +103,10 @@ async function nuevaPagina(ctx) {
   return page
 }
 
-// Qué suena: la ruta de cada medio que está reproduciendo (sin pausa y sin terminar).
+// Qué suena: la ruta de cada medio que está reproduciendo (sin pausa, sin terminar, sin error).
 const sonando = (page) => page.evaluate(() =>
-  [...window.__medios].filter((m) => !m.paused && !m.ended).map((m) => new URL(m.currentSrc || m.src, location.href).pathname))
+  // Un medio con `error` no suena aunque `paused` siga en false (Chrome no lo pausa al fallar).
+  [...window.__medios].filter((m) => !m.paused && !m.ended && !m.error).map((m) => new URL(m.currentSrc || m.src, location.href).pathname))
 
 /* ---------- navegación ---------- */
 
@@ -536,6 +537,123 @@ const CASOS = [
     await playEnHome(page, 'Uno')
     const home = await desborde()
     afirmar(cabe(home), `home con la barra a 400 px: hay contenido fuera del ancho: ${json(home)}`)
+  }],
+
+  ['resultados: se ve qué versión está elegida y cuál suena; YouTube/SoundCloud suenan como audio, sin monitor', async (page, ctx) => {
+    // Sin red: la búsqueda, la calidad, los metadatos y el audio de las fuentes se simulan
+    // interceptando los pedidos del navegador. Lo ESPERADO sale de estos resultados simulados
+    // (que hacen de API), no del front. El "audio de YouTube" es el WAV de un track de la base
+    // de juguete, servido por el mismo camino que usaría el backend (/api/fuente/audio).
+    const lib = await api(ctx, '/api/biblioteca')
+    const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
+    afirmar(uno, '/api/biblioteca no trae «Uno»')
+    const wav = Buffer.from(await (await fetch(`${ctx.url}/api/audio/${uno.id}`)).arrayBuffer())
+    const opcion = (fuente, extra) => ({ titulo: 'Tema Simulado', artista: 'Artista S', duracion: 200, fuente, thumbnail: null, ...extra })
+    const grupos = [
+      { opciones: [
+        opcion('youtube', { url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa', video_id: 'aaaaaaaaaaa' }),
+        opcion('soundcloud', { url: 'https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A123456789', video_id: '123456789' }),
+        opcion('ligaudio', { url: 'https://web.ligaudio.ru/x.mp3', stream_url: 'https://web.ligaudio.ru/x.mp3' }),
+      ] },
+      { opciones: [opcion('youtube', { titulo: 'Tema Roto', url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb', video_id: 'bbbbbbbbbbb' })] },
+    ]
+    const MOTIVO = 'El tema ya no está disponible en YouTube.'
+    const afuera = []            // pedidos a YouTube/SoundCloud directos (el monitor): no tiene que haber
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const json = (status, body) => req.respond({ status, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return json(200, { exito: true, grupos })
+      if (u.pathname === '/api/calidad') return json(200, { ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return json(200, { bpm: null, genero: null })
+      if (u.pathname === '/api/fuente/audio/info') return json(200, { preview: false, duracion: 200 })
+      if (u.pathname === '/api/fuente/audio') {
+        if (u.searchParams.get('ref') === 'bbbbbbbbbbb') return json(404, { error: MOTIVO })
+        return req.respond({ status: 200, contentType: 'audio/wav', body: wav })
+      }
+      if (u.origin !== new URL(ctx.url).origin) {
+        // Las carátulas (ytimg/sndcdn) no cuentan: el reproductor embebido vive en estos dos.
+        if (/(^|\.)(youtube\.com|soundcloud\.com)$/.test(u.hostname)) afuera.push(u.href)
+        return req.abort()
+      }
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'tema simulado')
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('.trk .vchip', { timeout: ESPERA_MS })
+
+    // Estado de las pastillas y de la fila, leído como lo lee un lector de pantalla + la forma.
+    const leer = () => page.evaluate(() => [...document.querySelectorAll('.trk')].map((row) => ({
+      sonando: row.getAttribute('aria-current'),
+      texto: row.querySelector('.trk-now')?.textContent ?? null,
+      chips: [...row.querySelectorAll('.vchip')].map((b) => ({
+        nombre: b.getAttribute('aria-label'),
+        elegida: b.getAttribute('aria-pressed'),
+        suena: b.getAttribute('aria-current'),
+        tilde: !!b.querySelector('.vchip-ok'),       // forma, no color
+        barras: !!b.querySelector('.eq'),
+      })),
+    })))
+    const c = (nombre, elegida, suena) => ({ nombre, elegida: String(elegida), suena: suena ? 'true' : null, tilde: elegida, barras: !!suena })
+
+    const inicio = await leer()
+    igual(inicio[0], { sonando: null, texto: null, chips: [
+      c('Opción 1: YouTube (elegida)', true, false), c('Opción 2: SoundCloud', false, false), c('Opción 3: MP3 directo', false, false),
+    ] }, 'antes de dar play: la opción 1 elegida (con tilde) y ninguna sonando')
+
+    // Play en la fila 1: suena la versión elegida (YouTube) como AUDIO desde el backend.
+    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
+    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'la barra no quedó sonando la fila 1')
+    igual(barra.titulo, 'Tema Simulado', 'la barra no muestra el tema de la fila 1')
+    const suenaYT = await hasta(() => sonando(page), (s) => s.length === 1, 'tendría que sonar un solo audio')
+    igual(suenaYT, ['/api/fuente/audio'], 'YouTube tiene que sonar por el audio del backend, no por el reproductor de YouTube')
+    const src1 = await page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.src)
+    igual(new URL(src1).searchParams.toString(), 'fuente=youtube&ref=aaaaaaaaaaa', 'el audio pedido no es el de la opción elegida')
+    const conYT = await leer()
+    igual(conYT[0], { sonando: 'true', texto: 'Sonando: opción 1 · YouTube', chips: [
+      c('Opción 1: YouTube (elegida, sonando ahora)', true, true), c('Opción 2: SoundCloud', false, false), c('Opción 3: MP3 directo', false, false),
+    ] }, 'sonando la opción 1: la fila y la pastilla tienen que decirlo')
+    igual(conYT[1].sonando, null, 'la fila 2 no suena y no puede marcarse como la que suena')
+    const deck = await page.evaluate(() => ({
+      fuente: document.querySelector('.deck-src')?.textContent,
+      monitor: window.__visible(document.querySelector('.deck-monitor')),
+      iframes: document.querySelectorAll('.deck-monitor iframe').length,
+    }))
+    igual(deck, { fuente: 'YouTube · 1/3, opción 1 de 3, solo audio', monitor: false, iframes: 0 },
+      'la barra tiene que decir fuente y versión, y no mostrar el recuadro de video')
+
+    // Elegir la opción 2 mientras suena la 1: se ve la diferencia entre elegida y sonando.
+    await page.click('.trk:nth-child(2) .vchip:nth-child(2)')
+    const cambio = await hasta(leer, (v) => v[0].chips[1].elegida === 'true', 'la opción 2 no quedó elegida')
+    igual(cambio[0].chips, [
+      c('Opción 1: YouTube (sonando ahora)', false, true), c('Opción 2: SoundCloud (elegida)', true, false), c('Opción 3: MP3 directo', false, false),
+    ], 'elegida (2) y sonando (1) tienen que distinguirse')
+
+    // Play de nuevo: suena la elegida (SoundCloud), también como audio.
+    await page.click('.trk:nth-child(2) .thumb-play')
+    await hasta(() => page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.src || ''),
+      (s) => s.includes('fuente=soundcloud&ref=123456789'), 'SoundCloud no sonó por el audio del backend')
+    const conSC = await hasta(leer, (v) => v[0].chips[1].suena === 'true' && !/^Cargando/.test(v[0].texto || ''), 'la opción 2 no quedó sonando')
+    igual(conSC[0].texto, 'Sonando: opción 2 · SoundCloud', 'la fila no dice qué versión suena')
+
+    // Pausa: la fila sigue diciendo cuál está en la barra, pero "En pausa" y sin barras animadas.
+    await page.click('.deck-play')
+    const pausa = await hasta(leer, (v) => /^En pausa/.test(v[0].texto || ''), 'en pausa la fila no lo dice')
+    igual(pausa[0].texto, 'En pausa: opción 2 · SoundCloud', 'el texto de la fila en pausa')
+
+    // Un tema que el backend no puede resolver: la barra dice el motivo del backend y ofrece
+    // el reproductor de YouTube como plan B (no lo abre sola, no finge que suena).
+    await page.click('.trk:nth-child(3) .thumb-play')
+    const roto = await hasta(() => page.evaluate(() => ({
+      estado: (document.querySelector('.deck')?.className.match(/\bis-(\w+)/) || [])[1],
+      msg: document.querySelector('.deck-msg span')?.textContent,
+      planB: [...document.querySelectorAll('.deck-msg button')].map((b) => b.textContent),
+    })), (v) => v.estado === 'error', 'con un tema que no se puede resolver la barra no quedó en error')
+    igual(roto, { estado: 'error', msg: MOTIVO, planB: ['Escuchar en el reproductor de YouTube'] },
+      'la barra tiene que decir el motivo del backend y ofrecer el plan B')
+    igual(await sonando(page), [], 'con el tema roto no puede quedar sonando otro audio')
+    igual(afuera, [], 'se pidió algo a YouTube/SoundCloud directo (¿se cargó el reproductor embebido?)')
   }],
 ]
 

@@ -118,9 +118,24 @@ export function Home({ onPlay }) {
   )
 }
 
+/* ---------- Estado de las versiones de una fila ----------
+   Dos estados distintos, y los dos se ven sin depender del color:
+   - ELEGIDA (la que bajan Descargar y el play de la fila): pastilla llena con un tilde en vez
+     del número.
+   - SONANDO (la que está cargada en la barra): barritas de nivel en vez del punto y un aro;
+     quietas si la barra está en pausa. La fila además dice en texto qué opción suena. */
+const IconChosen = () => <svg className="vchip-ok" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+const Eq = ({ on }) => <span className={`eq${on ? '' : ' is-quieto'}`} aria-hidden="true"><i /><i /><i /></span>
+const ROW_STATUS = {
+  playing: 'Sonando', loading: 'Cargando', paused: 'En pausa', ended: 'Terminó',
+  error: 'No se pudo reproducir', embed: 'En el reproductor de Spotify', none: 'Sin audio',
+}
+const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || 'fuente desconocida'
+
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
+function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
   const c = g.opciones[sel]
+  const isLive = loadedIdx >= 0 && (playerStatus === 'playing' || playerStatus === 'loading')
   const thumbKey = `t${i}`
   const rowPrev = preview.current && (preview.current.key === thumbKey || preview.current.key.startsWith(`o${i}:`))
     ? preview.current.song : null
@@ -129,7 +144,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
   const genero = c.genero || m.genero
   const key = c.camelot
   return (
-    <div className="trk"
+    <div className={`trk${loadedIdx >= 0 ? ' is-sonando' : ''}`} aria-current={loadedIdx >= 0 ? 'true' : undefined}
       onMouseEnter={() => preview.schedule(thumbKey, c)}
       onMouseLeave={() => { preview.cancel(); preview.stop() }}>
       <div className="trk-idx">{String(i + 1).padStart(2, '0')}</div>
@@ -147,6 +162,14 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
       </div>
       <div className="trk-id">
         <div className="trk-title" title={c.titulo}>{c.titulo}</div>
+        {/* Qué versión de esta fila está en la barra, en texto: el color y las barritas solas
+            no alcanzan (pedido del dueño 2026-09-28: "no se ve en qué reproducción estás parado"). */}
+        {loadedIdx >= 0 && (
+          <div className={`trk-now${isLive ? ' is-on' : ''}`}>
+            <Eq on={isLive} />
+            <span>{ROW_STATUS[playerStatus] || 'En la barra'}: opción {loadedIdx + 1} · {sourceName(g.opciones[loadedIdx])}</span>
+          </div>
+        )}
         <div className="trk-artist"><span className="truncate">{c.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(c.duracion)}</span></div>
       </div>
       <div className="trk-meta">
@@ -159,12 +182,21 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
         {g.opciones.map((o, k) => {
           const f = (o.fuente || '').toLowerCase()
           const okey = `o${i}:${k}`
+          const chosen = k === sel
+          const sounding = k === loadedIdx
+          // Nombre accesible completo: aria-pressed dice "elegida"; lo que suena va en el texto
+          // (y en aria-current), porque un lector no ve las barritas.
+          const stateText = [chosen ? 'elegida' : null, sounding ? (isLive ? 'sonando ahora' : 'cargada en la barra') : null].filter(Boolean).join(', ')
           return (
-            <button key={k} type="button" className={`vchip ${PF[f] || ''}`} aria-pressed={k === sel}
+            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
+              aria-pressed={chosen} aria-current={sounding ? 'true' : undefined}
+              aria-label={`Opción ${k + 1}: ${sourceName(o)}${stateText ? ` (${stateText})` : ''}`}
               onMouseEnter={() => preview.schedule(okey, o)}
               onClick={() => onSelect(i, k)}
-              title={`Opción ${k + 1} · ${o.fuente} — ${o.titulo}`}>
-              <span className="n">{k + 1}</span><span className="dot" />{FUENTE_CORTO[f] || o.fuente || '?'}
+              title={`Opción ${k + 1} · ${o.fuente} — ${o.titulo}${stateText ? ` · ${stateText}` : ''}`}>
+              {chosen ? <IconChosen /> : <span className="n">{k + 1}</span>}
+              {sounding ? <Eq on={isLive} /> : <span className="dot" />}
+              {FUENTE_CORTO[f] || o.fuente || '?'}
             </button>
           )
         })}
@@ -188,7 +220,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   const esBusqueda = origen === 'busqueda'
   const player = usePlayer()
   // Cola de la barra: la versión elegida de cada tema, en el orden de la lista.
-  const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap)), i)
+  const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
   const [allLabel, setAllLabel] = useState(null)
   const [allBusy, setAllBusy] = useState(false)
 
@@ -256,6 +288,8 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
           <TrackRow key={i} g={g} i={i} sel={sel[i]} formato={formato} metaMap={metaMap} preview={preview}
             dl={dl[songKey(g.opciones[sel[i]])]} onPlay={reproducir} onSpek={onSpek} onDownload={onDownload}
             current={player.current?.key === songKey(g.opciones[sel[i]])}
+            loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}
+            playerStatus={player.status}
             playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
             onSelect={onSelect} onCompare={onCompare} onParecidas={onParecidas} />
         ))}

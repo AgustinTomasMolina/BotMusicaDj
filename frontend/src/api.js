@@ -76,6 +76,33 @@ export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
 // URL de audio de un track de la biblioteca (para el <audio> del preview).
 export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 
+/* ---------- Audio de YouTube / SoundCloud para la barra (f32) ----------
+   El backend saca el audio del tema con yt-dlp y lo sirve como un archivo más (con Range):
+   la barra lo toca en su <audio>, sin el video. Se pide por fuente + id, nunca por URL. */
+export const sourceAudioUrl = ({ fuente, ref }) =>
+  `/api/fuente/audio?fuente=${encodeURIComponent(fuente)}&ref=${encodeURIComponent(ref)}`
+
+// Qué es lo que suena (misma resolución cacheada en el backend): si es un fragmento, duración…
+export async function sourceAudioInfo({ fuente, ref }) {
+  const r = await fetch(`/api/fuente/audio/info?fuente=${encodeURIComponent(fuente)}&ref=${encodeURIComponent(ref)}`)
+  return r.ok ? r.json() : null
+}
+
+// Por qué no se pudo: el <audio> avisa que falló pero no deja leer la respuesta. El backend
+// recuerda el fallo un rato, así que volver a preguntar no repite la resolución.
+// null = no hay motivo del backend (se muestra el genérico).
+export async function sourceAudioReason(src) {
+  try {
+    const r = await fetch(src, { headers: { Range: 'bytes=0-0' } })
+    if (r.ok) return null
+    const txt = await r.text()
+    let d = null
+    try { d = JSON.parse(txt) } catch { /* no era JSON */ }
+    if (d && d.error) return d.error
+    return `El servidor falló al preparar este audio (HTTP ${r.status}).`
+  } catch { return null }
+}
+
 /* ---------- Radio DJ (motor/) ----------
    OJO: esta biblioteca NO es la de la home. Aquella sale del XML de Rekordbox; esta, de la
    base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
