@@ -16,7 +16,7 @@
 //   raw        el objeto original de la pantalla (para descargar y agregar a playlist)
 //   paraPlaylist  lo que se manda a AddToPlaylist
 //   descargable   si el flujo de descarga de la app sirve para este tema
-import { audioUrl, radioAudioUrl } from '../api'
+import { audioUrl, radioAudioUrl, sourceAudioUrl } from '../api'
 import { songKey, metaKey } from '../utils'
 import { youtubeId } from '../cover'
 
@@ -36,8 +36,9 @@ export function fromLibrary(t) {
 }
 
 // Resultados de búsqueda / modo lista / parecidas. `meta` = el metaMap de la app (BPM y
-// género que se buscan aparte, los mismos que muestra la fila).
-export function fromResult(c, metaMap) {
+// género que se buscan aparte, los mismos que muestra la fila). `version` = {n, de}: qué
+// opción de la fila es (la barra dice "opción 2 de 3"); null si no viene de una fila.
+export function fromResult(c, metaMap, version = null) {
   const m = (metaMap && metaMap[metaKey(c)]) || {}
   const bpm = c.bpm || m.bpm || null
   const genero = c.genero || m.genero || null
@@ -51,6 +52,7 @@ export function fromResult(c, metaMap) {
     paraPlaylist: { ...c, bpm, genero, camelot: c.camelot },
     video_id: c.video_id, url: c.url, stream_url: c.stream_url, preview_url: c.preview_url,
     thumbnail: c.thumbnail, id: c.id,
+    opcion: version?.n ?? null, opciones: version?.de ?? null,
   }
 }
 
@@ -97,10 +99,32 @@ export function soundcloudUrl(t) {
   return /^https:\/\/(www\.)?soundcloud\.com\//.test(t.url || '') ? t.url : null
 }
 
+const SC_SLUG = /^https:\/\/(?:www\.|m\.)?soundcloud\.com\/([A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)\/?(?:[?#].*)?$/
+
+// Qué pedirle al backend para sonar un tema de YouTube o SoundCloud como audio (f32): la
+// fuente y un identificador, NUNCA una URL. El backend arma la URL de la fuente con eso (y
+// rechaza cualquier otra cosa), así no hay forma de hacerle pedir una dirección arbitraria.
+export function sourceAudioRef(t) {
+  if (!t) return null
+  const yt = youtubeId(t)
+  if (yt) return { fuente: 'youtube', ref: yt }
+  if ((t.fuente || '') !== 'soundcloud') return null
+  if (t.video_id && /^\d+$/.test(String(t.video_id))) return { fuente: 'soundcloud', ref: String(t.video_id) }
+  const m = SC_ID.exec(t.url || '')
+  if (m) return { fuente: 'soundcloud', ref: m[1] }
+  const s = SC_SLUG.exec(t.url || '')
+  return s ? { fuente: 'soundcloud', ref: s[1] } : null
+}
+
+// Hay reproductor embebido de la fuente para usar como plan B (YouTube, SoundCloud).
+export const hasEmbedFallback = (t) => !!(t && (youtubeId(t) || soundcloudUrl(t)))
+
 // Fuentes de audio directo, en orden de intento.
 export function directSources(t) {
   const out = []
   if (t.audioSrc) out.push(t.audioSrc)
+  const ref = sourceAudioRef(t)
+  if (ref) out.push(sourceAudioUrl(ref))
   if (t.stream_url) out.push(t.stream_url)
   if (t.preview_url) out.push(t.preview_url)
   // Ligaudio publica un .m3u8 como stream (Chrome de escritorio no lo abre en <audio>) y el
@@ -110,17 +134,19 @@ export function directSources(t) {
 }
 
 // Con qué motor suena un tema:
-//   'audio'      <audio> propio (biblioteca, radio, MP3 directos, previews de 30 s)
-//   'youtube'    IFrame API de YouTube (video visible en el monitor)
-//   'soundcloud' Widget API de SoundCloud (widget visible en el monitor)
+//   'audio'      <audio> propio (biblioteca, radio, MP3 directos, previews de 30 s, y desde
+//                f32 también YouTube y SoundCloud: el backend saca el audio con yt-dlp)
+//   'youtube'    IFrame API de YouTube (video visible en el monitor) — solo como plan B,
+//                cuando el audio no se pudo sacar y el usuario lo pide (`embed: true`)
+//   'soundcloud' Widget API de SoundCloud (widget visible en el monitor) — ídem
 //   'embed'      solo se puede escuchar en el reproductor de la fuente (Spotify): la barra
 //                no lo controla y lo dice
 //   null         no hay nada reproducible
-export function engineFor(t) {
+export function engineFor(t, { embed = false } = {}) {
   if (!t) return null
   if (t.audioSrc) return 'audio'
-  if (youtubeId(t)) return 'youtube'
-  if (soundcloudUrl(t)) return 'soundcloud'
+  if (embed && youtubeId(t)) return 'youtube'
+  if (embed && soundcloudUrl(t)) return 'soundcloud'
   if (directSources(t).length) return 'audio'
   if (t.fuente === 'spotify' && t.id) return 'embed'
   return null

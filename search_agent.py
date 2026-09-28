@@ -140,6 +140,12 @@ class SearchAgent:
                 # cliente 'android' esquiva el age-gate ("Sign in to confirm your age").
                 'ignoreerrors': True,
                 'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                # Búsqueda PLANA (f32): solo la página de resultados, sin abrir cada video.
+                # Medido con red real: sin esto cada búsqueda resolvía los formatos de sus N
+                # videos (8 s sola, 30-56 s con las 12 de parecidas en paralelo) y era la
+                # mitad del tiempo de /api/parecidas_lista. Plana: ~1,3 s. Trae lo mismo que
+                # se usa acá (id, título, canal, duración); la carátula sale del id.
+                'extract_flat': 'in_playlist',
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -147,15 +153,17 @@ class SearchAgent:
 
             canciones = []
             for video in (resultados or {}).get('entries') or []:
-                if not video:  # ignoreerrors deja None en los que fallaron
-                    continue
+                if not video or not video.get('id') or not video.get('title'):
+                    continue  # ignoreerrors deja None en los que fallaron
                 if len(canciones) >= limit:
                     break
                 cancion = {
                     'titulo': video['title'],
-                    'artista': video.get('uploader', 'Desconocido'),
-                    'duracion': video.get('duration', 0),
-                    'url': video['webpage_url'],
+                    'artista': video.get('uploader') or video.get('channel') or 'Desconocido',
+                    'duracion': video.get('duration') or 0,
+                    # La entrada plana no trae webpage_url; la URL canónica sale del id (así
+                    # un /shorts/ también queda como watch?v=, que es lo que entiende el resto).
+                    'url': video.get('webpage_url') or f"https://www.youtube.com/watch?v={video['id']}",
                     'fuente': 'youtube',
                     'video_id': video['id'],
                     'thumbnail': video.get('thumbnail') or f"https://i.ytimg.com/vi/{video['id']}/hqdefault.jpg",

@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -132,7 +133,41 @@ async def lifespan(app: FastAPI):
     broker.set_loop(asyncio.get_running_loop())
     await asyncio.to_thread(db.init_db)  # crea las tablas del historial si faltan
     logger.info("🌐 Servidor web iniciado. Buscador listo.")
+    threading.Thread(target=_calentar_librosa, name="calentar-librosa", daemon=True).start()
     yield
+
+
+def _calentar_librosa() -> None:
+    """Primera llamada a librosa en segundo plano, al arrancar (f32).
+
+    Medido: en un proceso nuevo, el primer análisis tarda 11-17 s (importar librosa y cargar
+    lo que numba compila) y el segundo 0,2 s. Sin esto, ese costo lo pagaba el primer
+    "parecidas" después de levantar el server (y con 16 análisis a la vez, más). Se analiza
+    una señal sintética de 2 s en un temporal; si algo falla no pasa nada: el primer pedido
+    real paga el costo como antes."""
+    if os.getenv("MUSIFLIX_SIN_CALENTAR"):
+        return
+    import tempfile
+    from contextlib import suppress
+    ruta = None
+    try:
+        import analisis_audio
+        import numpy as np
+        import soundfile as sf
+        sr = 22050
+        t = np.arange(sr * 2) / sr
+        fd, ruta = tempfile.mkstemp(suffix=".wav", prefix="musiflix-calentar-")
+        os.close(fd)
+        sf.write(ruta, (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
+        t0 = time.perf_counter()
+        analisis_audio.bpm_y_tono(ruta, dur=2)
+        logger.info(f"🔥 Análisis de audio listo ({time.perf_counter() - t0:.1f} s de arranque).")
+    except Exception as e:
+        logger.debug(f"calentar librosa: {e}")
+    finally:
+        if ruta:
+            with suppress(OSError):
+                os.remove(ruta)
 
 
 app = FastAPI(title="Bot de Música - Web", lifespan=lifespan)
@@ -168,9 +203,40 @@ async def ws_console(websocket: WebSocket):
         broker.unsubscribe(q)
 
 
+# Tope de espera por fuente en una búsqueda (f32). Antes era `fut.result(timeout=30)` futuro
+# por futuro DENTRO del `with ThreadPoolExecutor`: el tope se reiniciaba con cada fuente y, al
+# salir del `with`, se esperaba igual a la que colgaba — medido, una búsqueda de YouTube de
+# 56 s se descartaba por "timeout" y además se la esperaba entera. Ahora es un plazo único:
+# lo que no contestó a tiempo queda afuera y NO se espera.
+_SOURCE_DEADLINE_S = 20.0
+# Cache de búsquedas (f32): la misma consulta se repite (reabrir parecidas del mismo tema,
+# buscar de nuevo). Solo se guarda si contestaron TODAS las fuentes: un resultado recortado
+# por una fuente caída no se cachea. TTL corto porque los MP3 directos traen URLs firmadas.
+_MIX_TTL_S = 10 * 60
+_MIX_MAX = 500
+_MIX_CACHE: dict = {}
+_MIX_LOCK = threading.Lock()
+
+
 def _buscar_mix(q: str, limite: int) -> list:
     """Consulta todas las fuentes EN PARALELO y las intercala (round-robin)."""
-    from concurrent.futures import ThreadPoolExecutor
+    clave = (q, limite)
+    with _MIX_LOCK:
+        hit = _MIX_CACHE.get(clave)
+        if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
+            return [dict(c) for c in hit[1]]
+    mezcla, completa = _buscar_mix_fuentes(q, limite)
+    if completa:
+        with _MIX_LOCK:
+            if len(_MIX_CACHE) >= _MIX_MAX:
+                _MIX_CACHE.clear()
+            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
+    return mezcla
+
+
+def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
+    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo."""
+    from concurrent.futures import ThreadPoolExecutor, wait
 
     por_fuente = max(4, limite // 4)
 
@@ -184,14 +250,26 @@ def _buscar_mix(q: str, limite: int) -> list:
     ]
 
     resultados = {}
-    with ThreadPoolExecutor(max_workers=len(tareas)) as ex:
+    completa = True
+    ex = ThreadPoolExecutor(max_workers=len(tareas))
+    try:
         futuros = {ex.submit(fn): nombre for nombre, fn in tareas}
+        wait(futuros, timeout=_SOURCE_DEADLINE_S)
         for fut, nombre in futuros.items():
+            if not fut.done():
+                logger.warning(f"⚠️ Fuente '{nombre}' no contestó en {_SOURCE_DEADLINE_S:.0f} s: queda afuera.")
+                resultados[nombre] = []
+                completa = False
+                continue
             try:
-                resultados[nombre] = fut.result(timeout=30) or []
+                resultados[nombre] = fut.result() or []
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
+                completa = False
+    finally:
+        # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
+        ex.shutdown(wait=False, cancel_futures=True)
 
     # Orden de intercalado: primero las que se reproducen/descargan directo
     orden = ["youtube", "ligaudio", "hitplayer", "soundcloud", "spotify"]
@@ -203,7 +281,7 @@ def _buscar_mix(q: str, limite: int) -> list:
             if i < len(g):
                 mezcla.append(g[i])
         i += 1
-    return mezcla[:limite]
+    return mezcla[:limite], completa
 
 
 def _rank_calidad(fuente: str, formato: str) -> int:
@@ -351,13 +429,18 @@ def _agrupar_por_track(cands: list, formato: str, query: str = "") -> list:
     return grupos
 
 
+_LIST_WORKERS = 12
+
+
 def _buscar_lista(lineas: list, formato: str) -> list:
     """Busca cada línea EN PARALELO y devuelve sus opciones (lista de candidatos,
     vacía si esa línea no tuvo resultados), conservando el orden de la lista."""
     from concurrent.futures import ThreadPoolExecutor
 
     out: list = [[] for _ in lineas]
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    # 12 líneas a la vez (antes 6: las 12 parecidas iban en dos tandas). Cada línea abre 5
+    # fuentes, así que el tope real es ~60 pedidos de red simultáneos; más no se gana nada.
+    with ThreadPoolExecutor(max_workers=max(1, min(_LIST_WORKERS, len(lineas)))) as ex:
         futs = {ex.submit(_opciones_de, ln, formato): idx for idx, ln in enumerate(lineas)}
         for fut in futs:
             idx = futs[fut]
@@ -1089,6 +1172,13 @@ async def audio(track_id: str):
     if not ruta or not Path(ruta).exists():
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# Audio de YouTube/SoundCloud para la barra, sin video (f32): /api/fuente/audio[/info].
+# Todo el detalle (proxy con Range, validación anti-SSRF, cache) está en source_audio.py.
+import source_audio  # noqa: E402
+
+app.include_router(source_audio.router)
 
 
 # Motivos de /api/cover cuando no hay imagen que servir. El front dibuja el placeholder en

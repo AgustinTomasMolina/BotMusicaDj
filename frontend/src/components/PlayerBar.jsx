@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePlayer, usePlayerTime } from '../player/context'
-import { fmtBpm, NOMBRE_FUENTE } from '../player/track'
+import { sourceAudioInfo } from '../api'
+import { fmtBpm, hasEmbedFallback, NOMBRE_FUENTE, sourceAudioRef } from '../player/track'
 import { songKey } from '../utils'
 import Cover from './Cover'
 import { AddToPlaylist } from './AddToPlaylist'
@@ -62,7 +63,22 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
     return () => { ro.disconnect(); root.style.setProperty('--player-h', '0px') }
   }, [!!t]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Audio de YouTube/SoundCloud: cuando ya suena, se pregunta qué es (la resolución ya está
+  // cacheada en el backend, no cuesta). Sirve para no mentir: SoundCloud a veces entrega solo
+  // un fragmento de 30 s del tema, y la barra lo dice en vez de dejar creer que es el entero.
+  const [info, setInfo] = useState(null)
+  const infoRef = t && !t.audioSrc && !['youtube', 'soundcloud'].includes(p.engineKind) ? sourceAudioRef(t) : null
+  const infoKey = infoRef ? `${infoRef.fuente}|${infoRef.ref}` : null
+  const yaSuena = p.status === 'playing'
+  useEffect(() => {
+    if (!infoKey || !yaSuena) return
+    let vivo = true
+    sourceAudioInfo(infoRef).then((d) => { if (vivo && d) setInfo({ key: infoKey, ...d }) }).catch(() => {})
+    return () => { vivo = false }
+  }, [infoKey, yaSuena]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!t) return null
+  const fragmento = !!(info && info.key === infoKey && info.preview)
 
   const sonando = p.status === 'playing'
   const cargando = p.status === 'loading'
@@ -73,6 +89,15 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
   const fuente = NOMBRE_FUENTE[t.fuente] || t.fuente || null
   const formatoTrack = t.formato ? t.formato.toLowerCase() : null
   const dlState = t.descargable ? dl[songKey(t.raw)] : null
+  // YouTube/SoundCloud: suena como audio (lo saca el backend) o, si eso falló y el usuario lo
+  // pidió, en el reproductor embebido de la fuente (plan B, el monitor). La barra dice cuál.
+  const embebido = ['youtube', 'soundcloud'].includes(p.engineKind)
+  const audioDeFuente = !embebido && !!sourceAudioRef(t) && !t.audioSrc
+  const planB = hasEmbedFallback(t) && !embebido && p.status === 'error'
+  const version = t.opcion && t.opciones > 1 ? `opción ${t.opcion} de ${t.opciones}` : null
+  const via = embebido ? 'reproductor embebido' : audioDeFuente ? 'solo audio' : null
+  const srcTitle = [fuente && `Fuente: ${fuente}`, version && `versión elegida en la fila: ${version}`,
+    embebido ? `suena en el reproductor de ${fuente} (plan B)` : audioDeFuente ? 'suena el audio, sin video' : null].filter(Boolean).join(' · ')
 
   const onSeekKey = (e) => {
     if (!dur) return
@@ -114,9 +139,15 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
       <div className="deck-id">
         <div className="deck-title" title={t.titulo}>{t.titulo}</div>
         <div className="deck-sub">
-          {fuente && <span className={`deck-src ${PF[t.fuente] || ''}`}><i />{fuente}</span>}
+          {fuente && (
+            <span className={`deck-src ${PF[t.fuente] || ''}`} title={srcTitle}>
+              <i />{fuente}{version && <span className="deck-src-ver">{` · ${t.opcion}/${t.opciones}`}</span>}
+              <span className="sr-only">{version ? `, ${version}` : ''}{via ? `, ${via}` : ''}</span>
+            </span>
+          )}
+          {via && <span className="deck-via" aria-hidden="true">{via}</span>}
           <span className="truncate" title={t.artista || ''}>{t.artista || 'Artista sin dato'}</span>
-          {p.queue.length > 1 && <span className="deck-count mono" title="Posición en la lista desde la que se reprodujo">{p.index + 1}/{p.queue.length}</span>}
+          {p.queue.length > 1 && <span className="deck-count mono" title="Posición en la lista desde la que se reprodujo">tema {p.index + 1}/{p.queue.length}</span>}
         </div>
       </div>
 
@@ -185,10 +216,23 @@ export default function PlayerBar({ formato, dl, onDownload, onOpenEmbed }) {
       {(p.error || p.status === 'embed') && (
         <div className="deck-msg" role="note">
           <span>{p.status === 'embed' ? 'Spotify no deja controlar su reproductor desde la barra.' : p.error}</span>
+          {/* Plan B (f32): el audio no se pudo sacar → el reproductor embebido de la fuente,
+              que ahí sí se ve (es el de ellos). No se hace solo: lo elige el usuario. */}
+          {planB && <button type="button" className="btn btn-ghost btn-sm" onClick={p.playEmbedded}>Escuchar en el reproductor de {fuente}</button>}
           {p.status === 'embed'
             ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => onOpenEmbed(t.raw)}>Abrir el reproductor de Spotify</button>
             : t.url && /^https?:/.test(t.url) && t.fuente !== 'biblioteca' &&
               <a className="btn btn-ghost btn-sm" href={t.url} target="_blank" rel="noreferrer">Abrir en {fuente || 'la fuente'} <IcoExt /></a>}
+        </div>
+      )}
+      {fragmento && !p.error && (
+        <div className="deck-msg" role="note">
+          <span>{fuente} solo entrega un fragmento de {info.duracion ? Math.round(info.duracion) : 30} s de este tema, no el tema entero.</span>
+        </div>
+      )}
+      {audioDeFuente && cargando && !time && !p.error && (
+        <div className="deck-msg deck-msg-info" role="note">
+          <span>Preparando el audio de {fuente}… (sin video; la primera vez tarda unos segundos)</span>
         </div>
       )}
       <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>

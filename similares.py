@@ -5,9 +5,12 @@ por artistas relacionados (mismo estilo/escena) + el propio artista.
 Nivel 2 — audio: ordena por cercanía de BPM, y analiza el tono/key del tema
 semilla con librosa (sobre el preview de 30s) para mostrar mezcla armónica.
 """
+import copy
 import logging
 import re
 import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
@@ -18,13 +21,51 @@ logger = logging.getLogger("similares")
 DEEZER = "https://api.deezer.com"
 _UA = {"User-Agent": "Mozilla/5.0"}
 
+# Cache de respuestas de Deezer (f32). Medido: armar parecidas hacía 30-39 pedidos a la API y
+# varios se repiten entre semillas de la misma escena (los related, sus álbumes). Solo se
+# guardan respuestas buenas: un error o una cuota agotada no se cachea (volver a pedir es lo
+# correcto). TTL corto: el catálogo cambia poco, pero "lanzamientos recientes" es por fecha.
+_GET_TTL_S = 30 * 60
+_GET_MAX = 4000
+_GET_CACHE: dict[str, tuple[float, dict]] = {}
+_GET_LOCK = threading.Lock()
+# Deezer contesta 200 con {"error": {"code": 4, ...}} cuando se pasa de ~50 pedidos cada 5 s.
+# Sin reintento ese álbum quedaba afuera en silencio, y ahora que los pedidos van en
+# paralelo (ver construir_playlist) es más fácil llegar a la cuota.
+_QUOTA_RETRIES = 3
+# Pedidos a la API en paralelo. Medido desde acá cada pedido tarda ~2,4 s, así que 10 a la
+# vez son ~4 pedidos por segundo: lejos de la cuota de Deezer (~50 cada 5 s).
+_DEEZER_WORKERS = 10
+_PREVIEW_WORKERS = 16     # previews bajando + librosa en paralelo
+
 
 def _get(url: str) -> dict:
-    try:
-        return requests.get(url, headers=_UA, timeout=20).json()
-    except Exception as e:
-        logger.warning(f"⚠️ Deezer falló: {e}")
-        return {}
+    now = time.monotonic()
+    with _GET_LOCK:
+        hit = _GET_CACHE.get(url)
+        if hit and now - hit[0] < _GET_TTL_S:
+            # Copia: construir_playlist le escribe campos (_release, _bpm, _score…) a los
+            # tracks que recibe; sin copia, dos pedidos se pisarían el mismo dict.
+            return copy.deepcopy(hit[1])
+    for attempt in range(_QUOTA_RETRIES + 1):
+        try:
+            data = requests.get(url, headers=_UA, timeout=20).json()
+        except Exception as e:
+            logger.warning(f"⚠️ Deezer falló: {e}")
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        err = data.get("error")
+        if isinstance(err, dict) and err.get("code") == 4 and attempt < _QUOTA_RETRIES:
+            time.sleep(1.0 + attempt)          # cuota agotada: esperar y reintentar
+            continue
+        if not err:
+            with _GET_LOCK:
+                if len(_GET_CACHE) >= _GET_MAX:
+                    _GET_CACHE.clear()
+                _GET_CACHE[url] = (time.monotonic(), copy.deepcopy(data))
+        return data
+    return {}
 
 
 def _seed_limpio(t: str) -> str:
@@ -135,11 +176,32 @@ def _bajar_preview(preview_url: str) -> str | None:
     return ruta
 
 
+# Análisis de previews ya hechos (f32): repetir parecidas (o dos semillas de la misma escena)
+# volvía a bajar y analizar los mismos 20-30 previews, ~13-17 s medidos. La clave es la ruta
+# del preview SIN la query (la query es un token firmado que cambia; el archivo es el mismo).
+_ANALYSIS_CACHE: dict[tuple[str, int], dict] = {}
+_ANALYSIS_MAX = 5000
+
+
 def _analizar_preview(preview_url: str, dur: int = 30) -> dict | None:
     """Baja el preview y saca BPM+tono+camelot con librosa."""
+    clave = ((preview_url or "").split("?", 1)[0], dur)
+    with _GET_LOCK:
+        hit = _ANALYSIS_CACHE.get(clave)
+    if hit is not None:
+        return dict(hit)
+    res = _analizar_preview_sin_cache(preview_url, dur)
+    if res:
+        with _GET_LOCK:
+            if len(_ANALYSIS_CACHE) >= _ANALYSIS_MAX:
+                _ANALYSIS_CACHE.clear()
+            _ANALYSIS_CACHE[clave] = dict(res)
+    return res
+
+
+def _analizar_preview_sin_cache(preview_url: str, dur: int) -> dict | None:
     ruta = None
     try:
-        import os
         import analisis_audio
         ruta = _bajar_preview(preview_url)
         return analisis_audio.bpm_y_tono(ruta, dur=dur) if ruta else None
@@ -299,12 +361,10 @@ def construir_playlist(titulo: str, artista: str = "", total: int = 25,
     fam_obj = _familia(genero_hint) or _familia(seed_gen)   # familia objetivo de las parecidas
     logger.info(f"🎚️  Semilla género: {seed_gen or '?'} → familia '{fam_obj or '?'}'"
                 + (f" (pista: {genero_hint})" if genero_hint else ""))
-    # Semilla: BPM + key con librosa (mismo método que los candidatos)
-    seed_tono = _analizar_preview(seed.get("preview")) if analizar_tono else None
-    seed_bpm = (seed_tono or {}).get("bpm") or _bpm(seed["id"])
-    seed_camelot = (seed_tono or {}).get("camelot")
-    logger.info(f"🎚️  Semilla: '{seed['title']}' — {seed_bpm or '?'} BPM"
-                + (f", {seed_tono['tono']} ({seed_camelot})" if seed_tono else ""))
+    # El análisis de la semilla (bajar el preview + librosa, 3-6 s medidos) no depende de la
+    # búsqueda de candidatos: corre en paralelo con ella y se espera recién para el puntaje.
+    seed_pool = ThreadPoolExecutor(max_workers=1)
+    seed_future = seed_pool.submit(_analizar_preview, seed.get("preview")) if analizar_tono else None
 
     cutoff = (datetime.date.today() - datetime.timedelta(days=400)).isoformat()
     related = _get(f"{DEEZER}/artist/{artist_id}/related?limit=12").get("data") or []
@@ -327,16 +387,36 @@ def construir_playlist(titulo: str, artista: str = "", total: int = 25,
         t["_cover"] = cover or (t.get("album") or {}).get("cover_medium", "")
         pool[t["id"]] = t
 
-    for aid in artistas:
-        for alb_id, rd, cover in _albums_recientes(aid, cutoff, max_albums=2):
-            for t in _tracks_de_album(alb_id, rd, cover, max_tracks=3):
-                _agregar(t, rd, cover)
+    # Los pedidos a Deezer van EN PARALELO (antes en serie: medido, 30-39 pedidos de ~2 s =
+    # 50-75 s de los 150-190 s de parecidas). El pool se arma DESPUÉS, recorriendo en el mismo
+    # orden de siempre (artista → álbum → track): el dedup por (artista, título) se queda con
+    # el mismo tema que antes y la lista no depende de qué pedido contesta primero.
+    # Dos tandas: primero los álbumes recientes de TODOS los artistas, después el detalle de
+    # TODOS esos álbumes (con una tanda por artista, cada uno esperaba sus dos pedidos en serie).
+    with ThreadPoolExecutor(max_workers=_DEEZER_WORKERS) as ex:
+        per_artist = list(ex.map(lambda aid: _albums_recientes(aid, cutoff, max_albums=2), artistas))
+        albums = [al for als in per_artist for al in als]          # mismo orden que antes
+        details = list(ex.map(lambda al: _tracks_de_album(al[0], al[1], al[2], max_tracks=3), albums))
+    for (_alb_id, rd, cover), tracks in zip(albums, details, strict=True):
+        for t in tracks:
+            _agregar(t, rd, cover)
 
     # Backfill con hits si hay pocos recientes (quedan al final por menos recencia)
     if len(pool) < total:
-        for aid in artistas:
-            for t in _get(f"{DEEZER}/artist/{aid}/top?limit=3").get("data") or []:
+        with ThreadPoolExecutor(max_workers=_DEEZER_WORKERS) as ex:
+            tops = list(ex.map(lambda aid: _get(f"{DEEZER}/artist/{aid}/top?limit=3").get("data") or [],
+                               artistas))
+        for top in tops:
+            for t in top:
                 _agregar(t, "", (t.get("album") or {}).get("cover_medium", ""))
+
+    # Semilla: BPM + key con librosa (mismo método que los candidatos)
+    seed_tono = seed_future.result() if seed_future else None
+    seed_pool.shutdown(wait=False)
+    seed_bpm = (seed_tono or {}).get("bpm") or _bpm(seed["id"])
+    seed_camelot = (seed_tono or {}).get("camelot")
+    logger.info(f"🎚️  Semilla: '{seed['title']}' — {seed_bpm or '?'} BPM"
+                + (f", {seed_tono['tono']} ({seed_camelot})" if seed_tono else ""))
 
     candidatos = list(pool.values())
 
@@ -354,7 +434,9 @@ def construir_playlist(titulo: str, artista: str = "", total: int = 25,
 
     candidatos = candidatos[:30]  # acotar para el análisis de audio
     logger.info(f"🎧 Analizando key + BPM de {len(candidatos)} candidatos (librosa)…")
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    # 16 y no 8 (f32): medido, cada preview tarda ~4 s en bajar y librosa ~0,5 s; con 8 la
+    # tanda esperaba a la red, no a la CPU.
+    with ThreadPoolExecutor(max_workers=_PREVIEW_WORKERS) as ex:
         analisis = list(ex.map(lambda t: _analizar_preview(t.get("preview"), dur=20), candidatos))
 
     hoy = datetime.date.today().isoformat()

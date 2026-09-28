@@ -14,6 +14,7 @@
 
 import { directSources, soundcloudUrl } from './track'
 import { youtubeId } from '../cover'
+import { sourceAudioReason } from '../api'
 
 const scripts = {}
 function loadScript(src, ready) {
@@ -75,10 +76,17 @@ export class AudioEngine {
     a.addEventListener('error', () => {
       // Siguiente fuente (p. ej. el .m3u8 de Ligaudio → su MP3 directo) antes de rendirse.
       if (this.i + 1 < this.sources.length) { this.i++; this.a.src = this.sources[this.i]; this.play(); return }
-      cb.onState('error', 'El navegador no pudo abrir este audio. Puede que el archivo se haya movido o que la fuente ya no lo sirva.')
+      const src = this.sources[this.i] || ''
+      const generico = 'El navegador no pudo abrir este audio. Puede que el archivo se haya movido o que la fuente ya no lo sirva.'
+      // Audio de YouTube/SoundCloud sacado por el backend: su motivo dice qué pasó de verdad
+      // (video privado, tema que no existe, la fuente no contestó…).
+      if (!src.startsWith('/api/fuente/audio')) { cb.onState('error', generico); return }
+      const seq = this.seq
+      sourceAudioReason(src).then((m) => { if (seq === this.seq) cb.onState('error', m || generico) })
     })
   }
   load(track) {
+    this.seq = (this.seq || 0) + 1
     this.sources = directSources(track)
     this.i = 0
     this.cb.onState('loading')
@@ -97,10 +105,13 @@ export class AudioEngine {
   setVolume(v) { this.a.volume = v }
   // Soltar el archivo (no solo pausar): si no, el navegador sigue bajando un WAV de 60 MB.
   // Los eventos que dispare esto los ignora el reproductor (este motor ya no es el activo).
-  destroy() { this.sources = []; this.a.pause(); this.a.removeAttribute('src'); this.a.load() }
+  destroy() { this.seq = (this.seq || 0) + 1; this.sources = []; this.a.pause(); this.a.removeAttribute('src'); this.a.load() }
 }
 
-/* ---------- YouTube: IFrame API, el video queda visible en el monitor ---------- */
+/* ---------- YouTube: IFrame API, el video queda visible en el monitor ----------
+   Desde f32 es el PLAN B: YouTube suena como audio en el AudioEngine (el backend saca el
+   audio con yt-dlp, /api/fuente/audio). Este motor solo se usa si eso falló y el usuario
+   eligió "Escuchar en el reproductor de YouTube". Lo mismo vale para SoundCloud, abajo. */
 // 101/150 NO siempre es "el dueño lo desactivó": medido el 2026-09-25, YouTube devolvió 150
 // en un Chrome automatizado hasta para videos que su oEmbed declara embebibles (y el <iframe>
 // suelto del modal decía "Este video no está disponible" igual). El texto dice las dos causas.

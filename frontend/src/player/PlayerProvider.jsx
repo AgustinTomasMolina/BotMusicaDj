@@ -71,11 +71,14 @@ export default function PlayerProvider({ children }) {
       document.querySelectorAll('audio,video').forEach((m) => { if (m !== propio && !m.paused) m.pause() })
       window.dispatchEvent(new Event('musiflix:player-play'))
     }
-    const start = (q, i, auto = false) => {
+    // embed = plan B (f32): el tema suena en el reproductor embebido de su fuente (visible en
+    // el monitor) porque el audio no se pudo sacar. Solo lo pide el usuario, y vale para ESE
+    // tema: el siguiente vuelve a intentar como audio.
+    const start = (q, i, auto = false, { embed = false } = {}) => {
       const t = q[i]
       if (!t) return
       saltos.current = auto ? saltos.current + 1 : 0
-      const kind = engineFor(t)
+      const kind = engineFor(t, { embed })
       const motor = ['audio', ...IFRAME_ENGINES].includes(kind) ? kind : null
       if (active.current && active.current !== motor) engines.current[active.current]?.destroy()
       active.current = motor
@@ -109,10 +112,12 @@ export default function PlayerProvider({ children }) {
     const activeEngine = () => (active.current ? engines.current[active.current] : null)
     return {
       playQueue: (tracks, i = 0) => start(tracks, i),
+      // Plan B: el tema actual en el reproductor de YouTube/SoundCloud (se ve, es el de ellos).
+      playEmbedded: () => { const { queue: q, index: i } = S.current; if (q[i]) start(q, i, false, { embed: true }) },
       toggle: () => {
         const e = activeEngine()
         const st = S.current.status
-        if (st === 'error') { start(S.current.queue, S.current.index); return }
+        if (st === 'error') { start(S.current.queue, S.current.index, false, { embed: IFRAME_ENGINES.includes(active.current) }); return }
         if (!e) return
         if (st === 'playing' || st === 'loading') { e.pause(); return }
         exclusivo()
@@ -179,13 +184,15 @@ export default function PlayerProvider({ children }) {
       <PlayerTimeCtx.Provider value={clock}>
         {children}
         {/* Monitor: el reproductor de la fuente, visible (YouTube pide que su reproductor
-            embebido se vea; SoundCloud, que no se esconda). La barra lo controla por sus APIs. */}
+            embebido se vea; SoundCloud, que no se esconda). La barra lo controla por sus APIs.
+            Desde f32 es solo el plan B: lo normal es que YouTube y SoundCloud suenen como
+            audio en la barra, y el monitor aparece cuando eso falló y el usuario lo pidió. */}
         <aside className={`deck-monitor is-${engineKind || 'off'}`} ref={monitorRef} hidden={!monitorVisible}
           aria-label={`Reproductor de ${fuenteMonitor}`}>
           <div className="deck-monitor-head">
             <span className="deck-monitor-dot" aria-hidden="true" />
             <span>{engineKind === 'youtube' ? 'Video · YouTube' : 'SoundCloud'}</span>
-            <span className="deck-monitor-note">lo controla la barra</span>
+            <span className="deck-monitor-note">plan B · lo controla la barra</span>
           </div>
           <div className="deck-monitor-yt" ref={ytHost} hidden={engineKind !== 'youtube'} />
           <div className="deck-monitor-sc" ref={scHost} hidden={engineKind !== 'soundcloud'} />
