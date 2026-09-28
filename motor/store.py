@@ -24,6 +24,7 @@ Determinismo (spec §5): el orden de todo lo que devuelve el store lo fija Pytho
 por la clave de la ruta (absoluta + `normcase`), no la collation de SQLite ni el orden de
 inserción.
 """
+import contextlib
 import os
 import sqlite3
 from collections.abc import Iterable
@@ -51,7 +52,8 @@ from motor.modelos import (
 #   1  rms / onset_rate / percussive_ratio aceptan NULL (9440251 los tenía NOT NULL)
 #   2  columna path_key (ruta absoluta + normcase) con índice único
 #   3  columnas key_acuerdo / key_tramos (la confianza de la key, tarea 17)
-VERSION_ESQUEMA = 3
+#   4  tablas saved_sets / saved_set_steps / saved_set_ratings (sets guardados, tarea 16)
+VERSION_ESQUEMA = 4
 
 # Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está
 # migrando) antes de rendirse con `sqlite3.OperationalError: database is locked`. La CLI
@@ -105,6 +107,84 @@ CREATE TABLE IF NOT EXISTS norm_stats (
     count   INTEGER NOT NULL
 )"""
 
+# Sets guardados (tarea 16, `motor/saved_sets.py`). Tres tablas y no una columna JSON con todo
+# adentro: las calificaciones se cambian y se borran de a una, y el CSV de la tarea 14 las
+# cruza con los pasos.
+#
+# `saved_set_steps` es la FOTO de lo que se escuchó: una fila por posición con los datos tal
+# como se mostraron (ver `saved_sets.StepSnapshot`). NO referencia a `tracks`: un re-escaneo
+# que cambia un BPM, o un archivo que se borra de la biblioteca, no pueden cambiar ni llevarse
+# lo que se calificó. `path_key` está para poder DECIR que el archivo ya no está, no para
+# leer sus datos de hoy.
+#
+# `AUTOINCREMENT` en `saved_sets`: sin él SQLite reusa el id del último set borrado, y un CSV
+# ya exportado con "set 7" pasaría a hablar de otro set.
+_DDL_SETS = (
+    """CREATE TABLE IF NOT EXISTS saved_sets (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,          -- ISO 8601 UTC
+    name        TEXT,                   -- NULL = sin nombre
+    config      TEXT NOT NULL,          -- el RadioConfig usado, en JSON (saved_sets.config_json)
+    requested   INTEGER NOT NULL,       -- largo pedido
+    stop        TEXT,                   -- RadioSet.stop de ese armado; NULL = llegó al largo
+    stop_detail TEXT NOT NULL,
+    fragments   INTEGER NOT NULL
+)""",
+    """CREATE TABLE IF NOT EXISTS saved_set_steps (
+    set_id        INTEGER NOT NULL REFERENCES saved_sets(id) ON DELETE CASCADE,
+    position      INTEGER NOT NULL CHECK (position >= 1),
+    path          TEXT NOT NULL,
+    path_key      TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    artist        TEXT,
+    title         TEXT,
+    title_shown   TEXT NOT NULL,
+    duration      REAL NOT NULL,
+    is_track      INTEGER NOT NULL,
+    license       TEXT NOT NULL,        -- obligatorio (spec §5)
+    source_url    TEXT NOT NULL,        -- obligatorio (spec §5)
+    bpm           REAL NOT NULL,
+    bpm_shown     TEXT NOT NULL,        -- "128.4", como se mostró
+    key           TEXT NOT NULL,
+    key_classic   TEXT,
+    key_acuerdo   TEXT,
+    key_doubtful  INTEGER NOT NULL,     -- el `?` que se mostró
+    energy        REAL NOT NULL,        -- percentil 0..1 dentro de la biblioteca de ESE momento
+    energy_pct    INTEGER NOT NULL,
+    reason        TEXT NOT NULL,        -- Transition.reason() tal cual
+    is_seed       INTEGER NOT NULL,
+    from_bpm      REAL,
+    bpm_delta_pct REAL,
+    bpm_octave    TEXT NOT NULL,
+    from_key      TEXT,
+    key_relation  TEXT NOT NULL,
+    key_compat    REAL,
+    mixability    REAL,
+    musical_fit   REAL,
+    score         REAL,
+    energy_goal   REAL,
+    PRIMARY KEY (set_id, position)
+)""",
+    # `transition` = n, de la posición n a la n + 1. El CHECK repite la validación de
+    # `saved_sets.require_rating` en la base: una fila escrita por fuera tampoco puede
+    # inventar un nivel ni una `mala` sin motivo.
+    """CREATE TABLE IF NOT EXISTS saved_set_ratings (
+    set_id      INTEGER NOT NULL REFERENCES saved_sets(id) ON DELETE CASCADE,
+    transition  INTEGER NOT NULL CHECK (transition >= 1),
+    rating      TEXT NOT NULL CHECK (rating IN ('ok', 'regular', 'mala')),
+    reason      TEXT,
+    rated_at    TEXT NOT NULL,          -- ISO 8601 UTC, la última vez que se cambió
+    PRIMARY KEY (set_id, transition),
+    CHECK (rating <> 'mala' OR (reason IS NOT NULL AND trim(reason) <> ''))
+)""",
+)
+
+
+def _ahora() -> str:
+    """ISO 8601 UTC con `T` y `Z`, sin microsegundos: así lo ve el CSV de `sets exportar`, y
+    Excel no lo convierte en una fecha suya (que perdería los segundos)."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 class EsquemaIncompatible(Exception):
     """La base tiene una versión de esquema que este código no sabe leer. Se lanza al abrir,
@@ -154,6 +234,9 @@ class Store:
         espera = ESPERA_BLOQUEO_S if espera_bloqueo_s is None else espera_bloqueo_s
         self._con = sqlite3.connect(str(self.db_path), timeout=espera)
         self._con.row_factory = sqlite3.Row
+        # Las FK de los sets guardados (ON DELETE CASCADE) solo se aplican con esto, y es por
+        # conexión: sin él, borrar un set dejaría sus pasos y calificaciones huérfanos.
+        self._con.execute("PRAGMA foreign_keys = ON")
         try:
             self._preparar_esquema()
         except BaseException:
@@ -388,6 +471,7 @@ class Store:
                         paso(self)
             else:
                 self._con.execute(_DDL_TRACKS)
+                self._migrar_a_4_sets()
             for ddl in _DDL_INDICES:
                 self._con.execute(ddl)
             self._con.execute(_DDL_NORM_STATS)
@@ -471,6 +555,201 @@ class Store:
             if col not in columnas:
                 self._con.execute(f"ALTER TABLE tracks ADD COLUMN {col} TEXT")
 
+    def _migrar_a_4_sets(self) -> None:
+        """Crea las tablas de sets guardados (tarea 16). No toca `tracks`: una biblioteca
+        v3 sigue igual y arranca sin sets. `IF NOT EXISTS` porque también la usa una base
+        nueva, y porque una base que otro código ya llevó a 4 no puede fallar acá."""
+        for ddl in _DDL_SETS:
+            self._con.execute(ddl)
+
+    # -- sets guardados (tarea 16, motor/saved_sets.py) -----------------------
+
+    @contextlib.contextmanager
+    def _escritura(self):
+        """Una escritura de varias sentencias, entera o nada. `BEGIN IMMEDIATE` por lo mismo
+        que en `_preparar_esquema`: tomar el lock de escritura de entrada hace que otro
+        proceso escribiendo a la vez ESPERE en vez de morir con "database is locked"."""
+        self._con.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            self._con.execute("COMMIT")
+        except BaseException:
+            self._con.execute("ROLLBACK")
+            raise
+
+    def save_set(self, steps, *, config: str, requested: int, stop: str | None,
+                 stop_detail: str, fragments: int, name: str | None = None) -> int:
+        """Guarda la foto de un set (`saved_sets.snapshot_steps`) y devuelve su id.
+
+        Todo en una transacción: un set a medio guardar (la cabecera sin sus pasos) sería
+        un set que "se escuchó" sin tracks. Se valida ANTES de escribir, como `upsert`: las
+        posiciones son 1..n sin huecos, cada track trae licencia y origen (§5) y un BPM
+        finito, y solo la posición 1 es la semilla.
+        """
+        from motor.saved_sets import STEP_FIELDS, InvalidSavedSet, clean_name
+
+        steps = list(steps)
+        if not steps:
+            raise InvalidSavedSet("un set guardado tiene al menos un track (la semilla)")
+        posiciones = [s.position for s in steps]
+        if posiciones != list(range(1, len(steps) + 1)):
+            raise InvalidSavedSet(f"las posiciones tienen que ser 1..{len(steps)} en orden, "
+                                  f"recibí {posiciones}")
+        for s in steps:
+            require_text(s.license, "license")
+            require_text(s.source_url, "source_url")
+            require_finite_bpm(s.bpm)
+            if s.is_seed != (s.position == 1):
+                raise InvalidSavedSet(f"la posición {s.position} dice is_seed={s.is_seed}: "
+                                      f"la semilla es la posición 1 y solo ella")
+        nombre = clean_name(name)
+        if not isinstance(stop_detail, str):
+            raise InvalidSavedSet(f"stop_detail es un texto, recibí {stop_detail!r}")
+
+        marcas = ", ".join("?" * (len(STEP_FIELDS) + 1))
+        with self._escritura():
+            cur = self._con.execute(
+                "INSERT INTO saved_sets (created_at, name, config, requested, stop, "
+                "stop_detail, fragments) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_ahora(), nombre, config, int(requested), stop, stop_detail, int(fragments)))
+            set_id = int(cur.lastrowid)
+            self._con.executemany(
+                f"INSERT INTO saved_set_steps (set_id, {', '.join(STEP_FIELDS)}) "
+                f"VALUES ({marcas})",
+                [(set_id, *(getattr(s, f) for f in STEP_FIELDS)) for s in steps])
+        return set_id
+
+    def list_saved_sets(self) -> list:
+        """Todos los sets guardados, del más nuevo al más viejo (por id: la fecha puede
+        repetirse dentro del mismo segundo), con el resumen de calificaciones."""
+        from motor.saved_sets import SavedSetInfo, summarize
+
+        filas = self._con.execute("""
+            SELECT s.id, s.created_at, s.name, s.config, s.requested,
+                   (SELECT label FROM saved_set_steps p
+                     WHERE p.set_id = s.id AND p.position = 1) AS seed_label,
+                   (SELECT COUNT(*) FROM saved_set_steps p WHERE p.set_id = s.id) AS tracks,
+                   (SELECT COUNT(*) FROM saved_set_steps p WHERE p.set_id = s.id
+                      AND NOT EXISTS (SELECT 1 FROM tracks t
+                                       WHERE t.path_key = p.path_key)) AS missing
+              FROM saved_sets s ORDER BY s.id DESC""").fetchall()
+        calif: dict[int, list[str]] = {}
+        for f in self._con.execute("SELECT set_id, rating FROM saved_set_ratings"):
+            calif.setdefault(int(f["set_id"]), []).append(f["rating"])
+        return [SavedSetInfo(
+            id=int(f["id"]), created_at=f["created_at"], name=f["name"],
+            seed_label=f["seed_label"], tracks=int(f["tracks"]), requested=int(f["requested"]),
+            curve=_curva(f["config"]),
+            summary=summarize(max(int(f["tracks"]) - 1, 0), calif.get(int(f["id"]), [])),
+            missing=int(f["missing"])) for f in filas]
+
+    def get_saved_set(self, set_id: int):
+        """El set guardado entero: su foto (tal cual se guardó, sin recalcular nada), si
+        cada archivo sigue en la biblioteca y sus calificaciones. `SavedSetNotFound` si no
+        existe."""
+        import json
+
+        from motor.saved_sets import (
+            STEP_FIELDS,
+            Rating,
+            SavedSet,
+            SavedStep,
+            StepSnapshot,
+        )
+
+        cab = self._cabecera_set(set_id)
+        pasos = self._con.execute(f"""
+            SELECT {', '.join('p.' + c for c in STEP_FIELDS)},
+                   EXISTS (SELECT 1 FROM tracks t WHERE t.path_key = p.path_key) AS in_library
+              FROM saved_set_steps p WHERE p.set_id = ? ORDER BY p.position""",
+                                  (int(set_id),)).fetchall()
+        _bools = ("is_track", "key_doubtful", "is_seed")
+        steps = tuple(SavedStep(
+            StepSnapshot(**{c: (bool(f[c]) if c in _bools else f[c]) for c in STEP_FIELDS}),
+            bool(f["in_library"])) for f in pasos)
+        ratings = tuple(Rating(int(f["transition"]), f["rating"], f["reason"], f["rated_at"])
+                        for f in self._con.execute(
+                            "SELECT transition, rating, reason, rated_at FROM saved_set_ratings "
+                            "WHERE set_id = ? ORDER BY transition", (int(set_id),)))
+        return SavedSet(id=int(cab["id"]), created_at=cab["created_at"], name=cab["name"],
+                        config=json.loads(cab["config"]), requested=int(cab["requested"]),
+                        stop=cab["stop"], stop_detail=cab["stop_detail"],
+                        fragments=int(cab["fragments"]), steps=steps, ratings=ratings)
+
+    def rate_transition(self, set_id: int, transition: int, rating: str,
+                        reason: str | None = None):
+        """Califica la transición `transition` (de la posición n a la n + 1) del set. Si ya
+        tenía calificación, la reemplaza (nivel, motivo y fecha). Valida el nivel, el motivo
+        (obligatorio en `mala`) y que la transición exista en ESE set."""
+        from motor.saved_sets import Rating, require_rating
+
+        texto = require_rating(rating, reason)
+        n = self._transicion_valida(set_id, transition)
+        cuando = _ahora()
+        with self._escritura():
+            self._con.execute(
+                "INSERT INTO saved_set_ratings (set_id, transition, rating, reason, rated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (set_id, transition) DO UPDATE SET "
+                "rating = excluded.rating, reason = excluded.reason, "
+                "rated_at = excluded.rated_at",
+                (int(set_id), n, rating, texto, cuando))
+        return Rating(n, rating, texto, cuando)
+
+    def delete_rating(self, set_id: int, transition: int) -> bool:
+        """Deja la transición sin calificar. True si tenía calificación."""
+        n = self._transicion_valida(set_id, transition)
+        with self._escritura():
+            cur = self._con.execute(
+                "DELETE FROM saved_set_ratings WHERE set_id = ? AND transition = ?",
+                (int(set_id), n))
+        return cur.rowcount > 0
+
+    def rename_saved_set(self, set_id: int, name: str | None) -> str | None:
+        """Cambia el nombre (vacío o None = sin nombre). Devuelve el nombre que quedó."""
+        from motor.saved_sets import clean_name
+
+        nombre = clean_name(name)
+        self._cabecera_set(set_id)
+        with self._escritura():
+            self._con.execute("UPDATE saved_sets SET name = ? WHERE id = ?",
+                              (nombre, int(set_id)))
+        return nombre
+
+    def delete_saved_set(self, set_id: int) -> None:
+        """Borra el set con su foto y sus calificaciones. `SavedSetNotFound` si no existe.
+        Los hijos se borran explícitamente además del CASCADE: una conexión abierta por
+        otro código sin `PRAGMA foreign_keys` no puede dejar huérfanos por esta vía."""
+        self._cabecera_set(set_id)
+        with self._escritura():
+            for tabla in ("saved_set_ratings", "saved_set_steps"):
+                self._con.execute(f"DELETE FROM {tabla} WHERE set_id = ?", (int(set_id),))
+            self._con.execute("DELETE FROM saved_sets WHERE id = ?", (int(set_id),))
+
+    def _cabecera_set(self, set_id) -> sqlite3.Row:
+        from motor.saved_sets import SavedSetNotFound
+
+        if isinstance(set_id, bool) or not isinstance(set_id, int):
+            raise SavedSetNotFound(f"no hay un set guardado con id {set_id!r}")
+        fila = self._con.execute("SELECT * FROM saved_sets WHERE id = ?", (set_id,)).fetchone()
+        if fila is None:
+            raise SavedSetNotFound(f"no hay un set guardado con id {set_id}")
+        return fila
+
+    def _transicion_valida(self, set_id, transition) -> int:
+        """La transición como int, si el set existe y la tiene (1..largo-1)."""
+        from motor.saved_sets import InvalidSavedSet
+
+        self._cabecera_set(set_id)
+        largo = int(self._con.execute("SELECT COUNT(*) FROM saved_set_steps WHERE set_id = ?",
+                                      (set_id,)).fetchone()[0])
+        if isinstance(transition, bool) or not isinstance(transition, int) \
+                or not 1 <= transition <= largo - 1:
+            rango = (f"de 1 a {largo - 1}" if largo > 1
+                     else "ninguna: el set tiene un solo track")
+            raise InvalidSavedSet(f"el set {set_id} tiene {largo} tracks, así que sus "
+                                  f"transiciones van {rango}; recibí {transition!r}")
+        return transition
+
     def _rows(self) -> list[sqlite3.Row]:
         """Todas las filas, ORDENADAS POR CLAVE EN PYTHON — no por la collation de SQLite,
         que depende de cómo se compiló. Determinismo: mismo contenido, mismo orden. Se
@@ -553,4 +832,17 @@ _MIGRACIONES = (
     (1, Store._migrar_a_1_nulos),
     (2, Store._migrar_a_2_path_key),
     (3, Store._migrar_a_3_acuerdo_key),
+    (4, Store._migrar_a_4_sets),
 )
+
+
+def _curva(config: str) -> str | None:
+    """La curva del `RadioConfig` guardado, para el listado. None si el JSON no la trae (o
+    no se puede leer): el listado no puede caerse por un set guardado por otro código."""
+    import json
+
+    try:
+        valor = json.loads(config).get("curve")
+    except (ValueError, AttributeError):
+        return None
+    return valor if isinstance(valor, str) else None

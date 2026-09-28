@@ -5,7 +5,10 @@
     python -m motor info <track>
     python -m motor similar <track> [-n 10]
     python -m motor radio <track> [--largo 20] [--curva peak] [--semilla N]
-                                  [--randomness 0] [--m3u8 set.m3u8]
+                                  [--randomness 0] [--m3u8 set.m3u8] [--guardar [nombre]]
+    python -m motor sets listar | ver <id> | calificar <id> <n> ok|regular|mala|borrar
+                         [--motivo "..."] | renombrar <id> <nombre> | borrar <id>
+                         | exportar <archivo.csv> [--set <id>]
     python -m motor puente <origen> <destino> [--min-intermedios 3] [--max-intermedios 4]
                                               [--m3u8 puente.m3u8]
 
@@ -662,8 +665,7 @@ def cmd_radio(args: argparse.Namespace) -> int:
             f"(o `python -m motor list`), que muestra toda la biblioteca.")
 
     rset = build_set(semilla, biblioteca, config)
-    print(f"Set desde: {semilla.label}  (curva {config.curve}, semilla {config.seed}, "
-          f"randomness {config.randomness:g})\n")
+    print(f"{encabezado_set(semilla.label, config.curve, config.seed, config.randomness)}\n")
     for i, (paso, motivo) in enumerate(zip(rset.steps, rset.reasons(), strict=True), 1):
         print(f"  {i:>2}. {_fila(paso.track)}")
         print(f"      └ {motivo}")
@@ -684,6 +686,193 @@ def cmd_radio(args: argparse.Namespace) -> int:
     if args.m3u8:
         destino = write_m3u8(rset.tracks, args.m3u8)
         print(f"M3U8: {destino}")
+    if args.guardar is not None:
+        # Se guarda la foto de ESTE `rset`, el que se acaba de imprimir: no se vuelve a armar.
+        from motor.saved_sets import InvalidSavedSet, config_json, snapshot_steps
+
+        try:
+            with _abrir_store(args.db) as store:
+                set_id = store.save_set(
+                    snapshot_steps(rset), config=config_json(config), requested=config.length,
+                    stop=rset.stop, stop_detail=rset.stop_detail, fragments=rset.fragments,
+                    name=args.guardar)
+        except InvalidSavedSet as e:
+            raise ErrorDeUso(f"El set no se guardó: {e}") from e
+        print(f"Guardado como set #{set_id}. Calificá sus transiciones con "
+              f"`python -m motor sets calificar {set_id} <n> ok|regular|mala`.")
+    return OK
+
+
+def encabezado_set(label: str, curva, semilla, randomness) -> str:
+    """El renglón que encabeza un set: lo imprimen `radio` y `sets ver`, así un set guardado
+    se lee igual que cuando se armó."""
+    rnd = f"{randomness:g}" if isinstance(randomness, int | float) else f"{randomness}"
+    return f"Set desde: {label}  (curva {curva}, semilla {semilla}, randomness {rnd})"
+
+
+# --- sets guardados (tarea 16) --------------------------------------------------------------
+
+
+def _abrir_para_sets(db: Path):
+    """Abre la base para los sets guardados. Como `_abrir_existente`, no crea una base que no
+    existe; a diferencia de él, una biblioteca VACÍA no es un error: los sets guardados son
+    fotos y se leen aunque hoy no quede ningún track."""
+    if not db.exists():
+        raise ErrorDeUso(
+            f"No existe la base {db}.\n"
+            f"  Los sets se guardan con `python -m motor radio <track> --guardar [nombre]`.")
+    return _abrir_store(db)
+
+
+def _leer_set(store, set_id: int):
+    from motor.saved_sets import SavedSetNotFound
+
+    try:
+        return store.get_saved_set(set_id)
+    except SavedSetNotFound as e:
+        raise ErrorDeUso(f"{str(e)[:1].upper()}{str(e)[1:]}. `python -m motor sets listar` "
+                         f"muestra los que hay.") from e
+
+
+def _resumen(summary: dict) -> str:
+    return (f"ok {summary['ok']} · regular {summary['regular']} · mala {summary['mala']} · "
+            f"sin calificar {summary['sin_calificar']}")
+
+
+def cmd_sets_listar(args: argparse.Namespace) -> int:
+    with _abrir_para_sets(args.db) as store:
+        sets = store.list_saved_sets()
+    if not sets:
+        print("No hay sets guardados. Guardá uno con `python -m motor radio <track> "
+              "--guardar [nombre]`.")
+        return OK
+    print(f"{'id':>4}  {'guardado (UTC)':<20}  {'tracks':>7}  {'curva':<6}  "
+          f"{'ok':>3} {'reg':>3} {'mala':>4} {'sin':>4}  nombre · semilla")
+    for s in sets:
+        nombre = f"\"{s.name}\" · " if s.name else ""
+        faltan = (f"  [{s.missing} ya no {'está' if s.missing == 1 else 'están'} en la "
+                  f"biblioteca]" if s.missing else "")
+        r = s.summary
+        print(f"{s.id:>4}  {s.created_at:<20}  {s.tracks:>3}/{s.requested:<3}  "
+              f"{s.curve or '?':<6}  {r['ok']:>3} {r['regular']:>3} {r['mala']:>4} "
+              f"{r['sin_calificar']:>4}  {nombre}{s.seed_label}{faltan}")
+    print(f"\n{len(sets)} {'set guardado' if len(sets) == 1 else 'sets guardados'} · "
+          f"`sets ver <id>` muestra uno con sus transiciones")
+    return OK
+
+
+def cmd_sets_ver(args: argparse.Namespace) -> int:
+    from motor.saved_sets import rating_text, snapshot_row
+
+    with _abrir_para_sets(args.db) as store:
+        s = _leer_set(store, args.id)
+    cfg = s.config
+    nombre = f" · \"{s.name}\"" if s.name else ""
+    print(f"Set guardado #{s.id}{nombre} · guardado {s.created_at} (UTC)")
+    print(encabezado_set(s.steps[0].snapshot.label if s.steps else "?", cfg.get("curve", "?"),
+                         cfg.get("seed", "?"), cfg.get("randomness", "?")))
+    print("(la foto de lo que se mostró al guardarlo: BPM, key y porqué NO se recalculan con "
+          "la biblioteca de hoy)\n")
+    for paso in s.steps:
+        f = paso.snapshot
+        falta = "" if paso.in_library else "   [YA NO ESTÁ EN LA BIBLIOTECA]"
+        print(f"  {f.position:>2}. {snapshot_row(f)}{falta}")
+        print(f"      └ {f.reason}")
+        if not f.is_seed:
+            n = f.position - 1
+            print(f"      └ [{n} → {n + 1}] {rating_text(s.rating_of(n))}")
+
+    print(f"\n{len(s.steps)} de {s.requested} tracks pedidos · {s.transitions} transiciones: "
+          f"{_resumen(s.summary())}")
+    if s.fragments:
+        print(aviso_fragmentos(s.fragments, "La radio ignoró"))
+    if s.stop is not None:
+        print(f"{titular_corte(s.stop)}.")
+        print(f"  El set quedó en {len(s.steps)} de {s.requested} · por qué ({s.stop}): "
+              f"{s.stop_detail}")
+    if s.missing:
+        print(f"{s.missing} {'track' if s.missing == 1 else 'tracks'} de este set ya no "
+              f"{'está' if s.missing == 1 else 'están'} en la biblioteca (se borró o se movió "
+              f"y se re-escaneó): la foto de arriba es la de cuando se guardó.")
+        for paso in s.steps:
+            if not paso.in_library:
+                print(f"  {paso.snapshot.position:>2}. {paso.snapshot.path}")
+    print(LEYENDA_KEY)
+    return OK
+
+
+def cmd_sets_calificar(args: argparse.Namespace) -> int:
+    from motor.saved_sets import InvalidSavedSet, rating_text
+
+    with _abrir_para_sets(args.db) as store:
+        s = _leer_set(store, args.id)
+        try:
+            if args.calificacion == "borrar":
+                if args.motivo is not None:
+                    raise InvalidSavedSet("--motivo no va con `borrar`: se borra la "
+                                          "calificación entera")
+                store.delete_rating(args.id, args.transicion)
+                texto = "sin calificar"
+            else:
+                texto = rating_text(store.rate_transition(args.id, args.transicion,
+                                                          args.calificacion, args.motivo))
+        except InvalidSavedSet as e:
+            raise ErrorDeUso(f"No se calificó: {e}") from e
+        resumen = store.get_saved_set(args.id).summary()
+    n = args.transicion
+    desde, hasta = s.steps[n - 1].snapshot, s.steps[n].snapshot
+    print(f"Set #{s.id}, transición {n} → {n + 1}: {desde.label} → {hasta.label}")
+    print(f"  └ {hasta.reason}")
+    print(f"  └ {texto}")
+    print(f"Set #{s.id}: {_resumen(resumen)}")
+    return OK
+
+
+def cmd_sets_renombrar(args: argparse.Namespace) -> int:
+    from motor.saved_sets import InvalidSavedSet
+
+    with _abrir_para_sets(args.db) as store:
+        _leer_set(store, args.id)
+        try:
+            nombre = store.rename_saved_set(args.id, args.nombre)
+        except InvalidSavedSet as e:
+            raise ErrorDeUso(f"No se renombró: {e}") from e
+    print(f"Set #{args.id}: " + (f"ahora se llama \"{nombre}\"" if nombre else "sin nombre"))
+    return OK
+
+
+def cmd_sets_borrar(args: argparse.Namespace) -> int:
+    with _abrir_para_sets(args.db) as store:
+        s = _leer_set(store, args.id)
+        store.delete_saved_set(args.id)
+    r = s.summary()
+    print(f"Borrado el set #{s.id} ({len(s.steps)} tracks, "
+          f"{s.transitions - r['sin_calificar']} transiciones calificadas).")
+    return OK
+
+
+def cmd_sets_exportar(args: argparse.Namespace) -> int:
+    """Las calificaciones en CSV para la planilla de la tarea 14 (formato: `saved_sets.
+    ratings_csv`). UTF-8 con BOM, para que Excel lea los acentos."""
+    from motor.saved_sets import ratings_csv
+
+    with _abrir_para_sets(args.db) as store:
+        ids = args.set or [s.id for s in reversed(store.list_saved_sets())]
+        sets = [_leer_set(store, i) for i in ids]
+    if not sets:
+        raise ErrorDeUso("No hay sets guardados que exportar.")
+    destino = Path(args.archivo)
+    if destino.parent and not destino.parent.is_dir():
+        raise ErrorDeUso(f"No existe la carpeta {destino.parent}.")
+    with open(destino, "w", encoding="utf-8-sig", newline="") as fh:
+        fh.write(ratings_csv(sets))
+    total = sum(s.transitions for s in sets)
+    calificadas = sum(s.transitions - s.summary()["sin_calificar"] for s in sets)
+    print(f"{total} transiciones ({calificadas} calificadas) de {len(sets)} "
+          f"{'set' if len(sets) == 1 else 'sets'} → {destino.resolve()}")
+    print("Excel: Datos → Obtener datos → Desde texto/CSV, delimitador \"Coma\" (con doble clic "
+          "y configuración regional argentina, Excel separa por \";\" y deja todo en una "
+          "columna).")
     return OK
 
 
@@ -821,7 +1010,43 @@ def construir_parser() -> argparse.ArgumentParser:
     p.add_argument("--artist-gap", type=int, default=4,
                    help="Mínimo de tracks entre dos del mismo artista (default 4).")
     p.add_argument("--m3u8", type=Path, default=None, help="Exporta el set a este .m3u8.")
+    p.add_argument("--guardar", nargs="?", const="", default=None, metavar="NOMBRE",
+                   help="Guarda el set que se acaba de imprimir (con un nombre opcional) para "
+                        "calificar sus transiciones con `sets`.")
     p.set_defaults(func=cmd_radio)
+
+    p = sub.add_parser("sets", parents=[comun],
+                       help="Sets guardados: listarlos, verlos, calificar sus transiciones y "
+                            "exportar las calificaciones.")
+    ss = p.add_subparsers(dest="accion", required=True, metavar="accion")
+    q = ss.add_parser("listar", parents=[comun], help="Los sets guardados, del más nuevo al más viejo.")
+    q.set_defaults(func=cmd_sets_listar)
+    q = ss.add_parser("ver", parents=[comun],
+                      help="Un set guardado con cada transición, su porqué y su calificación.")
+    q.add_argument("id", type=int)
+    q.set_defaults(func=cmd_sets_ver)
+    q = ss.add_parser("calificar", parents=[comun],
+                      help="Califica la transición n (de la posición n a la n+1).")
+    q.add_argument("id", type=int)
+    q.add_argument("transicion", type=int, help="n: de la posición n a la n+1 (como en `ver`).")
+    q.add_argument("calificacion", choices=("ok", "regular", "mala", "borrar"),
+                   help="ok / regular / mala, o borrar para dejarla sin calificar.")
+    q.add_argument("--motivo", default=None,
+                   help="Qué sonó (obligatorio en `mala`, opcional en las otras).")
+    q.set_defaults(func=cmd_sets_calificar)
+    q = ss.add_parser("renombrar", parents=[comun], help="Cambia el nombre de un set.")
+    q.add_argument("id", type=int)
+    q.add_argument("nombre", help="El nombre nuevo (\"\" lo deja sin nombre).")
+    q.set_defaults(func=cmd_sets_renombrar)
+    q = ss.add_parser("borrar", parents=[comun], help="Borra un set con sus calificaciones.")
+    q.add_argument("id", type=int)
+    q.set_defaults(func=cmd_sets_borrar)
+    q = ss.add_parser("exportar", parents=[comun],
+                      help="Las transiciones y sus calificaciones a un CSV (planilla de la #14).")
+    q.add_argument("archivo", type=Path)
+    q.add_argument("--set", type=int, action="append", default=None, metavar="ID",
+                   help="Solo este set (se puede repetir). Sin esto, todos.")
+    q.set_defaults(func=cmd_sets_exportar)
 
     p = sub.add_parser("puente", parents=[comun],
                        help="Los temas que llevan de un track a otro sin salirse de ±8% de BPM.")

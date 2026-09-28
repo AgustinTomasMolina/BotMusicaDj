@@ -1307,29 +1307,41 @@ def _num(valor) -> float | None:
     return v if math.isfinite(v) else None
 
 
-def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
-    """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
+def _usar_store_motor(accion) -> tuple[object, str, str | None]:
+    """`(accion(store), estado, motivo)` sobre la base del motor. Nunca levanta por la base.
+
+    Una sola función para abrir la base y clasificar lo que puede salir mal (sin motor, sin
+    base, esquema de otro código, ocupada, ilegible): la usan la biblioteca de la radio y los
+    sets guardados, y dos copias de esta clasificación terminarían diciendo "ilegible" en una
+    pantalla y "ocupada" en otra para la misma base. Con `estado != ok` el resultado es None.
+
+    Lo que SÍ levanta son los errores del pedido (`InvalidSavedSet`, `SavedSetNotFound`):
+    no son de la base, y cada endpoint los contesta con su 400 / 404.
+    """
     try:
         from motor.cli import db_por_defecto, esta_bloqueada
+        from motor.saved_sets import InvalidSavedSet, SavedSetNotFound
         from motor.store import EsquemaIncompatible, Store
     except ImportError as e:
         logger.warning(f"⚠️ Radio: falta el paquete motor ({e}); la radio queda desactivada.")
-        return [], _RADIO_SIN_MOTOR, (
+        return None, _RADIO_SIN_MOTOR, (
             "Esta instalación no incluye el motor de radio (motor/), así que la radio está "
             "desactivada.")
 
     db = db_por_defecto()
     if not db.exists():
-        return [], _RADIO_SIN_BASE, (
+        return None, _RADIO_SIN_BASE, (
             f"No hay biblioteca del motor en {db}. Analizá una carpeta con "
             f"`python -m motor scan <carpeta> --licencia ... --origen ...`, o apuntá "
             f"DJRADIO_DB a la base que ya tengas.")
     try:
         # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
         with Store(db, espera_bloqueo_s=_RADIO_ESPERA_S) as store:
-            biblioteca = store.load_library()
+            return accion(store), _RADIO_OK, None
+    except (InvalidSavedSet, SavedSetNotFound):
+        raise
     except EsquemaIncompatible as e:
-        return [], _RADIO_ESQUEMA, str(e)
+        return None, _RADIO_ESQUEMA, str(e)
     except sqlite3.OperationalError as e:
         # "Ocupada" se separa de "ilegible" con la MISMA condición que la CLI
         # (`cli.esta_bloqueada`): no es una base rota, es que hay un scan corriendo, y se
@@ -1338,8 +1350,8 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
         # reintentar en un rato.
         if not esta_bloqueada(e):
             logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
-            return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
-        return [], _RADIO_OCUPADA, (
+            return None, _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return None, _RADIO_OCUPADA, (
             f"La biblioteca del motor ({db}) está ocupada: hay un scan u otra instancia "
             f"usándola (se esperó {_RADIO_ESPERA_S:g} s). Reintentá en un rato.")
     except (sqlite3.Error, ValueError) as e:
@@ -1348,8 +1360,18 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
         # al construirla y se lleva puesta la biblioteca entera. Ninguna de las dos es un bug
         # del server, y las dos son arreglables sabiendo qué base se está leyendo.
         logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
-        return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return None, _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+
+
+def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
+    """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
+    biblioteca, estado, motivo = _usar_store_motor(lambda store: store.load_library())
+    if estado != _RADIO_OK:
+        return [], estado, motivo
     if not biblioteca:
+        from motor.cli import db_por_defecto
+
+        db = db_por_defecto()
         return [], _RADIO_VACIA, (
             f"La biblioteca del motor ({db}) no tiene ningún track analizado. Corré "
             f"`python -m motor scan <carpeta> --licencia ... --origen ...`.")
@@ -1604,7 +1626,17 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
         "aviso_fragmentos": (aviso_fragmentos(rset.fragments, "La radio ignoró")
                              if rset.fragments else None),
         "leyenda_key": LEYENDA_KEY,
+        # La huella de lo que se muestra (`saved_sets.fingerprint`): el front la devuelve al
+        # guardar el set (POST /api/radio/sets) y, si el re-armado ya no muestra lo mismo, el
+        # guardado es 409 en vez de guardar otra cosa. Ver `radio_sets_guardar`.
+        "huella": _huella(rset),
     }
+
+
+def _huella(rset) -> str:
+    from motor.saved_sets import fingerprint, snapshot_steps
+
+    return fingerprint(snapshot_steps(rset))
 
 
 # Caracteres que Windows no acepta en un nombre de archivo, más los de control. El nombre
@@ -1729,6 +1761,279 @@ async def radio_audio(track_id: str):
                       f"con `docker compose exec web python -m motor scan /musica "
                       f"--licencia ... --origen ...`."}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# --- Sets guardados y calificación de transiciones (tarea 16, `motor/saved_sets.py`) -------
+#
+# Un set guardado es la FOTO de lo que se mostró (ver el docstring de `motor/saved_sets.py`):
+# acá nada lo re-arma ni recalcula al leerlo. Las rutas de los tracks salen de la base, nunca
+# del cliente: el cliente manda ids opacos (`_radio_id`) y números de set/transición.
+#
+#   POST   /api/radio/sets                          guardar el set que se está viendo
+#   GET    /api/radio/sets                          listar (con el resumen de calificaciones)
+#   GET    /api/radio/sets/{id}                     uno, con su foto y sus calificaciones
+#   PATCH  /api/radio/sets/{id}                     renombrar: {"nombre": "..."} ("" o null = sin nombre)
+#   DELETE /api/radio/sets/{id}                     borrar el set y sus calificaciones
+#   PUT    /api/radio/sets/{id}/transiciones/{n}    calificar: {"calificacion": "ok|regular|mala", "motivo": "..."}
+#   DELETE /api/radio/sets/{id}/transiciones/{n}    dejarla sin calificar
+#
+# La transición `n` va de la posición `n` a la `n + 1` (las posiciones son las `n` de los pasos).
+# Degradación: los GET contestan 200 con `estado`/`motivo` (como el resto de la radio) y las
+# escrituras 409 con lo mismo más `error`: sin base no hay nada que escribir, y un 200 diría
+# que se guardó. Pedido inválido → 400 con el motivo del motor; set inexistente → 404.
+
+
+def _set_guardado_resumen(info) -> dict:
+    return {"id": info.id, "nombre": info.name, "guardado": info.created_at,
+            "semilla": info.seed_label, "total": info.tracks, "pedidos": info.requested,
+            "curva": info.curve, "resumen": info.summary, "faltan": info.missing}
+
+
+def _set_guardado_json(s) -> dict:
+    """Un set guardado como lo lee la pantalla: la MISMA forma de paso que /api/radio/set
+    (`_radio_paso`) para que el front reuse cómo lo dibuja, más lo propio del set guardado.
+
+    Todo sale de la foto: `bpm` es el `bpm_shown` que se vio, `energia_pct` el percentil que
+    se imprimió, `motivo` el `Transition.reason()` de ese momento. `en_biblioteca: false`
+    dice que el archivo ya no está en la biblioteca (se borró o se movió y se re-escaneó):
+    el paso se muestra igual, entero, y sin audio — no hay qué reproducir.
+    """
+    from motor.cli import LEYENDA_KEY, aviso_fragmentos, titular_corte
+
+    pasos = []
+    for paso in s.steps:
+        f = paso.snapshot
+        tid = _radio_id(f.path)
+        pasos.append({
+            "n": f.position,
+            "track": {
+                "id": tid, "label": f.label, "titulo": f.title_shown, "artista": f.artist or "",
+                "bpm": float(f.bpm_shown), "camelot": f.key or None, "tonalidad": f.key_classic,
+                "key_dudosa": f.key_doubtful, "energia": round(f.energy, 3),
+                "energia_pct": f.energy_pct, "dur": round(f.duration, 1), "es_track": f.is_track,
+                "licencia": f.license, "origen": f.source_url,
+                "en_biblioteca": paso.in_library,
+                "audio": f"/api/radio/audio/{tid}" if paso.in_library else None,
+            },
+            "motivo": f.reason,
+            "es_semilla": f.is_seed,
+            "transicion": {
+                "from_bpm": f.from_bpm, "to_bpm": f.bpm, "bpm_delta_pct": f.bpm_delta_pct,
+                "bpm_octava": f.bpm_octave, "from_key": f.from_key, "to_key": f.key,
+                "key_relacion": f.key_relation, "key_compat": f.key_compat,
+                "mezclabilidad": f.mixability, "encaje_musical": f.musical_fit,
+                "score": f.score, "energia": f.energy, "energia_objetivo": f.energy_goal,
+            },
+        })
+    transiciones = []
+    for n in range(1, s.transitions + 1):
+        r = s.rating_of(n)
+        transiciones.append({
+            "n": n, "desde": n, "hasta": n + 1, "motivo_motor": s.steps[n].snapshot.reason,
+            "calificacion": r.rating if r else None, "motivo": r.reason if r else None,
+            "calificada": r.rated_at if r else None})
+    c = s.config
+    return {
+        "id": s.id, "nombre": s.name, "guardado": s.created_at,
+        # Con los nombres de /api/radio/set; `config_motor` es el RadioConfig entero (pesos
+        # incluidos), tal cual se guardó.
+        "config": {"largo": c.get("length"), "curva": c.get("curve"),
+                   "artist_gap": c.get("artist_gap"), "mmr_lambda": c.get("mmr_lambda"),
+                   "semilla": c.get("seed"), "randomness": c.get("randomness")},
+        "config_motor": c,
+        "pasos": pasos, "total": len(pasos), "pedidos": s.requested,
+        "completo": s.stop is None,
+        "corte": None if s.stop is None else {"codigo": s.stop, "titular": titular_corte(s.stop),
+                                               "detalle": s.stop_detail},
+        "fragmentos": s.fragments,
+        "aviso_fragmentos": (aviso_fragmentos(s.fragments, "La radio ignoró")
+                             if s.fragments else None),
+        "transiciones": transiciones, "resumen": s.summary(), "faltan": s.missing,
+        "leyenda_key": LEYENDA_KEY,
+    }
+
+
+def _sets_sin_base(estado: str, motivo: str | None) -> JSONResponse:
+    """Una escritura sin base utilizable: 409 con el estado, nunca un 200 ni un 500."""
+    return JSONResponse({**_radio_envoltura(estado, motivo), "error": motivo}, status_code=409)
+
+
+async def _sets_escribir(accion) -> tuple[object, JSONResponse | None]:
+    """Corre `accion(store)`; `(resultado, None)` o `(None, la respuesta de error)`."""
+    from motor.saved_sets import InvalidSavedSet, SavedSetNotFound
+
+    try:
+        res, estado, motivo = await asyncio.to_thread(_usar_store_motor, accion)
+    except InvalidSavedSet as e:
+        return None, JSONResponse({"error": str(e)}, status_code=400)
+    except SavedSetNotFound as e:
+        return None, JSONResponse({"error": str(e)}, status_code=404)
+    if estado != _RADIO_OK:
+        return None, _sets_sin_base(estado, motivo)
+    return res, None
+
+
+def _campo(payload: dict, nombre: str, tipo):
+    """Un campo opcional del cuerpo con su tipo, o `ValueError`. `True` no es un int acá: un
+    `largo: true` no puede armar un set de 1."""
+    valor = payload.get(nombre)
+    if valor is None:
+        return None
+    ok = (isinstance(valor, int) and not isinstance(valor, bool)) if tipo is int else \
+        (isinstance(valor, int | float) and not isinstance(valor, bool)) if tipo is float else \
+        isinstance(valor, tipo)
+    if not ok:
+        raise ValueError(f"`{nombre}` tiene que ser {tipo.__name__}, recibí {valor!r}")
+    return valor
+
+
+@app.post("/api/radio/sets")
+async def radio_sets_guardar(payload: dict):
+    """Guarda el set que la pantalla está mostrando.
+
+    Cuerpo: los MISMOS parámetros que /api/radio/set (`track`, `largo`, `curva`,
+    `artist_gap`, `mmr_lambda`, `semilla`, `randomness`) más:
+
+    - `esperado` (obligatorio): los ids de los pasos que se mostraron, en orden (lista o
+      separados por coma). Es el mecanismo del export .m3u8: el set se re-arma con la misma
+      config y, si no da esos ids, 409 en vez de guardar otro set.
+    - `huella` (recomendado): la `huella` que devolvió /api/radio/set. Cubre el caso que los
+      ids no ven: el mismo set de tracks pero con un dato distinto (un re-escaneo cambió un
+      BPM entre que se mostró y se guardó). Si no coincide, 409.
+    - `nombre` (opcional).
+
+    201 con el set guardado (la misma forma que GET /api/radio/sets/{id}).
+    """
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "el cuerpo tiene que ser un objeto JSON"}, status_code=400)
+    try:
+        track = _campo(payload, "track", str) or ""
+        params = [_campo(payload, "largo", int), _campo(payload, "curva", str),
+                  _campo(payload, "artist_gap", int), _campo(payload, "mmr_lambda", float),
+                  _campo(payload, "semilla", int), _campo(payload, "randomness", float)]
+        huella = _campo(payload, "huella", str)
+        nombre = _campo(payload, "nombre", str)
+        esperado = payload.get("esperado")
+        if isinstance(esperado, str):
+            esperado = [i.strip() for i in esperado.split(",") if i.strip()]
+        if not (isinstance(esperado, list) and esperado
+                and all(isinstance(i, str) for i in esperado)):
+            raise ValueError("falta `esperado`: los ids de los pasos que se mostraron, en "
+                             "orden. Sin eso no hay forma de saber que se guarda lo que se vio.")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    armado = await _armar_set_radio(track, *params)
+    if isinstance(armado, JSONResponse):
+        return armado
+    if armado.rset is None:
+        return _sets_sin_base(armado.estado, armado.motivo)
+
+    from motor.saved_sets import config_json, fingerprint, snapshot_steps
+
+    rset, config = armado.rset, armado.config
+    ids = [_radio_id(t.path) for t in rset.tracks]
+    if esperado != ids:
+        return JSONResponse(
+            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
+                      "la misma (¿un scan nuevo?). Armalo de nuevo y guardá ese.",
+             "esperado": esperado, "armado": ids}, status_code=409)
+    fotos = snapshot_steps(rset)
+    armada = fingerprint(fotos)
+    if huella is not None and huella != armada:
+        return JSONResponse(
+            {"error": "Los datos de los tracks cambiaron desde que armaste el set (¿un "
+                      "re-escaneo?): los mismos tracks, pero no lo que se mostró. Armalo de "
+                      "nuevo y guardá ese.", "huella_esperada": huella, "huella_armada": armada},
+            status_code=409)
+
+    def guardar(store):
+        set_id = store.save_set(fotos, config=config_json(config), requested=config.length,
+                                stop=rset.stop, stop_detail=rset.stop_detail,
+                                fragments=rset.fragments, name=nombre)
+        return store.get_saved_set(set_id)
+
+    guardado, error = await _sets_escribir(guardar)
+    if error is not None:
+        return error
+    return JSONResponse({**_radio_envoltura(_RADIO_OK, None), "set": _set_guardado_json(guardado)},
+                        status_code=201)
+
+
+@app.get("/api/radio/sets")
+async def radio_sets_listar():
+    """Los sets guardados, del más nuevo al más viejo, con el resumen de calificaciones."""
+    sets, estado, motivo = await asyncio.to_thread(
+        _usar_store_motor, lambda store: store.list_saved_sets())
+    return {**_radio_envoltura(estado, motivo),
+            "sets": [_set_guardado_resumen(s) for s in sets or []]}
+
+
+@app.get("/api/radio/sets/{set_id}")
+async def radio_sets_ver(set_id: int):
+    """Un set guardado: su foto (sin re-armar ni recalcular), sus calificaciones y el resumen."""
+    from motor.saved_sets import SavedSetNotFound
+
+    try:
+        s, estado, motivo = await asyncio.to_thread(
+            _usar_store_motor, lambda store: store.get_saved_set(set_id))
+    except SavedSetNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return {**_radio_envoltura(estado, motivo),
+            "set": None if s is None else _set_guardado_json(s)}
+
+
+@app.patch("/api/radio/sets/{set_id}")
+async def radio_sets_renombrar(set_id: int, payload: dict):
+    if "nombre" not in payload:
+        return JSONResponse({"error": "falta `nombre` (\"\" o null lo deja sin nombre)"},
+                            status_code=400)
+    nombre, error = await _sets_escribir(
+        lambda store: store.rename_saved_set(set_id, payload["nombre"]))
+    if error is not None:
+        return error
+    return {**_radio_envoltura(_RADIO_OK, None), "id": set_id, "nombre": nombre}
+
+
+@app.delete("/api/radio/sets/{set_id}")
+async def radio_sets_borrar(set_id: int):
+    _, error = await _sets_escribir(lambda store: store.delete_saved_set(set_id))
+    if error is not None:
+        return error
+    return {**_radio_envoltura(_RADIO_OK, None), "borrado": set_id}
+
+
+@app.put("/api/radio/sets/{set_id}/transiciones/{n}")
+async def radio_sets_calificar(set_id: int, n: int, payload: dict):
+    """Califica la transición `n` (de la posición `n` a la `n + 1`). Reemplaza la que hubiera.
+    `motivo` es obligatorio con `mala` y opcional con `ok` / `regular`."""
+    def calificar(store):
+        r = store.rate_transition(set_id, n, payload.get("calificacion"), payload.get("motivo"))
+        return r, store.get_saved_set(set_id).summary()
+
+    res, error = await _sets_escribir(calificar)
+    if error is not None:
+        return error
+    r, resumen = res
+    return {**_radio_envoltura(_RADIO_OK, None),
+            "transicion": {"n": r.transition, "desde": r.transition, "hasta": r.transition + 1,
+                           "calificacion": r.rating, "motivo": r.reason,
+                           "calificada": r.rated_at},
+            "resumen": resumen}
+
+
+@app.delete("/api/radio/sets/{set_id}/transiciones/{n}")
+async def radio_sets_descalificar(set_id: int, n: int):
+    """Deja la transición `n` sin calificar. `borrada: false` si ya no tenía calificación."""
+    def borrar(store):
+        return store.delete_rating(set_id, n), store.get_saved_set(set_id).summary()
+
+    res, error = await _sets_escribir(borrar)
+    if error is not None:
+        return error
+    borrada, resumen = res
+    return {**_radio_envoltura(_RADIO_OK, None), "n": n, "borrada": borrada,
+            "resumen": resumen}
 
 
 @app.get("/api/historial")
