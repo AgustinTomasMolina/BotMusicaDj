@@ -295,14 +295,47 @@ def test_renombrar_y_borrar(base):
     assert huerfanos == [0, 0], f"borrar el set dejó pasos/calificaciones: {huerfanos}"
 
 
-def test_la_huella_cambia_si_cambia_un_dato_mostrado(base):
+def _otro_valor(valor):
+    """Un valor distinto del mismo tipo, para cambiar UN campo por vez."""
+    if isinstance(valor, bool):
+        return not valor
+    if isinstance(valor, int):
+        return valor + 1
+    if isinstance(valor, float):
+        return valor + 0.5
+    if isinstance(valor, str):
+        return valor + "x"
+    return "x"          # None → un valor presente
+
+
+def test_la_huella_cambia_con_cada_dato_mostrado_por_separado(base):
+    """TODOS los campos de la foto y de la cabecera entran en la huella: se cambia cada uno
+    por separado (en el paso 2, que no es la semilla y tiene todo medido) y la huella tiene
+    que cambiar. Un campo que la huella ignorara podría cambiar entre mostrar y guardar sin
+    que el 409 salte."""
+    from motor.saved_sets import StepSnapshot, shown_header
+
     db, rutas = base
     with Store(db) as store:
-        rset, _ = _armar(store, rutas)
-    fotos = snapshot_steps(rset)
-    otra = [*fotos[:2], dataclasses.replace(fotos[2], bpm_shown="130.1"), *fotos[3:]]
-    assert fingerprint(fotos) == fingerprint(snapshot_steps(rset)), "la huella no es estable"
-    assert fingerprint(otra) != fingerprint(fotos)
+        rset, config = _armar(store, rutas)
+    fotos, cab = snapshot_steps(rset), shown_header(rset, config)
+    base_huella = fingerprint(fotos, cab)
+    assert base_huella == fingerprint(snapshot_steps(rset), shown_header(rset, config)), \
+        "la huella no es estable"
+
+    sin_cambio = []
+    for campo in (f.name for f in dataclasses.fields(StepSnapshot)):
+        otra = [*fotos[:1],
+                dataclasses.replace(fotos[1], **{campo: _otro_valor(getattr(fotos[1], campo))}),
+                *fotos[2:]]
+        if fingerprint(otra, cab) == base_huella:
+            sin_cambio.append(campo)
+    for clave in cab:
+        if fingerprint(fotos, {**cab, clave: _otro_valor(cab[clave])}) == base_huella:
+            sin_cambio.append(f"cabecera.{clave}")
+    assert sin_cambio == [], f"la huella no ve estos campos: {sin_cambio}"
+    assert set(cab) == {"requested", "curve", "seed", "randomness", "stop", "stop_detail",
+                        "fragments"}, cab
 
 
 # --- migración v3 → v4: atomicidad y concurrencia ---------------------------------------
@@ -533,9 +566,17 @@ def test_cli_radio_guardar_ver_calificar_y_exportar(base, capsys, tmp_path):
     csv_path = tmp_path / "planilla.csv"
     codigo, out, err = _correr(capsys, "--db", db, "sets", "exportar", csv_path)
     assert codigo == 0, err
+    assert "Separado por \";\"" in out, out
     crudo = csv_path.read_bytes()
-    assert crudo.startswith(b"\xef\xbb\xbf"), "sin BOM Excel no lee los acentos"
-    filas = list(csv.DictReader(crudo.decode("utf-8-sig").splitlines()))
+    assert crudo.startswith(b"\xef\xbb\xbfset;nombre_set;guardado;"), \
+        f"sin BOM Excel no lee los acentos, y el separador por defecto es ';': {crudo[:40]!r}"
+    filas = list(csv.DictReader(crudo.decode("utf-8-sig").splitlines(), delimiter=";"))
+    # Con `--separador ,` es el mismo contenido, separado por coma.
+    csv_coma = tmp_path / "planilla_coma.csv"
+    codigo, out_coma, err = _correr(capsys, "--db", db, "sets", "exportar", csv_coma,
+                                    "--separador", ",")
+    assert codigo == 0 and "Separado por \",\"" in out_coma, err
+    assert list(csv.DictReader(csv_coma.read_bytes().decode("utf-8-sig").splitlines())) == filas
     with Store(db) as store:
         rset, _ = _armar(store, rutas)
     esperado = [(f"{n} → {n + 1}", f"{rset[n - 1].track.bpm:.1f} BPM",
@@ -550,7 +591,7 @@ def test_cli_radio_guardar_ver_calificar_y_exportar(base, capsys, tmp_path):
     assert [float(f["score"]) for f in filas] == [rset[n].transition.total for n in (1, 2, 3)]
 
 
-def test_cli_sets_ver_dice_que_un_track_ya_no_esta(base, capsys):
+def test_cli_sets_ver_dice_que_un_track_ya_no_esta(base, capsys, tmp_path):
     db, rutas = base
     assert _correr(capsys, "--db", db, "radio", rutas["uno.wav"], "--largo", 4,
                    "--guardar")[0] == 0
@@ -562,6 +603,146 @@ def test_cli_sets_ver_dice_que_un_track_ya_no_esta(base, capsys):
     assert renglon.endswith("Artista B — Dos   [YA NO ESTÁ EN LA BIBLIOTECA]"), renglon
     assert f"   3. {rutas['dos.wav']}" in ver.splitlines(), ver
     assert sum("YA NO ESTÁ" in r for r in ver.splitlines()) == 1, ver
+
+    # El CSV también lo dice, en las dos transiciones que tocan a dos.wav (la 2 llega, la 3 sale).
+    destino = tmp_path / "faltan.csv"
+    assert _correr(capsys, "--db", db, "sets", "exportar", destino)[0] == 0
+    filas = list(csv.DictReader(destino.read_bytes().decode("utf-8-sig").splitlines(),
+                                delimiter=";"))
+    assert [(f["desde_en_biblioteca"], f["hasta_en_biblioteca"]) for f in filas] == [
+        ("sí", "sí"), ("sí", "no"), ("no", "sí")]
+
+
+# --- un set cortado (el motor no llegó al largo pedido) -----------------------------------
+
+def test_un_set_cortado_se_guarda_con_su_largo_pedido_y_su_corte(base, capsys):
+    """Pedido de 10 sobre una biblioteca que no da para 10: el set se corta. Se guarda con el
+    largo PEDIDO, el código y el detalle del corte, y `sets ver` lo dice igual que `radio`."""
+    db, rutas = base
+    with Store(db) as store:
+        rset, _ = _armar(store, rutas, largo=10)
+    assert rset.stop is not None and len(rset) < 10, \
+        f"el set de 10 no se cortó ({len(rset)}, {rset.stop}): el test no probaría nada"
+
+    codigo, radio, err = _correr(capsys, "--db", db, "radio", rutas["uno.wav"], "--largo", 10,
+                                 "--guardar")
+    assert codigo == 0, err
+    with Store(db) as store:
+        s = store.get_saved_set(1)
+    assert (len(s.steps), s.requested, s.stop, s.stop_detail) == \
+        (len(rset), 10, rset.stop, rset.stop_detail)
+    assert s.summary()["sin_calificar"] == len(rset) - 1
+
+    codigo, ver, err = _correr(capsys, "--db", db, "sets", "ver", 1)
+    assert codigo == 0, err
+    corte_radio = [r for r in radio.splitlines() if r.startswith("NO ") or "El set quedó" in r]
+    corte_ver = [r for r in ver.splitlines() if r.startswith("NO ") or "El set quedó" in r]
+    assert len(corte_radio) == 2 and corte_ver == corte_radio, (corte_ver, corte_radio)
+    assert f"{len(rset)} de 10 tracks pedidos" in ver, ver
+
+
+# --- validaciones de texto --------------------------------------------------------------
+
+@pytest.mark.parametrize(("crudo", "limpio"), [
+    ("noche\nde prueba", "noche de prueba"),
+    ("noche\r\nde prueba", "noche de prueba"),
+    ("a\x00b\tc\x7fd", "a b c d"),
+])
+def test_nombres_y_motivos_quedan_en_una_linea(base, crudo, limpio):
+    db, rutas = base
+    with Store(db) as store:
+        rset, config = _armar(store, rutas)
+        sid = _guardar(store, rset, config, name=crudo)
+        assert store.rename_saved_set(sid, crudo) == limpio
+        store.rate_transition(sid, 1, "mala", crudo)
+        s = store.get_saved_set(sid)
+        assert (s.name, s.ratings[0].reason) == (limpio, limpio)
+        with pytest.raises(InvalidSavedSet, match="motivo"):
+            store.rate_transition(sid, 2, "mala", "\r\n\t\x00")
+
+
+def test_sets_listar_no_se_parte_con_un_nombre_de_varias_lineas(base, capsys):
+    db, rutas = base
+    assert _correr(capsys, "--db", db, "radio", rutas["uno.wav"], "--largo", 4,
+                   "--guardar", "linea uno\nlinea dos")[0] == 0
+    _, listado, _ = _correr(capsys, "--db", db, "sets", "listar")
+    # Las filas de sets van alineadas a la derecha ("   1  2026-…"); el pie no tiene sangría.
+    filas = [r for r in listado.splitlines() if r.startswith("   ") and r.strip()[:1].isdigit()]
+    assert len(filas) == 1 and "\"linea uno linea dos\" · Artista A — Uno" in filas[0], listado
+
+
+def test_motivo_y_nombre_con_tope(base):
+    from motor.saved_sets import NAME_MAX, REASON_MAX
+
+    db, rutas = base
+    with Store(db) as store:
+        rset, config = _armar(store, rutas)
+        sid = _guardar(store, rset, config, name="n" * NAME_MAX)
+        assert store.rate_transition(sid, 1, "ok", "m" * REASON_MAX).reason == "m" * REASON_MAX
+        with pytest.raises(InvalidSavedSet, match=f"como mucho {REASON_MAX}"):
+            store.rate_transition(sid, 1, "mala", "m" * (REASON_MAX + 1))
+        with pytest.raises(InvalidSavedSet, match=f"como mucho {NAME_MAX}"):
+            store.rename_saved_set(sid, "n" * (NAME_MAX + 1))
+        s = store.get_saved_set(sid)
+    assert (s.name, s.ratings[0].rating) == ("n" * NAME_MAX, "ok"), "una falla escribió igual"
+
+
+@pytest.mark.parametrize("inicio", ["=", "+", "-", "@", "\t", "\r"])
+def test_el_csv_neutraliza_todo_lo_que_excel_toma_como_formula(inicio):
+    from motor.saved_sets import _celda
+
+    assert _celda(f"{inicio}1+1") == f"'{inicio}1+1"
+    assert _celda("1+1") == "1+1", "a lo que no empieza con fórmula no se le agrega nada"
+
+
+@pytest.mark.parametrize("set_id", [2 ** 63, 10 ** 25, -(2 ** 63) - 1])
+def test_un_id_fuera_del_rango_de_sqlite_es_set_inexistente(base, set_id):
+    """SQLite guarda enteros de 64 bits: un id más grande no puede existir, y pasárselo
+    tira `OverflowError` (que por la API era un 500)."""
+    db, _ = base
+    with Store(db) as store:
+        for accion in (lambda: store.get_saved_set(set_id),
+                       lambda: store.rate_transition(set_id, 1, "ok"),
+                       lambda: store.delete_rating(set_id, 1),
+                       lambda: store.rename_saved_set(set_id, "x"),
+                       lambda: store.delete_saved_set(set_id)):
+            with pytest.raises(SavedSetNotFound, match=str(set_id)):
+                accion()
+
+
+def _borrar_el_set_antes_de_escribir(monkeypatch, db, set_id):
+    """Otro proceso borra el set justo entre que se pidió la escritura y que se toma el lock:
+    el caso en que validar AFUERA de la transacción no alcanza."""
+    original = Store._escritura
+
+    def escritura(self):
+        otro = sqlite3.connect(str(db))
+        for sql in ("DELETE FROM saved_set_ratings WHERE set_id = ?",
+                    "DELETE FROM saved_set_steps WHERE set_id = ?",
+                    "DELETE FROM saved_sets WHERE id = ?"):
+            otro.execute(sql, (set_id,))
+        otro.commit()
+        otro.close()
+        return original(self)
+
+    monkeypatch.setattr(Store, "_escritura", escritura)
+
+
+@pytest.mark.parametrize("accion", ["calificar", "descalificar", "renombrar", "borrar"])
+def test_un_set_borrado_en_el_medio_es_inexistente_y_no_una_base_rota(base, monkeypatch,
+                                                                       accion):
+    db, rutas = base
+    with Store(db) as store:
+        rset, config = _armar(store, rutas)
+        sid = _guardar(store, rset, config)
+        store.rate_transition(sid, 1, "ok")
+        _borrar_el_set_antes_de_escribir(monkeypatch, db, sid)
+        hacer = {"calificar": lambda: store.rate_transition(sid, 2, "ok"),
+                 "descalificar": lambda: store.delete_rating(sid, 1),
+                 "renombrar": lambda: store.rename_saved_set(sid, "x"),
+                 "borrar": lambda: store.delete_saved_set(sid)}[accion]
+        with pytest.raises(SavedSetNotFound, match=str(sid)):
+            hacer()
 
 
 def test_cli_sets_errores_de_uso(base, capsys, tmp_path):

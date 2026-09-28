@@ -15,7 +15,7 @@ from sinteticos import CATALOGO, LICENCIA, ORIGEN, armar_base_radio, embedding  
 
 from motor.modelos import TrackFeatures  # noqa: E402
 from motor.radio import RadioConfig, build_set  # noqa: E402
-from motor.saved_sets import fingerprint, snapshot_steps  # noqa: E402
+from motor.saved_sets import fingerprint, shown_header, snapshot_steps  # noqa: E402
 from motor.store import Store  # noqa: E402
 
 
@@ -103,8 +103,9 @@ def test_la_huella_de_la_pantalla_es_la_de_la_foto_del_motor(server, client, bib
     with Store(biblioteca["db"]) as store:
         lib = store.load_library()
     semilla = next(t for t in lib if t.path.name == "uno.wav")
-    assert mostrado["huella"] == fingerprint(snapshot_steps(build_set(semilla, lib,
-                                                                      RadioConfig(length=4))))
+    config = RadioConfig(length=4)
+    rset = build_set(semilla, lib, config)
+    assert mostrado["huella"] == fingerprint(snapshot_steps(rset), shown_header(rset, config))
 
 
 def test_guardar_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca):
@@ -140,6 +141,9 @@ def test_guardar_se_niega_si_un_reescaneo_cambio_lo_que_se_mostro(server, client
     ({"esperado": None}, "esperado"),
     ({"esperado": []}, "esperado"),
     ({"esperado": [1, 2]}, "esperado"),
+    ({"huella": None}, "huella"),
+    ({"huella": ""}, "huella"),
+    ({"huella": 5}, "huella"),
     ({"largo": "4"}, "largo"),
     ({"largo": True}, "largo"),
     ({"nombre": 5}, "nombre"),
@@ -228,7 +232,8 @@ def test_sin_base_degrada_sin_500_y_no_crea_la_base(client, tmp_path, monkeypatc
     assert str(fantasma) in d["motivo"]
     d = client.get("/api/radio/sets/1").json()
     assert (d["estado"], d["set"]) == ("sin-base", None)
-    for r in (client.post("/api/radio/sets", json={"track": "x", "esperado": ["a"]}),
+    for r in (client.post("/api/radio/sets", json={"track": "x", "esperado": ["a"],
+                                                     "huella": "h"}),
               client.put("/api/radio/sets/1/transiciones/1", json={"calificacion": "ok"}),
               client.delete("/api/radio/sets/1/transiciones/1"),
               client.patch("/api/radio/sets/1", json={"nombre": "x"}),
@@ -253,3 +258,68 @@ def test_base_ocupada_es_409_rapido_y_no_un_500(server, client, biblioteca):
     assert r.status_code == 409, r.text
     assert r.json()["estado"] == "base-ocupada", r.json()
     assert client.get(f"/api/radio/sets/{sid}").json()["set"]["resumen"]["ok"] == 0
+
+
+def test_sin_huella_no_guarda_aunque_los_ids_coincidan(server, client, biblioteca):
+    """El caso que encontró la auditoría: sin huella, tras un re-escaneo de dos.wav se
+    guardaba 130.4 BPM y 9A sin `?` cuando la pantalla mostraba 130.0 BPM y 9A?. Ahora la
+    huella es obligatoria: sin ella, 400, y no se guarda nada."""
+    _, cuerpo = _mostrado(server, client, biblioteca)
+    sin = {k: v for k, v in cuerpo.items() if k != "huella"}
+    r = client.post("/api/radio/sets", json=sin)
+    assert r.status_code == 400 and "huella" in r.json()["error"], r.text
+    assert client.get("/api/radio/sets").json()["sets"] == []
+
+
+def test_un_set_cortado_se_guarda_con_el_largo_pedido_y_su_corte(server, client, biblioteca):
+    mostrado, cuerpo = _mostrado(server, client, biblioteca, largo=10)
+    assert mostrado["completo"] is False and mostrado["total"] < 10, \
+        "el set de 10 no se cortó: el test no probaría nada"
+    r = client.post("/api/radio/sets", json=cuerpo)
+    assert r.status_code == 201, r.text
+    for s in (r.json()["set"], client.get(f"/api/radio/sets/{r.json()['set']['id']}").json()["set"]):
+        assert (s["total"], s["pedidos"], s["completo"], s["corte"]) == \
+            (mostrado["total"], 10, False, mostrado["corte"]), s
+    listado = client.get("/api/radio/sets").json()["sets"][0]
+    assert (listado["total"], listado["pedidos"]) == (mostrado["total"], 10)
+
+
+@pytest.mark.parametrize("set_id", [str(2 ** 63), "9" * 26])
+def test_un_id_enorme_es_404_y_no_un_500(client, biblioteca, set_id):
+    base = f"/api/radio/sets/{set_id}"
+    for r in (client.get(base), client.patch(base, json={"nombre": "x"}), client.delete(base),
+              client.put(f"{base}/transiciones/1", json={"calificacion": "ok"}),
+              client.delete(f"{base}/transiciones/1")):
+        assert r.status_code == 404, (r.request.method, r.text)
+
+
+def test_una_transicion_enorme_es_400(server, client, biblioteca):
+    _, cuerpo = _mostrado(server, client, biblioteca)
+    sid = client.post("/api/radio/sets", json=cuerpo).json()["set"]["id"]
+    r = client.put(f"/api/radio/sets/{sid}/transiciones/{'9' * 26}", json={"calificacion": "ok"})
+    assert r.status_code == 400 and "de 1 a 3" in r.json()["error"], r.text
+
+
+def test_un_set_borrado_en_el_medio_es_404_y_no_base_ilegible(server, client, biblioteca,
+                                                            monkeypatch):
+    """Otro proceso borra el set entre el pedido y la escritura: tiene que decir que el set no
+    existe, no que la base está rota."""
+    import sqlite3
+
+    _, cuerpo = _mostrado(server, client, biblioteca)
+    sid = client.post("/api/radio/sets", json=cuerpo).json()["set"]["id"]
+    original = Store._escritura
+
+    def escritura(self):
+        otro = sqlite3.connect(str(biblioteca["db"]))
+        for sql in ("DELETE FROM saved_set_steps WHERE set_id = ?",
+                    "DELETE FROM saved_sets WHERE id = ?"):
+            otro.execute(sql, (sid,))
+        otro.commit()
+        otro.close()
+        return original(self)
+
+    monkeypatch.setattr(Store, "_escritura", escritura)
+    r = client.put(f"/api/radio/sets/{sid}/transiciones/1", json={"calificacion": "ok"})
+    assert r.status_code == 404, r.text
+    assert str(sid) in r.json()["error"], r.json()

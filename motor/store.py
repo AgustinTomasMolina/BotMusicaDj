@@ -684,9 +684,12 @@ class Store:
         from motor.saved_sets import Rating, require_rating
 
         texto = require_rating(rating, reason)
-        n = self._transicion_valida(set_id, transition)
         cuando = _ahora()
+        # El set y el rango se validan ADENTRO de la transacción: validados afuera, otro
+        # proceso podía borrar el set en el medio y el INSERT fallaba por la FK, que la API
+        # reportaba como "base ilegible" en vez de "no existe".
         with self._escritura():
+            n = self._transicion_valida(set_id, transition)
             self._con.execute(
                 "INSERT INTO saved_set_ratings (set_id, transition, rating, reason, rated_at) "
                 "VALUES (?, ?, ?, ?, ?) ON CONFLICT (set_id, transition) DO UPDATE SET "
@@ -697,8 +700,8 @@ class Store:
 
     def delete_rating(self, set_id: int, transition: int) -> bool:
         """Deja la transición sin calificar. True si tenía calificación."""
-        n = self._transicion_valida(set_id, transition)
         with self._escritura():
+            n = self._transicion_valida(set_id, transition)
             cur = self._con.execute(
                 "DELETE FROM saved_set_ratings WHERE set_id = ? AND transition = ?",
                 (int(set_id), n))
@@ -709,8 +712,8 @@ class Store:
         from motor.saved_sets import clean_name
 
         nombre = clean_name(name)
-        self._cabecera_set(set_id)
         with self._escritura():
+            self._cabecera_set(set_id)
             self._con.execute("UPDATE saved_sets SET name = ? WHERE id = ?",
                               (nombre, int(set_id)))
         return nombre
@@ -719,8 +722,8 @@ class Store:
         """Borra el set con su foto y sus calificaciones. `SavedSetNotFound` si no existe.
         Los hijos se borran explícitamente además del CASCADE: una conexión abierta por
         otro código sin `PRAGMA foreign_keys` no puede dejar huérfanos por esta vía."""
-        self._cabecera_set(set_id)
         with self._escritura():
+            self._cabecera_set(set_id)
             for tabla in ("saved_set_ratings", "saved_set_steps"):
                 self._con.execute(f"DELETE FROM {tabla} WHERE set_id = ?", (int(set_id),))
             self._con.execute("DELETE FROM saved_sets WHERE id = ?", (int(set_id),))
@@ -728,7 +731,11 @@ class Store:
     def _cabecera_set(self, set_id) -> sqlite3.Row:
         from motor.saved_sets import SavedSetNotFound
 
-        if isinstance(set_id, bool) or not isinstance(set_id, int):
+        # Fuera del rango de INTEGER de SQLite (64 bits con signo) no puede haber un set, y
+        # pasarle ese número a SQLite es `OverflowError`, que ninguna capa de arriba espera
+        # (un id de 26 dígitos en la URL daba 500). Se contesta lo que es: no existe.
+        if isinstance(set_id, bool) or not isinstance(set_id, int) \
+                or not -(2 ** 63) <= set_id < 2 ** 63:
             raise SavedSetNotFound(f"no hay un set guardado con id {set_id!r}")
         fila = self._con.execute("SELECT * FROM saved_sets WHERE id = ?", (set_id,)).fetchone()
         if fila is None:

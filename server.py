@@ -1629,14 +1629,14 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
         # La huella de lo que se muestra (`saved_sets.fingerprint`): el front la devuelve al
         # guardar el set (POST /api/radio/sets) y, si el re-armado ya no muestra lo mismo, el
         # guardado es 409 en vez de guardar otra cosa. Ver `radio_sets_guardar`.
-        "huella": _huella(rset),
+        "huella": _huella(rset, config),
     }
 
 
-def _huella(rset) -> str:
-    from motor.saved_sets import fingerprint, snapshot_steps
+def _huella(rset, config) -> str:
+    from motor.saved_sets import set_fingerprint
 
-    return fingerprint(snapshot_steps(rset))
+    return set_fingerprint(rset, config)
 
 
 # Caracteres que Windows no acepta en un nombre de archivo, más los de control. El nombre
@@ -1897,9 +1897,10 @@ async def radio_sets_guardar(payload: dict):
     - `esperado` (obligatorio): los ids de los pasos que se mostraron, en orden (lista o
       separados por coma). Es el mecanismo del export .m3u8: el set se re-arma con la misma
       config y, si no da esos ids, 409 en vez de guardar otro set.
-    - `huella` (recomendado): la `huella` que devolvió /api/radio/set. Cubre el caso que los
+    - `huella` (obligatoria): la `huella` que devolvió /api/radio/set. Cubre el caso que los
       ids no ven: el mismo set de tracks pero con un dato distinto (un re-escaneo cambió un
-      BPM entre que se mostró y se guardó). Si no coincide, 409.
+      BPM entre que se mostró y se guardó), o la misma lista con otro encabezado o corte.
+      Falta → 400; no coincide → 409.
     - `nombre` (opcional).
 
     201 con el set guardado (la misma forma que GET /api/radio/sets/{id}).
@@ -1920,6 +1921,10 @@ async def radio_sets_guardar(payload: dict):
                 and all(isinstance(i, str) for i in esperado)):
             raise ValueError("falta `esperado`: los ids de los pasos que se mostraron, en "
                              "orden. Sin eso no hay forma de saber que se guarda lo que se vio.")
+        if not huella:
+            raise ValueError("falta `huella`: la que devolvió /api/radio/set con el set que se "
+                             "muestra. Sin ella un re-escaneo entre mostrar y guardar haría "
+                             "guardar datos que nunca estuvieron en pantalla.")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -1929,7 +1934,7 @@ async def radio_sets_guardar(payload: dict):
     if armado.rset is None:
         return _sets_sin_base(armado.estado, armado.motivo)
 
-    from motor.saved_sets import config_json, fingerprint, snapshot_steps
+    from motor.saved_sets import config_json, fingerprint, shown_header, snapshot_steps
 
     rset, config = armado.rset, armado.config
     ids = [_radio_id(t.path) for t in rset.tracks]
@@ -1939,8 +1944,8 @@ async def radio_sets_guardar(payload: dict):
                       "la misma (¿un scan nuevo?). Armalo de nuevo y guardá ese.",
              "esperado": esperado, "armado": ids}, status_code=409)
     fotos = snapshot_steps(rset)
-    armada = fingerprint(fotos)
-    if huella is not None and huella != armada:
+    armada = fingerprint(fotos, shown_header(rset, config))
+    if huella != armada:
         return JSONResponse(
             {"error": "Los datos de los tracks cambiaron desde que armaste el set (¿un "
                       "re-escaneo?): los mismos tracks, pero no lo que se mostró. Armalo de "

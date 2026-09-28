@@ -8,7 +8,7 @@
                                   [--randomness 0] [--m3u8 set.m3u8] [--guardar [nombre]]
     python -m motor sets listar | ver <id> | calificar <id> <n> ok|regular|mala|borrar
                          [--motivo "..."] | renombrar <id> <nombre> | borrar <id>
-                         | exportar <archivo.csv> [--set <id>]
+                         | exportar <archivo.csv> [--set <id>] [--separador ";"|","]
     python -m motor puente <origen> <destino> [--min-intermedios 3] [--max-intermedios 4]
                                               [--m3u8 puente.m3u8]
 
@@ -865,14 +865,17 @@ def cmd_sets_exportar(args: argparse.Namespace) -> int:
     if destino.parent and not destino.parent.is_dir():
         raise ErrorDeUso(f"No existe la carpeta {destino.parent}.")
     with open(destino, "w", encoding="utf-8-sig", newline="") as fh:
-        fh.write(ratings_csv(sets))
+        fh.write(ratings_csv(sets, args.separador))
     total = sum(s.transitions for s in sets)
     calificadas = sum(s.transitions - s.summary()["sin_calificar"] for s in sets)
     print(f"{total} transiciones ({calificadas} calificadas) de {len(sets)} "
           f"{'set' if len(sets) == 1 else 'sets'} → {destino.resolve()}")
-    print("Excel: Datos → Obtener datos → Desde texto/CSV, delimitador \"Coma\" (con doble clic "
-          "y configuración regional argentina, Excel separa por \";\" y deja todo en una "
-          "columna).")
+    if args.separador == ";":
+        print("Separado por \";\": Excel con configuración regional argentina lo abre con "
+              "doble clic. Para Excel en inglés u otras herramientas: --separador \",\".")
+    else:
+        print("Separado por \",\": con configuración regional argentina, abrilo desde Datos → "
+              "Obtener datos → Desde texto/CSV (con doble clic queda todo en una columna).")
     return OK
 
 
@@ -1046,6 +1049,8 @@ def construir_parser() -> argparse.ArgumentParser:
     q.add_argument("archivo", type=Path)
     q.add_argument("--set", type=int, action="append", default=None, metavar="ID",
                    help="Solo este set (se puede repetir). Sin esto, todos.")
+    q.add_argument("--separador", choices=(";", ","), default=";",
+                   help="Separador de columnas (default \";\", el de Excel en castellano).")
     q.set_defaults(func=cmd_sets_exportar)
 
     p = sub.add_parser("puente", parents=[comun],

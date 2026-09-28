@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, fields
 
@@ -139,26 +140,56 @@ def snapshot_steps(rset) -> list[StepSnapshot]:
     return fotos
 
 
-def fingerprint(steps: Sequence[StepSnapshot]) -> str:
-    """Huella de lo que se MOSTRÓ: sha256 de la foto en JSON canónico.
+def shown_header(rset, config) -> dict:
+    """Lo que se muestra del set y no es de ningún paso: el largo pedido, la curva, la
+    semilla del azar y el randomness (el encabezado), y el corte con su detalle y los
+    fragmentos ignorados (el pie). Entra en la huella con la foto de los pasos."""
+    return {"requested": config.length, "curve": config.curve, "seed": config.seed,
+            "randomness": config.randomness, "stop": rset.stop,
+            "stop_detail": rset.stop_detail, "fragments": rset.fragments}
 
-    La API la devuelve con cada set (`/api/radio/set`) y el guardado la puede exigir: si al
+
+def fingerprint(steps: Sequence[StepSnapshot], header: dict) -> str:
+    """Huella de lo que se MOSTRÓ: sha256 de la foto de los pasos Y de la cabecera
+    (`shown_header`), en JSON canónico. Cubre TODOS los campos de `StepSnapshot`, no una
+    selección: un campo que quedara afuera sería uno que puede cambiar sin que nadie se
+    entere (hay un test que cambia cada uno por separado).
+
+    La API la devuelve con cada set (`/api/radio/set`) y el guardado la exige: si al
     re-armar para guardar sale la misma lista de tracks pero con otro dato (un re-escaneo
     cambió un BPM entre que se mostró y se guardó), los ids coinciden y la huella no. Sin
     esto se guardaría como "lo que escuchaste" un BPM que nunca estuvo en pantalla.
     """
-    texto = json.dumps([asdict(s) for s in steps], sort_keys=True, ensure_ascii=False,
-                       allow_nan=False, separators=(",", ":"))
+    texto = json.dumps({"steps": [asdict(s) for s in steps], "header": header},
+                       sort_keys=True, ensure_ascii=False, allow_nan=False,
+                       separators=(",", ":"))
     return hashlib.sha256(texto.encode("utf-8")).hexdigest()[:32]
+
+
+def set_fingerprint(rset, config) -> str:
+    """La huella de un `RadioSet` recién armado con su config: lo que devuelve la API."""
+    return fingerprint(snapshot_steps(rset), shown_header(rset, config))
+
+
+# Caracteres de control (saltos de línea, tab, NUL...). En un nombre o un motivo parten las
+# tablas de la terminal (`sets listar`, `sets ver`) y los renglones del CSV: se cambian por
+# un espacio. "\r\n" es UN salto de línea, así que queda UN espacio.
+_CONTROL = re.compile(r"\r\n|[\x00-\x1f\x7f]")
+
+
+def _one_line(texto: str) -> str:
+    return _CONTROL.sub(" ", texto)
 
 
 def clean_name(name: object) -> str | None:
     """El nombre de un set: texto o nada. Vacío o solo espacios = sin nombre (None), no un
-    nombre "   ". No se recorta por dentro: es un dato del usuario."""
+    nombre "   ". Los caracteres de control pasan a espacio (`_CONTROL`); fuera de eso no
+    se recorta ni se reescribe: es un dato del usuario."""
     if name is None:
         return None
     if not isinstance(name, str):
         raise InvalidSavedSet(f"el nombre de un set es un texto, recibí {name!r}")
+    name = _one_line(name)
     if not name.strip():
         return None
     if len(name) > NAME_MAX:
@@ -174,11 +205,14 @@ def require_rating(rating: object, reason: object) -> str | None:
     - `mala` exige motivo: una transición mala sin por qué no sirve para ajustar nada, que es
       para lo que existe este dataset (y es lo que pide la planilla de la tarea 14).
     - En `ok` / `regular` el motivo es opcional; vacío o solo espacios cuenta como ausente.
+    - Los caracteres de control pasan a espacio, como en `clean_name`.
     """
     if rating not in RATINGS:
         raise InvalidSavedSet(f"la calificación es una de {', '.join(RATINGS)}; recibí {rating!r}")
     if reason is not None and not isinstance(reason, str):
         raise InvalidSavedSet(f"el motivo es un texto, recibí {reason!r}")
+    if reason is not None:
+        reason = _one_line(reason)
     texto = reason if reason is not None and reason.strip() else None
     if rating == RATING_BAD and texto is None:
         raise InvalidSavedSet("una transición `mala` necesita el motivo (qué sonó mal): sin eso "
@@ -320,20 +354,25 @@ def _num_celda(valor: float | None) -> str:
     return "" if valor is None else repr(float(valor))
 
 
-def ratings_csv(sets: Sequence[SavedSet]) -> str:
+CSV_SEPARATORS = (";", ",")
+
+
+def ratings_csv(sets: Sequence[SavedSet], separator: str = ";") -> str:
     """Las transiciones de los sets, una por fila, con su calificación (o vacía).
 
     Formato elegido para que Excel no deforme nada (ver `_celda`, `_bpm_celda`,
-    `_acuerdo_celda`): separador coma, decimales con punto, fechas ISO 8601 con `T` y `Z`
-    (Excel no las convierte), BPM con la unidad pegada y el acuerdo como "3 de 3". Lo escribe
-    `sets exportar` en UTF-8 con BOM para que Excel lea los acentos.
+    `_acuerdo_celda`): decimales con punto, fechas ISO 8601 con `T` y `Z` (Excel no las
+    convierte), BPM con la unidad pegada y el acuerdo como "3 de 3". Lo escribe `sets
+    exportar` en UTF-8 con BOM para que Excel lea los acentos.
 
-    Cómo abrirlo en Excel con configuración regional argentina (separador de listas `;`):
-    Datos → Obtener datos → Desde texto/CSV, delimitador "Coma". Con doble clic Excel usa `;`
-    y mete todo en la columna A.
+    Separador `;` por defecto (decisión del dueño): es el separador de listas de Excel con
+    configuración regional argentina, así el archivo se abre bien con doble clic. `,` para
+    Excel en inglés o para leerlo con otras herramientas.
     """
+    if separator not in CSV_SEPARATORS:
+        raise ValueError(f"el separador es uno de {CSV_SEPARATORS}, recibí {separator!r}")
     buf = io.StringIO()
-    w = csv.writer(buf, lineterminator="\r\n")
+    w = csv.writer(buf, delimiter=separator, lineterminator="\r\n")
     w.writerow(CSV_COLUMNS)
     for s in sets:
         for n in range(1, s.transitions + 1):
@@ -364,7 +403,8 @@ def config_json(config) -> str:
 
 __all__ = [
     "CSV_COLUMNS", "RATINGS", "RATING_BAD", "RATING_OK", "RATING_REGULAR", "STEP_FIELDS",
-    "InvalidSavedSet", "Rating", "SavedSet", "SavedSetInfo", "SavedSetNotFound", "SavedStep",
-    "StepSnapshot", "clean_name", "config_json", "fingerprint", "rating_text", "ratings_csv",
-    "require_rating", "snapshot_row", "snapshot_steps", "summarize",
+    "CSV_SEPARATORS", "InvalidSavedSet", "Rating", "SavedSet", "SavedSetInfo",
+    "SavedSetNotFound", "SavedStep", "StepSnapshot", "clean_name", "config_json",
+    "fingerprint", "rating_text", "ratings_csv", "require_rating", "set_fingerprint",
+    "shown_header", "snapshot_row", "snapshot_steps", "summarize",
 ]
