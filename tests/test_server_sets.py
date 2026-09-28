@@ -108,6 +108,21 @@ def test_la_huella_de_la_pantalla_es_la_de_la_foto_del_motor(server, client, bib
     assert mostrado["huella"] == fingerprint(snapshot_steps(rset), shown_header(rset, config))
 
 
+def test_guardar_con_la_config_entera_en_json_como_la_manda_el_navegador(server, client, biblioteca):
+    """La pantalla guarda mandando la `config` que devolvió /api/radio/set, en JSON. Un
+    navegador serializa 0.0 como `0`: `randomness` y `mmr_lambda` pueden llegar como enteros.
+    Tienen que dar la MISMA huella que el set que se mostró (que vino por la query, donde
+    FastAPI los parsea como float); si no, guardar desde la pantalla daba 409 siempre."""
+    mostrado, cuerpo = _mostrado(server, client, biblioteca)
+    config = {k: (int(v) if isinstance(v, float) and v.is_integer() else v)
+              for k, v in mostrado["config"].items() if v is not None}
+    assert any(isinstance(v, int) and k in ("randomness", "mmr_lambda") for k, v in config.items()), \
+        f"la config de fábrica no tiene un float entero: el test no probaría nada ({config})"
+    r = client.post("/api/radio/sets", json={**cuerpo, **config})
+    assert r.status_code == 201, r.text
+    assert r.json()["set"]["config"] == mostrado["config"]
+
+
 def test_guardar_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca):
     _, cuerpo = _mostrado(server, client, biblioteca)
     ids = cuerpo["esperado"]

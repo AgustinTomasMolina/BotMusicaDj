@@ -160,6 +160,42 @@ function nombreDeDescarga(disp) {
   return ascii ? ascii[1] : 'DJ Radio.m3u8'
 }
 
+/* ---------- Sets guardados de la radio (tarea 16) ----------
+   Un set guardado es la FOTO de lo que se vio: la pantalla lo dibuja con lo que devuelve
+   GET /api/radio/sets/{id}, nunca re-armándolo. Todas devuelven {ok, status, data} con el
+   cuerpo leído por `cuerpoRadio`, por lo mismo que `getRadioSet`: un 400/404/409 trae el
+   motivo del backend en `data.error` y la pantalla lo muestra tal cual. */
+async function pedirSets(ruta, metodo = 'GET', cuerpo) {
+  const init = { method: metodo }
+  if (cuerpo !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(cuerpo)
+  }
+  const r = await fetch(ruta, init)
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}
+
+// Guarda el set que está EN PANTALLA: los parámetros que el set dice que usó, `esperado`
+// (los ids de los pasos, en orden) y la `huella` que devolvió /api/radio/set. Si el backend
+// re-arma otra cosa contesta 409 con el motivo, y no se guarda nada.
+export const guardarRadioSet = (params, esperado, huella, nombre) => {
+  const cuerpo = { esperado, huella }
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    cuerpo[k] = v
+  }
+  if (nombre && nombre.trim()) cuerpo.nombre = nombre
+  return pedirSets('/api/radio/sets', 'POST', cuerpo)
+}
+export const listarRadioSets = () => pedirSets('/api/radio/sets')
+export const getRadioSetGuardado = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`)
+export const renombrarRadioSet = (id, nombre) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`, 'PATCH', { nombre })
+export const borrarRadioSet = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`, 'DELETE')
+export const calificarTransicion = (id, n, calificacion, motivo) =>
+  pedirSets(`/api/radio/sets/${encodeURIComponent(id)}/transiciones/${n}`, 'PUT', { calificacion, motivo: motivo ?? null })
+export const descalificarTransicion = (id, n) =>
+  pedirSets(`/api/radio/sets/${encodeURIComponent(id)}/transiciones/${n}`, 'DELETE')
+
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
 
 // El <audio> avisa que falló pero no deja leer el cuerpo de la respuesta, y el 404 de la

@@ -1884,7 +1884,11 @@ def _campo(payload: dict, nombre: str, tipo):
         isinstance(valor, tipo)
     if not ok:
         raise ValueError(f"`{nombre}` tiene que ser {tipo.__name__}, recibí {valor!r}")
-    return valor
+    # Un float que llega como entero en el JSON (`"randomness": 0`, que es como lo manda un
+    # navegador: JSON.stringify(0.0) da "0") se guarda como float, igual que lo parsea
+    # /api/radio/set desde la query. Si quedara int, la huella del set (`shown_header`)
+    # serializaría `0` en vez de `0.0` y el guardado daría 409 con el mismo set.
+    return float(valor) if tipo is float else valor
 
 
 @app.post("/api/radio/sets")
