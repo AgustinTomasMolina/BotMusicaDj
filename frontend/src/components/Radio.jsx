@@ -612,7 +612,7 @@ export default function Radio() {
       aplicarCalificacion(id, n, { calificacion: t.calificacion, motivo: t.motivo, calificada: t.calificada })
       setAviso(`Transición ${t.desde} → ${t.hasta}: ${t.calificacion}${t.motivo ? ` (${t.motivo})` : ''}, guardada.`)
       cargarSets()
-      return { ok: true }
+      return { ok: true, motivo: t.motivo }
     } catch {
       return { ok: false, error: 'no pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.' }
     } finally {

@@ -243,6 +243,8 @@ export function Calificar({ setId, t, desdeTitulo, hastaTitulo, onGuardar, onQui
   // Los pedidos de ESTA transición van en serie. Si llega un clic mientras otro viaja, queda
   // esperando y al volver se manda el ÚLTIMO pedido: un segundo clic nunca se pierde en
   // silencio (el estado dice «Guardando…» y después lo que quedó).
+  const elegidaRef = useRef(null)
+  elegidaRef.current = elegida
   const enVuelo = useRef(false)
   const siguiente = useRef(null)      // {tipo: 'guardar'|'quitar', nivel, texto}
 
@@ -258,8 +260,12 @@ export function Calificar({ setId, t, desdeTitulo, hastaTitulo, onGuardar, onQui
       if (r.ok) {
         // Lo elegido ya es lo guardado. Una «mala» esperando motivo se respeta, salvo que
         // lo que se acaba de guardar sea justamente esa «mala».
+        const esperaMala = elegidaRef.current === 'mala' && !(a.tipo === 'guardar' && a.nivel === 'mala')
         setElegida((e) => (e === 'mala' && !(a.tipo === 'guardar' && a.nivel === 'mala') ? e : null))
         setConMotivo(false)
+        // El campo muestra el motivo tal cual quedó guardado (recortado), en el mismo render;
+        // salvo que haya una «mala» esperando motivo: ese borrador no se pisa.
+        if (!esperaMala) setMotivo(r.motivo || '')
       } else {
         // No se guardó: la pantalla vuelve a mostrar lo que tiene la API (así un segundo clic
         // en el mismo nivel vuelve a mandarlo). Solo una «mala» queda elegida, para que el

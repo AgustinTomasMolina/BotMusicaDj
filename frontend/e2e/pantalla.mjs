@@ -472,7 +472,8 @@ const CASOS_SETS = [
     const t3 = await hasta(() => calificacionApi(ctx, s.id, 3), (v) => v.calificacion === 'mala', 'mala con motivo no quedó guardada')
     igual(t3.motivo, 'choque de bajos', 'el motivo guardado')
 
-    const real = await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(t3.resumen), 'el resumen en pantalla no llegó al de la API')
+    const real = await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(t3.resumen) && v.transiciones[2]?.sel === 'mala' && v.transiciones[2]?.motivo === 'choque de bajos',
+      'el resumen o la transición 3 en pantalla no llegaron a lo que tiene la API')
     igual(t3.resumen, { ok: 1, regular: 1, mala: 1, sin_calificar: s.transiciones.length - 3 }, 'el resumen de la API después de las tres')
     igual(real.transiciones.slice(0, 3), [{ n: 1, sel: 'ok', motivo: null }, { n: 2, sel: 'regular', motivo: null }, { n: 3, sel: 'mala', motivo: 'choque de bajos' }],
       'lo que muestran los tres controles')
