@@ -1074,6 +1074,63 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rcurva>i{flex:1;min-width:2px;border-radius:2px 2px 0 0;background:var(--color-accent-500)}
 .rcurva>i.is-sin{background:var(--color-neutral-700)}
 
+/* — sets guardados y calificación de transiciones (tarea 16, 2026-09-28) — */
+.rguardar{min-height:32px}
+.rguardar[aria-disabled=true]{opacity:.45;cursor:not-allowed}
+.rrearmar{margin-top:var(--space-2)}
+/* La lista: misma fila que las semillas (botón entero, aria-pressed = el que está abierto). */
+.rsets{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;max-height:min(46vh,420px);overflow-y:auto;overscroll-behavior:contain}
+.rsg{display:flex;flex-direction:column;gap:4px;width:100%;min-height:44px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
+.rsg:hover{background:var(--color-well)}
+.rsg[aria-pressed=true]{background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 0 0 0 1px var(--color-accent)}
+.rsg-top{display:flex;align-items:baseline;gap:var(--space-2);min-width:0}
+.rsg-nombre{flex:1;min-width:0;font-size:13.5px;font-weight:500}
+.rsg-sin{font-style:normal;color:var(--color-neutral-400)}
+.rsg-id{font-size:11px;color:var(--color-neutral-400)}
+.rsg-meta{display:flex;flex-wrap:wrap;gap:2px var(--space-2);font-size:11.5px;color:var(--color-neutral-400);min-width:0}
+.rsg-semilla{max-width:100%}
+.rsg-faltan{font-size:11px;color:var(--color-warn)}
+/* El reparto ok / regular / mala / sin calificar: números de la API, en pastillas. */
+.rresumen{display:flex;flex-wrap:wrap;align-items:center;gap:4px var(--space-2);margin:0;font-size:12px;color:var(--color-neutral-400)}
+.rresumen-cuenta{color:var(--color-text);margin-right:var(--space-1)}
+.rresumen-n{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:var(--radius-pill);font-size:11px;background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 8%,transparent)}
+.rresumen-n b{color:var(--color-text)}
+.rresumen-n.is-ok{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-ok) 45%,transparent)}
+.rresumen-n.is-regular{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 45%,transparent)}
+.rresumen-n.is-mala{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-danger) 50%,transparent)}
+/* Cabecera del set guardado abierto: dice cuál es, antes que los pasos. */
+.rguardado{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:color-mix(in srgb,var(--color-accent) 9%,var(--color-well));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 40%,transparent)}
+.rguardado-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px var(--space-3)}
+.rguardado-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px var(--space-2);margin:0;font-size:15px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.rguardado-h:focus-visible{outline:none}
+.rguardado-nombre{font-weight:500;color:var(--color-accent-200)}
+.rguardado-nombre i{font-style:normal;color:var(--color-neutral-400)}
+.rguardado-fecha{font-size:12px;color:var(--color-neutral-400)}
+.rguardado-acciones,.rguardado-form{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.rguardado-form .input{flex:1 1 180px;min-width:0;height:32px}
+.rguardado .btn-sm{min-height:32px}
+.rborrar-ok{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+.rborrar-ok:hover{background:color-mix(in srgb,var(--color-danger) 12%,transparent)}
+/* Calificar una transición: entre el porqué y la fila, chico y a mano con el tema sonando. */
+.rcal{display:flex;flex-direction:column;gap:4px;margin:0 0 4px;padding-left:22px;min-width:0}
+.rcal-fila{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.rcal-seg{background:var(--color-well)}
+/* 32px de alto: blanco cómodo sin mirar (WCAG 2.5.8 pide 24). */
+.rcal-opt{min-height:32px;padding:5px 12px;font-size:12.5px}
+.rcal-opt b{font-weight:600}
+.rcal-opt.is-ok:has(input:checked){color:var(--color-ok);box-shadow:inset 0 0 0 1px var(--color-ok);background:color-mix(in srgb,var(--color-ok) 12%,transparent)}
+.rcal-opt.is-regular:has(input:checked){color:var(--color-warn);box-shadow:inset 0 0 0 1px var(--color-warn);background:color-mix(in srgb,var(--color-warn) 12%,transparent)}
+.rcal-opt.is-mala:has(input:checked){color:var(--color-danger);box-shadow:inset 0 0 0 1px var(--color-danger);background:color-mix(in srgb,var(--color-danger) 12%,transparent)}
+.rcal .btn-sm{min-height:32px}
+.rcal-estado{font-size:11px;color:var(--color-neutral-400)}
+.rcal-motivo{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center}
+.rcal-motivo .input{flex:1 1 200px;min-width:0;height:32px;font-size:13px}
+.rcal-falta{color:var(--color-warn)}
+/* Paso cuyo archivo ya no está: se ve (es la foto) pero sin botón de reproducir. */
+.rplay.is-sin{border-style:dashed;background:transparent;cursor:default}
+.rpaso.is-falta .rpaso-titulo{color:var(--color-neutral-300)}
+.rtag-falta{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-pill);font-size:10.5px;letter-spacing:0.03em;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 34%,transparent)}
+
 
 /* ===== Carátulas (2026-09-25) =====
    La imagen real llena su marco; sin imagen, un placeholder "white label" (el disco promo sin

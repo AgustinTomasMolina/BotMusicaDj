@@ -661,6 +661,19 @@ def test_nombres_y_motivos_quedan_en_una_linea(base, crudo, limpio):
             store.rate_transition(sid, 2, "mala", "\r\n\t\x00")
 
 
+def test_el_motivo_se_guarda_recortado(base):
+    """Espacios (y saltos, que pasan a espacio) al principio o al final no son parte del
+    motivo: se guarda recortado. Los de adentro quedan."""
+    db, rutas = base
+    with Store(db) as store:
+        rset, config = _armar(store, rutas)
+        sid = _guardar(store, rset, config)
+        assert store.rate_transition(sid, 1, "mala", "  choque  de bajos \n").reason == "choque  de bajos"
+        assert store.rate_transition(sid, 2, "ok", "\t bien ").reason == "bien"
+        s = store.get_saved_set(sid)
+        assert [r.reason for r in s.ratings] == ["choque  de bajos", "bien"]
+
+
 def test_sets_listar_no_se_parte_con_un_nombre_de_varias_lineas(base, capsys):
     db, rutas = base
     assert _correr(capsys, "--db", db, "radio", rutas["uno.wav"], "--largo", 4,

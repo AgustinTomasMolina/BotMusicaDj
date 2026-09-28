@@ -248,7 +248,9 @@ async function main() {
       ],
     })
     const { correr } = await import('./pantalla.mjs')
-    const resultados = await correr({ browser, url, base, tmp, solo: SOLO })
+    // `python` viaja para los casos de sets guardados, que cambian la base de juguete con
+    // base_mutar.py (un re-escaneo simulado) mientras el server corre.
+    const resultados = await correr({ browser, url, base, tmp, solo: SOLO, python })
 
     const fallas = resultados.filter((r) => !r.ok)
     console.log('')
