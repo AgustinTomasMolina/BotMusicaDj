@@ -1884,7 +1884,18 @@ def _campo(payload: dict, nombre: str, tipo):
         isinstance(valor, tipo)
     if not ok:
         raise ValueError(f"`{nombre}` tiene que ser {tipo.__name__}, recibí {valor!r}")
-    return valor
+    # Un float que llega como entero en el JSON (`"randomness": 0`, que es como lo manda un
+    # navegador: JSON.stringify(0.0) da "0") se guarda como float, igual que lo parsea
+    # /api/radio/set desde la query. Si quedara int, la huella del set (`shown_header`)
+    # serializaría `0` en vez de `0.0` y el guardado daría 409 con el mismo set.
+    if tipo is not float:
+        return valor
+    try:
+        return float(valor)
+    except OverflowError:
+        # Un entero de cientos de dígitos no entra en un float: es un pedido inválido (400),
+        # no un error del servidor (500).
+        raise ValueError(f"`{nombre}` está fuera de rango: {str(valor)[:20]}…") from None
 
 
 @app.post("/api/radio/sets")
@@ -1986,6 +1997,36 @@ async def radio_sets_ver(set_id: int):
         return JSONResponse({"error": str(e)}, status_code=404)
     return {**_radio_envoltura(estado, motivo),
             "set": None if s is None else _set_guardado_json(s)}
+
+
+@app.get("/api/radio/sets/{set_id}/m3u8")
+async def radio_sets_m3u8(set_id: int):
+    """El set guardado como .m3u8 para Rekordbox: su FOTO (rutas y datos que se guardaron,
+    en su orden), no un re-armado. Mismo contenido que escribe `motor.export.m3u8_text` (vía
+    `saved_sets.snapshot_m3u8`) y mismas cabeceras y nombre de archivo que
+    /api/radio/set.m3u8.
+
+    Una ruta que ya no está en la biblioteca va igual: es la que había, y el DJ puede tener el
+    archivo en otro lado. `X-DJRadio-Faltan` dice cuántas son, para que la pantalla avise.
+    Errores: 404 si el set no existe; sin base utilizable, 409 con `estado`/`motivo` (un 200
+    con JSON el navegador lo guardaría como si fuera el .m3u8)."""
+    from motor.saved_sets import SavedSetNotFound, snapshot_m3u8
+
+    try:
+        s, estado, motivo = await asyncio.to_thread(
+            _usar_store_motor, lambda store: store.get_saved_set(set_id))
+    except SavedSetNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    if estado != _RADIO_OK or s is None:
+        return _sets_sin_base(estado, motivo)
+    nombre = _nombre_m3u8(s.steps[0].snapshot.label if s.steps else f"set {s.id}",
+                          s.config.get("curve") or "")
+    return Response(
+        content=snapshot_m3u8(s.steps).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": _content_disposition(nombre),
+                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+                 "X-DJRadio-Faltan": str(s.missing)})
 
 
 @app.patch("/api/radio/sets/{set_id}")

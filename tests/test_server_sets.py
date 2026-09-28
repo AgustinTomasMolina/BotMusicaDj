@@ -108,6 +108,21 @@ def test_la_huella_de_la_pantalla_es_la_de_la_foto_del_motor(server, client, bib
     assert mostrado["huella"] == fingerprint(snapshot_steps(rset), shown_header(rset, config))
 
 
+def test_guardar_con_la_config_entera_en_json_como_la_manda_el_navegador(server, client, biblioteca):
+    """La pantalla guarda mandando la `config` que devolvió /api/radio/set, en JSON. Un
+    navegador serializa 0.0 como `0`: `randomness` y `mmr_lambda` pueden llegar como enteros.
+    Tienen que dar la MISMA huella que el set que se mostró (que vino por la query, donde
+    FastAPI los parsea como float); si no, guardar desde la pantalla daba 409 siempre."""
+    mostrado, cuerpo = _mostrado(server, client, biblioteca)
+    config = {k: (int(v) if isinstance(v, float) and v.is_integer() else v)
+              for k, v in mostrado["config"].items() if v is not None}
+    assert any(isinstance(v, int) and k in ("randomness", "mmr_lambda") for k, v in config.items()), \
+        f"la config de fábrica no tiene un float entero: el test no probaría nada ({config})"
+    r = client.post("/api/radio/sets", json={**cuerpo, **config})
+    assert r.status_code == 201, r.text
+    assert r.json()["set"]["config"] == mostrado["config"]
+
+
 def test_guardar_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca):
     _, cuerpo = _mostrado(server, client, biblioteca)
     ids = cuerpo["esperado"]
@@ -323,3 +338,81 @@ def test_un_set_borrado_en_el_medio_es_404_y_no_base_ilegible(server, client, bi
     r = client.put(f"/api/radio/sets/{sid}/transiciones/1", json={"calificacion": "ok"})
     assert r.status_code == 404, r.text
     assert str(sid) in r.json()["error"], r.json()
+
+
+# --- .m3u8 de un set guardado: la FOTO, no un re-armado --------------------------------------
+
+def _guardar_uno(server, client, biblioteca) -> tuple[dict, bytes, str]:
+    """Guarda el set de uno.wav y devuelve (set guardado, bytes y Content-Disposition del
+    .m3u8 del set ARMADO en ese mismo momento)."""
+    _, cuerpo = _mostrado(server, client, biblioteca)
+    vivo = client.get("/api/radio/set.m3u8",
+                      params={"track": cuerpo["track"], "largo": cuerpo["largo"]})
+    assert vivo.status_code == 200, vivo.text
+    s = client.post("/api/radio/sets", json=cuerpo).json()["set"]
+    return s, vivo.content, vivo.headers["content-disposition"]
+
+
+def test_el_m3u8_del_set_guardado_es_byte_a_byte_el_del_set_que_se_guardo(server, client,
+                                                                           biblioteca):
+    s, vivo, disp = _guardar_uno(server, client, biblioteca)
+    r = client.get(f"/api/radio/sets/{s['id']}/m3u8")
+    assert r.status_code == 200, r.text
+    assert r.content == vivo, "el .m3u8 de la foto no es el del set armado que se guardó"
+    assert r.headers["content-disposition"] == disp
+    assert (r.headers["x-content-type-options"], r.headers["cache-control"],
+            r.headers["x-djradio-faltan"]) == ("nosniff", "no-store", "0")
+    # En el orden de la foto, con las rutas de la foto.
+    rutas = [ln for ln in r.content.decode("utf-8").split("\r\n")
+             if ln and not ln.startswith("#")]
+    assert rutas == [str(biblioteca["rutas"][n])
+                     for n in ("uno.wav", "cinco.wav", "dos.wav", "tres.wav")]
+
+
+def test_el_m3u8_del_set_guardado_no_cambia_si_se_re_escanea_un_track(server, client,
+                                                                     biblioteca):
+    """Un re-escaneo cambia el BPM de dos.wav: el set armado de hoy lo exporta con el BPM
+    nuevo, el guardado sigue diciendo el de la foto."""
+    import sqlite3
+
+    s, vivo, _ = _guardar_uno(server, client, biblioteca)
+    con = sqlite3.connect(str(biblioteca["db"]))
+    con.execute("UPDATE tracks SET bpm = 131.3 WHERE path_key = ?",
+                (Store._key(biblioteca["rutas"]["dos.wav"]),))
+    con.commit()
+    con.close()
+    hoy = client.get("/api/radio/set.m3u8",
+                     params={"track": s["pasos"][0]["track"]["id"], "largo": 4})
+    assert b"bpm=131.3" in hoy.content and hoy.content != vivo, \
+        "el re-escaneo no cambió el set de hoy: el test no probaría nada"
+    r = client.get(f"/api/radio/sets/{s['id']}/m3u8")
+    assert r.content == vivo
+    assert b"bpm=130.0" in r.content and b"bpm=131.3" not in r.content
+
+
+def test_el_m3u8_del_set_guardado_trae_la_ruta_que_ya_no_esta_y_dice_cuantas(server, client,
+                                                                             biblioteca):
+    s, vivo, _ = _guardar_uno(server, client, biblioteca)
+    with Store(biblioteca["db"]) as store:
+        assert store.delete(biblioteca["rutas"]["cinco.wav"])
+    r = client.get(f"/api/radio/sets/{s['id']}/m3u8")
+    assert r.status_code == 200, r.text
+    assert r.content == vivo, "la ruta que ya no está no puede desaparecer del .m3u8 de la foto"
+    assert str(biblioteca["rutas"]["cinco.wav"]).encode("utf-8") in r.content
+    assert r.headers["x-djradio-faltan"] == "1"
+
+
+def test_el_m3u8_de_un_set_que_no_existe_es_404(server, client, biblioteca):
+    r = client.get("/api/radio/sets/999/m3u8")
+    assert r.status_code == 404 and "999" in r.json()["error"], r.text
+
+
+def test_un_float_gigante_es_400_y_no_500(server, client, biblioteca):
+    """`float()` de un entero de cientos de dígitos tira OverflowError: tiene que ser el 400
+    de un pedido inválido, no un 500."""
+    _, cuerpo = _mostrado(server, client, biblioteca)
+    for campo in ("randomness", "mmr_lambda"):
+        r = client.post("/api/radio/sets", json={**cuerpo, campo: 10 ** 400})
+        assert r.status_code == 400, r.text
+        assert campo in r.json()["error"] and "fuera de rango" in r.json()["error"]
+    assert client.get("/api/radio/sets").json()["sets"] == []

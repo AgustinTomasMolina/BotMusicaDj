@@ -28,6 +28,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 
 # Los tres niveles, en el orden en que se cuentan en los resúmenes.
 RATING_OK = "ok"
@@ -212,8 +213,10 @@ def require_rating(rating: object, reason: object) -> str | None:
     if reason is not None and not isinstance(reason, str):
         raise InvalidSavedSet(f"el motivo es un texto, recibí {reason!r}")
     if reason is not None:
-        reason = _one_line(reason)
-    texto = reason if reason is not None and reason.strip() else None
+        # Recortado: espacios al principio o al final no son parte del motivo (y un motivo de
+        # solo espacios no es un motivo).
+        reason = _one_line(reason).strip()
+    texto = reason or None
     if rating == RATING_BAD and texto is None:
         raise InvalidSavedSet("una transición `mala` necesita el motivo (qué sonó mal): sin eso "
                               "la marca no sirve para ajustar el motor")
@@ -302,6 +305,37 @@ def snapshot_row(s: StepSnapshot) -> str:
     marca = MARCA_DUDOSA if s.key_doubtful else " "
     return (f"{s.bpm_shown:>6} BPM  {s.key:>3} {clasica:<3}{marca} "
             f"energía {s.energy_pct:3d}  {s.label}")
+
+
+@dataclass(frozen=True, slots=True)
+class _SnapshotTrack:
+    """Lo que `export.m3u8_text` lee de un track, sacado de la FOTO de un paso. No es un
+    `Track` (la foto no tiene embedding ni features): son solo los campos que el export usa,
+    con los valores que se guardaron."""
+
+    path: Path
+    label: str
+    duration: float
+    bpm: float
+    key: str
+    energy: float
+
+
+def snapshot_m3u8(steps: Sequence[SavedStep]) -> str:
+    """El .m3u8 de un set guardado: su foto, en su orden, con el MISMO `m3u8_text` que el set
+    armado. Nada se re-arma ni se busca en la biblioteca de hoy: si un track se re-escaneó,
+    el archivo dice lo que se guardó; si ya no está, va igual con la ruta que tenía (el
+    que llama avisa cuántos faltan con `SavedSet.missing`).
+
+    Para el set recién guardado da los MISMOS bytes que `/api/radio/set.m3u8` (hay un test):
+    los campos de la foto son los del `Track` sin redondear."""
+    from motor.export import m3u8_text
+
+    return m3u8_text([
+        _SnapshotTrack(path=Path(s.snapshot.path), label=s.snapshot.label,
+                       duration=s.snapshot.duration, bpm=s.snapshot.bpm, key=s.snapshot.key,
+                       energy=s.snapshot.energy)
+        for s in steps])
 
 
 def rating_text(r: Rating | None) -> str:
@@ -406,5 +440,5 @@ __all__ = [
     "CSV_SEPARATORS", "InvalidSavedSet", "Rating", "SavedSet", "SavedSetInfo",
     "SavedSetNotFound", "SavedStep", "StepSnapshot", "clean_name", "config_json",
     "fingerprint", "rating_text", "ratings_csv", "require_rating", "set_fingerprint",
-    "shown_header", "snapshot_row", "snapshot_steps", "summarize",
+    "shown_header", "snapshot_m3u8", "snapshot_row", "snapshot_steps", "summarize",
 ]

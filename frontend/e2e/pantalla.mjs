@@ -8,8 +8,12 @@
 // Sin esperas fijas: cada paso espera un ESTADO (un selector, un atributo, qué audio suena)
 // con un tope, y si el tope se vence el error dice qué quedó en pantalla.
 
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const AQUI = path.dirname(fileURLToPath(import.meta.url))
 
 const ESPERA_MS = 8000
 
@@ -140,11 +144,13 @@ async function armarSet(page, { teclado = false } = {}) {
   } else {
     await page.click('.rarmar')
   }
-  await respuesta
+  const r = await respuesta
   await hasta(() => page.evaluate(() => ({
     armando: /Armando/.test(document.querySelector('.rarmar')?.textContent || ''),
     pasos: document.querySelectorAll('.rpaso').length,
   })), (v) => !v.armando && v.pasos > 0, 'el set no se dibujó después de armarlo')
+  // Lo que contestó /api/radio/set a ESTE pedido: el set que la pantalla está mostrando.
+  return r.json()
 }
 
 async function playEnHome(page, titulo) {
@@ -213,6 +219,589 @@ async function semillaUno(ctx) {
   afirmar(uno, '/api/radio/biblioteca no trae el track «Uno» de la base de juguete')
   return { lib, uno }
 }
+
+/* ---------- sets guardados (tarea 16) ---------- */
+
+// Pedido a la API con cualquier método; devuelve {status, data} sin tirar por un 4xx: los
+// casos comparan el motivo que manda el backend.
+async function apiPedir(ctx, ruta, metodo = 'GET', cuerpo) {
+  const init = { method: metodo }
+  if (cuerpo !== undefined) { init.headers = { 'Content-Type': 'application/json' }; init.body = JSON.stringify(cuerpo) }
+  const r = await fetch(ctx.url + ruta, init)
+  const txt = await r.text()
+  let data = null
+  try { data = JSON.parse(txt) } catch { data = { texto: txt } }
+  return { status: r.status, data }
+}
+
+const setGuardadoApi = async (ctx, id) => {
+  const r = await apiPedir(ctx, `/api/radio/sets/${id}`)
+  afirmar(r.status === 200 && r.data.set, `GET /api/radio/sets/${id} contestó ${r.status}: ${json(r.data)}`)
+  return r.data.set
+}
+
+// Un re-escaneo simulado sobre la base de juguete (base_mutar.py), con el server corriendo.
+function mutarBase(ctx, ...args) {
+  const r = spawnSync(ctx.python, [path.join(AQUI, 'base_mutar.py'), args[0], ctx.base.djradio_db, ...args.slice(1)], { encoding: 'utf8' })
+  if (r.error || r.status !== 0) throw new Error(`base_mutar.py ${args[0]} falló: ${r.error ? r.error.message : (r.stderr || r.stdout)}`)
+  return JSON.parse(r.stdout)
+}
+
+// Guarda POR LA API el set de «Uno», para los casos que no prueban el botón de guardar: con
+// la huella y los ids del set que devuelve /api/radio/set, igual que la pantalla.
+async function guardarUnoPorApi(ctx, nombre) {
+  const { uno } = await semillaUno(ctx)
+  const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+  const r = await apiPedir(ctx, '/api/radio/sets', 'POST', {
+    track: uno.id, ...set.config, esperado: set.pasos.map((p) => p.track.id), huella: set.huella, ...(nombre ? { nombre } : {}),
+  })
+  afirmar(r.status === 201, `POST /api/radio/sets contestó ${r.status}: ${json(r.data)}`)
+  return r.data.set
+}
+
+// Abre desde la lista de «Sets guardados» el set `id` y espera a ver su cabecera.
+async function abrirGuardado(page, id) {
+  const respuesta = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/radio/sets/${id}` && r.request().method() === 'GET', { timeout: ESPERA_MS })
+  const hay = await hasta(() => page.evaluate((i) => {
+    const b = [...document.querySelectorAll('.rsg')].find((x) => x.querySelector('.rsg-id')?.textContent === `#${i}`)
+    if (!b) return false
+    b.click()
+    return true
+  }, id), (v) => v, `la lista de sets guardados no tiene el #${id}`)
+  afirmar(hay, `no encontré el set #${id} en la lista`)
+  await respuesta
+  await hasta(() => page.evaluate(() => document.querySelector('.rguardado-h .mono')?.textContent ?? null),
+    (v) => v === `#${id}`, `abrí el set #${id} y la cabecera no dice cuál es`)
+}
+
+// Lo que muestra el panel del set con un set guardado abierto.
+function leerGuardado(page) {
+  return page.evaluate(() => {
+    const resumenDe = (el) => {
+      if (!el) return null
+      const o = {}
+      el.querySelectorAll('[data-k]').forEach((x) => { if (x.dataset.k !== 'calificadas') o[x.dataset.k] = Number(x.querySelector('b')?.textContent) })
+      return o
+    }
+    return {
+      id: document.querySelector('.rguardado-h .mono')?.textContent ?? null,
+      nombre: document.querySelector('.rguardado-nombre')?.textContent ?? null,
+      fecha: document.querySelector('.rguardado-fecha time')?.getAttribute('datetime') ?? null,
+      calificadas: document.querySelector('.rguardado .rresumen-cuenta')?.textContent ?? null,
+      resumen: resumenDe(document.querySelector('.rguardado .rresumen')),
+      pasos: [...document.querySelectorAll('.rpaso')].map((p) => ({
+        n: p.querySelector('.rpaso-n')?.textContent ?? null,
+        titulo: p.querySelector('.rpaso-titulo')?.textContent ?? null,
+        artista: p.querySelector('.rpaso-artista')?.textContent ?? null,
+        motivo: p.querySelector('.rpaso-why .mono')?.textContent ?? null,
+        semilla: !!p.querySelector('.rtag-seed'),
+        datos: window.__datosTrack(p),
+      })),
+      transiciones: [...document.querySelectorAll('.rcal')].map((c) => ({
+        n: Number(c.dataset.n),
+        sel: c.querySelector('input[type=radio]:checked')?.value ?? null,
+        motivo: c.querySelector('.rcal-motivo input')?.value ?? null,
+      })),
+      aviso: document.querySelector('.rsets-aviso')?.textContent ?? null,
+    }
+  })
+}
+
+// Lo que el set guardado de la API dice de cada paso, con la forma de `leerGuardado`.
+const esperadoPasos = (s) => s.pasos.map((p) => ({
+  n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo,
+  semilla: p.es_semilla, datos: esperadoDatos(p.track, s.leyenda_key),
+}))
+
+// Calificación de la transición `n` según la API, y el resumen.
+async function calificacionApi(ctx, id, n) {
+  const s = await setGuardadoApi(ctx, id)
+  const t = s.transiciones.find((x) => x.n === n)
+  return { calificacion: t.calificacion, motivo: t.motivo, resumen: s.resumen }
+}
+
+const clickNivel = (page, n, nivel) => page.click(`.rcal[data-n="${n}"] .rcal-opt.is-${nivel}`)
+
+// Intercepta los pedidos de la página: `manejar(req)` devuelve true si se ocupó de ese pedido
+// (abortarlo, retenerlo, contestarlo); el resto sigue de largo.
+async function interceptar(page, manejar) {
+  await page.setRequestInterception(true)
+  page.on('request', (req) => {
+    if (req.isInterceptResolutionHandled()) return
+    Promise.resolve(manejar(req)).then((hecho) => { if (!hecho) req.continue().catch(() => {}) })
+  })
+}
+const esPut = (req, id, n) => req.method() === 'PUT' && new URL(req.url()).pathname === `/api/radio/sets/${id}/transiciones/${n}`
+
+// Lo que muestra el control de la transición `n`: el nivel marcado, su clase y el estado.
+const controlDe = (page, n) => page.evaluate((i) => {
+  const c = document.querySelector(`.rcal[data-n="${i}"]`)
+  return c ? {
+    sel: c.querySelector('input[type=radio]:checked')?.value ?? null,
+    clase: (c.className.match(/\bis-(ok|regular|mala)\b/) || [])[1] ?? null,
+    estado: c.querySelector('.rcal-estado')?.textContent ?? null,
+    error: c.querySelector('.rcal-error')?.textContent ?? null,
+    motivo: !!c.querySelector('.rcal-motivo input'),
+    falta: !!c.querySelector('.rcal-falta'),
+  } : null
+}, n)
+
+// Toca «Exportar a Rekordbox» y devuelve lo que bajó el navegador (nombre y bytes).
+async function exportarConBoton(page, ctx) {
+  const dir = fs.mkdtempSync(path.join(ctx.tmp, 'descargas-'))
+  const cdp = await page.createCDPSession()
+  await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, eventsEnabled: true })
+  const descargas = []
+  cdp.on('Browser.downloadWillBegin', (e) => descargas.push({ guid: e.guid, nombre: e.suggestedFilename, estado: 'empezó' }))
+  cdp.on('Browser.downloadProgress', (e) => { const d = descargas.find((x) => x.guid === e.guid); if (d) d.estado = e.state })
+  await page.click('.rexportar')
+  const [d] = await hasta(async () => descargas, (ds) => ds.length > 0 && ds.every((x) => x.estado === 'completed' || x.estado === 'canceled'),
+    'tocar «Exportar a Rekordbox» no terminó ninguna descarga')
+  igual(d.estado, 'completed', 'estado de la descarga')
+  return { nombre: d.nombre, bytes: fs.readFileSync(path.join(dir, d.nombre)) }
+}
+
+const CASOS_SETS = [
+
+  ['sets: guardar el set que se ve = GET /api/radio/sets/{id} y la cabecera dice cuál es', async (page, ctx) => {
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    const visto = await armarSet(page)
+    const antes = await leerGuardado(page)
+    afirmar(antes.transiciones.length === 0, `sin guardar no tiene que haber controles de calificación: ${json(antes.transiciones)}`)
+    await page.click('.rguardar')
+    await page.waitForSelector('#r-guardar-nombre', { timeout: ESPERA_MS })
+    const nombre = `Prueba E2E ñ ${Date.now()}`
+    await page.type('#r-guardar-nombre', nombre)
+    const pedido = page.waitForRequest((q) => new URL(q.url()).pathname === '/api/radio/sets' && q.method() === 'POST', { timeout: ESPERA_MS })
+    const respuesta = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/radio/sets' && r.request().method() === 'POST', { timeout: ESPERA_MS })
+    await page.keyboard.press('Enter')
+    const cuerpo = JSON.parse((await pedido).postData() || '{}')
+    // Lo que viaja es lo que se VE: los ids de los pasos del set armado y su huella.
+    igual({ esperado: cuerpo.esperado, huella: cuerpo.huella, nombre: cuerpo.nombre },
+      { esperado: visto.pasos.map((p) => p.track.id), huella: visto.huella, nombre }, 'el POST no manda los ids y la huella del set en pantalla')
+    const r = await respuesta
+    igual(r.status(), 201, 'estado del POST /api/radio/sets')
+    const id = (await r.json()).set.id
+    const s = await setGuardadoApi(ctx, id)
+    const real = await hasta(() => leerGuardado(page), (v) => v.id === `#${id}`, 'después de guardar, la cabecera no dice qué set guardado se mira')
+    igual(real.nombre, `«${s.nombre}»`, 'el nombre en la cabecera')
+    igual(real.fecha, s.guardado, 'la fecha de la cabecera (datetime) no es la de la API')
+    igual(real.pasos, esperadoPasos(s), 'los pasos en pantalla no son la foto de GET /api/radio/sets/{id}')
+    // Y la foto es el set que se había armado: mismos tracks, mismos porqués, mismos datos.
+    igual(esperadoPasos(s), visto.pasos.map((p) => ({ n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo, semilla: p.es_semilla, datos: esperadoDatos(p.track, visto.leyenda_key) })),
+      'lo guardado no es lo que se veía')
+    igual(real.transiciones, s.transiciones.map((t) => ({ n: t.n, sel: null, motivo: null })), 'un control de calificación por transición, todos sin calificar')
+    igual(real.resumen, s.resumen, 'el resumen de la cabecera no es el de la API')
+    afirmar(/#\d+/.test(real.aviso || '') && real.aviso.includes(`#${id}`), `la región viva no avisó que se guardó: ${json(real.aviso)}`)
+    const foco = await page.evaluate(() => document.activeElement?.id ?? null)
+    igual(foco, 'r-guardado-h', 'después de guardar el foco tiene que ir a la cabecera del set guardado')
+    const enLista = await hasta(() => page.$$eval('.rsg', (bs) => bs.map((b) => ({ id: b.querySelector('.rsg-id')?.textContent, abierto: b.getAttribute('aria-pressed') }))),
+      (v) => v.some((x) => x.id === `#${id}`), `el set #${id} no aparece en la lista`)
+    igual(enLista.filter((x) => x.abierto === 'true').map((x) => x.id), [`#${id}`], 'la lista no marca como abierto al set recién guardado')
+  }],
+
+  ['sets: la lista = GET /api/radio/sets (nombre, fecha, semilla, largo, resumen)', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Lista ${Date.now()}`)
+    await apiPedir(ctx, `/api/radio/sets/${s.id}/transiciones/1`, 'PUT', { calificacion: 'regular', motivo: null })
+    const lista = (await api(ctx, '/api/radio/sets')).sets
+    await abrirRadio(page, ctx)
+    const real = await hasta(() => page.$$eval('.rsg', (bs) => bs.map((b) => {
+      const o = {}
+      b.querySelectorAll('.rresumen [data-k]').forEach((x) => { o[x.dataset.k] = Number(x.querySelector('b')?.textContent) })
+      return {
+        id: b.querySelector('.rsg-id')?.textContent ?? null,
+        nombre: b.querySelector('.rsg-nombre')?.textContent ?? null,
+        fecha: b.querySelector('time')?.getAttribute('datetime') ?? null,
+        semilla: b.querySelector('[data-k=semilla]')?.textContent ?? null,
+        largo: b.querySelector('[data-k=largo]')?.textContent ?? null,
+        resumen: o,
+      }
+    })), (v) => v.length === lista.length, `la lista no tiene los ${lista.length} sets de la API`)
+    igual(real, lista.map((x) => ({
+      id: `#${x.id}`, nombre: x.nombre ?? 'Sin nombre', fecha: x.guardado, semilla: `desde ${x.semilla}`,
+      largo: `${x.total} de ${x.pedidos} tracks`, resumen: x.resumen,
+    })), 'la lista de sets guardados no dice lo mismo que GET /api/radio/sets')
+    afirmar(lista.find((x) => x.id === s.id)?.resumen.regular === 1, 'el set calificado por la API no quedó con 1 regular: el caso no probaría el resumen')
+  }],
+
+  ['sets: calificar OK / regular / mala (mala sin motivo no se guarda y lo dice)', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Calificar ${Date.now()}`)
+    afirmar(s.transiciones.length >= 3, `la base de juguete da ${s.transiciones.length} transiciones: hacen falta 3 para las tres escalas`)
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    // El control de 3 niveles es un grupo de radios con nombre: dice qué transición califica.
+    const grupos = await page.$$eval('.rcal [role=radiogroup]', (gs) => gs.map((g) => g.getAttribute('aria-label')))
+    igual(grupos, s.transiciones.map((t) => `Calificación de la transición ${t.desde} → ${t.hasta} (${s.pasos[t.desde - 1].track.titulo} → ${s.pasos[t.hasta - 1].track.titulo})`),
+      'el nombre accesible de cada grupo de calificación')
+
+    // OK con el mouse: se guarda al elegir.
+    await clickNivel(page, 1, 'ok')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'ok', 'elegí OK en la transición 1 y la API no la tiene como ok')
+    // Regular con el teclado (Espacio sobre el radio).
+    await page.focus('.rcal[data-n="2"] input[value=regular]')
+    await page.keyboard.press('Space')
+    await hasta(() => calificacionApi(ctx, s.id, 2), (v) => v.calificacion === 'regular', 'elegí Regular con el teclado en la transición 2 y la API no la tiene')
+
+    // Mala sin motivo: no se manda nada, el foco va al motivo y la pantalla dice qué falta.
+    const puts = []
+    page.on('request', (q) => { if (q.method() === 'PUT' && /\/transiciones\/3$/.test(new URL(q.url()).pathname)) puts.push(q.url()) })
+    await clickNivel(page, 3, 'mala')
+    const pendiente = await hasta(() => page.evaluate(() => ({
+      foco: document.activeElement?.id ?? null,
+      falta: document.querySelector('.rcal[data-n="3"] .rcal-falta')?.textContent ?? null,
+    })), (v) => v.foco && v.falta, 'elegí Mala sin motivo y no se abrió el campo con el foco ni el aviso de qué falta')
+    afirmar(/motivo/.test(pendiente.falta), `el aviso de «mala» no habla del motivo: ${json(pendiente.falta)}`)
+    igual(pendiente.foco, `rcal-${s.id}-3-motivo`, 'el foco al elegir Mala')
+    igual((await controlDe(page, 3)).estado, 'sin guardar', 'una Mala que espera motivo no puede decir «guardada» ni «sin calificar»')
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    igual(puts, [], 'elegir Mala sin motivo mandó la calificación igual')
+    // Enter con el campo vacío: la API la rechaza y la pantalla muestra SU motivo.
+    const esperadoError = (await apiPedir(ctx, `/api/radio/sets/${s.id}/transiciones/3`, 'PUT', { calificacion: 'mala', motivo: '' })).data.error
+    afirmar(esperadoError, 'la API aceptó una mala sin motivo: el caso no tiene qué probar')
+    await page.keyboard.press('Enter')
+    const err = await hasta(() => page.evaluate(() => document.querySelector('.rcal[data-n="3"] .rcal-error[role=alert]')?.textContent ?? null),
+      (v) => v !== null, 'Enter con el motivo vacío no mostró por qué no se guardó')
+    igual(err, `No se guardó: ${esperadoError}`, 'el error de mala sin motivo no es el de la API')
+    igual((await calificacionApi(ctx, s.id, 3)).calificacion, null, 'mala sin motivo quedó guardada')
+    // Con motivo sí. Los espacios de las puntas no viajan (el front recorta; la API también).
+    await page.type(`#rcal-${s.id}-3-motivo`, '  choque de bajos  ')
+    const put3 = page.waitForRequest((q) => esPut(q, s.id, 3), { timeout: ESPERA_MS })
+    await page.keyboard.press('Enter')
+    igual(JSON.parse((await put3).postData() || '{}').motivo, 'choque de bajos', 'el motivo viajó sin recortar')
+    const t3 = await hasta(() => calificacionApi(ctx, s.id, 3), (v) => v.calificacion === 'mala', 'mala con motivo no quedó guardada')
+    igual(t3.motivo, 'choque de bajos', 'el motivo guardado')
+
+    const real = await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(t3.resumen) && v.transiciones[2]?.sel === 'mala' && v.transiciones[2]?.motivo === 'choque de bajos',
+      'el resumen o la transición 3 en pantalla no llegaron a lo que tiene la API')
+    igual(t3.resumen, { ok: 1, regular: 1, mala: 1, sin_calificar: s.transiciones.length - 3 }, 'el resumen de la API después de las tres')
+    igual(real.transiciones.slice(0, 3), [{ n: 1, sel: 'ok', motivo: null }, { n: 2, sel: 'regular', motivo: null }, { n: 3, sel: 'mala', motivo: 'choque de bajos' }],
+      'lo que muestran los tres controles')
+    igual(real.calificadas, `3 de ${s.transiciones.length} transiciones calificadas`, 'la cuenta de calificadas')
+    afirmar((real.aviso || '').includes('3 → 4: mala'), `la región viva no avisó la última calificación: ${json(real.aviso)}`)
+    const errores = await page.$$eval('.rcal-error', (es) => es.length)
+    igual(errores, 0, 'quedó un error pegado después de guardar bien')
+  }],
+
+  ['sets: cambiar y quitar una calificación', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Cambiar ${Date.now()}`)
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'ok')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'ok', 'OK en la transición 1 no quedó guardada')
+    await clickNivel(page, 1, 'regular')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'regular', 'cambiar de OK a Regular no quedó en la API')
+    await hasta(() => page.$eval('.rcal[data-n="1"] .rcal-quitar', () => true).catch(() => false), (v) => v, 'una transición calificada no ofrece «Quitar»')
+    await page.click('.rcal[data-n="1"] .rcal-quitar')
+    const t = await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === null, '«Quitar» no la dejó sin calificar en la API')
+    igual(t.resumen.sin_calificar, s.transiciones.length, 'el resumen de la API después de quitar')
+    const real = await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(t.resumen) && v.transiciones[0].sel === null,
+      'después de quitar, la pantalla sigue mostrando la calificación o el resumen viejo')
+    igual(real.transiciones[0], { n: 1, sel: null, motivo: null }, 'el control de la transición 1 después de quitar')
+    igual(await page.$('.rcal[data-n="1"] .rcal-quitar'), null, '«Quitar» sigue en una transición sin calificar')
+    afirmar((real.aviso || '').includes('1 → 2: sin calificar'), `la región viva no avisó que se quitó: ${json(real.aviso)}`)
+  }],
+
+  ['sets: un set guardado se ve con su FOTO aunque después cambie el BPM en la base', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Foto ${Date.now()}`)
+    const paso = s.pasos[1].track
+    const nuevo = Math.round((paso.bpm + 0.7) * 10) / 10
+    const { antes } = mutarBase(ctx, 'bpm', paso.titulo, String(nuevo))
+    try {
+      // El cambio es real: la biblioteca de hoy ya dice el BPM nuevo.
+      const hoy = (await api(ctx, '/api/radio/biblioteca')).tracks.find((t) => t.titulo === paso.titulo)
+      igual(bpm1(hoy.bpm), bpm1(nuevo), 'la biblioteca no tomó el BPM cambiado (el caso no probaría nada)')
+      afirmar(bpm1(nuevo) !== bpm1(paso.bpm), 'el BPM nuevo se dibuja igual que el viejo')
+      await abrirRadio(page, ctx)
+      await abrirGuardado(page, s.id)
+      const real = await leerGuardado(page)
+      igual(real.pasos, esperadoPasos(s), 'el set guardado no se ve como la foto que se guardó')
+      igual(real.pasos[1].datos.BPM, bpm1(paso.bpm), `el paso 2 («${paso.titulo}») muestra el BPM de hoy y no el de la foto`)
+    } finally {
+      mutarBase(ctx, 'bpm', paso.titulo, String(antes))
+    }
+  }],
+
+  ['sets: un paso que ya no está en la biblioteca se ve marcado y no se puede reproducir', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Falta ${Date.now()}`)
+    const paso = s.pasos[1].track
+    const respaldo = path.join(ctx.tmp, `respaldo-${Date.now()}.json`)
+    mutarBase(ctx, 'ocultar', paso.titulo, respaldo)
+    try {
+      const hoy = await setGuardadoApi(ctx, s.id)
+      igual(hoy.pasos.map((p) => p.track.en_biblioteca), s.pasos.map((_, i) => i !== 1), 'la API no marca el paso 2 como fuera de la biblioteca (el caso no probaría nada)')
+      await abrirRadio(page, ctx)
+      await abrirGuardado(page, s.id)
+      const filas = await page.$$eval('.rpaso', (ps) => ps.map((p) => ({
+        falta: p.querySelector('.rtag-falta')?.textContent ?? null,
+        play: p.querySelector('.rpaso-row button.rplay')?.getAttribute('aria-label') ?? null,
+      })))
+      igual(filas, hoy.pasos.map((p) => (p.track.en_biblioteca
+        ? { falta: null, play: `Reproducir ${p.track.titulo}` }
+        : { falta: 'ya no está en la biblioteca', play: null })), 'los pasos: el que falta, marcado y sin botón; el resto, reproducibles')
+      igual((await leerGuardado(page)).pasos, esperadoPasos(hoy), 'el paso que falta tiene que verse entero, con los datos de la foto')
+      // El hueco del botón no reproduce nada.
+      await page.click('.rpaso:nth-child(2) .rplay')
+      await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+      igual(await sonando(page), [], 'tocar el paso que ya no está hizo sonar algo')
+      const nota = await page.$eval('.rguardado', (g) => g.textContent)
+      afirmar(nota.includes('ya no está en la biblioteca del'), `la cabecera no avisa que falta un track: ${json(nota)}`)
+      // Los otros sí suenan.
+      await page.click('.rpaso:nth-child(1) .rplay')
+      await hasta(() => sonando(page), (v) => json(v) === json([`/api/radio/audio/${s.pasos[0].track.id}`]), 'el paso 1 del set guardado no suena')
+    } finally {
+      mutarBase(ctx, 'restaurar', respaldo)
+    }
+  }],
+
+  ['sets: renombrar y borrar (con confirmación)', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, null)
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    igual((await leerGuardado(page)).nombre, 'sin nombre', 'un set sin nombre')
+    await page.click('.rguardado-acciones .btn:first-child')
+    await page.waitForSelector('#r-renombrar', { timeout: ESPERA_MS })
+    const nombre = `Renombrado ${Date.now()}`
+    await page.type('#r-renombrar', nombre)
+    await page.keyboard.press('Enter')
+    await hasta(() => setGuardadoApi(ctx, s.id), (v) => v.nombre === nombre, 'renombrar no llegó a la API')
+    await hasta(() => leerGuardado(page), (v) => v.nombre === `«${nombre}»`, 'la cabecera no muestra el nombre nuevo')
+    await hasta(() => page.$$eval('.rsg', (bs) => bs.map((b) => [b.querySelector('.rsg-id')?.textContent, b.querySelector('.rsg-nombre')?.textContent])),
+      (v) => v.some(([i, n]) => i === `#${s.id}` && n === nombre), 'la lista no muestra el nombre nuevo')
+
+    // Borrar pide confirmación: Cancelar no borra nada.
+    await page.click('.rborrar')
+    await page.waitForSelector('[role=alertdialog]', { timeout: ESPERA_MS })
+    const dialogo = await page.$eval('[role=alertdialog]', (d) => ({ titulo: d.querySelector('.dialog-title')?.textContent, foco: document.activeElement?.textContent }))
+    igual(dialogo, { titulo: `¿Borrar el set guardado #${s.id} («${nombre}»)?`, foco: 'Cancelar' }, 'el diálogo de borrar (y el foco empieza en Cancelar)')
+    await page.keyboard.press('Enter')   // Enter sobre «Cancelar»
+    await hasta(() => page.$('[role=alertdialog]'), (v) => v === null, 'Cancelar no cerró el diálogo')
+    igual((await apiPedir(ctx, `/api/radio/sets/${s.id}`)).status, 200, 'Cancelar borró el set igual')
+    await page.click('.rborrar')
+    await page.waitForSelector('.rborrar-ok', { timeout: ESPERA_MS })
+    await page.click('.rborrar-ok')
+    await hasta(async () => (await apiPedir(ctx, `/api/radio/sets/${s.id}`)).status, (v) => v === 404, 'confirmar no borró el set en la API')
+    await hasta(() => page.evaluate((i) => ({
+      cabecera: !!document.querySelector('.rguardado'),
+      enLista: [...document.querySelectorAll('.rsg-id')].some((x) => x.textContent === `#${i}`),
+    }), s.id), (v) => !v.cabecera && !v.enLista, 'el set borrado sigue en pantalla o en la lista')
+    afirmar(((await leerGuardado(page)).aviso || '').includes(`#${s.id} borrado`), 'la región viva no avisó el borrado')
+  }],
+
+  ['sets: si el set cambió entre armar y guardar, 409 con el motivo y «Re-armar el set»', async (page, ctx) => {
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    const visto = await armarSet(page)
+    // Después de armar se toca un control: «Re-armar» tiene que usar lo que el set USÓ, no
+    // lo que hoy dicen los controles.
+    const largoHoy = String(Math.max(1, Number(visto.config.largo) - 17))
+    afirmar(largoHoy !== String(visto.config.largo), 'el largo de los controles no difiere del del set: el caso no probaría nada')
+    await page.click('#r-cfg-largo', { clickCount: 3 })
+    await page.type('#r-cfg-largo', largoHoy)
+    await hasta(() => page.$eval('#r-cfg-largo', (i) => i.value), (v) => v === largoHoy, 'no pude cambiar el largo de los controles')
+    const paso = visto.pasos[1].track
+    const nuevo = Math.round((paso.bpm + 0.3) * 10) / 10
+    const antesLista = (await api(ctx, '/api/radio/sets')).sets.map((x) => x.id)
+    const { antes } = mutarBase(ctx, 'bpm', paso.titulo, String(nuevo))
+    try {
+      await page.click('.rguardar')
+      await page.waitForSelector('#r-guardar-nombre', { timeout: ESPERA_MS })
+      const respuesta = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/radio/sets' && r.request().method() === 'POST', { timeout: ESPERA_MS })
+      await page.keyboard.press('Enter')
+      const r = await respuesta
+      igual(r.status(), 409, 'guardar un set que cambió en la base')
+      const motivo = (await r.json()).error
+      const alerta = await hasta(() => page.evaluate(() => {
+        const a = document.querySelector('.rguardar-error[role=alert]')
+        return a ? { titulo: a.querySelector('.alert-title')?.textContent, texto: a.querySelector('p')?.textContent, rearmar: !!a.querySelector('.rrearmar') } : null
+      }), (v) => v !== null, 'el 409 no se mostró')
+      igual(alerta, { titulo: 'No se guardó el set', texto: motivo, rearmar: true }, 'el aviso del 409: el motivo de la API y el botón para re-armar')
+      igual((await api(ctx, '/api/radio/sets')).sets.map((x) => x.id), antesLista, 'un 409 guardó algo igual')
+      igual((await leerGuardado(page)).pasos[1].datos.BPM, bpm1(paso.bpm), 'el set en pantalla cambió solo (tiene que seguir el que se armó)')
+      // Re-armar muestra el set de hoy, y ese sí se guarda.
+      const hoy = page.waitForResponse((x) => new URL(x.url()).pathname === '/api/radio/set', { timeout: ESPERA_MS })
+      await page.click('.rrearmar')
+      const respHoy = await hoy
+      const qs = new URL(respHoy.url()).searchParams
+      igual({ track: qs.get('track'), largo: qs.get('largo'), curva: qs.get('curva') },
+        { track: visto.semilla.id, largo: String(visto.config.largo), curva: visto.config.curva },
+        '«Re-armar el set» no pidió el set con la config que el set usó (usó la de los controles)')
+      const rearmado = await respHoy.json()
+      const fila = rearmado.pasos.find((p) => p.track.titulo === paso.titulo)
+      afirmar(fila, `el set re-armado ya no tiene «${paso.titulo}»`)
+      await hasta(() => leerGuardado(page), (v) => v.pasos.some((p) => p.titulo === paso.titulo && p.datos.BPM === bpm1(nuevo)),
+        'después de «Re-armar el set» la pantalla no muestra el BPM de hoy')
+      igual(await page.$('.rguardar-error'), null, 'el aviso del 409 quedó pegado al set re-armado')
+      await page.click('.rguardar')
+      await page.waitForSelector('#r-guardar-nombre', { timeout: ESPERA_MS })
+      const otra = page.waitForResponse((x) => new URL(x.url()).pathname === '/api/radio/sets' && x.request().method() === 'POST', { timeout: ESPERA_MS })
+      await page.keyboard.press('Enter')
+      const ok = await otra
+      igual(ok.status(), 201, 'guardar el set re-armado')
+      const s = await setGuardadoApi(ctx, (await ok.json()).set.id)
+      igual(bpm1(s.pasos.find((p) => p.track.titulo === paso.titulo).track.bpm), bpm1(nuevo), 'se guardó un BPM que no era el que estaba en pantalla')
+    } finally {
+      mutarBase(ctx, 'bpm', paso.titulo, String(antes))
+    }
+  }],
+
+  ['sets: exportar un set guardado baja su FOTO aunque la base haya cambiado, y avisa lo que falta', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Exportar ${Date.now()}`)
+    afirmar(s.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
+    const cambia = s.pasos[1].track
+    const falta = s.pasos[2].track
+    const respaldo = path.join(ctx.tmp, `respaldo-exp-${Date.now()}.json`)
+    const { antes } = mutarBase(ctx, 'bpm', cambia.titulo, String(Math.round((cambia.bpm + 0.7) * 10) / 10))
+    try {
+      mutarBase(ctx, 'ocultar', falta.titulo, respaldo)
+      try {
+        const r = await fetch(`${ctx.url}/api/radio/sets/${s.id}/m3u8`)
+        afirmar(r.ok, `/api/radio/sets/${s.id}/m3u8 contestó ${r.status}`)
+        const esperado = Buffer.from(await r.arrayBuffer())
+        const nombre = decodeURIComponent((/filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') || '') || [])[1] || '')
+        igual(r.headers.get('x-djradio-faltan'), '1', 'la API no cuenta el track que falta')
+        // Que el caso tenga dientes: el set de HOY ya no es la foto.
+        const hoy = await fetch(`${ctx.url}/api/radio/set.m3u8?track=${encodeURIComponent(s.pasos[0].track.id)}&largo=${s.config.largo}`)
+        const hoyBytes = hoy.ok ? Buffer.from(await hoy.arrayBuffer()) : Buffer.alloc(0)
+        afirmar(Buffer.compare(hoyBytes, esperado) !== 0, 'el .m3u8 del set de hoy es igual al de la foto: el caso no probaría nada')
+        afirmar(esperado.toString('utf8').includes(`bpm=${bpm1(cambia.bpm)} `), 'el .m3u8 de la foto no trae el BPM que se guardó')
+        await abrirRadio(page, ctx)
+        await abrirGuardado(page, s.id)
+        const bajado = await exportarConBoton(page, ctx)
+        igual(bajado.nombre, nombre, 'nombre del archivo bajado')
+        afirmar(Buffer.compare(bajado.bytes, esperado) === 0,
+          `con un set guardado abierto, el .m3u8 bajado no es su foto\n  bajado:   ${json(bajado.bytes.toString('utf8').slice(0, 300))}\n  esperado: ${json(esperado.toString('utf8').slice(0, 300))}`)
+        const aviso = await page.$eval('.rexportar-ok', (p) => p.textContent).catch(() => null)
+        afirmar(aviso && aviso.includes(nombre) && aviso.includes('1 ya no está en la biblioteca'), `el aviso no dice que falta un track: ${json(aviso)}`)
+      } finally {
+        mutarBase(ctx, 'restaurar', respaldo)
+      }
+    } finally {
+      mutarBase(ctx, 'bpm', cambia.titulo, String(antes))
+    }
+  }],
+
+  ['sets: abrir un set guardado para el audio del set armado', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Audio ${Date.now()}`)
+    const { uno } = await semillaUno(ctx)
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    await page.click('.rpaso .rplay')
+    await hasta(async () => ({ suenan: await sonando(page), pausar: await pasosEnPausar(page) }),
+      (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && v.pausar.length === 1, 'el paso 1 del set armado no quedó sonando')
+    await abrirGuardado(page, s.id)
+    await hasta(async () => ({ suenan: await sonando(page), pausar: await pasosEnPausar(page) }),
+      (v) => v.suenan.length === 0 && v.pausar.length === 0,
+      'abrí un set guardado y el audio del set armado sigue sonando (o un botón sigue en «Pausar»)')
+  }],
+
+  ['sets: al cambiar de set guardado, una calificación a medio escribir no pasa al otro', async (page, ctx) => {
+    const a = await guardarUnoPorApi(ctx, `A ${Date.now()}`)
+    const b = await guardarUnoPorApi(ctx, `B ${Date.now()}`)
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, a.id)
+    await clickNivel(page, 1, 'mala')
+    await page.waitForSelector('.rcal[data-n="1"] .rcal-motivo input', { timeout: ESPERA_MS })
+    await page.type('.rcal[data-n="1"] .rcal-motivo input', 'a medio escribir')
+    await abrirGuardado(page, b.id)
+    const c = await controlDe(page, 1)
+    igual({ sel: c.sel, motivo: c.motivo, falta: c.falta, estado: c.estado }, { sel: null, motivo: false, falta: false, estado: 'sin calificar' },
+      `el set #${b.id} muestra la «mala» a medio escribir del set #${a.id}`)
+    igual((await calificacionApi(ctx, b.id, 1)).calificacion, null, 'la API del set B')
+  }],
+
+  ['sets: si no se puede guardar una calificación, la pantalla vuelve a lo que tiene la API', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Rollback ${Date.now()}`)
+    await apiPedir(ctx, `/api/radio/sets/${s.id}/transiciones/1`, 'PUT', { calificacion: 'ok' })
+    let fallar = true
+    await interceptar(page, (req) => {
+      if (fallar && esPut(req, s.id, 1)) { req.abort('failed'); return true }
+      return false
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'regular')
+    const c = await hasta(() => controlDe(page, 1), (v) => v && v.error, 'el PUT falló y la pantalla no lo dijo')
+    igual({ sel: c.sel, clase: c.clase, estado: c.estado }, { sel: 'ok', clase: 'ok', estado: 'guardada' },
+      'con el PUT caído la pantalla tiene que volver a mostrar lo que tiene la API (ok), no «Regular guardada»')
+    igual((await calificacionApi(ctx, s.id, 1)).calificacion, 'ok', 'la API')
+    // Volver a elegir Regular manda el pedido otra vez (el radio no quedó marcado).
+    fallar = false
+    await clickNivel(page, 1, 'regular')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'regular', 'el segundo clic en Regular no se mandó')
+    const d = await hasta(() => controlDe(page, 1), (v) => v.estado === 'guardada' && v.sel === 'regular', 'la pantalla no terminó en Regular guardada')
+    igual(d.error, null, 'quedó el error del intento anterior')
+  }],
+
+  ['sets: dos clics seguidos en la misma transición: se guarda el último', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Dos clics ${Date.now()}`)
+    let retenido = null
+    await interceptar(page, (req) => {
+      if (!retenido && esPut(req, s.id, 1)) { retenido = req; return true }
+      return false
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'ok')
+    await hasta(async () => !!retenido, (v) => v, 'el primer clic no mandó el PUT')
+    await clickNivel(page, 1, 'regular')          // mientras el primero sigue viajando
+    await hasta(() => controlDe(page, 1), (v) => v.sel === 'regular' && v.estado === 'Guardando…',
+      'mientras viaja el primero, la pantalla tiene que mostrar el último pedido y que se está guardando')
+    retenido.continue()
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'regular', 'el segundo clic se perdió: la API quedó con el primero')
+    await hasta(() => controlDe(page, 1), (v) => v.sel === 'regular' && v.estado === 'guardada', 'la pantalla no terminó en Regular guardada')
+  }],
+
+  ['sets: respuestas fuera de orden no hacen retroceder el resumen', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Orden ${Date.now()}`)
+    // El PUT de la transición 1 llega al server PRIMERO, pero su respuesta llega a la página
+    // DESPUÉS que la de la transición 2: trae el resumen viejo (1 calificada).
+    let soltar
+    const suelta = new Promise((r) => { soltar = r })
+    let tomado = false
+    await interceptar(page, async (req) => {
+      if (tomado || !esPut(req, s.id, 1)) return false
+      tomado = true
+      const r = await fetch(req.url(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: req.postData() })
+      const cuerpo = await r.text()
+      await suelta
+      await req.respond({ status: r.status, contentType: 'application/json', body: cuerpo })
+      return true
+    })
+    await abrirRadio(page, ctx)
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'ok')
+    await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'ok', 'el PUT de la transición 1 no llegó al server')
+    const r2 = page.waitForResponse((x) => esPut(x.request(), s.id, 2), { timeout: ESPERA_MS })
+    await clickNivel(page, 2, 'ok')
+    await r2
+    const r1 = page.waitForResponse((x) => esPut(x.request(), s.id, 1), { timeout: ESPERA_MS })
+    soltar()
+    await r1
+    // Una vuelta más por la red de la página: la respuesta vieja ya se procesó.
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    const api2 = await setGuardadoApi(ctx, s.id)
+    igual(api2.resumen.ok, 2, 'la API después de las dos')
+    await hasta(() => leerGuardado(page), (v) => json(v.resumen) === json(api2.resumen) && v.calificadas === `2 de ${s.transiciones.length} transiciones calificadas`,
+      'el resumen en pantalla retrocedió con la respuesta vieja')
+  }],
+
+  ['sets: 400 px con un set guardado, calificaciones y el campo de motivo abierto', async (page, ctx) => {
+    const s = await guardarUnoPorApi(ctx, `Un nombre bastante largo para ver que no se corta a 400 px ${Date.now()}`)
+    await apiPedir(ctx, `/api/radio/sets/${s.id}/transiciones/2`, 'PUT', { calificacion: 'regular', motivo: 'entra medio tarde el bombo, habría que mezclar antes' })
+    await abrirRadio(page, ctx)
+    await page.setViewport({ width: 400, height: 860 })
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    await abrirGuardado(page, s.id)
+    await clickNivel(page, 1, 'mala')     // queda pendiente, con el campo de motivo abierto
+    await page.waitForSelector('.rcal[data-n="1"] .rcal-motivo input', { timeout: ESPERA_MS })
+    await page.click('.rguardado-acciones .btn:first-child')   // Renombrar: el formulario abierto
+    await page.waitForSelector('#r-renombrar', { timeout: ESPERA_MS })
+    const d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `set guardado a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+  }],
+]
 
 /* ---------- casos ---------- */
 
@@ -481,17 +1070,36 @@ const CASOS = [
   }],
 
   ['400 px: sin scroll horizontal ni contenido cortado (home con la barra y radio con un set)', async (page, ctx) => {
-    // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del
-    // ancho queda cortado e invisible (peor que un scroll). Por eso no alcanza con mirar
-    // scrollWidth: se busca cualquier elemento visible que se salga de la caja que lo
-    // recorta. Dos clases de contenedor:
-    //  - overflow-x auto|scroll: se desliza de costado A PROPÓSITO (los estantes de la home):
-    //    lo de adentro se alcanza scrolleando, se excusa.
-    //  - overflow-x hidden|clip: RECORTA. Lo que se sale de ese contenedor queda cortado e
-    //    invisible, igual que lo que se sale del viewport: es un fallo.
-    // Cada elemento se juzga contra su ancestro más cercano de alguno de los dos tipos (o el
-    // viewport); el contenedor, a su vez, contra el suyo.
-    const desborde = () => page.evaluate(() => {
+    const desborde = () => desbordeDe(page)
+    const cabe = (d) => d.scroll <= d.ancho && d.fuera.length === 0
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    await page.setViewport({ width: 400, height: 860 })
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    const radio = await desborde()
+    afirmar(cabe(radio), `radio con set a 400 px: hay contenido fuera del ancho: ${json(radio)}`)
+    await abrirHome(page, ctx)
+    await playEnHome(page, 'Uno')
+    const home = await desborde()
+    afirmar(cabe(home), `home con la barra a 400 px: hay contenido fuera del ancho: ${json(home)}`)
+  }],
+
+  ...CASOS_SETS,
+]
+
+// `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del
+// ancho queda cortado e invisible (peor que un scroll). Por eso no alcanza con mirar
+// scrollWidth: se busca cualquier elemento visible que se salga de la caja que lo
+// recorta. Dos clases de contenedor:
+//  - overflow-x auto|scroll: se desliza de costado A PROPÓSITO (los estantes de la home):
+//    lo de adentro se alcanza scrolleando, se excusa.
+//  - overflow-x hidden|clip: RECORTA. Lo que se sale de ese contenedor queda cortado e
+//    invisible, igual que lo que se sale del viewport: es un fallo.
+// Cada elemento se juzga contra su ancestro más cercano de alguno de los dos tipos (o el
+// viewport); el contenedor, a su vez, contra el suyo.
+function desbordeDe(page) {
+  return page.evaluate(() => {
       const ancho = document.documentElement.clientWidth
       const fuera = [...document.querySelectorAll('body *')].filter((e) => {
         const r = e.getBoundingClientRect()
@@ -523,21 +1131,8 @@ const CASOS = [
         return r.right > caja.right + 1 || r.left < caja.left - 1
       }).slice(0, 4).map((e) => `${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} (${Math.round(e.getBoundingClientRect().left)}..${Math.round(e.getBoundingClientRect().right)})`)
       return { scroll: document.documentElement.scrollWidth, ancho, fuera }
-    })
-    const cabe = (d) => d.scroll <= d.ancho && d.fuera.length === 0
-    await abrirRadio(page, ctx)
-    await elegirSemilla(page, 'Uno')
-    await armarSet(page)
-    await page.setViewport({ width: 400, height: 860 })
-    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
-    const radio = await desborde()
-    afirmar(cabe(radio), `radio con set a 400 px: hay contenido fuera del ancho: ${json(radio)}`)
-    await abrirHome(page, ctx)
-    await playEnHome(page, 'Uno')
-    const home = await desborde()
-    afirmar(cabe(home), `home con la barra a 400 px: hay contenido fuera del ancho: ${json(home)}`)
-  }],
-]
+  })
+}
 
 export async function correr(ctx) {
   const resultados = []
