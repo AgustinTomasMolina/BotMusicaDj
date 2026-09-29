@@ -39,6 +39,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from calidad.tags import EXTS
@@ -342,6 +343,57 @@ def _requerir_mutagen() -> None:
             "No se tocó la base.") from e
 
 
+@dataclass(frozen=True)
+class AnalisisDeArchivo:
+    """Lo que `scan` mide de UN archivo antes de guardarlo: el análisis, la duración, el
+    mtime de ANTES de analizar, cuánto tardó y el artista/título de los tags."""
+    features: object          # TrackFeatures
+    duracion: float
+    mtime: float
+    segundos: float
+    artista: str | None
+    titulo: str | None
+
+
+def analizar_para_guardar(ruta: str, *, consenso: bool = False) -> AnalisisDeArchivo | str:
+    """Analiza un archivo como lo hace `scan`: el análisis o el MOTIVO por el que falló.
+
+    Vive afuera de `cmd_scan` porque la pantalla de radio de MusiFlix (`radio_playlist.py`,
+    vía `server.py`) analiza en segundo plano los temas de una playlist que el motor no
+    conoce, y tiene que medir EXACTAMENTE igual que la terminal: dos caminos de análisis
+    darían dos BPM para el mismo archivo según por dónde entró a la base. No abre la base a
+    propósito: el análisis tarda segundos y quien llama decide cuánto la tiene tomada.
+
+    Solo lee el audio (regla del proyecto). Los tags se leen después de un análisis que
+    anduvo, igual que siempre en el scan; si `leer_tags` levanta, levanta (sin mutagen, por
+    ejemplo: `cmd_scan` lo verifica antes con `_requerir_mutagen`).
+    """
+    from calidad.tags import leer_tags
+    from motor.analisis import analizar_archivo
+
+    try:
+        mtime = Path(ruta).stat().st_mtime   # ANTES de analizar: si cambia durante
+        t0 = time.perf_counter()             # el análisis, el próximo scan lo rehace
+        res = analizar_archivo(ruta, consenso=consenso)
+        dt = time.perf_counter() - t0
+    except Exception as e:  # noqa: BLE001 — un archivo raro no frena 10k tracks
+        return f"{type(e).__name__}: {e}"
+    if res is None:
+        return "no se pudo decodificar o dura menos de 1 s"
+    features, duracion = res
+    tags = leer_tags(ruta)
+    return AnalisisDeArchivo(features, duracion, mtime, dt, tags.get("artista") or None,
+                             tags.get("titulo") or None)
+
+
+def guardar_analisis(store, ruta: str, a: AnalisisDeArchivo, *, licencia: str,
+                     origen: str) -> None:
+    """El `upsert` del scan, con la licencia y el origen que se le pasen (nunca inventados:
+    `Store.upsert` los exige)."""
+    store.upsert(ruta, a.features, duration=a.duracion, license=licencia, source_url=origen,
+                 artist=a.artista, title=a.titulo, mtime=a.mtime)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     faltan = [f"--{n}" for n, v in (("licencia", args.licencia), ("origen", args.origen))
               if v is None or not str(v).strip()]
@@ -358,8 +410,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                          f"No se tocó la base.")
     carpeta = carpeta.resolve()
 
-    from calidad.tags import leer_tags
-    from motor.analisis import analizar_archivo, calentar
+    from motor.analisis import calentar
 
     rutas = sorted({_clave(p) for p in carpeta.rglob("*")
                     if p.is_file() and p.suffix.lower() in EXTS})
@@ -396,17 +447,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         for i, ruta in enumerate(pendientes, 1):
             nombre = Path(ruta).name
             estaba = os.path.normcase(ruta) in en_base
-            try:
-                mtime = Path(ruta).stat().st_mtime   # ANTES de analizar: si cambia durante
-                t0 = time.perf_counter()             # el análisis, el próximo scan lo rehace
-                res = analizar_archivo(ruta, consenso=args.consenso)
-                dt = time.perf_counter() - t0
-            except Exception as e:  # noqa: BLE001 — un archivo raro no frena 10k tracks
-                res, motivo = None, f"{type(e).__name__}: {e}"
-            else:
-                motivo = "no se pudo decodificar o dura menos de 1 s"
+            res = analizar_para_guardar(ruta, consenso=args.consenso)
 
-            if res is None:
+            if isinstance(res, str):
+                motivo = res
                 fallidos.append((nombre, motivo))
                 if estaba:
                     # El archivo cambió y la versión nueva no se puede analizar: el análisis
@@ -419,11 +463,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} FALLÓ ({motivo})", flush=True)
                 continue
 
-            features, duracion = res
-            tags = leer_tags(ruta)
-            store.upsert(ruta, features, duration=duracion, license=args.licencia,
-                         source_url=args.origen, artist=tags.get("artista") or None,
-                         title=tags.get("titulo") or None, mtime=mtime)
+            guardar_analisis(store, ruta, res, licencia=args.licencia, origen=args.origen)
+            features, dt = res.features, res.segundos
             (actualizados if estaba else nuevos).append(nombre)
             print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} {features.bpm:6.1f} BPM  "
                   f"{features.key:>3} {_clasica(features.key):<3}"
