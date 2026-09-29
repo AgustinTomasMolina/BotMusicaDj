@@ -11,7 +11,14 @@ import pytest
 
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
-from sinteticos import CATALOGO, LICENCIA, ORIGEN, armar_base_radio, embedding  # noqa: E402
+from sinteticos import (  # noqa: E402
+    CATALOGO,
+    LICENCIA,
+    ORIGEN,
+    armar_base_radio,
+    crear_playlist_radio,
+    embedding,
+)
 
 from motor.modelos import TrackFeatures  # noqa: E402
 from motor.radio import RadioConfig, build_set  # noqa: E402
@@ -32,6 +39,7 @@ def server(tmp_path_factory):
         for mod in ("server", "jobs", "db"):
             sys.modules.pop(mod, None)
         srv = importlib.import_module("server")
+        srv.db.init_db()        # las tablas de MusiFlix (playlists): el lifespan no corre acá
     return srv
 
 
@@ -42,16 +50,18 @@ def client(server, monkeypatch):
 
 
 @pytest.fixture
-def biblioteca(tmp_path, monkeypatch):
+def biblioteca(server, tmp_path, monkeypatch):
     db = tmp_path / "djradio" / "biblioteca.sqlite"
     _, rutas = armar_base_radio(tmp_path / "musica", db)
     monkeypatch.setenv("DJRADIO_DB", str(db))
-    return {"db": db, "rutas": rutas}
+    # Desde f33 la radio arma solo desde una playlist: el CATALOGO entero, un solo género.
+    return {"db": db, "rutas": rutas, "playlist": crear_playlist_radio(server.db, rutas)}
 
 
 def _mostrado(server, client, biblioteca, largo=4) -> tuple[dict, dict]:
     """Lo que la pantalla muestra (/api/radio/set) y el cuerpo con que lo guardaría."""
-    params = {"track": server._radio_id(biblioteca["rutas"]["uno.wav"]), "largo": largo}
+    params = {"playlist": biblioteca["playlist"],
+              "track": server._radio_id(biblioteca["rutas"]["uno.wav"]), "largo": largo}
     d = client.get("/api/radio/set", params=params).json()
     return d, {**params, "esperado": [p["track"]["id"] for p in d["pasos"]],
                "huella": d["huella"]}
@@ -152,6 +162,24 @@ def test_guardar_se_niega_si_un_reescaneo_cambio_lo_que_se_mostro(server, client
     assert client.get("/api/radio/sets").json()["sets"] == []
 
 
+def test_guardar_se_niega_si_la_playlist_cambio_entre_mostrar_y_guardar(server, client,
+                                                                        biblioteca):
+    """Se saca de la playlist un tema que estaba en el set mostrado: el re-armado ya no lo
+    tiene, los ids no coinciden y el guardado es 409 — no se guarda un set que no se vio."""
+    mostrado, cuerpo = _mostrado(server, client, biblioteca)
+    titulo = mostrado["pasos"][2]["track"]["titulo"]
+    pl = server.db.get_playlist_radio(biblioteca["playlist"])
+    item = next(it for it in pl["items"] if it["titulo"] == titulo)
+    assert server.db.quitar_item(item["id"])
+    r = client.post("/api/radio/sets", json=cuerpo)
+    assert r.status_code == 409, r.text
+    assert titulo not in [p["track"]["titulo"] for p in
+                          client.get("/api/radio/set", params={
+                              k: cuerpo[k] for k in ("playlist", "track", "largo")}).json()["pasos"]]
+    assert r.json()["esperado"] == cuerpo["esperado"] and r.json()["armado"] != cuerpo["esperado"]
+    assert client.get("/api/radio/sets").json()["sets"] == []
+
+
 @pytest.mark.parametrize(("cambio", "pista"), [
     ({"esperado": None}, "esperado"),
     ({"esperado": []}, "esperado"),
@@ -164,6 +192,10 @@ def test_guardar_se_niega_si_un_reescaneo_cambio_lo_que_se_mostro(server, client
     ({"nombre": 5}, "nombre"),
     ({"curva": "inexistente"}, "curva"),
     ({"nombre": "x" * 201}, "nombre"),
+    # Desde f33 el set sale de una playlist: sin ella (o con una que no existe) no se guarda.
+    ({"playlist": None}, "playlist"),
+    ({"playlist": "1"}, "playlist"),
+    ({"playlist": 987654}, "987654"),
 ])
 def test_guardar_pedido_invalido_es_400_y_no_guarda(server, client, biblioteca, cambio, pista):
     _, cuerpo = _mostrado(server, client, biblioteca)
@@ -238,17 +270,18 @@ def test_un_track_que_ya_no_esta_se_muestra_entero_y_sin_audio(server, client, b
     assert client.get("/api/radio/sets").json()["sets"][0]["faltan"] == 1
 
 
-def test_sin_base_degrada_sin_500_y_no_crea_la_base(client, tmp_path, monkeypatch):
+def test_sin_base_degrada_sin_500_y_no_crea_la_base(server, client, tmp_path, monkeypatch):
     fantasma = tmp_path / "no-existe" / "biblioteca.sqlite"
     monkeypatch.setenv("DJRADIO_DB", str(fantasma))
+    pid = server.db.crear_playlist("sin base")["id"]
 
     d = client.get("/api/radio/sets").json()
     assert (d["configurada"], d["estado"], d["sets"]) == (False, "sin-base", [])
     assert str(fantasma) in d["motivo"]
     d = client.get("/api/radio/sets/1").json()
     assert (d["estado"], d["set"]) == ("sin-base", None)
-    for r in (client.post("/api/radio/sets", json={"track": "x", "esperado": ["a"],
-                                                     "huella": "h"}),
+    for r in (client.post("/api/radio/sets", json={"playlist": pid, "track": "x",
+                                                     "esperado": ["a"], "huella": "h"}),
               client.put("/api/radio/sets/1/transiciones/1", json={"calificacion": "ok"}),
               client.delete("/api/radio/sets/1/transiciones/1"),
               client.patch("/api/radio/sets/1", json={"nombre": "x"}),
@@ -347,7 +380,8 @@ def _guardar_uno(server, client, biblioteca) -> tuple[dict, bytes, str]:
     .m3u8 del set ARMADO en ese mismo momento)."""
     _, cuerpo = _mostrado(server, client, biblioteca)
     vivo = client.get("/api/radio/set.m3u8",
-                      params={"track": cuerpo["track"], "largo": cuerpo["largo"]})
+                      params={"playlist": cuerpo["playlist"], "track": cuerpo["track"],
+                              "largo": cuerpo["largo"]})
     assert vivo.status_code == 200, vivo.text
     s = client.post("/api/radio/sets", json=cuerpo).json()["set"]
     return s, vivo.content, vivo.headers["content-disposition"]
@@ -382,7 +416,8 @@ def test_el_m3u8_del_set_guardado_no_cambia_si_se_re_escanea_un_track(server, cl
     con.commit()
     con.close()
     hoy = client.get("/api/radio/set.m3u8",
-                     params={"track": s["pasos"][0]["track"]["id"], "largo": 4})
+                     params={"playlist": biblioteca["playlist"],
+                             "track": s["pasos"][0]["track"]["id"], "largo": 4})
     assert b"bpm=131.3" in hoy.content and hoy.content != vivo, \
         "el re-escaneo no cambió el set de hoy: el test no probaría nada"
     r = client.get(f"/api/radio/sets/{s['id']}/m3u8")

@@ -410,20 +410,78 @@ def _buscar_item(s, pid, ident):
     return None
 
 
-def agregar_item(pid: int, track: dict) -> dict | None:
+def _con_archivo(it: "MiPlaylistItem", ruta_local: str) -> None:
+    it.ruta = ruta_local
+    it.archivo = Path(ruta_local).name[:500]
+    it.formato = Path(ruta_local).suffix.lstrip(".").lower()[:10] or None
+
+
+def agregar_item(pid: int, track: dict, ruta_local: str | None = None) -> dict | None:
+    """Agrega un tema a la playlist. `ruta_local` es el archivo del tema YA RESUELTO POR EL
+    SERVER (hoy: el índice de la biblioteca local, `server._lib_audio`, a partir del `lib_id`
+    que manda la home). Nunca una ruta que haya mandado el cliente: `_snapshot` no lee
+    `ruta` del cuerpo, y cualquier página abierta en el navegador puede pegarle a este
+    endpoint — una ruta suya haría que la radio lea o sirva cualquier archivo de la PC.
+
+    Con archivo, el dedupe es por ARCHIVO: dos archivos distintos con el mismo artista y
+    título (el mismo master en dos carpetas) entran los dos, y la radio decide cuál usa y dice
+    por qué el otro no (`radio_playlist.clasificar`); taparlo acá lo haría invisible. Si el
+    tema ya estaba SIN archivo (la home lo guardaba así antes de f33), se le completa: es la
+    forma de arreglar esos items, agregándolos de nuevo.
+    """
     try:
         snap = _snapshot(track)
         ident = _ident(snap["fuente"], snap["url"], snap["titulo"], snap["artista"])
         with SessionLocal() as s:
             if not s.get(MiPlaylist, pid):
                 return None
-            if _buscar_item(s, pid, ident):   # dedupe
-                return {"ok": True, "dup": True}
+            previo = _buscar_item(s, pid, ident)
+            if ruta_local:
+                clave = os.path.normcase(ruta_local)
+                mismo = next((it for it in s.scalars(select(MiPlaylistItem).where(
+                    MiPlaylistItem.playlist_id == pid)) if it.ruta and os.path.normcase(it.ruta) == clave), None)
+                if mismo is not None:
+                    return {"ok": True, "dup": True, "id": mismo.id, "archivo_completado": False}
+                if previo is not None and previo.ruta:
+                    previo = None       # mismo nombre, OTRO archivo: es otro item
+            if previo:   # dedupe
+                completado = bool(ruta_local) and not previo.ruta
+                if completado:
+                    _con_archivo(previo, ruta_local)
+                    s.commit()
+                return {"ok": True, "dup": True, "id": previo.id, "archivo_completado": completado}
             it = MiPlaylistItem(playlist_id=pid, orden=_next_orden(s, pid), **snap)
+            if ruta_local:
+                _con_archivo(it, ruta_local)
             s.add(it); s.commit()
             return {"ok": True, "id": it.id}
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude agregar item: {e}"); return None
+
+
+def get_playlist_radio(pid: int) -> dict | None:
+    """La playlist con lo que necesita la radio de cada item, RUTA incluida.
+
+    Aparte de `get_playlist_mia` a propósito: aquella es la que viaja al navegador y no lleva
+    la ruta (no hay por qué mandarle al cliente dónde está cada archivo en la PC). Esta la
+    usa solo el server para clasificar los items (`radio_playlist.py`). Mismo orden que la
+    pantalla de playlists: `orden` y, a igual orden, el más viejo primero.
+    `None` si la playlist no existe (o la base falló: se loguea, como el resto del módulo).
+    """
+    try:
+        with SessionLocal() as s:
+            p = s.get(MiPlaylist, pid)
+            if not p:
+                return None
+            items = list(s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)
+                                   .order_by(MiPlaylistItem.orden, MiPlaylistItem.id)))
+            return {"id": p.id, "nombre": p.nombre, "items": [
+                {"id": it.id, "titulo": it.titulo, "artista": it.artista, "fuente": it.fuente,
+                 "url": it.url, "genero": it.genero, "ruta": it.ruta or None}
+                for it in items]}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude leer la playlist {pid} para la radio: {e}")
+        return None
 
 
 def quitar_item(item_id: int) -> bool:

@@ -14,6 +14,10 @@ Dos aclaraciones sobre los datos, porque parecen chocar con reglas del proyecto:
 - La `duration` que guarda la base es la declarada en el `upsert`, no la del WAV: los
   archivos son de 0.25 s para que la suite no escriba megabytes. La radio decide con la
   duración de la BASE, que es lo que se está probando.
+
+Desde f33 la radio arma SOLO desde una playlist de MusiFlix (fixture `playlist`: el CATALOGO
+entero, todo "Techno"). Lo propio de las playlists —género, duplicados, sin archivo, el
+análisis en segundo plano, `lib_id`— está en `test_server_radio_playlist.py`.
 """
 import importlib
 import json
@@ -29,7 +33,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 # El CATALOGO y los WAVs viven en tests/sinteticos.py: el E2E del front (frontend/e2e) arma
 # la misma base del motor y compara la pantalla contra esta API.
-from sinteticos import CATALOGO, armar_base_radio  # noqa: E402
+from sinteticos import (  # noqa: E402
+    CATALOGO,
+    LICENCIA,
+    ORIGEN,
+    armar_base_radio,
+    crear_playlist_radio,
+)
 
 from motor.cli import (  # noqa: E402
     aviso_fragmentos,
@@ -56,6 +66,7 @@ def server(tmp_path_factory):
         for mod in ("server", "jobs", "db"):
             sys.modules.pop(mod, None)
         srv = importlib.import_module("server")
+        srv.db.init_db()        # las tablas de MusiFlix (playlists): el lifespan no corre acá
     return srv
 
 
@@ -81,6 +92,13 @@ def biblioteca(tmp_path, monkeypatch):
     return {"raiz": raiz, "db": db, "audios": audios, "rutas": rutas}
 
 
+@pytest.fixture
+def playlist(server, biblioteca) -> int:
+    """Una playlist de MusiFlix con TODO el CATALOGO, del mismo género: el pool es la
+    biblioteca entera, así estos tests siguen comparando contra `build_set` sobre la base."""
+    return crear_playlist_radio(server.db, biblioteca["rutas"])
+
+
 def _tracks_del_motor(db) -> dict:
     """La biblioteca leída con el motor, por nombre de archivo. Es la fuente contra la que
     se comparan las respuestas: si el endpoint recalcula algo, deja de coincidir."""
@@ -90,8 +108,9 @@ def _tracks_del_motor(db) -> dict:
 
 # --------------------------------------------------------------- degradación sin config
 
-def test_radio_sin_base_degrada_sin_500(client, tmp_path, monkeypatch):
-    """La base configurada no existe: 200, vacía y con el motivo diciendo dónde buscó.
+def test_radio_sin_base_degrada_sin_500(server, client, tmp_path, monkeypatch):
+    """La base configurada no existe: 200, sin set y con el motivo diciendo dónde buscó.
+    Las playlists se listan igual: son de MusiFlix, no de la base del motor.
 
     También verifica que NO se haya creado la base: `Store(ruta)` crea el archivo, así que
     un endpoint que abriera sin preguntar dejaría una base vacía nueva y el próximo pedido
@@ -99,43 +118,51 @@ def test_radio_sin_base_degrada_sin_500(client, tmp_path, monkeypatch):
     """
     fantasma = tmp_path / "no-existe" / "biblioteca.sqlite"
     monkeypatch.setenv("DJRADIO_DB", str(fantasma))
+    pid = server.db.crear_playlist("sin base")["id"]
 
-    r = client.get("/api/radio/biblioteca")
+    r = client.get("/api/radio/playlists")
     assert r.status_code == 200
     d = r.json()
-    assert (d["configurada"], d["estado"], d["total"], d["tracks"]) == (False, "sin-base", 0, [])
+    assert (d["configurada"], d["estado"]) == (False, "sin-base")
+    assert {"id": pid, "nombre": "sin base", "total": 0} in d["playlists"], d["playlists"]
     assert str(fantasma) in d["motivo"], "el motivo no dice qué base buscó: no hay qué arreglar"
-    assert not fantasma.exists(), "el endpoint creó la base que no existía"
+    d = client.get(f"/api/radio/playlists/{pid}").json()
+    assert (d["estado"], d["items"]) == ("sin-base", [])
+    assert not fantasma.exists(), "un GET creó la base que no existía"
 
-    s = client.get("/api/radio/set", params={"track": "lo que sea"}).json()
+    s = client.get("/api/radio/set", params={"playlist": pid, "track": "lo que sea"}).json()
     assert (s["configurada"], s["estado"], s["pasos"], s["semilla"]) == (False, "sin-base", [], None)
+    assert s["playlist"] == {"id": pid, "nombre": "sin base"}
 
 
-def test_radio_sin_el_paquete_motor_degrada_sin_500(client, biblioteca, monkeypatch, caplog):
+def test_radio_sin_el_paquete_motor_degrada_sin_500(client, playlist, monkeypatch, caplog):
     """Como en una imagen Docker que no copió motor/: las variables están y el import falla.
     Un None en sys.modules hace que `from motor.store import ...` tire ImportError."""
     monkeypatch.setitem(sys.modules, "motor.store", None)
     with caplog.at_level("WARNING", logger="bot_web"):
-        d = client.get("/api/radio/biblioteca").json()
-    assert (d["configurada"], d["estado"], d["total"]) == (False, "sin-motor", 0)
+        d = client.get("/api/radio/playlists").json()
+    assert (d["configurada"], d["estado"]) == (False, "sin-motor")
     assert "motor" in d["motivo"], "el front tiene que poder explicar por qué está vacía"
     assert any("motor" in m and "desactivada" in m for m in caplog.messages), \
         "sin warning en el log nadie se entera de que falta el motor"
+    # Y sin motor no se analiza nada: 409 con el motivo, no un hilo que va a fallar en cada tema.
+    r = client.post(f"/api/radio/playlists/{playlist}/analizar")
+    assert (r.status_code, r.json()["estado"]) == (409, "sin-motor"), r.text
 
 
-def test_radio_base_vacia_dice_que_escanear(client, tmp_path, monkeypatch):
+def test_radio_base_vacia_dice_que_hacer(server, client, tmp_path, monkeypatch):
     """La base existe pero no tiene tracks: configurada SÍ (el usuario apuntó a algo) y el
-    motivo dice cuál es el paso siguiente."""
+    motivo dice cuál es el paso siguiente — ahora también desde la pantalla."""
     db = tmp_path / "vacia.sqlite"
     Store(db).close()
     monkeypatch.setenv("DJRADIO_DB", str(db))
 
-    d = client.get("/api/radio/biblioteca").json()
-    assert (d["configurada"], d["estado"], d["total"]) == (True, "base-vacia", 0)
-    assert "scan" in d["motivo"], f"no dice cómo llenarla: {d['motivo']}"
+    d = client.get("/api/radio/playlists").json()
+    assert (d["configurada"], d["estado"]) == (True, "base-vacia")
+    assert "scan" in d["motivo"] and "playlist" in d["motivo"], f"no dice cómo llenarla: {d['motivo']}"
 
 
-def test_radio_base_ocupada_no_congela_la_pantalla(server, client, biblioteca, monkeypatch):
+def test_radio_base_ocupada_no_congela_la_pantalla(server, client, playlist, biblioteca):
     """Con un scan corriendo, la base está tomada. La CLI espera 30 s porque ahí esperar es
     lo correcto; un GET no puede colgar la pantalla medio minuto, y "database is locked" en
     crudo no le dice al DJ que lo único que tiene que hacer es reintentar."""
@@ -148,8 +175,11 @@ def test_radio_base_ocupada_no_congela_la_pantalla(server, client, biblioteca, m
     otro.execute("BEGIN EXCLUSIVE")          # como un scan a mitad de camino
     try:
         t0 = reloj.monotonic()
-        d = client.get("/api/radio/biblioteca").json()
+        d = client.get(f"/api/radio/playlists/{playlist}").json()
         tardo = reloj.monotonic() - t0
+        # Sin poder leer la base, todo parecería "por analizar": analizar ahí re-analizaría
+        # la playlist entera. 409 con el motivo, y no arranca nada.
+        a = client.post(f"/api/radio/playlists/{playlist}/analizar")
     finally:
         otro.rollback()
         otro.close()
@@ -159,6 +189,8 @@ def test_radio_base_ocupada_no_congela_la_pantalla(server, client, biblioteca, m
     assert "locked" not in d["motivo"], f"el motivo es el crudo de SQLite: {d['motivo']}"
     assert tardo < ESPERA_BLOQUEO_S / 2, \
         f"esperó {tardo:.1f} s: está usando la espera de la CLI ({ESPERA_BLOQUEO_S:g} s)"
+    assert (a.status_code, a.json()["estado"], a.json()["analisis"]["corriendo"]) == \
+        (409, "base-ocupada", False), a.text
 
 
 def test_radio_base_ilegible_degrada_sin_500(client, tmp_path, monkeypatch, caplog):
@@ -168,22 +200,30 @@ def test_radio_base_ilegible_degrada_sin_500(client, tmp_path, monkeypatch, capl
     monkeypatch.setenv("DJRADIO_DB", str(db))
 
     with caplog.at_level("WARNING", logger="bot_web"):
-        d = client.get("/api/radio/biblioteca").json()
-    assert (d["configurada"], d["estado"], d["total"]) == (True, "base-ilegible", 0)
+        d = client.get("/api/radio/playlists").json()
+    assert (d["configurada"], d["estado"]) == (True, "base-ilegible")
     assert str(db) in d["motivo"], f"no dice qué base no pudo leer: {d['motivo']}"
 
 
-# --------------------------------------------------------------- /api/radio/biblioteca
+# --------------------------------------------------------------- /api/radio/playlists/{id}
 
-def test_biblioteca_del_motor_dice_lo_que_tiene_la_base(server, client, biblioteca):
+def _tracks_de(d) -> list[dict]:
+    """Los `track` (datos del motor) de los items listos de /api/radio/playlists/{id}."""
+    return [it["track"] for it in d["items"] if it["estado"] == "listo"]
+
+
+def test_la_playlist_trae_los_datos_del_motor_de_cada_tema(server, client, biblioteca, playlist):
     """Cada track con lo que pide §6: BPM con un decimal, las DOS notaciones de key, el `?`
     de confianza y la energía. Y lo que no es un track sigue listado, marcado."""
-    d = client.get("/api/radio/biblioteca").json()
+    d = client.get(f"/api/radio/playlists/{playlist}").json()
     assert (d["configurada"], d["estado"], d["motivo"]) == (True, "ok", None)
-    assert d["total"] == len(CATALOGO), "la biblioteca lista todo lo de la base, también el loop"
+    assert [it["estado"] for it in d["items"]] == ["listo"] * len(CATALOGO), \
+        "la playlist lista todo lo que tiene, también el loop"
+    # La licencia y el origen visibles (§6) son los de la BASE del motor para ese archivo.
+    assert {(it["licencia"], it["origen"]) for it in d["items"]} == {(LICENCIA, ORIGEN)}
 
     tracks = _tracks_del_motor(biblioteca["db"])
-    por_id = {t["id"]: t for t in d["tracks"]}
+    por_id = {t["id"]: t for t in _tracks_de(d)}
 
     uno = por_id[server._radio_id(biblioteca["rutas"]["uno.wav"])]
     assert uno == {
@@ -198,7 +238,7 @@ def test_biblioteca_del_motor_dice_lo_que_tiene_la_base(server, client, bibliote
 
     # El `?` de la key: unánime (3/3) no lo lleva, 2/3 y "no se midió" sí. Es la regla de
     # `cli.key_dudosa`, y se compara contra ELLA para que moverla mueva el test.
-    dudosas = {t["label"]: t["key_dudosa"] for t in d["tracks"]}
+    dudosas = {t["label"]: t["key_dudosa"] for t in _tracks_de(d)}
     assert dudosas == {"Artista A — Uno": key_dudosa("3/3"), "Artista B — Dos": key_dudosa("2/3"),
                        "Artista C — Tres": key_dudosa(None), "Artista D — Cuatro": key_dudosa("0/0"),
                        "Artista E — Loop": key_dudosa("3/3"), "Artista F — Cinco": key_dudosa("3/3")}
@@ -238,12 +278,12 @@ def _energias_que_imprime_la_cli(db, capsys, labels) -> dict:
 
 
 def test_la_energia_de_la_pantalla_es_la_que_imprime_la_terminal(server, client, biblioteca,
-                                                                 capsys):
+                                                                 playlist, capsys):
     """El percentil 0-100 de /api/radio/* contra el de `python -m motor list`, track por
-    track, en la biblioteca y en cada paso del set (decisión del dueño 2026-09-21: en
+    track, en la playlist y en cada paso del set (decisión del dueño 2026-09-21: en
     pantalla se muestra el percentil, no el 0..1 crudo)."""
-    d = client.get("/api/radio/biblioteca").json()
-    en_pantalla = {t["label"]: t["energia_pct"] for t in d["tracks"]}
+    d = client.get(f"/api/radio/playlists/{playlist}").json()
+    en_pantalla = {t["label"]: t["energia_pct"] for t in _tracks_de(d)}
     en_consola = _energias_que_imprime_la_cli(biblioteca["db"], capsys, list(en_pantalla))
 
     # 1) La terminal sigue imprimiendo lo de siempre. El valor esperado NO sale de
@@ -264,20 +304,20 @@ def test_la_energia_de_la_pantalla_es_la_que_imprime_la_terminal(server, client,
 
     # Y el mismo número en cada paso del set, que es donde se lee mientras se arma.
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    pasos = client.get("/api/radio/set", params={"track": id_uno}).json()["pasos"]
+    pasos = client.get("/api/radio/set", params={"playlist": playlist, "track": id_uno}).json()["pasos"]
     assert pasos, "sin pasos no hay nada que comparar"
     assert {p["track"]["label"]: p["track"]["energia_pct"] for p in pasos} == \
         {p["track"]["label"]: en_consola[p["track"]["label"]] for p in pasos}
 
 
-def test_biblioteca_trae_las_curvas_y_los_defaults_del_motor(client, biblioteca):
+def test_playlists_trae_las_curvas_y_los_defaults_del_motor(client, playlist):
     """La pantalla dibuja los controles con esto: tiene que ser lo que dice el motor y no
     una copia en el server (mismo argumento que `test_set_sin_parametros_...`, y el mismo
     valor: `config_default` se compara contra el `config` que devuelve /api/radio/set)."""
     from motor.cli import LEYENDA_KEY
     from motor.energia import CURVES
 
-    d = client.get("/api/radio/biblioteca").json()
+    d = client.get("/api/radio/playlists").json()
     por_defecto = RadioConfig()
     assert d["opciones"] == {
         "curvas": list(CURVES),
@@ -288,16 +328,16 @@ def test_biblioteca_trae_las_curvas_y_los_defaults_del_motor(client, biblioteca)
                            "randomness": por_defecto.randomness},
         "leyenda_key": LEYENDA_KEY,
     }
-    usado = client.get("/api/radio/set", params={"track": "uno"}).json()["config"]
+    usado = client.get("/api/radio/set", params={"playlist": playlist, "track": "uno"}).json()["config"]
     assert d["opciones"]["config_default"] == usado, \
         "los defaults que dibuja la pantalla no son los que el motor termina usando"
 
 
-def test_biblioteca_sin_el_paquete_motor_no_inventa_curvas(client, biblioteca, monkeypatch):
+def test_playlists_sin_el_paquete_motor_no_inventa_curvas(client, biblioteca, monkeypatch):
     """Sin motor no hay curvas ni defaults que ofrecer: `null`, no un juego escrito a mano
     (§6 — un dato que miente es peor que uno ausente)."""
     monkeypatch.setitem(sys.modules, "motor.store", None)
-    d = client.get("/api/radio/biblioteca").json()
+    d = client.get("/api/radio/playlists").json()
     assert (d["estado"], d["opciones"]) == ("sin-motor", None)
 
 
@@ -316,10 +356,10 @@ def test_las_opciones_sin_el_paquete_motor_son_none(server, monkeypatch):
 
 # --------------------------------------------------------------- /api/radio/set
 
-def test_set_sin_parametros_usa_los_defaults_del_motor(client, biblioteca):
+def test_set_sin_parametros_usa_los_defaults_del_motor(client, biblioteca, playlist):
     """Los defaults salen de `RadioConfig`, no de la firma del endpoint. Se comparan contra
     la dataclass: si alguien copia un 20 en server.py y el motor cambia, esto rompe."""
-    d = client.get("/api/radio/set", params={"track": "uno"}).json()
+    d = client.get("/api/radio/set", params={"playlist": playlist, "track": "uno"}).json()
     por_defecto = RadioConfig()
     assert d["config"] == {"largo": por_defecto.length, "curva": por_defecto.curve,
                            "artist_gap": por_defecto.artist_gap,
@@ -328,12 +368,12 @@ def test_set_sin_parametros_usa_los_defaults_del_motor(client, biblioteca):
     assert d["pedidos"] == por_defecto.length
 
 
-def test_set_completo_trae_el_porque_que_dio_el_motor(server, client, biblioteca):
+def test_set_completo_trae_el_porque_que_dio_el_motor(server, client, biblioteca, playlist):
     """El set, paso por paso, igual al que arma `build_set` con la misma config: mismos
     tracks, mismo orden y el MISMO motivo (§6). Nada se recalcula en el server."""
     tracks = _tracks_del_motor(biblioteca["db"])
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    d = client.get("/api/radio/set", params={"track": id_uno, "largo": 4}).json()
+    d = client.get("/api/radio/set", params={"playlist": playlist, "track": id_uno, "largo": 4}).json()
 
     esperado = build_set(tracks["uno.wav"], list(tracks.values()), RadioConfig(length=4))
     assert [p["track"]["label"] for p in d["pasos"]] == [t.label for t in esperado.tracks]
@@ -376,12 +416,12 @@ def test_set_completo_trae_el_porque_que_dio_el_motor(server, client, biblioteca
     assert d["aviso_fragmentos"] == aviso_fragmentos(1, "La radio ignoró")
 
 
-def test_set_cortado_dice_el_motivo_y_el_titular_del_motor(server, client, biblioteca):
+def test_set_cortado_dice_el_motivo_y_el_titular_del_motor(server, client, biblioteca, playlist):
     """Se piden 6 y solo hay 4 mezclables: el corte tiene que ser el del motor, con el
     titular que ya escribe la CLI, y no un set estirado ni un 500."""
     tracks = _tracks_del_motor(biblioteca["db"])
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    d = client.get("/api/radio/set", params={"track": id_uno, "largo": 6}).json()
+    d = client.get("/api/radio/set", params={"playlist": playlist, "track": id_uno, "largo": 6}).json()
 
     esperado = build_set(tracks["uno.wav"], list(tracks.values()), RadioConfig(length=6))
     assert (d["total"], d["pedidos"], d["completo"]) == (4, 6, False)
@@ -395,11 +435,11 @@ def test_set_cortado_dice_el_motivo_y_el_titular_del_motor(server, client, bibli
     assert "8" in d["corte"]["detalle"], f"el detalle no dice la tolerancia: {d['corte']['detalle']}"
 
 
-def test_set_rechaza_una_semilla_que_no_es_un_track(server, client, biblioteca):
+def test_set_rechaza_una_semilla_que_no_es_un_track(server, client, biblioteca, playlist):
     """Pedir la radio DESDE el loop es un error, no un set: todo el set se arma contra el
     BPM y la key de la semilla, y 10 s de audio no son una medición (§6)."""
     id_loop = server._radio_id(biblioteca["rutas"]["loop.wav"])
-    r = client.get("/api/radio/set", params={"track": id_loop, "largo": 5})
+    r = client.get("/api/radio/set", params={"playlist": playlist, "track": id_loop, "largo": 5})
     assert r.status_code == 400, f"armó un set desde un loop de 10 s: {r.json()}"
     d = r.json()
     assert "pasos" not in d, "devolvió pasos de un set que no tenía que armar"
@@ -409,7 +449,7 @@ def test_set_rechaza_una_semilla_que_no_es_un_track(server, client, biblioteca):
     assert "10.0 s" in d["error"], "no dice cuánto dura el archivo"
 
 
-def test_set_resuelve_la_semilla_por_su_ruta_real(client, biblioteca):
+def test_set_resuelve_la_semilla_por_su_ruta_real(client, biblioteca, playlist):
     """Pasar la ruta del archivo tiene que seguir funcionando (es la forma que usa la CLI),
     aunque la API no consulte el disco para resolverla."""
     ruta = biblioteca["rutas"]["uno.wav"]
@@ -417,13 +457,14 @@ def test_set_resuelve_la_semilla_por_su_ruta_real(client, biblioteca):
     if os.name == "nt":
         formas.append(str(ruta).upper())   # en Windows la caja no cambia de qué track hablás
     for forma in formas:
-        r = client.get("/api/radio/set", params={"track": forma, "largo": 2})
+        r = client.get("/api/radio/set", params={"playlist": playlist, "track": forma, "largo": 2})
         assert r.status_code == 200, f"la ruta {forma!r} no resolvió: {r.json()}"
         assert r.json()["semilla"]["label"] == "Artista A — Uno", \
             f"la ruta {forma!r} resolvió a otro track: {r.json()['semilla']}"
 
 
-def test_set_no_toca_el_disco_con_la_ruta_que_le_manden(server, client, biblioteca, monkeypatch):
+def test_set_no_toca_el_disco_con_la_ruta_que_le_manden(server, client, biblioteca, playlist,
+                                                        monkeypatch):
     """`track` viene de afuera: el endpoint no tiene CORS y escucha en localhost, así que
     cualquier página abierta en el navegador puede disparar este GET.
 
@@ -459,7 +500,7 @@ def test_set_no_toca_el_disco_con_la_ruta_que_le_manden(server, client, bibliote
 
     errores = {}
     for sonda in (existe, no_existe, unc):
-        r = client.get("/api/radio/set", params={"track": sonda})
+        r = client.get("/api/radio/set", params={"playlist": playlist, "track": sonda})
         assert r.status_code == 400, f"{sonda!r} no tenía que resolver a nada"
         errores[sonda] = r.json()["error"]
         assert any(m in errores[sonda] for m in ("Ningún track", "no elijo uno")), \
@@ -478,30 +519,30 @@ def test_set_no_toca_el_disco_con_la_ruta_que_le_manden(server, client, bibliote
         assert not tocados, f"el server le pegó al disco con {sonda!r}: {tocados}"
 
 
-def test_set_con_semilla_inexistente_o_ausente_no_inventa_una(client, biblioteca):
-    r = client.get("/api/radio/set", params={"track": "no-esta-en-la-base"})
+def test_set_con_semilla_inexistente_o_ausente_no_inventa_una(client, biblioteca, playlist):
+    r = client.get("/api/radio/set", params={"playlist": playlist, "track": "no-esta-en-la-base"})
     assert r.status_code == 400
     assert "no-esta-en-la-base" in r.json()["error"] and "Ningún track" in r.json()["error"]
 
-    r = client.get("/api/radio/set", params={"track": "   "})
+    r = client.get("/api/radio/set", params={"playlist": playlist, "track": "   "})
     assert r.status_code == 400
     assert "semilla" in r.json()["error"].lower(), r.json()
 
     # Un fragmento que coincide con varios no elige uno: la regla de `cli.resolver_track`.
-    r = client.get("/api/radio/set", params={"track": ".wav"})
+    r = client.get("/api/radio/set", params={"playlist": playlist, "track": ".wav"})
     assert r.status_code == 400
     assert "no elijo uno" in r.json()["error"], r.json()
 
 
-def test_set_con_una_curva_que_no_existe_lo_dice_el_motor(client, biblioteca):
-    r = client.get("/api/radio/set", params={"track": "uno", "curva": "montaña rusa"})
+def test_set_con_una_curva_que_no_existe_lo_dice_el_motor(client, biblioteca, playlist):
+    r = client.get("/api/radio/set", params={"playlist": playlist, "track": "uno", "curva": "montaña rusa"})
     assert r.status_code == 400
     assert "curva desconocida" in r.json()["error"], r.json()
 
 
 # --------------------------------------------------------------- /api/radio/audio/{id}
 
-def test_audio_sirve_el_archivo_de_ese_track(server, client, biblioteca):
+def test_audio_sirve_el_archivo_de_ese_track(server, client, biblioteca, playlist):
     for nombre in ("dos.wav", "cuatro.wav"):   # ninguno es el primero: un "sirve cualquiera" no pasa
         tid = server._radio_id(biblioteca["rutas"][nombre])
         r = client.get(f"/api/radio/audio/{tid}")
@@ -509,7 +550,7 @@ def test_audio_sirve_el_archivo_de_ese_track(server, client, biblioteca):
         assert r.content == biblioteca["audios"][nombre], f"sirvió otro archivo que el de {nombre}"
 
 
-def test_audio_responde_a_range(server, client, biblioteca):
+def test_audio_responde_a_range(server, client, biblioteca, playlist):
     completo = biblioteca["audios"]["uno.wav"]
     tid = server._radio_id(biblioteca["rutas"]["uno.wav"])
     r = client.get(f"/api/radio/audio/{tid}", headers={"Range": "bytes=100-199"})
@@ -518,14 +559,14 @@ def test_audio_responde_a_range(server, client, biblioteca):
     assert r.content == completo[100:200]
 
 
-def test_audio_id_inexistente_da_404(client, biblioteca):
+def test_audio_id_inexistente_da_404(client, biblioteca, playlist):
     for tid in ("0" * 16, "12345", "0"):
         r = client.get(f"/api/radio/audio/{tid}")
         assert r.status_code == 404, f"id {tid!r} no debería servir nada"
         assert r.json() == {"error": "track no encontrado"}
 
 
-def test_audio_de_un_archivo_movido_no_se_confunde_con_un_id_invalido(server, client, biblioteca):
+def test_audio_de_un_archivo_movido_no_se_confunde_con_un_id_invalido(server, client, biblioteca, playlist):
     """El track está en la base y el archivo no está: es otra cosa que "no encontrado", y el
     DJ la arregla distinto (en Docker es la carpeta que no se montó)."""
     tid = server._radio_id(biblioteca["rutas"]["tres.wav"])
@@ -537,7 +578,7 @@ def test_audio_de_un_archivo_movido_no_se_confunde_con_un_id_invalido(server, cl
 
 
 def test_audio_deja_de_servir_un_id_de_una_base_que_ya_no_esta(server, client, biblioteca,
-                                                               tmp_path, monkeypatch):
+                                                               playlist, tmp_path, monkeypatch):
     """Si la carga de la biblioteca FALLA, el índice id→ruta se reemplaza igual (queda
     vacío). Si no, el server seguiría sirviendo audio de una base que ya no es la
     configurada: los archivos siguen en disco, así que el `exists()` no salva nada.
@@ -547,7 +588,7 @@ def test_audio_deja_de_servir_un_id_de_una_base_que_ya_no_esta(server, client, b
 
     # La base configurada desaparece (o DJRADIO_DB pasa a apuntar a otra cosa).
     monkeypatch.setenv("DJRADIO_DB", str(tmp_path / "otra" / "biblioteca.sqlite"))
-    assert client.get("/api/radio/biblioteca").json()["estado"] == "sin-base"
+    assert client.get(f"/api/radio/playlists/{playlist}").json()["estado"] == "sin-base"
 
     assert biblioteca["rutas"]["uno.wav"].exists(), "el archivo sigue en disco: ese no es el filtro"
     r = client.get(f"/api/radio/audio/{tid}")
@@ -582,7 +623,7 @@ def test_un_valor_no_finito_viaja_como_null_y_no_como_NaN(server, biblioteca):
                parse_constant=lambda c: pytest.fail(f"el JSON trae la constante {c}"))
 
 
-def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, biblioteca):
+def test_audio_no_sirve_archivos_fuera_de_la_biblioteca(server, client, biblioteca, playlist):
     """El id NO es una ruta: ni relativa ni absoluta, ni aunque el archivo exista y hasta
     aunque ESTÉ en la biblioteca — a esos se llega por su id, no por su ruta."""
     servidor = Path(server.__file__).resolve()
@@ -623,12 +664,12 @@ def _m3u8_esperado(tracks) -> bytes:
     return "".join(f"{r}\r\n" for r in renglones).encode("utf-8")
 
 
-def test_m3u8_es_el_set_de_la_pantalla_byte_a_byte(server, client, biblioteca):
+def test_m3u8_es_el_set_de_la_pantalla_byte_a_byte(server, client, biblioteca, playlist):
     """Mismo set que /api/radio/set, en el mismo orden, con CRLF, sin BOM y con las rutas
     absolutas del scan, que existen en disco (lo que pide la #15: sin archivos rotos)."""
     tracks = _tracks_del_motor(biblioteca["db"])
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    params = {"track": id_uno, "largo": 4, "curva": "warmup"}
+    params = {"playlist": playlist, "track": id_uno, "largo": 4, "curva": "warmup"}
 
     pantalla = client.get("/api/radio/set", params=params).json()
     r = client.get("/api/radio/set.m3u8", params=params)
@@ -648,10 +689,12 @@ def test_m3u8_es_el_set_de_la_pantalla_byte_a_byte(server, client, biblioteca):
         f"hay rutas que no resuelven a un archivo: {rutas}"
 
 
-def test_m3u8_es_el_mismo_archivo_que_escribe_la_cli(server, client, biblioteca, tmp_path,
-                                                    capsys):
+def test_m3u8_es_el_mismo_archivo_que_escribe_la_cli(server, client, biblioteca, playlist,
+                                                    tmp_path, capsys):
     """`python -m motor radio --m3u8` y el botón de la pantalla tienen que dar el mismo
-    archivo para el mismo set: si no, el DJ tiene dos exports que dicen cosas distintas."""
+    archivo para el mismo set: si no, el DJ tiene dos exports que dicen cosas distintas.
+    La playlist tiene toda la biblioteca y un solo género: el pool es el de la CLI, y el set
+    tiene que ser ESE (el filtro de la playlist no reordena ni cambia el scoring)."""
     from motor.cli import main
 
     salida = tmp_path / "cli.m3u8"
@@ -661,18 +704,18 @@ def test_m3u8_es_el_mismo_archivo_que_escribe_la_cli(server, client, biblioteca,
     assert codigo == 0, capsys.readouterr().out
 
     r = client.get("/api/radio/set.m3u8",
-                   params={"track": server._radio_id(ruta_uno), "largo": 4})
+                   params={"playlist": playlist, "track": server._radio_id(ruta_uno), "largo": 4})
     assert r.status_code == 200, r.text
     assert r.content == salida.read_bytes(), \
         (f"la API y la CLI exportan distinto.\nAPI:\n{r.content!r}\n"
          f"CLI:\n{salida.read_bytes()!r}")
 
 
-def test_m3u8_cabeceras_de_descarga(server, client, biblioteca):
+def test_m3u8_cabeceras_de_descarga(server, client, biblioteca, playlist):
     """Texto UTF-8 (no se interpreta), que el navegador lo BAJE con un nombre que diga qué
     set es, y que no quede cacheado: el mismo pedido puede dar otro set tras un scan."""
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    r = client.get("/api/radio/set.m3u8", params={"track": id_uno, "curva": "flat"})
+    r = client.get("/api/radio/set.m3u8", params={"playlist": playlist, "track": id_uno, "curva": "flat"})
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "text/plain; charset=utf-8"
     assert r.headers["content-disposition"] == (
@@ -722,19 +765,19 @@ def test_content_disposition_ascii_no_trae_caracteres_que_windows_rechaza(server
 
 
 def test_m3u8_semilla_que_no_es_track_es_400_con_el_motivo_del_motor(server, client,
-                                                                     biblioteca):
+                                                                     biblioteca, playlist):
     id_loop = server._radio_id(biblioteca["rutas"]["loop.wav"])
-    r = client.get("/api/radio/set.m3u8", params={"track": id_loop})
+    r = client.get("/api/radio/set.m3u8", params={"playlist": playlist, "track": id_loop})
     assert r.status_code == 400, f"exportó un set armado desde un loop: {r.text}"
     assert r.json()["error"] == motivo_semilla_no_track(
         _tracks_del_motor(biblioteca["db"])["loop.wav"]), "el motivo no es el del motor"
     assert "content-disposition" not in r.headers, "un error no se baja como archivo"
 
 
-def test_m3u8_pedidos_invalidos_son_400_y_no_un_archivo(client, biblioteca):
+def test_m3u8_pedidos_invalidos_son_400_y_no_un_archivo(client, biblioteca, playlist):
     for params, pista in (({}, "semilla"), ({"track": "no-existe-este-track"}, None),
                           ({"track": "Uno", "curva": "montaña"}, "montaña")):
-        r = client.get("/api/radio/set.m3u8", params=params)
+        r = client.get("/api/radio/set.m3u8", params={"playlist": playlist, **params})
         assert r.status_code == 400, f"{params}: {r.status_code} {r.text}"
         assert r.json()["error"], f"{params}: 400 sin motivo"
         if pista:
@@ -742,11 +785,12 @@ def test_m3u8_pedidos_invalidos_son_400_y_no_un_archivo(client, biblioteca):
         assert "content-disposition" not in r.headers
 
 
-def test_m3u8_sin_base_es_409_con_el_motivo_y_no_un_200(client, tmp_path, monkeypatch):
+def test_m3u8_sin_base_es_409_con_el_motivo_y_no_un_200(server, client, tmp_path, monkeypatch):
     """Sin base no hay set: un 200 con JSON el navegador lo guardaría como `.m3u8`."""
     fantasma = tmp_path / "no-existe" / "biblioteca.sqlite"
     monkeypatch.setenv("DJRADIO_DB", str(fantasma))
-    r = client.get("/api/radio/set.m3u8", params={"track": "Uno"})
+    playlist = server.db.crear_playlist("sin base")["id"]
+    r = client.get("/api/radio/set.m3u8", params={"playlist": playlist, "track": "Uno"})
     assert r.status_code == 409, r.text
     d = r.json()
     assert (d["configurada"], d["estado"]) == (False, "sin-base")
@@ -754,11 +798,11 @@ def test_m3u8_sin_base_es_409_con_el_motivo_y_no_un_200(client, tmp_path, monkey
     assert "content-disposition" not in r.headers
 
 
-def test_m3u8_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca):
+def test_m3u8_se_niega_si_el_set_ya_no_es_el_de_la_pantalla(server, client, biblioteca, playlist):
     """`esperado` son los ids que la pantalla muestra. Si el re-armado da otro set (un scan
     entre medio), 409: bajar otro set con el mismo nombre sería un dato que miente (§6)."""
     id_uno = server._radio_id(biblioteca["rutas"]["uno.wav"])
-    params = {"track": id_uno, "largo": 3}
+    params = {"playlist": playlist, "track": id_uno, "largo": 3}
     ids = [p["track"]["id"] for p in client.get("/api/radio/set", params=params).json()["pasos"]]
 
     ok = client.get("/api/radio/set.m3u8", params={**params, "esperado": ",".join(ids)})

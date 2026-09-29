@@ -100,6 +100,29 @@ def armar_base_radio(raiz: Path, db: Path, segundos: float = 0.25) -> tuple[dict
     return audios, rutas
 
 
+# Género con que los tests ponen el CATALOGO en una playlist de MusiFlix: desde f33 la radio
+# arma SOLO desde una playlist y solo con el mismo género que la semilla.
+GENERO = "Techno"
+
+
+def item_de_catalogo(nombre: str, genero: str | None = GENERO) -> dict:
+    """El item de playlist de un track del CATALOGO, como lo agrega la home (fuente
+    "biblioteca"): artista y título del catálogo, y el género que se pida."""
+    fila = next(c for c in CATALOGO if c[0] == nombre)
+    return {"titulo": fila[7], "artista": fila[6], "fuente": "biblioteca", "genero": genero}
+
+
+def crear_playlist_radio(db_mod, rutas: dict, nombre: str = "Radio",
+                         genero: str | None = GENERO, nombres=None) -> int:
+    """Playlist de MusiFlix con los tracks del CATALOGO (todos, o `nombres`), cada uno con su
+    archivo. Va por `db.agregar_item` con la ruta ya resuelta, que es lo que hace el server
+    después de resolver el `lib_id` de la home (el camino HTTP lo prueba su propio test)."""
+    pid = db_mod.crear_playlist(nombre)["id"]
+    for n in nombres or [c[0] for c in CATALOGO]:
+        db_mod.agregar_item(pid, item_de_catalogo(n, genero), str(rutas[n]))
+    return pid
+
+
 # ------------------------------------------------------- biblioteca local (XML de Rekordbox)
 
 def location(ruta: Path) -> str:
