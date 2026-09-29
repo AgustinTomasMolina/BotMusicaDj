@@ -20,9 +20,13 @@ export async function buscarLista(lista, formato) {
   return json(r)
 }
 
-export async function parecidasLista(titulo, artista, formato, genero) {
+// `fuente` + `fuenteId` (el id del resultado): con SoundCloud el backend pide el ISRC y
+// resuelve la semilla en Deezer. `duracion` solo desempata entre lanzamientos del mismo tema.
+export async function parecidasLista(titulo, artista, formato, genero, fuente, fuenteId, duracion) {
   const q = `titulo=${encodeURIComponent(titulo)}&artista=${encodeURIComponent(artista || '')}` +
-            `&formato=${encodeURIComponent(formato)}&genero=${encodeURIComponent(genero || '')}`
+            `&formato=${encodeURIComponent(formato)}&genero=${encodeURIComponent(genero || '')}` +
+            `&fuente=${encodeURIComponent(fuente || '')}&fuente_id=${encodeURIComponent(fuenteId || '')}` +
+            (duracion > 0 ? `&duracion=${encodeURIComponent(duracion)}` : '')
   const r = await fetch(`/api/parecidas_lista?${q}`)
   return json(r)
 }

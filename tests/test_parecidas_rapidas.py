@@ -12,6 +12,7 @@ import random
 import sys
 import threading
 import time
+from urllib.parse import quote
 
 import pytest
 import search_agent
@@ -31,7 +32,9 @@ def catalogo():
     r = {}
     seed = {"id": 1000, "title": "Semilla", "artist": {"id": 1, "name": "A1"}, "album": {"id": 9000},
             "preview": "https://cdnt-preview.dzcdn.net/semilla.mp3?hdnea=x"}
-    r[f"{D}/search?q=A1%20Semilla&limit=5"] = {"data": [seed]}
+    # La semilla se busca con la consulta estricta (f33) y se verifica: mismo artista y título.
+    q_seed = quote('artist:"A1" track:"semilla"')
+    r[f"{D}/search?q={q_seed}&limit=10"] = {"data": [seed]}
     r[f"{D}/album/9000"] = {"genres": {"data": [{"name": "Techno"}]}}
     r[f"{D}/track/1000"] = {"bpm": 130}
     artistas = [1, 2, 3, 4, 5]          # 5 × 5 temas únicos + 5 hits = 30 (el tope de candidatos)
