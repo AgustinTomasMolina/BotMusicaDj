@@ -85,9 +85,11 @@ class _Cronometrado:
             self.acc[self.clave] = self.acc.get(self.clave, 0.0) + (time.perf_counter() - t)
 
 
-def calentar() -> float:
-    """Compila el JIT sobre TODO el camino del scan (delega en `motor.analisis.calentar`)."""
-    return A.calentar()
+def calentar(sr: int = A.SR) -> float:
+    """Compila el JIT sobre TODO el camino del scan (delega en `motor.analisis.calentar`).
+
+    Recibe `sr` porque la etapa A (`benchmark.analizar.analizar`) lo llama con el suyo."""
+    return A.calentar(sr)
 
 
 def medir(ruta: str, sr: int = A.SR, consenso: bool = False) -> Tiempo | None:
