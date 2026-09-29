@@ -703,7 +703,11 @@
       "title": "Exodus",
       "artist": "imminent",
       "artist_id": 190100,
-      "duration": 240
+      "duration": 240,
+      "contributors": [
+       "imminent",
+       "Billy Currie"
+      ]
      }
     ]
    }
@@ -1092,7 +1096,10 @@
       "title": "The Aftermath",
       "artist": "DYEN",
       "artist_id": 49333652,
-      "duration": 426
+      "duration": 426,
+      "contributors": [
+       "DYEN"
+      ]
      }
     ]
    }
@@ -1296,7 +1303,10 @@
       "title": "BOUNCE DA HARD",
       "artist": "Derjay",
       "artist_id": 226097845,
-      "duration": 241
+      "duration": 241,
+      "contributors": [
+       "Derjay"
+      ]
      }
     ]
    }
@@ -2008,7 +2018,10 @@
       "title": "From the Top",
       "artist": "Lil Texas",
       "artist_id": 4287296,
-      "duration": 192
+      "duration": 192,
+      "contributors": [
+       "Lil Texas"
+      ]
      }
     ]
    }
@@ -2750,7 +2763,11 @@
       "title": "Bangarang (feat. Sirah)",
       "artist": "Skrillex",
       "artist_id": 525643,
-      "duration": 215
+      "duration": 215,
+      "contributors": [
+       "Skrillex",
+       "Sirah"
+      ]
      }
     ]
    }
@@ -3577,7 +3594,11 @@
       "title": "WAP (feat. Megan Thee Stallion)",
       "artist": "Cardi B",
       "artist_id": 9064930,
-      "duration": 187
+      "duration": 187,
+      "contributors": [
+       "Cardi B",
+       "Megan Thee Stallion"
+      ]
      }
     ]
    }
@@ -5246,7 +5267,10 @@
       "title": "DtMF",
       "artist": "Bad Bunny",
       "artist_id": 10583405,
-      "duration": 237
+      "duration": 237,
+      "contributors": [
+       "Bad Bunny"
+      ]
      }
     ]
    }
@@ -5765,7 +5789,7 @@
     "artist:\"KUKO, KOBOSIL\" track:\"Eiskalt (Short Mix)\"": [],
     "artist:\"Kobosil\" track:\"Eiskalt (Short Mix)\"": [],
     "artist:\"Kobosil\" track:\"eiskalt\"": [],
-    "isrc:DEMM42401044": [
+    "Kobosil eiskalt short mix": [
      {
       "id": 2988969511,
       "title": "Eiskalt (Short Mix)",
@@ -5774,13 +5798,17 @@
       "duration": 213
      }
     ],
-    "Kobosil eiskalt short mix": [
+    "isrc:DEMM42401044": [
      {
       "id": 2988969511,
       "title": "Eiskalt (Short Mix)",
       "artist": "Kuko",
       "artist_id": 186647907,
-      "duration": 213
+      "duration": 213,
+      "contributors": [
+       "Kuko",
+       "Kobosil"
+      ]
      }
     ]
    }
@@ -7824,7 +7852,15 @@
       "title": "Baddadan",
       "artist": "Chase & Status",
       "artist_id": 15617,
-      "duration": 177
+      "duration": 177,
+      "contributors": [
+       "Chase & Status",
+       "Bou",
+       "iRah",
+       "Flowdan",
+       "Trigga",
+       "Takura"
+      ]
      }
     ]
    }
@@ -8256,7 +8292,18 @@
     "artist:\"Inferno (Original Mix)\" track:\"carl cox reinier zonneveld chris coe\"": [],
     "artist:\"Reinier Zonneveld\" track:\"PREMIERE: Carl Cox & & Chris Coe - Inferno (Original Mix) [Filth on Acid]\"": [],
     "artist:\"Reinier Zonneveld\" track:\"inferno\"": [],
-    "Carl Cox & Reinier Zonneveld & Chris Coe inferno original mix": []
+    "Carl Cox & Reinier Zonneveld & Chris Coe inferno original mix": [],
+    "artist:\"Inferno\" track:\"carl cox reinier zonneveld chris coe\"": [],
+    "Inferno carl cox reinier zonneveld chris coe": [
+     {
+      "id": 507548912,
+      "title": "Inferno",
+      "artist": "Carl Cox",
+      "artist_id": 3951,
+      "duration": 416
+     }
+    ],
+    "Inferno carl cox reinier zonneveld chris coe original mix": []
    }
   },
   {
@@ -8644,7 +8691,11 @@
       "title": "Brain Scramble",
       "artist": "Elmefti",
       "artist_id": 76344542,
-      "duration": 168
+      "duration": 168,
+      "contributors": [
+       "Elmefti",
+       "HOLY PRIEST"
+      ]
      }
     ]
    }
@@ -9310,7 +9361,11 @@
       "title": "Thootie",
       "artist": "Ice Spice",
       "artist_id": 102426952,
-      "duration": 152
+      "duration": 152,
+      "contributors": [
+       "Ice Spice",
+       "Tokischa"
+      ]
      }
     ]
    }
@@ -10621,7 +10676,10 @@
       "title": "Stronger (instrumental)",
       "artist": "Kanye West",
       "artist_id": 230,
-      "duration": 313
+      "duration": 313,
+      "contributors": [
+       "Kanye West"
+      ]
      }
     ]
    }
@@ -10970,7 +11028,10 @@
       "title": "Glue",
       "artist": "Bicep",
       "artist_id": 369056,
-      "duration": 269
+      "duration": 269,
+      "contributors": [
+       "Bicep"
+      ]
      }
     ]
    }
@@ -13061,7 +13122,10 @@
       "title": "Bound 2",
       "artist": "Kanye West",
       "artist_id": 230,
-      "duration": 229
+      "duration": 229,
+      "contributors": [
+       "Kanye West"
+      ]
      }
     ]
    }
@@ -13157,6 +13221,79 @@
       "artist": "Vitamin String Quartet",
       "artist_id": 275309,
       "duration": 186
+     }
+    ],
+    "artist:\"army of me\" track:\"björk\"": [],
+    "army of me björk": [
+     {
+      "id": 2629694162,
+      "title": "Army Of Me",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 234
+     },
+     {
+      "id": 2629551732,
+      "title": "Army Of Me (Sucker Punch Remix)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 279
+     },
+     {
+      "id": 2629697262,
+      "title": "Army Of Me (Live)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 244
+     },
+     {
+      "id": 2629697622,
+      "title": "Army Of Me",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 318
+     },
+     {
+      "id": 2629551712,
+      "title": "Army Of Me (ABA All-Stars Mix)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 233
+     },
+     {
+      "id": 2259094817,
+      "title": "Sweet Intuition",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 283
+     },
+     {
+      "id": 901876812,
+      "title": "Army Of Me [Bjork cover]",
+      "artist": "Proghma-C",
+      "artist_id": 471330,
+      "duration": 393
+     },
+     {
+      "id": 502480552,
+      "title": "Take Good Care Of Your Children",
+      "artist": "Agnetha Fältskog",
+      "artist_id": 8240,
+      "duration": 225
+     },
+     {
+      "id": 1913594157,
+      "title": "Army Of Me (Bjork)",
+      "artist": "Elephant Music",
+      "artist_id": 8075127,
+      "duration": 141
+     },
+     {
+      "id": 123463812,
+      "title": "Army of Me",
+      "artist": "Midnite String Quartet",
+      "artist_id": 5174833,
+      "duration": 229
      }
     ]
    }
@@ -15047,19 +15184,13 @@
    "artista": "uploader",
    "duracion": 215.707,
    "isrc": "QM8DG1884186",
-   "motivo": "Nena - 99 Luftballons (ORIGINAL): (ORIGINAL) es el original",
+   "motivo": "Nena - 99 Luftballons (ORIGINAL) de DJ Lantern (215,7 s): la auditoria 3 lo marca como regrabacion posible; UNKNOWN (la regla nueva no lo rechaza)",
    "verdad": {
-    "estado": "en_deezer",
-    "ids": [
-     7633179,
-     3718509972,
-     3786035712,
-     3786206112
-    ]
+    "estado": "unknown",
+    "ids": []
    },
    "antes": null,
    "deezer": {
-    "isrc:QM8DG1884186": [],
     "artist:\"Nena\" track:\"99 luftballons\"": [],
     "Nena 99 luftballons": [
      {
@@ -15141,7 +15272,8 @@
       "artist_id": 4067508,
       "duration": 199
      }
-    ]
+    ],
+    "isrc:QM8DG1884186": []
    }
   },
   {
@@ -16661,7 +16793,888 @@
      }
     ]
    }
+  },
+  {
+   "n": "a65",
+   "fuente": "soundcloud",
+   "titulo": "Genesis - Mama",
+   "artista": "uploader",
+   "duracion": 416.96,
+   "isrc": null,
+   "motivo": "Genesis - Mama de 416,96 s (SoundCloud): el vivo de 417 s, no el remaster de 410 → nada",
+   "verdad": {
+    "estado": "neg",
+    "ids": [
+     14639826
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Genesis\" track:\"mama\"": [],
+    "Genesis mama": [
+     {
+      "id": 14639826,
+      "title": "Mama (2007 Remaster)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 410
+     },
+     {
+      "id": 14617899,
+      "title": "Mama (Live in Frankfurt)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 417
+     },
+     {
+      "id": 14615172,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 410
+     },
+     {
+      "id": 14638195,
+      "title": "Mama",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 318
+     },
+     {
+      "id": 935050772,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 425
+     },
+     {
+      "id": 3349455861,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 440
+     },
+     {
+      "id": 14640069,
+      "title": "Mama (2007 Remastered Version)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 318
+     },
+     {
+      "id": 2348766305,
+      "title": "Mama (Work in Progress Version)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 643
+     },
+     {
+      "id": 2614668382,
+      "title": "Mama",
+      "artist": "Genesis",
+      "artist_id": 263723361,
+      "duration": 176
+     },
+     {
+      "id": 935050782,
+      "title": "Abacab (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 538
+     }
+    ],
+    "artist:\"Mama\" track:\"genesis\"": [],
+    "Mama genesis": [
+     {
+      "id": 14639826,
+      "title": "Mama (2007 Remaster)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 410
+     },
+     {
+      "id": 14617899,
+      "title": "Mama (Live in Frankfurt)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 417
+     },
+     {
+      "id": 14615172,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 410
+     },
+     {
+      "id": 14638195,
+      "title": "Mama",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 318
+     },
+     {
+      "id": 935050772,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 425
+     },
+     {
+      "id": 3349455861,
+      "title": "Mama (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 440
+     },
+     {
+      "id": 14640069,
+      "title": "Mama (2007 Remastered Version)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 318
+     },
+     {
+      "id": 2348766305,
+      "title": "Mama (Work in Progress Version)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 643
+     },
+     {
+      "id": 2614668382,
+      "title": "Mama",
+      "artist": "Genesis",
+      "artist_id": 263723361,
+      "duration": 176
+     },
+     {
+      "id": 935050782,
+      "title": "Abacab (Live)",
+      "artist": "Genesis",
+      "artist_id": 3037,
+      "duration": 538
+     }
+    ]
+   }
+  },
+  {
+   "n": "a159",
+   "fuente": "soundcloud",
+   "titulo": "Argy & Omnya - Aria",
+   "artista": "Obsessive Progressive",
+   "duracion": 314.8,
+   "isrc": null,
+   "motivo": "Argy & Omnya - Aria de 314,8 s (SoundCloud): es la Extended, que no está → nada",
+   "verdad": {
+    "estado": "none",
+    "ids": []
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Argy\" track:\"aria\"": [],
+    "artist:\"Omnya\" track:\"aria\"": [],
+    "Argy & Omnya aria": [
+     {
+      "id": 2563894342,
+      "title": "Aria",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 236
+     },
+     {
+      "id": 3759028292,
+      "title": "Aria (Omiki Remix)",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 180
+     },
+     {
+      "id": 2835440172,
+      "title": "Aria [Argy & Omnya RMX] (Violin Version)",
+      "artist": "Habib Alberto",
+      "artist_id": 157724912,
+      "duration": 315
+     },
+     {
+      "id": 2722493472,
+      "title": "Pictures Of You",
+      "artist": "Anyma",
+      "artist_id": 1014142,
+      "duration": 175
+     }
+    ],
+    "Argy aria": [
+     {
+      "id": 2563894342,
+      "title": "Aria",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 236
+     },
+     {
+      "id": 3759028292,
+      "title": "Aria (Omiki Remix)",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 180
+     },
+     {
+      "id": 2819984172,
+      "title": "Arya Tara",
+      "artist": "Le Wanski",
+      "artist_id": 51733322,
+      "duration": 431
+     },
+     {
+      "id": 2835440172,
+      "title": "Aria [Argy & Omnya RMX] (Violin Version)",
+      "artist": "Habib Alberto",
+      "artist_id": 157724912,
+      "duration": 315
+     },
+     {
+      "id": 1146141252,
+      "title": "Sun Is Setting",
+      "artist": "Artaria",
+      "artist_id": 14451515,
+      "duration": 458
+     },
+     {
+      "id": 906693162,
+      "title": "Ar yarig (Tamm kreiz)",
+      "artist": "Eben",
+      "artist_id": 89163282,
+      "duration": 176
+     },
+     {
+      "id": 4129520781,
+      "title": "I N A B",
+      "artist": "Artaria",
+      "artist_id": 14451515,
+      "duration": 224
+     },
+     {
+      "id": 3968320321,
+      "title": "Ar yarig",
+      "artist": "Ital Express",
+      "artist_id": 385968741,
+      "duration": 289
+     },
+     {
+      "id": 3311133291,
+      "title": "People Say So",
+      "artist": "Artaria",
+      "artist_id": 14451515,
+      "duration": 375
+     },
+     {
+      "id": 123874298,
+      "title": "Ar yarig",
+      "artist": "Yves Ribis",
+      "artist_id": 6337362,
+      "duration": 132
+     }
+    ],
+    "Omnya aria": [
+     {
+      "id": 2563894342,
+      "title": "Aria",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 236
+     },
+     {
+      "id": 3759028292,
+      "title": "Aria (Omiki Remix)",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 180
+     },
+     {
+      "id": 2835440172,
+      "title": "Aria [Argy & Omnya RMX] (Violin Version)",
+      "artist": "Habib Alberto",
+      "artist_id": 157724912,
+      "duration": 315
+     },
+     {
+      "id": 4275795172,
+      "title": "PARADISE DENIED",
+      "artist": "Bloodlust",
+      "artist_id": 9764026,
+      "duration": 214
+     },
+     {
+      "id": 3467409411,
+      "title": "CARNAGE (CARNAGE EDIT)",
+      "artist": "Omnya",
+      "artist_id": 4846379,
+      "duration": 147
+     },
+     {
+      "id": 2464620245,
+      "title": "Carnage (Live Edit)",
+      "artist": "Omnya",
+      "artist_id": 4846379,
+      "duration": 175
+     },
+     {
+      "id": 3787708602,
+      "title": "BREAK YOUR BONES",
+      "artist": "Omnya",
+      "artist_id": 4846379,
+      "duration": 188
+     },
+     {
+      "id": 1334422722,
+      "title": "Arcanum",
+      "artist": "Omnia",
+      "artist_id": 6320,
+      "duration": 213
+     },
+     {
+      "id": 1334422732,
+      "title": "Arcanum (Extended Mix)",
+      "artist": "Omnia",
+      "artist_id": 6320,
+      "duration": 269
+     },
+     {
+      "id": 1914425537,
+      "title": "Carnage",
+      "artist": "Omnya",
+      "artist_id": 4846379,
+      "duration": 182
+     }
+    ],
+    "artist:\"Aria\" track:\"argy omnya\"": [],
+    "Aria argy omnya": [
+     {
+      "id": 2563894342,
+      "title": "Aria",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 236
+     },
+     {
+      "id": 3759028292,
+      "title": "Aria (Omiki Remix)",
+      "artist": "Argy",
+      "artist_id": 145050,
+      "duration": 180
+     },
+     {
+      "id": 2835440172,
+      "title": "Aria [Argy & Omnya RMX] (Violin Version)",
+      "artist": "Habib Alberto",
+      "artist_id": 157724912,
+      "duration": 315
+     },
+     {
+      "id": 2722493472,
+      "title": "Pictures Of You",
+      "artist": "Anyma",
+      "artist_id": 1014142,
+      "duration": 175
+     }
+    ]
+   }
+  },
+  {
+   "n": "a82",
+   "fuente": "youtube",
+   "titulo": "Daft Punk - Around The World (Official Music Video Remastered)",
+   "artista": "Daft Punk",
+   "duracion": 242,
+   "isrc": null,
+   "motivo": "Around The World (video) 242 s = Radio Edit 241 s (regla de la Radio Edit por duración)",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     14598347
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Daft Punk\" track:\"around the world\"": [],
+    "Daft Punk around the world": [
+     {
+      "id": 3129775,
+      "title": "Around the World",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 429
+     },
+     {
+      "id": 3167843,
+      "title": "Around the World / Harder, Better, Faster, Stronger",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 342
+     },
+     {
+      "id": 14598347,
+      "title": "Around the World (Radio Edit)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 241
+     },
+     {
+      "id": 67238728,
+      "title": "Give Life Back to Music",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 274
+     },
+     {
+      "id": 1651462622,
+      "title": "Around the World (Mellow Mix)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 471
+     },
+     {
+      "id": 1651462592,
+      "title": "Around the World (I:Cube Remix)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 378
+     },
+     {
+      "id": 1651462672,
+      "title": "Around the World (M.A.W Remix)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 563
+     },
+     {
+      "id": 1651462612,
+      "title": "Around the World (Tee's Frozen Sun Mix)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 477
+     },
+     {
+      "id": 1651462642,
+      "title": "Around the World (Kenlou Mix)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 470
+     },
+     {
+      "id": 1651462712,
+      "title": "Around the World (RAW Dub)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 414
+     }
+    ],
+    "Daft Punk around the world official music video remastered": []
+   }
+  },
+  {
+   "n": "c117",
+   "fuente": "soundcloud",
+   "titulo": "Hurt",
+   "artista": "Johnny Cash",
+   "duracion": 30.0,
+   "isrc": "ATR981126347",
+   "motivo": "SoundCloud 'Hurt' de Johnny Cash con el ISRC del tributo 'Johnny Crash' y preview de 30 s → no",
+   "verdad": {
+    "estado": "neg",
+    "ids": [
+     14990882
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "isrc:ATR981126347": [
+     {
+      "id": 14990882,
+      "title": "Hurt",
+      "artist": "Johnny Crash",
+      "artist_id": 1527232,
+      "duration": 267,
+      "contributors": [
+       "Johnny Crash"
+      ]
+     }
+    ],
+    "artist:\"Johnny Cash\" track:\"hurt\"": [],
+    "Johnny Cash hurt": [
+     {
+      "id": 128846783,
+      "title": "Hurt",
+      "artist": "Johnny Cash",
+      "artist_id": 405,
+      "duration": 216
+     },
+     {
+      "id": 4123332341,
+      "title": "Johnny cash hurt type beat",
+      "artist": "Dean Blunt",
+      "artist_id": 4101237,
+      "duration": 159
+     },
+     {
+      "id": 75388828,
+      "title": "Hurt so Bad",
+      "artist": "Johnny Cash",
+      "artist_id": 405,
+      "duration": 152
+     },
+     {
+      "id": 3063146,
+      "title": "Heart Of Gold",
+      "artist": "Johnny Cash",
+      "artist_id": 405,
+      "duration": 181
+     },
+     {
+      "id": 2371377,
+      "title": "Hurt (Dedicated To Johnny Cash) (Live)",
+      "artist": "Sevendust",
+      "artist_id": 3118,
+      "duration": 247
+     },
+     {
+      "id": 14990882,
+      "title": "Hurt",
+      "artist": "Johnny Crash",
+      "artist_id": 1527232,
+      "duration": 267
+     },
+     {
+      "id": 5398277,
+      "title": "I Don't Hurt Anymore (Album Version)",
+      "artist": "Johnny Cash",
+      "artist_id": 405,
+      "duration": 165
+     },
+     {
+      "id": 2239923047,
+      "title": "Hurt (Acoustic)",
+      "artist": "The Ghost of Johnny Cash",
+      "artist_id": 15134933,
+      "duration": 232
+     },
+     {
+      "id": 1488328662,
+      "title": "Hurt",
+      "artist": "The Ghost of Johnny Cash",
+      "artist_id": 15134933,
+      "duration": 232
+     },
+     {
+      "id": 2256046587,
+      "title": "Hurt",
+      "artist": "The Ghost of Johnny Cash",
+      "artist_id": 15134933,
+      "duration": 236
+     }
+    ]
+   }
+  },
+  {
+   "n": "c154",
+   "fuente": "youtube",
+   "titulo": "J Balvin, Willy William - Mi Gente (Official Video)",
+   "artista": "J Balvin and Willy William",
+   "duracion": 186,
+   "isrc": null,
+   "motivo": "J Balvin, Willy William - Mi Gente 186 s: no el 'Mi Gente' de Willy William de 137 s",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     376989861
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"J Balvin\" track:\"mi gente\"": [],
+    "artist:\"Willy William\" track:\"mi gente\"": [],
+    "J Balvin, Willy William mi gente": [
+     {
+      "id": 422582962,
+      "title": "Mi Gente (Busta K Remix)",
+      "artist": "J Balvin",
+      "artist_id": 4860761,
+      "duration": 183
+     },
+     {
+      "id": 667004452,
+      "title": "Mi Gente Homecoming Live",
+      "artist": "Beyoncé",
+      "artist_id": 145,
+      "duration": 177
+     },
+     {
+      "id": 2857534732,
+      "title": "Mi Gente",
+      "artist": "Willy William",
+      "artist_id": 1200692,
+      "duration": 137
+     },
+     {
+      "id": 940461242,
+      "title": "Mi Gente (Acoustic) (Acoustic)",
+      "artist": "Carlos C Major",
+      "artist_id": 64994082,
+      "duration": 113
+     },
+     {
+      "id": 408994112,
+      "title": "Mi Gente (Tribute To J Balvin & Willy William) (Tribute)",
+      "artist": "Brava HitMakers",
+      "artist_id": 5351037,
+      "duration": 187
+     },
+     {
+      "id": 822648072,
+      "title": "Mi Gente (Made Popular By J Balvin & Willy William) [Vocal Version]",
+      "artist": "Party Tyme Karaoke",
+      "artist_id": 384495,
+      "duration": 185
+     }
+    ],
+    "J Balvin mi gente": [
+     {
+      "id": 422582962,
+      "title": "Mi Gente (Busta K Remix)",
+      "artist": "J Balvin",
+      "artist_id": 4860761,
+      "duration": 183
+     },
+     {
+      "id": 667004452,
+      "title": "Mi Gente Homecoming Live",
+      "artist": "Beyoncé",
+      "artist_id": 145,
+      "duration": 177
+     },
+     {
+      "id": 2857534732,
+      "title": "Mi Gente",
+      "artist": "Willy William",
+      "artist_id": 1200692,
+      "duration": 137
+     },
+     {
+      "id": 940461242,
+      "title": "Mi Gente (Acoustic) (Acoustic)",
+      "artist": "Carlos C Major",
+      "artist_id": 64994082,
+      "duration": 113
+     },
+     {
+      "id": 3558994391,
+      "title": "Mi Gente from \"KPOPPED\"",
+      "artist": "J Balvin",
+      "artist_id": 278426021,
+      "duration": 142
+     },
+     {
+      "id": 1975896367,
+      "title": "Mi Gente",
+      "artist": "Sweet Little Band",
+      "artist_id": 154357,
+      "duration": 175
+     }
+    ],
+    "Willy William mi gente": [
+     {
+      "id": 667004452,
+      "title": "Mi Gente Homecoming Live",
+      "artist": "Beyoncé",
+      "artist_id": 145,
+      "duration": 177
+     },
+     {
+      "id": 2857534732,
+      "title": "Mi Gente",
+      "artist": "Willy William",
+      "artist_id": 1200692,
+      "duration": 137
+     },
+     {
+      "id": 422582962,
+      "title": "Mi Gente (Busta K Remix)",
+      "artist": "J Balvin",
+      "artist_id": 4860761,
+      "duration": 183
+     },
+     {
+      "id": 407561992,
+      "title": "Mi Gente (J. Balvin, Willy William Tribute)",
+      "artist": "Joanna",
+      "artist_id": 231164125,
+      "duration": 185
+     },
+     {
+      "id": 940461242,
+      "title": "Mi Gente (Acoustic) (Acoustic)",
+      "artist": "Carlos C Major",
+      "artist_id": 64994082,
+      "duration": 113
+     },
+     {
+      "id": 1108931582,
+      "title": "Gymnasium (Gymnastic Mix)",
+      "artist": "Underwasser",
+      "artist_id": 2447701,
+      "duration": 188
+     }
+    ],
+    "artist:\"Mi Gente\" track:\"j balvin willy william\"": [],
+    "Mi Gente j balvin willy william": [
+     {
+      "id": 422582962,
+      "title": "Mi Gente (Busta K Remix)",
+      "artist": "J Balvin",
+      "artist_id": 4860761,
+      "duration": 183
+     },
+     {
+      "id": 667004452,
+      "title": "Mi Gente Homecoming Live",
+      "artist": "Beyoncé",
+      "artist_id": 145,
+      "duration": 177
+     },
+     {
+      "id": 2857534732,
+      "title": "Mi Gente",
+      "artist": "Willy William",
+      "artist_id": 1200692,
+      "duration": 137
+     },
+     {
+      "id": 940461242,
+      "title": "Mi Gente (Acoustic) (Acoustic)",
+      "artist": "Carlos C Major",
+      "artist_id": 64994082,
+      "duration": 113
+     },
+     {
+      "id": 408994112,
+      "title": "Mi Gente (Tribute To J Balvin & Willy William) (Tribute)",
+      "artist": "Brava HitMakers",
+      "artist_id": 5351037,
+      "duration": 187
+     },
+     {
+      "id": 822648072,
+      "title": "Mi Gente (Made Popular By J Balvin & Willy William) [Vocal Version]",
+      "artist": "Party Tyme Karaoke",
+      "artist_id": 384495,
+      "duration": 185
+     }
+    ]
+   }
+  },
+  {
+   "n": "c174",
+   "fuente": "youtube",
+   "titulo": "Iron Maiden - 2 Minutes To Midnight (1998 Remastered Version) #02",
+   "artista": "uploader",
+   "duracion": 360,
+   "isrc": null,
+   "motivo": "Iron Maiden - 2 Minutes To Midnight (1998 Remastered Version) #02: '#02' es el número de pista",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     3155095,
+     3158428,
+     585594602
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Iron Maiden\" track:\"2 minutes to midnight\"": [],
+    "Iron Maiden 2 minutes to midnight": [
+     {
+      "id": 585594602,
+      "title": "2 Minutes to Midnight (2015 Remaster)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 363
+     },
+     {
+      "id": 3158428,
+      "title": "2 Minutes to Midnight (1998 Remaster)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 359
+     },
+     {
+      "id": 3155406,
+      "title": "2 Minutes To Midnight (Live '01)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 386
+     },
+     {
+      "id": 3154975,
+      "title": "2 Minutes to Midnight (Live at Long Beach Arena; 1998 Remaster)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 363
+     },
+     {
+      "id": 1145040412,
+      "title": "2 Minutes To Midnight (Live in Mexico City, Palacio de los Deportes, Mexico, September 2019)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 354
+     },
+     {
+      "id": 16929093,
+      "title": "2 Minutes to Midnight (Live At Estadio Nacional, Santiago)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 350
+     },
+     {
+      "id": 3166037,
+      "title": "2 Minutes to Midnight (Live in Melbourne 07 February 2008)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 357
+     },
+     {
+      "id": 3575168371,
+      "title": "2 Minutes to Midnight (Live at Long Beach Arena, 2015 Remaster)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 368
+     },
+     {
+      "id": 3155028,
+      "title": "2 Minutes To Midnight (Live at Donington; 1998 Remaster)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 342
+     },
+     {
+      "id": 3155000,
+      "title": "2 Minutes To Midnight (Live; 1998 Remastered Version)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 337
+     }
+    ],
+    "Iron Maiden 2 minutes to midnight 1998 remastered version": [
+     {
+      "id": 3155000,
+      "title": "2 Minutes To Midnight (Live; 1998 Remastered Version)",
+      "artist": "Iron Maiden",
+      "artist_id": 931,
+      "duration": 337
+     }
+    ]
+   }
   }
  ],
- "descripcion_hallazgos": "Casos de las auditorías de f33 (160 y 224 entradas reales nuevas, 2026-09-29; los de la segunda llevan prefijo 'b'): motivo, verdad etiquetada a mano (ids de Deezer que es correcto aceptar; 'none' = no hay que aceptar nada) y las respuestas de Deezer grabadas. Uploaders personales reemplazados por 'uploader' donde el título ya trae el artista."
+ "descripcion_hallazgos": "Casos de las auditorías de f33 (160, 224 y 201 entradas reales nuevas, 2026-09-29; prefijos 'a', 'b' y 'c'): motivo, verdad etiquetada a mano (ids de Deezer que es correcto aceptar; 'none' = no hay que aceptar nada) y las respuestas de Deezer grabadas (los ISRC con sus `contributors`). Uploaders personales reemplazados por 'uploader' donde no cambian la lectura."
 }

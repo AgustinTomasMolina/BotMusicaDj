@@ -582,7 +582,8 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     if (fuente or "").lower() == "soundcloud" and fuente_id:
         isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
     res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
-                                  genero or None, isrc, track_identity.duration_or_none(duracion))
+                                  genero or None, isrc, track_identity.duration_or_none(duracion),
+                                  fuente=(fuente or "").lower() or None)
     if not res.get("exito"):
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
                        + (f" ({res['motivo']})" if res.get("motivo") else ""))

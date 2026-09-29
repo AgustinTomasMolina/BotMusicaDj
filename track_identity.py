@@ -40,6 +40,8 @@ from dataclasses import dataclass, field, replace
 
 logger = logging.getLogger("track_identity")
 
+# CONGELADAS (cierre del P0, 2026-09-29): no se agregan palabras ni formatos a estas listas; decidir la
+# misma grabación solo con texto no escala, lo que falta va por evidencia (ISRC, duración), no por palabras.
 # Separadores entre artistas: "A, B", "A & B", "A x B", "A vs B", "A feat. B", "A · B"…
 _ARTIST_SEP = re.compile(
     r"\s*(?:,|&|\+|/|\bx\b|\bvs\.?\s|\band\b|\bfeat\.?\s|\bft\.?\s|\bfeaturing\b|\bwith\b|·)\s*", re.I)
@@ -77,7 +79,8 @@ _NOT_THE_ARTIST = {"tribute", "cover", "covers", "band", "karaoke", "orchestra",
                    "players", "piano", "lullaby", "arcade", "emulation", "ringtone", "ringtones", "singers"}
 _GROUP = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
 _FEAT_GROUP = re.compile(r"[\(\[]([^\(\)\[\]]*?)[\s,\-–]*\b(?:feat\.?|ft\.?|featuring)\s+([^\(\)\[\]]+)[\)\]]", re.I)
-_FEAT = re.compile(r"\s*\b(?:feat\.?|ft\.?|featuring)\s+([^\(\)\[\]\-–—|]+)", re.I)
+# El invitado termina en " - " o "|" con espacios, no en un guion pegado ("ft. JAY-Z", "ft. T-Pain").
+_FEAT = re.compile(r"\s*\b(?:feat\.?|ft\.?|featuring)\s+((?:(?!\s+[-–—|]\s)[^\(\)\[\]|])+)", re.I)
 _WITH = re.compile(r"\(\s*with\s+([^\)]+)\)", re.I)
 # "Artista - Tema": guion con espacio de al menos un lado ("Kanye West- Stronger"), o " : ".
 # "Jay-Z" o "blink-182" no se parten (sin espacios alrededor).
@@ -212,6 +215,7 @@ def _clean_title(t: str | None) -> str:
     """Saca del título el ruido del upload y nada más (el resto es parte del título)."""
     t = unicodedata.normalize("NFKC", t or "")            # （…） de ancho completo → (…)
     t = re.sub(r"#[^\W\d]\w*", " ", t)                    # "#techno" es ruido; "#52" es parte del título
+    t = re.sub(r"(?<=[\)\]])\s*#\d+\s*$", "", t)          # "… (1998 Remastered Version) #02": número de pista
     t = re.sub(r"\.(?:mp3|wav|flac|m4a|aiff?|ogg)\s*$", "", t, flags=re.I)
     t = re.sub(r"^\s*premiere\s*[:\-|–]\s*", "", t, flags=re.I)
     t = re.sub(r"\bfree\s*d(?:ownload|l)\b|<3", " ", t, flags=re.I)
@@ -419,21 +423,29 @@ def _is_artist_prefix(prefix: str, artist: str) -> bool:
 
 
 def artists_match(a: Identity, b: Identity) -> bool:
-    """¿Comparten algún artista? Por nombre, por el nombre sin espacios ("KanyeWestVEVO" →
-    "kanyewest" = "kanye west"), o por los tokens del nombre completo en las DOS direcciones
-    ("Chase and Status" = "Chase & Status"; "Avicii" no es "Avicii Tribute")."""
+    """¿Comparten algún artista? Ver `_artist_relation`."""
+    return _artist_relation(a, b) is not None
+
+
+def _artist_relation(a: Identity, b: Identity) -> str | None:
+    """"directo": por nombre, por el nombre sin espacios ("KanyeWestVEVO" → "kanyewest" =
+    "kanye west"), o por los tokens del nombre completo en las DOS direcciones ("Chase and
+    Status" = "Chase & Status"; "Avicii" no es "Avicii Tribute"). "alias": solo por `_alias`
+    (dos alfabetos, apellido), que es evidencia más débil y necesita duración. None: no."""
     all_a, all_b = a.artists | a.feat, b.artists | b.feat
     if all_a & all_b:
-        return True
+        return "directo"
     if {x.replace(" ", "") for x in all_a} & {y.replace(" ", "") for y in all_b}:
-        return True
+        return "directo"
     tokens_a = {w for x in all_a for w in x.split()}
     tokens_b = {w for x in all_b for w in x.split()}
     if (bool(a.artists) and bool(b.artists)
             and any(set(x.split()) <= tokens_b for x in a.artists)
             and any(set(y.split()) <= tokens_a for y in b.artists)):
-        return True
-    return any(_alias(x, y) or _alias(y, x) for x in a.artists for y in b.artists)
+        return "directo"
+    if any(_alias(x, y) or _alias(y, x) for x in a.artists for y in b.artists):
+        return "alias"
+    return None
 
 
 def _latin(w: str) -> bool:
@@ -474,19 +486,75 @@ def is_same_track(wanted: Identity, candidate: Identity) -> bool:
             and wanted.version == candidate.version and artists_match(wanted, candidate))
 
 
-def isrc_confirms(wanted: Identity, found: Identity, wanted_s: float | None, found_s: float | None) -> bool:
-    """¿El track que Deezer dio para un ISRC es lo que dice el upload? El ISRC lo carga quien
-    sube el tema y puede ser el de otra versión ("Stronger" con el ISRC de la instrumental):
-    la versión tiene que ser la misma, y el título base igual o la duración a ±5 %. El artista
-    no se exige (un sello o un coautor sube el tema: Kobosil → Kuko)."""
-    if wanted.version != found.version:
-        return False
-    if same_title(wanted, found):
-        return True
-    w, f = duration_or_none(wanted_s), duration_or_none(found_s)
-    if w and f:
-        return abs(w - f) <= 0.05 * w
-    return False
+# Grados de evidencia de "es la misma grabación", del más fuerte al más débil.
+EVIDENCE_GRADES = ("isrc+duracion", "isrc", "texto+duracion", "texto")
+# Ediciones del mismo tema que la regla de la Radio Edit por duración puede aceptar (nunca vivo,
+# remix ni instrumental).
+_EDITIONS = {"radio", "extended", "club", "short", "edit"}
+
+
+def _dur_diff(w: float | None, c: float | None) -> float | None:
+    return abs(w - c) if (w and c) else None
+
+
+def evidencia_misma_grabacion(wanted: Identity, cand: Identity, wanted_s=None, cand_s=None, *,
+                              via: str = "texto", edicion: bool = False, audio_exacto: bool = False) -> str | None:
+    """¿`cand` (Deezer) es la misma grabación que `wanted` (el upload)? Devuelve el GRADO de la
+    evidencia ("isrc+duracion" > "isrc" > "texto+duracion" > "texto") o None si no alcanza.
+    Todas las aceptaciones pasan por acá; las reglas que miran al resto del pool (ambigüedad,
+    invitados, la edición que delata la duración) quedan en `pick_track_evidencia`.
+
+    Base: mismo título ∧ misma versión ∧ artista en común. Además:
+    - via="isrc" (el track que Deezer da para el ISRC del upload): el ISRC lo carga quien sube el
+      tema, así que el artista puede no coincidir (Kobosil sube "Eiskalt" de Kuko: el crédito
+      está en `contributors`), pero entonces la duración tiene que confirmar a ±5 %. Sin duración
+      (preview de 30 s) y con otro artista, no: "Hurt" de la cuenta de Johnny Cash con el ISRC
+      del tributo "Johnny Crash".
+    - texto: el upload dura más del doble → no; el candidato no tiene al PRIMER artista del
+      upload y la duración difiere más del 10 % → no ("J Balvin, Willy William - Mi Gente" de
+      186 s no es el "Mi Gente" de Willy William de 137 s); si el artista solo coincide por
+      alias (otro alfabeto, apellido), la duración tiene que cuadrar (±max(10 s, 10 %)). Con
+      `audio_exacto` (SoundCloud: el upload ES el audio, no un video con intro), un upload más
+      LARGO que no cuadra es otra edición: "Argy & Omnya - Aria" de 314,8 s es la Extended, no el
+      "Aria" de 236 s (uno más corto puede ser un recorte o estar acelerado: se deja).
+    - edicion=True (regla de la Radio Edit, aprobada por el dueño): upload SIN versión y
+      candidato que es una edición del mismo tema (radio/extended/club/short/edit) cuya duración
+      coincide a ±max(3 s, 2 %)."""
+    rel = _artist_relation(wanted, cand)
+    w, c = duration_or_none(wanted_s), duration_or_none(cand_s)
+    diff = _dur_diff(w, c)
+    if via == "isrc":
+        if wanted.version != cand.version:
+            return None
+        confirma = diff is not None and diff <= 0.05 * w
+        if not same_title(wanted, cand):
+            # Otro título (el compositor adelante, un subtítulo): solo si la duración es la misma
+            # a ±max(3 s, 2 %) — "Beethoven - Moonlight Sonata (Glenn playing…)" 298,1 s = 298 s.
+            return "isrc+duracion" if diff is not None and diff <= max(3.0, 0.02 * w) else None
+        if rel is None and not confirma:
+            return None
+        return "isrc+duracion" if confirma else "isrc"
+    if not same_title(wanted, cand) or rel is None:
+        return None
+    if edicion:
+        if wanted.version != "original" or cand.version not in _EDITIONS:
+            return None
+        return "texto+duracion" if diff is not None and diff <= max(3.0, 0.02 * w) else None
+    if wanted.version != cand.version:
+        return None
+    if diff is None:
+        return None if rel == "alias" else "texto"
+    if w > 2 * c:
+        return None
+    cuadra = diff <= max(10.0, 0.10 * w)
+    if not cuadra and ((audio_exacto and w > c) or rel == "alias" or not _names_first_artist(wanted, cand)):
+        return None
+    return "texto+duracion" if cuadra else "texto"
+
+
+def _names_first_artist(wanted: Identity, cand: Identity) -> bool:
+    primero = split_artists(wanted.artist_names[0]) if wanted.artist_names else frozenset()
+    return not primero or artists_match(Identity(primero, ""), Identity(cand.artists | cand.feat, ""))
 
 
 def duration_or_none(s) -> float | None:
@@ -533,11 +601,22 @@ def deezer_queries(entry: Identity) -> list[str]:
 
 
 def deezer_identity(track: dict) -> Identity:
-    return parse_fields((track.get("artist") or {}).get("name") or "", track.get("title") or "")
+    """Identidad de un track de Deezer. `contributors` (solo viene en /track/…, p. ej. por ISRC)
+    suma los coautores: "Eiskalt (Short Mix)" es de Kuko y Kobosil."""
+    ident = parse_fields((track.get("artist") or {}).get("name") or "", track.get("title") or "")
+    otros = ", ".join(c.get("name") or "" for c in track.get("contributors") or [] if isinstance(c, dict))
+    return replace(ident, feat=ident.feat | (split_artists(otros) - ident.artists)) if otros else ident
 
 
 def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = None) -> dict | None:
-    """El track de Deezer que es la entrada, o None. Si los aceptados son de obras distintas
+    return pick_track_evidencia(entry, tracks, duration_s)[0]
+
+
+def pick_track_evidencia(entry: Identity, tracks: list[dict], duration_s: float | None = None,
+                         audio_exacto: bool = False) -> tuple[dict | None, str | None]:
+    """(track de Deezer que es la entrada, grado de evidencia) o (None, None). Cada candidato
+    pasa por `evidencia_misma_grabacion`; acá quedan solo las reglas que necesitan ver el pool
+    entero (por eso no pueden vivir en la función de a pares). Si los aceptados son de obras distintas
     (artistas sin nada en común), es ambiguo y no se elige ninguno. Entre varios del mismo tema
     (dos lanzamientos, "Levels" y "Levels (Original Version)") gana el de duración más cercana
     a la entrada; sin duración, el primero.
@@ -550,20 +629,24 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
     - la entrada NO nombra invitados, todos los aceptados traen invitados que la entrada no
       menciona ("Alors On Danse (Featuring Erik Hassle)") y hay una edición del mismo tema sin
       ellos: es otra grabación;
-    - la entrada dura más del doble que el candidato (un "Humble" de 706 s no es el de 3 min);
     - la duración delata otra edición del mismo tema: el aceptado está lejos (> 10 %) y otra
       edición (Radio Edit, Extended…) coincide (±max(10 s, 5 %)). "Born Slippy (Nuxx)" de
-      268 s es la Radio Edit de 264 s, no el original de 454 s."""
+      268 s no es el original de 454 s.
+    En ese último caso, y cuando no hay ningún aceptado, un upload SIN versión puede ser una
+    edición del tema: se acepta si UNA sola edición coincide a ±max(3 s, 2 %) (regla de la
+    Radio Edit por duración, aprobada por el dueño): Born Slippy de 268 s → la Radio Edit de 264."""
     dur = duration_or_none(duration_s)
     pool = [(t, deezer_identity(t)) for t in tracks]
-    accepted = [(t, i) for t, i in pool if is_same_track(entry, i)]
+    grados = {id(t): evidencia_misma_grabacion(entry, i, dur, t.get("duration"), audio_exacto=audio_exacto)
+              for t, i in pool}
+    accepted = [(t, i) for t, i in pool if grados[id(t)]]
     if not accepted:
-        return None
+        return _edicion_por_duracion(entry, pool, dur)
     first = accepted[0][1]
     for _, i in accepted[1:]:
         if not artists_match(first, i):
             logger.info(f"🔎 Identidad ambigua: «{accepted[0][0].get('title')}» de dos artistas distintos; no elijo ninguno.")
-            return None
+            return None, None
 
     def cerca(t):
         d = duration_or_none(t.get("duration"))
@@ -578,7 +661,7 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
             accepted = [(t, i) for t, i in accepted if cerca(t)]
             if not accepted:
                 logger.info("🔎 El aceptado no tiene a los invitados, otra versión sí y la duración no cuadra: no elijo.")
-                return None
+                return None, None
     else:
         sin_extra = [(t, i) for t, i in accepted if not _unnamed_guests(entry, i)]
         if sin_extra:
@@ -586,23 +669,47 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
         elif any(same_title(entry, i) and i.version in _SAME_WORK and artists_match(entry, i)
                  and not _unnamed_guests(entry, i) for _, i in pool):
             logger.info(f"🔎 «{accepted[0][0].get('title')}» trae invitados que el upload no nombra: no elijo.")
-            return None
-    if dur:
-        accepted = [(t, i) for t, i in accepted
-                    if not (duration_or_none(t.get("duration")) and dur > 2 * duration_or_none(t.get("duration")))]
-        if not accepted:
-            logger.info(f"🔎 El upload dura {dur:.0f} s, más del doble que el tema: no elijo.")
-            return None
+            return None, None
     if not dur:
-        return accepted[0][0]
+        return accepted[0][0], grados[id(accepted[0][0])]
     best, _ = min(accepted, key=lambda ti: abs((ti[0].get("duration") or 0) - dur))   # min es estable
     if abs((best.get("duration") or 0) - dur) > max(10.0, 0.10 * dur):
         for t, i in pool:
             if (i.version in _SAME_WORK and i.version != entry.version and same_title(entry, i)
                     and artists_match(entry, i) and abs((t.get("duration") or 0) - dur) <= max(10.0, 0.05 * dur)):
-                logger.info(f"🔎 La duración ({dur:.0f} s) es la de «{t.get('title')}», no la de «{best.get('title')}»: no elijo.")
-                return None
-    return best
+                logger.info(f"🔎 La duración ({dur:.0f} s) es la de «{t.get('title')}», no la de «{best.get('title')}».")
+                return _edicion_por_duracion(entry, pool, dur)
+    # El elegido no cuadra en duración y hay otro con el mismo texto y otra duración ("Army Of Me"
+    # de 234 s y de 318 s, upload de 272 s): no se sabe cuál es.
+    if grados[id(best)] == "texto" and any(
+            abs((t.get("duration") or 0) - (best.get("duration") or 0)) > max(10.0, 0.10 * (best.get("duration") or 0))
+            for t, i in pool if is_same_track(entry, i)):
+        logger.info(f"🔎 «{best.get('title')}» tiene lanzamientos de distinta duración y ninguno cuadra: no elijo.")
+        return None, None
+    # Otra grabación del tema (un vivo, un remix; no una edición) coincide a ±3 s y el elegido no:
+    # "Genesis - Mama" de 416,96 s es el vivo de 417, no el remaster de 410. Solo con audio exacto
+    # (SoundCloud): en un video la intro mueve la duración y un remix o un vivo cae cerca por
+    # casualidad (medido: costaba 7 aciertos en videos de YouTube).
+    d_best = abs((best.get("duration") or 0) - dur)
+    for t, i in (pool if audio_exacto and d_best > 3.0 else []):
+        d = _dur_diff(dur, duration_or_none(t.get("duration")))
+        if (i.version != entry.version and i.version not in _SAME_WORK and same_title(entry, i) and artists_match(entry, i)
+                and d is not None and d <= 3.0):
+            logger.info(f"🔎 «{t.get('title')}» dura lo mismo que el upload: no elijo «{best.get('title')}».")
+            return _edicion_por_duracion(entry, pool, dur)
+    return best, grados[id(best)]
+
+
+def _edicion_por_duracion(entry: Identity, pool: list, dur: float | None) -> tuple[dict | None, str | None]:
+    """Regla de la Radio Edit por duración: la edición del mismo tema cuya duración coincide a
+    ±max(3 s, 2 %). Si coinciden ediciones distintas (Radio Edit y Club Mix), es ambiguo: nada."""
+    eds = [(t, i) for t, i in pool
+           if evidencia_misma_grabacion(entry, i, dur, t.get("duration"), edicion=True)]
+    if not eds or len({i.version for _, i in eds}) > 1:
+        return None, None
+    best = min(eds, key=lambda ti: abs((ti[0].get("duration") or 0) - dur))[0]
+    logger.info(f"🎯 Por duración ({dur:.0f} s): «{best.get('title')}».")
+    return best, "texto+duracion"
 
 
 def _has_guests(ident: Identity, guests: frozenset) -> bool:

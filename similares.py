@@ -104,18 +104,17 @@ DEEZER_UNAVAILABLE = "deezer_no_disponible"     # Deezer no contestó: no se sab
 NOT_SEARCHABLE = "sin_artista_o_titulo"         # no quedó artista o título para preguntarle a Deezer
 
 
-def _buscar_verificado(entrada: track_identity.Identity,
-                       duracion: float | None = None) -> tuple[dict | None, bool | None]:
-    """(track de Deezer que ES la entrada o None, Deezer contestó alguna consulta; None si
-    no había nada que consultar).
+def _buscar_verificado(entrada: track_identity.Identity, duracion: float | None = None,
+                       audio_exacto: bool = False) -> tuple[dict | None, bool | None, str | None]:
+    """(track de Deezer que ES la entrada o None, Deezer contestó alguna consulta — None si
+    no había nada que consultar —, grado de evidencia).
 
     Todas las consultas de la entrada van en paralelo y se juntan (sin repetir ids, en el
     orden de las consultas); de ese pool se acepta solo lo que pasa la regla de identidad
-    (`track_identity.pick_track`, con la duración solo para desempatar). Nunca el primer
-    resultado "porque sí"."""
+    (`track_identity.pick_track_evidencia`). Nunca el primer resultado "porque sí"."""
     consultas = track_identity.deezer_queries(entrada)
     if not consultas:
-        return None, None
+        return None, None, None
     limite = track_identity.search_limit(entrada)
     with ThreadPoolExecutor(max_workers=min(4, len(consultas))) as ex:
         respuestas = list(ex.map(lambda q: _get(f"{DEEZER}/search?q={quote(q)}&limit={limite}"), consultas))
@@ -126,36 +125,43 @@ def _buscar_verificado(entrada: track_identity.Identity,
             if t.get("id") not in vistos:
                 vistos.add(t.get("id"))
                 pool.append(t)
-    return track_identity.pick_track(entrada, pool, duracion), contesto
+    track, grado = track_identity.pick_track_evidencia(entrada, pool, duracion, audio_exacto)
+    return track, contesto, grado
 
 
-def resolver_seed_detalle(titulo: str, artista: str, isrc: str | None = None,
-                          duracion: float | None = None) -> tuple[dict | None, str | None]:
-    """(semilla de Deezer, None) o (None, motivo). La semilla es el tema pedido o nada:
-    1) si hay ISRC (lo trae SoundCloud) y el track de Deezer CONFIRMA lo que dice el upload
-       (misma versión; mismo título o duración a ±5 %), es ese track;
-    2) si no, título y artista normalizados y la regla de identidad de `track_identity`.
-    Medido sobre 40 + 160 entradas reales: 0 sustituciones."""
+def resolver_semilla(titulo: str, artista: str, isrc: str | None = None, duracion: float | None = None,
+                     fuente: str | None = None) -> tuple[dict | None, str | None, str | None]:
+    """(semilla de Deezer, None, grado de evidencia) o (None, motivo, None). La semilla es el
+    tema pedido o nada:
+    1) si hay ISRC (lo trae SoundCloud) y `evidencia_misma_grabacion(via="isrc")` lo confirma
+       (misma versión y título; otro artista solo con la duración a ±5 %), es ese track;
+    2) si no, título y artista normalizados y la misma función de evidencia sobre la búsqueda.
+    El grado ("isrc+duracion" > "isrc" > "texto+duracion" > "texto") va en el detalle.
+    `fuente` = "soundcloud": el upload es el audio mismo (sin intro de video), así que su
+    duración tiene que cuadrar con la del tema."""
     entrada = track_identity.parse_entry(titulo, artista)
+    exacto = (fuente or "").lower() == "soundcloud"
     consulto = contesto = False
     if isrc:
         consulto = True
         t = _get(f"{DEEZER}/track/isrc:{quote(isrc)}")
         contesto = bool(t)
         if t.get("id") and (t.get("artist") or {}).get("id"):
-            if track_identity.isrc_confirms(entrada, track_identity.deezer_identity(t), duracion, t.get("duration")):
-                logger.info(f"🎯 Semilla por ISRC {isrc}: '{t.get('title')}' — {t['artist'].get('name')}")
-                return t, None
+            grado = track_identity.evidencia_misma_grabacion(
+                entrada, track_identity.deezer_identity(t), duracion, t.get("duration"), via="isrc")
+            if grado:
+                logger.info(f"🎯 Semilla por ISRC {isrc} ({grado}): '{t.get('title')}' — {t['artist'].get('name')}")
+                return t, None, grado
             logger.info(f"🔎 El ISRC {isrc} es '{t.get('title')}' y el upload dice '{titulo}': no lo tomo.")
-    seed, contesto_busqueda = _buscar_verificado(entrada, duracion)
+    seed, contesto_busqueda, grado = _buscar_verificado(entrada, duracion, exacto)
     if seed:
-        return seed, None
+        return seed, None, grado
     # "God's Plan - Drake" subido por un tercero: la otra lectura de "A - B", con la misma regla.
     al_reves = track_identity.parse_entry_swapped(titulo, artista)
     if al_reves is not None:
-        seed, contesto_swap = _buscar_verificado(al_reves, duracion)
+        seed, contesto_swap, grado = _buscar_verificado(al_reves, duracion, exacto)
         if seed:
-            return seed, None
+            return seed, None, grado
         if contesto_swap is not None:
             contesto_busqueda = bool(contesto_busqueda) or contesto_swap
     if contesto_busqueda is not None:
@@ -165,7 +171,13 @@ def resolver_seed_detalle(titulo: str, artista: str, isrc: str | None = None,
     else:
         motivo = SEED_NOT_FOUND if (contesto or contesto_busqueda) else DEEZER_UNAVAILABLE
     logger.info(f"🚫 Sin semilla para '{titulo}' — {artista}: {motivo}")
-    return None, motivo
+    return None, motivo, None
+
+
+def resolver_seed_detalle(titulo: str, artista: str, isrc: str | None = None,
+                          duracion: float | None = None, fuente: str | None = None) -> tuple[dict | None, str | None]:
+    """(semilla, None) o (None, motivo): `resolver_semilla` sin el grado."""
+    return resolver_semilla(titulo, artista, isrc, duracion, fuente)[:2]
 
 
 def _resolver_seed(titulo: str, artista: str, genero_hint: str | None = None,
@@ -274,7 +286,7 @@ def _buscar_meta(entrada: track_identity.Identity, usar_preview: bool) -> dict:
     la semilla: si no se puede demostrar que el resultado es el tema, los dos quedan vacíos
     (la fila no muestra nada; antes mostraba el BPM y el género del primer resultado, que
     podía ser otra canción)."""
-    t, _ = _buscar_verificado(entrada)
+    t, _, _ = _buscar_verificado(entrada)
     if not t:
         return {"bpm": None, "genero": None}
     bpm = int(t.get("bpm") or 0) or _bpm(t["id"])
@@ -358,9 +370,10 @@ def sin_semilla(motivo: str) -> dict:
 
 def construir_playlist(titulo: str, artista: str = "", total: int = 25,
                        analizar_tono: bool = True, genero_hint: str | None = None,
-                       isrc: str | None = None, duracion: float | None = None) -> dict:
+                       isrc: str | None = None, duracion: float | None = None,
+                       fuente: str | None = None) -> dict:
     import datetime
-    seed, motivo = resolver_seed_detalle(titulo, artista, isrc, duracion)
+    seed, motivo, evidencia = resolver_semilla(titulo, artista, isrc, duracion, fuente)
     if not seed:
         return sin_semilla(motivo or SEED_NOT_FOUND)
 
@@ -486,6 +499,8 @@ def construir_playlist(titulo: str, artista: str = "", total: int = 25,
             "bpm": seed_bpm or None,
             "tono": (seed_tono or {}).get("tono"),
             "camelot": seed_camelot,
+            # Grado de evidencia de que la semilla es el tema pedido (todavía no se muestra).
+            "evidencia": evidencia,
         },
         "canciones": canciones,
     }

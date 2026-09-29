@@ -25,8 +25,11 @@ A = {e["n"]: e for e in DATOS["hallazgos"]}      # casos de la auditoría (160 e
 
 def fila_deezer(t: dict) -> dict:
     """Una fila grabada con la forma de la API de Deezer (artist como objeto)."""
-    return {"id": t["id"], "title": t["title"], "artist": {"id": t["artist_id"], "name": t["artist"]},
-            "duration": t["duration"], "album": {"id": None}}
+    f = {"id": t["id"], "title": t["title"], "artist": {"id": t["artist_id"], "name": t["artist"]},
+         "duration": t["duration"], "album": {"id": None}}
+    if t.get("contributors"):                       # solo los tracks pedidos por ISRC
+        f["contributors"] = [{"name": n} for n in t["contributors"]]
+    return f
 
 
 class DeezerGrabado:
@@ -64,7 +67,7 @@ def resolver(monkeypatch, n, con_isrc: bool = True):
     dz = DeezerGrabado(e)
     monkeypatch.setattr(similares, "_get", dz)
     seed, motivo = similares.resolver_seed_detalle(e["titulo"], e["artista"], e["isrc"] if con_isrc else None,
-                                                   e["duracion"])
+                                                   e["duracion"], e["fuente"])
     assert dz.no_grabadas == [], f"el código hizo consultas que el fixture no tiene: {dz.no_grabadas}"
     return seed, motivo
 
@@ -287,8 +290,10 @@ def test_la_duracion_desempata_entre_lanzamientos_del_mismo_tema():
     assert cortas and largas
     entrada = ti.parse_entry(a["titulo"], a["artista"])
     for orden in ([largas[0], cortas[0]], [cortas[0], largas[0]]):
-        assert ti.pick_track(entrada, orden, 267)["duration"] == 234, "tiene que ganar la más cercana a 267 s"
-        assert ti.pick_track(entrada, orden, 300)["duration"] == 318, "y la más cercana a 300 s"
+        assert ti.pick_track(entrada, orden, 240)["duration"] == 234, "tiene que ganar la más cercana a 240 s"
+        assert ti.pick_track(entrada, orden, 310)["duration"] == 318, "y la más cercana a 310 s"
+        # 267 s no cuadra con ninguno y los dos lanzamientos duran distinto: no se sabe cuál es.
+        assert ti.pick_track(entrada, orden, 267) is None
 
 
 @pytest.mark.parametrize("n", sorted(A))
@@ -298,21 +303,32 @@ def test_hallazgos_de_la_auditoria(monkeypatch, n):
     v = a["verdad"]
     if v["estado"] == "none":
         assert seed is None, f"{a['titulo']} ({a['motivo']}): aceptó {nombre(seed)}"
+    elif v["estado"] == "unknown":                 # la auditoría no lo pudo decidir: sin verdad
+        pytest.skip(a["motivo"])
+    elif v["estado"] == "neg":                     # esos ids son seguro otra grabación
+        assert seed is None or seed["id"] not in v["ids"], f"{a['titulo']} ({a['motivo']}): aceptó {nombre(seed)}"
     else:
         assert seed is None or seed["id"] in v["ids"], f"{a['titulo']} ({a['motivo']}): aceptó {nombre(seed)}"
 
 
 # Resultado esperado de cada hallazgo (id, o None = rechazo honesto con su motivo).
 ESPERADO = {
-    "a50": None, "a131": None, "a118": 424036432, "a140": 14383882, "a137": 14383880, "a138": None, "a16": None,
-    "a67": 1178682, "a19": 448260732, "a20": 1783253587, "a68": 389034231, "a145": 373789461, "a100": 3212563611,
-    "a2": None, "a26": None, "a34": None, "a119": None, "a115": 68350113, "a10": 2629694162, "a44": 92198180,
-    "a112": 1178682, "a141": 14383880, "a97": 144535404, "a106": 116914090, "a60": None,
+    # Radio Edit por duración (aprobada por el dueño): a50 Born Slippy 268 s → Radio Edit 264 s,
+    # a26 Get Lucky, a60 Gravity (Edit), a82 Around the World, a138 Levels.
+    "a50": 140857827, "a131": None, "a118": 424036432, "a140": 14383882, "a137": 14383880, "a138": 14383880,
+    "a16": None, "a67": 1178682, "a19": 448260732, "a20": 1783253587, "a68": 389034231, "a145": 373789461,
+    "a100": 3212563611, "a2": None, "a26": 66609426, "a34": None, "a119": None, "a115": 68350113,
+    "a10": None,        # 267 s: "Army Of Me" de 234 y de 318 s, ninguno cuadra → no se sabe
+    "a44": 92198180, "a112": 1178682, "a141": 14383880, "a97": 144535404, "a106": 116914090, "a60": 699067122,
+    "a65": None, "a159": None, "a82": 14598347,
     # auditoría 2
     "b205": None, "b30": None, "b201": None, "b28": 75526535, "b56": 2333553245, "b208": 60904700,
     "b185": 1355376732, "b157": 2966772721, "b69": 3786035712, "b119": 6686670, "b94": 533609232,
     "b137": 70322130, "b133": 4091936771, "b194": 1843514397, "b189": 824731152, "b123": 13247459,
     "b8": 2393352885, "b90": None, "b102": None, "b63": None,
+    # auditoría 3
+    "c117": 128846783,  # el "Hurt" de Johnny Cash por texto; nunca el del tributo (14990882)
+    "c154": None, "c174": 3158428,
 }
 
 
@@ -393,19 +409,111 @@ def test_lectura_al_reves_solo_si_la_normal_no_encuentra(monkeypatch):
     assert ti.parse_entry_swapped("Money", "Pink Floyd") is None, "sin separador no hay otra lectura"
 
 
-@pytest.mark.parametrize("titulo_deezer, dur_deezer, dur_upload, esperado", [
-    ("Otra Cosa", 312, 310, True),         # título distinto, duración a ±5 %: confirma
-    ("Otra Cosa", 312, 250, False),        # título distinto, 20 % afuera: no
-    ("Otra Cosa", 312, None, False),       # título distinto, sin duración: no
-    ("Otra Cosa", 312, float("inf"), False),
-    ("Otra Cosa", 312, float("nan"), False),
-    ("Otra Cosa", 312, -5, False),
-    ("Stronger", 312, None, True),         # mismo título: confirma sin duración
-    ("Stronger (Instrumental)", 312, 312, False),
+@pytest.mark.parametrize("artista_deezer, titulo_deezer, dur_deezer, dur_upload, grado", [
+    # por ISRC
+    ("Kanye West", "Stronger", 312, 311, "isrc+duracion"),
+    ("Kanye West", "Stronger", 312, None, "isrc"),               # mismo título y artista, sin duración
+    ("Kanye West", "Stronger", 312, 250, "isrc"),                # la duración no confirma pero el artista sí
+    ("Johnny Crash", "Stronger", 312, None, None),               # A1: otro artista y sin duración → no
+    ("Johnny Crash", "Stronger", 312, 30.0, None),               # 30 s = preview de SoundCloud: no se sabe
+    ("Johnny Crash", "Stronger", 312, 250, None),                # otro artista y la duración no cuadra
+    ("Johnny Crash", "Stronger", 312, 305, "isrc+duracion"),     # otro artista, la duración confirma a ±5 %
+    ("Kanye West", "Otra Cosa", 312, 311, "isrc+duracion"),      # otro título: solo con duración a ±max(3 s, 2 %)
+    ("Kanye West", "Otra Cosa", 312, 300, None),
+    ("Kanye West", "Otra Cosa", 312, None, None),
+    ("Kanye West", "Otra Cosa", 312, float("inf"), None),
+    ("Kanye West", "Otra Cosa", 312, float("nan"), None),
+    ("Kanye West", "Otra Cosa", 312, -5, None),
+    ("Kanye West", "Stronger (Instrumental)", 312, 312, None),   # otra versión, nunca
 ])
-def test_isrc_confirms(titulo_deezer, dur_deezer, dur_upload, esperado):
-    assert ti.isrc_confirms(ti.parse_entry("Kanye West - Stronger", "x"), ti.parse_fields("Kanye West", titulo_deezer),
-                            dur_upload, dur_deezer) is esperado
+def test_evidencia_por_isrc(artista_deezer, titulo_deezer, dur_deezer, dur_upload, grado):
+    assert ti.evidencia_misma_grabacion(ti.parse_entry("Kanye West - Stronger", "x"),
+                                        ti.parse_fields(artista_deezer, titulo_deezer), dur_upload, dur_deezer,
+                                        via="isrc") == grado
+
+
+@pytest.mark.parametrize("pedido, dur_upload, artista_deezer, titulo_deezer, dur_deezer, grado", [
+    ("Kanye West - Stronger", 315, "Kanye West", "Stronger", 312, "texto+duracion"),
+    ("Kanye West - Stronger", None, "Kanye West", "Stronger", 312, "texto"),
+    ("Kanye West - Stronger", 267, "Kanye West", "Stronger", 312, "texto"),          # video más corto: se acepta
+    ("Kanye West - Stronger", 706, "Kanye West", "Stronger", 312, None),             # más del doble
+    # A2: el primer artista del upload no está y la duración no cuadra
+    ("J Balvin, Willy William - Mi Gente", 186, "Willy William", "Mi Gente", 137, None),
+    ("J Balvin, Willy William - Mi Gente", 186, "J Balvin", "Mi Gente", 187, "texto+duracion"),
+    ("J Balvin, Willy William - Mi Gente", 140, "Willy William", "Mi Gente", 137, "texto+duracion"),
+    # alias (otro alfabeto, apellido): necesita que la duración cuadre
+    ("米津玄師 Kenshi Yonezu - Lemon", 260, "Kenshi Yonezu", "Lemon", 256, "texto+duracion"),
+    ("米津玄師 Kenshi Yonezu - Lemon", 400, "Kenshi Yonezu", "Lemon", 256, None),
+    ("米津玄師 Kenshi Yonezu - Lemon", None, "Kenshi Yonezu", "Lemon", 256, None),
+])
+def test_evidencia_por_texto(pedido, dur_upload, artista_deezer, titulo_deezer, dur_deezer, grado):
+    assert ti.evidencia_misma_grabacion(ti.parse_entry(pedido, "x"), ti.parse_fields(artista_deezer, titulo_deezer),
+                                        dur_upload, dur_deezer) == grado
+
+
+def test_evidencia_audio_exacto_mas_largo_es_otra_edicion():
+    e, d = ti.parse_entry("Argy & Omnya - Aria", "x"), ti.parse_fields("Argy", "Aria")
+    assert ti.evidencia_misma_grabacion(e, d, 314.8, 236) == "texto"                 # un video: puede ser la intro
+    assert ti.evidencia_misma_grabacion(e, d, 314.8, 236, audio_exacto=True) is None  # SoundCloud: es otra edición
+    assert ti.evidencia_misma_grabacion(e, d, 200, 236, audio_exacto=True) == "texto"  # más corto: recorte, se deja
+
+
+@pytest.mark.parametrize("dur_upload, titulos, esperado", [
+    (264, [("Born Slippy (Nuxx)", 454), ("Born Slippy (Nuxx) (Radio Edit)", 264)], "Born Slippy (Nuxx) (Radio Edit)"),
+    (268, [("Born Slippy (Nuxx)", 454), ("Born Slippy (Nuxx) (Radio Edit)", 264)], "Born Slippy (Nuxx) (Radio Edit)"),
+    (272, [("Born Slippy (Nuxx)", 454), ("Born Slippy (Nuxx) (Radio Edit)", 264)], None),      # 8 s > max(3 s, 2 %)
+    (199, [("Levels (Original Version)", 339), ("Levels (Radio Edit)", 199)], "Levels (Radio Edit)"),
+    (199, [("Levels (Radio Edit)", 199), ("Levels (Club Mix)", 200)], None),                  # dos ediciones: ambiguo
+    (199, [("Levels (Radio Edit)", 199), ("Levels (Radio Edit)", 198)], "Levels (Radio Edit)"),   # dos lanzamientos
+    (199, [("Levels (Live)", 199)], None),                                                     # un vivo, nunca
+    (199, [("Levels (Skrillex Remix)", 199)], None),                                          # un remix, nunca
+    (199, [("Levels (Instrumental Radio Edit)", 199)], None),                                 # instrumental, nunca
+])
+def test_radio_edit_por_duracion(dur_upload, titulos, esperado):
+    filas = [{"id": k, "title": t, "artist": {"id": 1, "name": "Avicii" if "Levels" in t else "Underworld"},
+              "duration": d} for k, (t, d) in enumerate(titulos)]
+    pedido = "Avicii - Levels" if "Levels" in titulos[0][0] else "Underworld - Born Slippy (Nuxx)"
+    track, grado = ti.pick_track_evidencia(ti.parse_entry(pedido, "x"), filas, dur_upload)
+    assert (track or {}).get("title") == esperado
+    assert grado == ("texto+duracion" if esperado else None)
+    # con versión en el título del upload la regla no aplica
+    assert ti.pick_track(ti.parse_entry(pedido + " (Extended Mix)", "x"), filas, dur_upload) is None
+
+
+def test_invitados_que_el_upload_no_nombra():
+    # Filas GRABADAS de «Stromae - Alors on danse»: sin duración, la versión "Featuring Erik
+    # Hassle" no es el tema pedido si hay una edición sin invitados (la Radio Edit).
+    filas = [fila_deezer(t) for q in A["b201"]["deezer"] for t in A["b201"]["deezer"][q]
+             if t["id"] in (7046192, 6297555)]
+    filas = list({t["id"]: t for t in filas}.values())
+    assert {t["id"] for t in filas} == {7046192, 6297555}
+    assert ti.pick_track(ti.parse_entry("Stromae - Alors on danse", "x"), filas, None) is None
+    solo = [t for t in filas if t["id"] == 7046192]
+    assert ti.pick_track(ti.parse_entry("Stromae - Alors on danse", "x"), solo, None)["id"] == 7046192, \
+        "sin otra edición, el crédito se acepta (Netsky - Rio)"
+
+
+def test_feat_con_guion_y_numero_de_pista():
+    u = ti.parse_entry("Rihanna - Umbrella ft. JAY-Z", "x")
+    assert (u.base_title, set(u.feat)) == ("umbrella", {"jay z"})
+    assert ti.parse_entry("Artist - Song ft. T-Pain", "x").base_title == "song"
+    assert ti.parse_entry("Artist - Song ft. T-Pain - Official", "x").feat == frozenset({"t pain"})
+    assert ti.parse_entry("Iron Maiden - 2 Minutes To Midnight (1998 Remastered Version) #02", "x").base_title == \
+        "2 minutes to midnight"
+    assert ti.parse_entry("QUEVEDO || Gran Via #52", "x").base_title == "gran via 52"
+
+
+def test_grado_en_el_detalle(monkeypatch):
+    # Kobosil sube "Eiskalt (Short Mix)" (preview de 30 s) con el ISRC del de Kuko: coincide el
+    # coautor (contributors) → "isrc"; sin ISRC no se puede.
+    e = E[23]
+    monkeypatch.setattr(similares, "_get", DeezerGrabado(e))
+    seed, motivo, grado = similares.resolver_semilla(e["titulo"], e["artista"], e["isrc"], e["duracion"], e["fuente"])
+    assert (seed["id"], grado) == (2988969511, "isrc")
+    a = A["a82"]
+    monkeypatch.setattr(similares, "_get", DeezerGrabado(a))
+    seed, _, grado = similares.resolver_semilla(a["titulo"], a["artista"], None, a["duracion"], a["fuente"])
+    assert (seed["id"], grado) == (14598347, "texto+duracion")
 
 
 @pytest.mark.parametrize("dur", [None, 900.0])
@@ -559,8 +667,12 @@ def test_las_40_entradas_cero_sustituciones(monkeypatch):
         if c in ("sustitucion", "rechazo_mal"):
             malos.append(f"[{n}] {c}: {e['artista']} | {e['titulo']} -> {nombre(seed)}")
     assert antes["sustitucion"] == 10, f"el fixture tiene que reproducir las 10 sustituciones de antes: {antes}"
-    assert malos == [], "\n".join(malos)
-    assert ahora == {"ok": 39, "rechazo_mal": 0, "sustitucion": 0, "unknown": 1}
+    assert not [m for m in malos if "sustitucion" in m], "\n".join(malos)
+    # Costo conocido: [33] es la subida a SoundCloud de 520 s de un "Inferno" que en Deezer dura
+    # 416 s; con audio exacto un upload más largo que no cuadra es otra edición (la misma regla que
+    # rechaza la Extended de "Aria"). El diseño ya lo tenía como "misma obra; ¿misma mezcla? UNKNOWN".
+    assert [m.split()[0] for m in malos] == ["[33]"], "\n".join(malos)
+    assert ahora == {"ok": 38, "rechazo_mal": 1, "sustitucion": 0, "unknown": 1}
 
 
 # --- meta de las filas ----------------------------------------------------------------------
@@ -658,10 +770,11 @@ def test_parecidas_lista_limpia_la_duracion(server, monkeypatch, dur, llega):
     from fastapi.testclient import TestClient
     recibido = []
     monkeypatch.setattr(similares, "construir_playlist",
-                        lambda *a: recibido.append(a) or similares.sin_semilla(similares.SEED_NOT_FOUND))
+                        lambda *a, **k: recibido.append((a, k)) or similares.sin_semilla(similares.SEED_NOT_FOUND))
     TestClient(server.app).get("/api/parecidas_lista", params={"titulo": "From The Top", "artista": "IMMINENT - Topic",
-                                                               "duracion": dur})
-    assert recibido and recibido[0][-1] == llega, recibido
+                                                               "duracion": dur, "fuente": "SoundCloud"})
+    assert recibido and recibido[0][0][-1] == llega, recibido
+    assert recibido[0][1] == {"fuente": "soundcloud"}, "la fuente llega a la resolución (audio exacto)"
 
 
 def test_parecidas_lista_de_soundcloud_usa_el_isrc(server, monkeypatch):
@@ -676,3 +789,4 @@ def test_parecidas_lista_de_soundcloud_usa_el_isrc(server, monkeypatch):
         "titulo": e["titulo"], "artista": e["artista"], "fuente": "soundcloud", "fuente_id": "1234567"})
     assert pedidos == ["1234567"], "el id de SoundCloud tiene que llegar hasta el pedido del ISRC"
     assert r.json()["exito"] is True and (r.json()["seed"]["titulo"], r.json()["seed"]["artista"]) == ("Eiskalt (Short Mix)", "Kuko")
+    assert r.json()["seed"]["evidencia"] == "isrc", "el grado de evidencia va en el detalle de la semilla"
