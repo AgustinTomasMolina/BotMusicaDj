@@ -829,13 +829,17 @@ def test_parecidas_con_semilla_y_sin_candidatos_dice_por_que(server, monkeypatch
     assert (d["exito"], d["total"], d["grupos"], d["seed"]["titulo"]) == (True, 0, [], "Eiskalt (Short Mix)")
     assert (d["motivo"], d["mensaje"], d["detalle"]) == (
         "sin_candidatos", "No encontré temas parecidos a «Eiskalt (Short Mix)»",
-        "Deezer dio 2 artistas relacionados con Kuko, pero ningún tema con preview para comparar.")
+        "Deezer devolvió 2 artistas relacionados con Kuko, pero ningún tema con preview para "
+        "comparar (ni suyos ni de ellos).")
 
 
 def test_parecidas_sin_relacionados_lo_dice_distinto(server, monkeypatch):
+    """"No devolvió", no "no tiene": `_get` contesta vacío igual cuando Deezer no respondió
+    (auditoría de f35), así que el texto describe lo que llegó."""
     d = _parecidas_de_eiskalt(server, monkeypatch, DeezerGrabado)
     assert (d["motivo"], d["detalle"]) == (
-        "sin_candidatos", "Deezer no tiene artistas relacionados con Kuko ni otros temas suyos para comparar.")
+        "sin_candidatos", "Deezer no devolvió artistas relacionados con Kuko ni otros temas suyos "
+                          "con preview para comparar.")
 
 
 def test_parecidas_que_no_estan_en_ninguna_plataforma_lo_dicen(server, monkeypatch):
@@ -849,8 +853,9 @@ def test_parecidas_que_no_estan_en_ninguna_plataforma_lo_dicen(server, monkeypat
     assert (d["exito"], d["total"], d["encontradas"], d["grupos"]) == (True, 7, 0, [])
     assert (d["motivo"], d["mensaje"], d["detalle"]) == (
         "sin_plataformas",
-        "Encontré 7 temas parecidos a «Semilla», pero ninguno en YouTube, SoundCloud ni MP3",
-        "No aparecieron: Otro - Tema 0, Otro - Tema 1, Otro - Tema 2, Otro - Tema 3, Otro - Tema 4 y 2 más.")
+        "Encontré 7 temas parecidos a «Semilla», pero no encontré ninguno en YouTube, SoundCloud ni MP3",
+        "No aparecieron (o no eran el mismo tema): Otro - Tema 0, Otro - Tema 1, Otro - Tema 2, "
+        "Otro - Tema 3, Otro - Tema 4 y 2 más.")
 
 
 def test_una_lista_con_resultados_no_trae_motivo(server, monkeypatch):
