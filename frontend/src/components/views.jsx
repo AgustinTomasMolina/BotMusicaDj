@@ -40,7 +40,9 @@ function LibCard({ t, i, playing, onToggle }) {
       <div className="lib-title" title={t.titulo}>{t.titulo}</div>
       <div className="lib-artist" title={t.artista}>{t.artista || '—'}</div>
       <div className="lib-actions">
-        <AddToPlaylist track={{ titulo: t.titulo, artista: t.artista, bpm: t.bpm, camelot: t.camelot, genero: t.genero }} />
+        {/* `lib_id` + fuente "biblioteca": el SERVER resuelve el archivo con ese id y lo guarda
+            en el item (la radio lo analiza y lo toca). La ruta nunca viaja desde acá. */}
+        <AddToPlaylist track={{ titulo: t.titulo, artista: t.artista, bpm: t.bpm, camelot: t.camelot, genero: t.genero, fuente: 'biblioteca', lib_id: t.id }} />
       </div>
     </div>
   )

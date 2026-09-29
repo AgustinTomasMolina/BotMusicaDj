@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  getRadioBiblioteca, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
+  getRadioPlaylists, getRadioPlaylist, analizarRadioPlaylist, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
   guardarRadioSet, listarRadioSets, getRadioSetGuardado, renombrarRadioSet, borrarRadioSet,
   calificarTransicion, descalificarTransicion,
 } from '../api'
@@ -103,52 +103,181 @@ function motivoDelRechazo(status, data) {
   return `El servidor rechazó el pedido con HTTP ${status} y sin explicación.`
 }
 
-/* ---------- 1. Elegir la semilla ---------- */
-function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
+/* ---------- 1. La playlist ---------- */
+
+// Qué le pasa a cada tema que no entra, en TEXTO (el color solo no alcanza, §6). El motivo
+// largo lo escribe el backend (`radio_playlist.clasificar`); esto es el rótulo del grupo.
+const ESTADO_TXT = {
+  por_analizar: 'Por analizar',
+  fallo_analisis: 'El análisis falló',
+  sin_archivo: 'Sin archivo (por bajar)',
+  archivo_no_existe: 'El archivo ya no está',
+  sin_genero: 'Sin género',
+  sin_origen: 'Sin origen',
+  duplicado: 'Duplicados',
+}
+// Cómo se nombra cada motivo en la frase "entran 18 de 40 (12 de otro género, …)".
+const EXCLUIDO_TXT = {
+  otro_genero: 'de otro género', sin_genero: 'sin género', sin_archivo: 'sin bajar',
+  archivo_no_existe: 'con el archivo movido', por_analizar: 'por analizar',
+  fallo_analisis: 'con el análisis fallido', duplicado: 'duplicados', sin_origen: 'sin origen',
+}
+
+// Estados de la base en los que la radio no puede hacer nada (ni leer ni analizar). Sin base
+// o con la base vacía SÍ se sigue: elegir una playlist la llena (el análisis hace de `scan`).
+const BLOQUEANTES = ['sin-motor', 'esquema-incompatible', 'base-ilegible']
+
+/* "Género del set: Techno · entran 18 de 40 (12 de otro género, 3 sin bajar)". Los números
+   son los del backend (`excluidos`): acá solo se escriben. */
+function ResumenPool({ p, id }) {
+  if (!p || p.genero == null) return null
+  const partes = Object.entries(p.excluidos || {}).filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${EXCLUIDO_TXT[k] || k}`)
+  return (
+    <p className="rpool" id={id}>
+      Género del set: <b>{p.genero}</b> · entran {p.entran} de {p.total}
+      {partes.length > 0 && ` (${partes.join(', ')})`}
+    </p>
+  )
+}
+
+function ElegirPlaylist({ playlists, plId, onElegir }) {
+  return (
+    <section className="rpanel" aria-labelledby="r-pl-h">
+      <h2 id="r-pl-h" className="rpanel-h">1 · La playlist</h2>
+      <p className="rpanel-sub">El set sale solo de esta playlist, y solo con temas del mismo género que la semilla.</p>
+      <label className="rcfg-label" htmlFor="r-playlist">Playlist</label>
+      <select id="r-playlist" className="input rpl-select" value={plId ?? ''}
+        onChange={(e) => onElegir(e.target.value ? Number(e.target.value) : null)}>
+        <option value="">Elegí una playlist…</option>
+        {playlists.map((p) => (
+          <option key={p.id} value={p.id}>{p.nombre} ({p.total} tema{p.total === 1 ? '' : 's'})</option>
+        ))}
+      </select>
+    </section>
+  )
+}
+
+/* El análisis en segundo plano: barra accesible mientras corre, cómo terminó después. */
+function Analisis({ pl, error, onAnalizar }) {
+  const a = pl.analisis || {}
+  const pendientes = pl.resumen?.por_analizar || 0
+  if (a.corriendo) {
+    const texto = `Analizando ${a.hechos}/${a.total}${a.actual ? ` · ${a.actual}` : ''}`
+    return (
+      <div className="ranalisis">
+        <div className="rbarra" role="progressbar" aria-label="Análisis de la playlist"
+          aria-valuemin={0} aria-valuemax={a.total} aria-valuenow={a.hechos} aria-valuetext={texto}>
+          <i style={{ width: `${a.total ? (100 * a.hechos) / a.total : 0}%` }} />
+        </div>
+        <p className="rnota ranalisis-txt">{texto} · podés seguir usando la app mientras tanto.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="ranalisis">
+      {a.ocupado_por && (
+        <p className="rnota">Se está analizando la playlist «{a.ocupado_por.nombre}» (un análisis a la vez): esta sigue cuando termine.</p>
+      )}
+      {a.total > 0 && (
+        <p className="rnota ranalisis-fin">
+          Análisis terminado: {a.hechos - a.fallidos.length} de {a.total} analizado{a.total === 1 ? '' : 's'}
+          {a.fallidos.length > 0 && `, ${a.fallidos.length} falló${a.fallidos.length === 1 ? '' : 'aron'} (el motivo está abajo, en «Quedan afuera»)`}.
+        </p>
+      )}
+      {error && <p className="rnota rnota-err" role="alert">{error}</p>}
+      {pendientes > 0 && !a.ocupado_por && (
+        <button type="button" className="btn btn-secondary btn-sm ranalizar" onClick={onAnalizar}>
+          Analizar {pendientes} tema{pendientes === 1 ? '' : 's'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/* Lo que queda afuera de la playlist y por qué, agrupado por motivo y en texto. */
+function Afuera({ items }) {
+  const fuera = items.filter((it) => it.estado !== 'listo')
+  if (!fuera.length) return null
+  const grupos = Object.keys(ESTADO_TXT).map((e) => [e, fuera.filter((it) => it.estado === e)]).filter(([, xs]) => xs.length)
+  return (
+    <details className="rafuera">
+      <summary>Quedan afuera {fuera.length} de {items.length}: {grupos.map(([e, xs]) => `${xs.length} ${ESTADO_TXT[e].toLowerCase()}`).join(' · ')}</summary>
+      {grupos.map(([e, xs]) => (
+        <div key={e} className="rafuera-grupo" data-estado={e}>
+          <h3 className="rafuera-h">{ESTADO_TXT[e]} ({xs.length})</h3>
+          <ul>
+            {xs.map((it) => (
+              <li key={it.id}>
+                <span className="rafuera-tema">{it.artista ? `${it.artista} — ` : ''}{it.titulo || '(sin título)'}</span>
+                {it.genero && <span className="rafuera-gen"> · {it.genero}</span>}
+                <span className="rafuera-motivo"> — {it.motivo}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </details>
+  )
+}
+
+/* ---------- 2. Elegir la semilla ---------- */
+function Semillero({ items, total, leyenda, elegida, onElegir, q, setQ, pool }) {
   const filtrados = useMemo(() => {
     const n = normalizeText(q)
-    if (!n) return tracks
-    return tracks.filter((t) => normalizeText(`${t.label} ${t.titulo} ${t.artista}`).includes(n))
-  }, [tracks, q])
+    if (!n) return items
+    return items.filter((it) => normalizeText(`${it.track.label} ${it.track.titulo} ${it.track.artista} ${it.genero || ''}`).includes(n))
+  }, [items, q])
   const visibles = filtrados.slice(0, MAX_LISTA)
 
   return (
     <section className="rpanel" aria-labelledby="r-semilla-h">
-      <h2 id="r-semilla-h" className="rpanel-h">1 · El track semilla</h2>
-      <p className="rpanel-sub">Todo el set se arma contra su BPM y su key.</p>
+      <h2 id="r-semilla-h" className="rpanel-h">2 · El track semilla</h2>
+      <p className="rpanel-sub">Todo el set se arma contra su BPM y su key, y con los temas de su género.</p>
       <div className="rbuscar">
         <span className="rbuscar-ico" aria-hidden="true"><IconSearch size={15} /></span>
         <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Filtrá por tema o artista…" autoComplete="off"
-          aria-label="Filtrar la biblioteca del motor" aria-controls="r-lista-semillas" />
+          placeholder="Filtrá por tema, artista o género…" autoComplete="off"
+          aria-label="Filtrar los temas listos de la playlist" aria-controls="r-lista-semillas" />
       </div>
       <div className="rlista" id="r-lista-semillas" role="list">
-        {visibles.length === 0 && (
-          <p className="rnota">Ningún track de la biblioteca coincide con «{q.trim()}».</p>
+        {items.length === 0 && (
+          <p className="rnota">Todavía no hay temas listos en esta playlist: tienen que tener archivo, género y estar analizados.</p>
         )}
-        {visibles.map((t) => (
-          <div role="listitem" key={t.id}>
-            {/* Lo que no es un track se marca y NO se esconde: `python -m motor list` también
-                lo muestra, y esconderlo haría que el DJ no encuentre un archivo que sabe que
-                escaneó. Sigue siendo elegible acá a propósito: quien lo intente recibe el
-                motivo del motor (400 de /api/radio/set), no un botón muerto sin explicación. */}
-            <button type="button" className={`rsem${t.es_track ? '' : ' is-notrack'}`}
-              aria-pressed={elegida && elegida.id === t.id} onClick={() => onElegir(t)}>
-              <span className="rsem-id">
-                <span className="rsem-titulo truncate">{t.titulo}</span>
-                <span className="rsem-artista truncate">{t.artista || '—'}</span>
-              </span>
-              <DatosTrack t={t} leyenda={leyenda} />
-              {!t.es_track && <span className="rtag-notrack">no es un track</span>}
-            </button>
-          </div>
-        ))}
+        {items.length > 0 && visibles.length === 0 && (
+          <p className="rnota">Ningún tema listo de la playlist coincide con «{q.trim()}».</p>
+        )}
+        {visibles.map((it) => {
+          const t = it.track
+          return (
+            <div role="listitem" key={it.id}>
+              {/* Lo que no es un track se marca y NO se esconde: `python -m motor list` también
+                  lo muestra. Sigue siendo elegible acá a propósito: quien lo intente recibe el
+                  motivo del motor (400 de /api/radio/set), no un botón muerto sin explicación. */}
+              <button type="button" className={`rsem${t.es_track ? '' : ' is-notrack'}`}
+                aria-pressed={!!elegida && elegida.id === it.id} onClick={() => onElegir(it)}>
+                <span className="rsem-id">
+                  <span className="rsem-titulo truncate">{t.titulo}</span>
+                  <span className="rsem-artista truncate">{t.artista || '—'}</span>
+                </span>
+                <DatosTrack t={t} leyenda={leyenda} />
+                <span className="rsem-extra">
+                  <span className="rtag-gen">{it.genero}</span>
+                  {/* Licencia visible siempre (§6): la que tiene la base del motor. */}
+                  <span className="rsem-lic" title={`Origen: ${it.origen || '—'}`}>Licencia: {it.licencia || '—'}</span>
+                </span>
+                {!t.es_track && <span className="rtag-notrack">no es un track</span>}
+              </button>
+            </div>
+          )
+        })}
       </div>
       <p className="rlista-pie">
         {filtrados.length > visibles.length
           ? `Se dibujan ${visibles.length} de ${filtrados.length} — filtrá para ver el resto.`
-          : `${filtrados.length} de ${tracks.length} tracks de la biblioteca del motor.`}
+          : `${filtrados.length} de ${items.length} temas listos (la playlist tiene ${total}).`}
       </p>
+      {elegida && <ResumenPool p={pool} id="r-pool-semilla" />}
       {/* La leyenda del `?` va acá y no solo debajo del set: en esta lista ya hay keys
           dudosas antes de armar nada, y un `?` que solo se explica en un `title` es un
           símbolo mudo para quien no usa mouse (§6). Es el mismo texto del motor, y que
@@ -164,7 +293,7 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
   const set1 = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
   return (
     <section className="rpanel" aria-labelledby="r-cfg-h">
-      <h2 id="r-cfg-h" className="rpanel-h">2 · La radio</h2>
+      <h2 id="r-cfg-h" className="rpanel-h">3 · La radio</h2>
       <p className="rpanel-sub">Los valores son los del motor. Un campo vacío usa el de fábrica.</p>
       <div className="rcfg">
         {curvas && curvas.length > 0 && (
@@ -272,10 +401,20 @@ function Curva({ pasos }) {
 
 /* ---------- La pantalla ---------- */
 export default function Radio() {
-  const [lib, setLib] = useState(null)        // respuesta de /api/radio/biblioteca
+  const [lib, setLib] = useState(null)        // respuesta de /api/radio/playlists
   const [cfg, setCfg] = useState(null)        // lo que muestran los controles
   const [q, setQ] = useState('')
-  const [elegida, setElegida] = useState(null)
+  const [plId, setPlId] = useState(null)      // la playlist elegida
+  const [pl, setPl] = useState(null)          // respuesta de /api/radio/playlists/{id}
+  const [errorPl, setErrorPl] = useState('')  // no se pudo leer la playlist
+  const [errorAnalisis, setErrorAnalisis] = useState('')
+  const [elegidaId, setElegidaId] = useState(null)   // id del ITEM semilla
+  // Una playlist se analiza sola UNA vez por elección: si después de analizar algo sigue
+  // "por analizar", no se relanza en loop (queda el botón para pedirlo a mano).
+  const autoRef = useRef(null)
+  const lecturaPl = useRef(0)
+  const plIdRef = useRef(null)   // la elegida AHORA (las funciones async la leen al volver)
+  plIdRef.current = plId
   const [set_, setSet] = useState(null)       // respuesta de /api/radio/set
   const [armando, setArmando] = useState(false)
   const [error, setError] = useState('')      // motivo del backend (400) o de conexión
@@ -307,17 +446,20 @@ export default function Radio() {
 
   useEffect(() => {
     let vivo = true
-    getRadioBiblioteca()
+    getRadioPlaylists()
       .then((d) => {
         if (!vivo) return
         setLib(d)
+        // Con una sola playlist no hay nada que elegir. Con varias NO se elige sola: elegir
+        // una arranca el análisis de lo que falte, y eso lo decide el DJ.
+        if (d.playlists && d.playlists.length === 1) setPlId(d.playlists[0].id)
         // Los defaults de los controles son los del motor. Si el backend no los manda
         // (sin el paquete motor), no se inventan: la pantalla muestra el motivo.
         if (d.opciones && d.opciones.config_default) setCfg({ ...d.opciones.config_default })
       })
       .catch(() => vivo && setLib({
-        configurada: false, estado: 'sin-conexion', total: 0, tracks: [], opciones: null,
-        motivo: 'No pude conectar con el servidor para leer la biblioteca del motor. Revisá que esté corriendo y volvé a intentar.',
+        configurada: false, estado: 'sin-conexion', playlists: [], opciones: null,
+        motivo: 'No pude conectar con el servidor para leer las playlists de la radio. Revisá que esté corriendo y volvé a intentar.',
       }))
     // El ref se LEE en el cleanup, no al montar: cuando este efecto corre, el <audio>
     // todavía no está en el DOM (se dibuja más abajo, con los datos ya cargados), así que
@@ -328,6 +470,82 @@ export default function Radio() {
 
   // Al volver de un «Reintentar», el foco va al encabezado de lo que se acaba de dibujar.
   useEffect(() => { if (intento > 0 && lib) tituloRef.current?.focus({ preventScroll: true }) }, [intento, lib])
+
+  /* ---------- la playlist elegida ---------- */
+
+  // Lee la playlist. Solo se aplica la ÚLTIMA lectura pedida (cambiar de playlist mientras
+  // una lectura viaja no puede dejar dibujada la anterior). Con la base "ocupada" (un
+  // análisis escribiendo justo en ese momento) NO se reemplazan los items: el backend no la
+  // pudo leer y los mostraría todos "por analizar", que no es cierto (§6).
+  const cargarPl = async (id) => {
+    const mia = ++lecturaPl.current
+    try {
+      const r = await getRadioPlaylist(id)
+      if (mia !== lecturaPl.current) return
+      if (!r.ok || !Array.isArray(r.data?.items)) {
+        setErrorPl(motivoDelRechazo(r.status, r.data))
+        return
+      }
+      setErrorPl('')
+      if (r.data.estado === 'base-ocupada') {
+        setPl((p) => (p && p.playlist.id === id ? { ...p, analisis: r.data.analisis, ocupada: r.data.motivo } : { ...r.data, ocupada: r.data.motivo }))
+        return
+      }
+      setPl(r.data)
+    } catch {
+      if (mia === lecturaPl.current) setErrorPl('No pude conectar con el servidor para leer la playlist. Revisá que esté corriendo y volvé a intentar.')
+    }
+  }
+
+  useEffect(() => {
+    setPl(null); setErrorPl(''); setErrorAnalisis(''); setElegidaId(null); setQ('')
+    autoRef.current = null
+    if (plId != null) cargarPl(plId)
+  }, [plId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mientras hay un análisis (de esta u otra playlist) o la base está ocupada, se relee
+  // cada 1.5 s: la barra avanza y los temas pasan a "listo" a medida que se analizan.
+  const siguiendo = !!pl && (pl.analisis?.corriendo || !!pl.analisis?.ocupado_por || !!pl.ocupada)
+  useEffect(() => {
+    if (!siguiendo || plId == null) return
+    const t = setTimeout(() => cargarPl(plId), 1500)
+    return () => clearTimeout(t)
+  }, [siguiendo, pl, plId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const analizar = async () => {
+    if (plId == null) return
+    const id = plId
+    setErrorAnalisis('')
+    try {
+      const r = await analizarRadioPlaylist(id)
+      if (id !== plIdRef.current) return
+      if (r.data?.analisis) setPl((p) => (p && p.playlist.id === id ? { ...p, analisis: r.data.analisis } : p))
+      // Otra playlist analizándose: esta espera (la relectura sigue) y se intenta al terminar.
+      if (r.status === 409 && r.data?.analisis?.ocupado_por) return
+      autoRef.current = id
+      if (!r.ok) setErrorAnalisis(`No se pudo analizar: ${motivoDelRechazo(r.status, r.data)}`)
+      else if (!r.data?.arrancado) cargarPl(id)
+    } catch {
+      autoRef.current = id
+      setErrorAnalisis('No pude conectar con el servidor para analizar la playlist. Revisá que esté corriendo y volvé a intentar.')
+    }
+  }
+
+  // Al elegir la playlist arranca solo el análisis de lo que falte (decisión del dueño).
+  useEffect(() => {
+    if (!pl || pl.ocupada || autoRef.current === pl.playlist.id) return
+    const a = pl.analisis || {}
+    if ((pl.resumen?.por_analizar || 0) > 0 && !a.corriendo && !a.ocupado_por) analizar()
+  }, [pl]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const listos = useMemo(() => (pl ? pl.items.filter((it) => it.estado === 'listo' && it.track) : []), [pl])
+  const elegida = listos.find((it) => it.id === elegidaId) || null
+  // Qué entraría con la semilla elegida, ANTES de armar (lo calcula el backend por género).
+  const poolSemilla = useMemo(() => {
+    if (!elegida || !pl) return null
+    const g = (pl.generos || []).find((x) => x.clave === elegida.genero_clave)
+    return g ? { genero: g.genero, entran: g.entran, total: g.total, excluidos: g.excluidos } : null
+  }, [elegida, pl])
 
   // Corta lo que esté sonando y limpia su estado. El set que viene puede no tener ese paso.
   const pararAudio = () => {
@@ -353,7 +571,7 @@ export default function Radio() {
     // Armar muestra el set nuevo: el set guardado que se miraba se cierra (sigue en la lista).
     setGuardado(null)
     try {
-      const r = await getRadioSet(params || { track: elegida.id, ...cfg })
+      const r = await getRadioSet(params || { playlist: plId, track: elegida.track.id, ...cfg })
       if (!r.ok) {
         // 400: semilla que no es un track, curva inexistente, randomness fuera de 0..1. El
         // texto lo escribe el motor y se muestra tal cual — inventar uno propio acá sería
@@ -400,7 +618,7 @@ export default function Radio() {
     try {
       const r = guardado
         ? await exportarSetGuardadoM3u8(guardado.id)
-        : await exportarRadioM3u8({ track: set_.semilla.id, ...set_.config }, set_.pasos.map((p) => p.track.id))
+        : await exportarRadioM3u8({ playlist: set_.playlist.id, track: set_.semilla.id, ...set_.config }, set_.pasos.map((p) => p.track.id))
       if (!r.ok) {
         setAvisoExport({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data) })
         return
@@ -475,7 +693,7 @@ export default function Radio() {
     setGuardando(true)
     setErrorGuardar(null)
     try {
-      const r = await guardarRadioSet({ track: set_.semilla.id, ...set_.config },
+      const r = await guardarRadioSet({ playlist: set_.playlist.id, track: set_.semilla.id, ...set_.config },
         set_.pasos.map((p) => p.track.id), set_.huella, nombre)
       if (!r.ok || !r.data?.set) {
         setErrorGuardar({ texto: motivoDelRechazo(r.status, r.data), conflicto: r.status === 409 })
@@ -667,20 +885,22 @@ export default function Radio() {
   }
 
   if (!lib) {
-    return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando la biblioteca del motor…</p></div>
+    return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando las playlists de la radio…</p></div>
   }
 
-  // Sin base, sin motor, base ocupada, vacía o ilegible: el backend manda SIEMPRE el motivo
-  // y el motivo dice qué hacer. Nunca una pantalla vacía sin explicación.
-  if (lib.estado !== 'ok') {
+  // Sin motor, base ocupada, ilegible o de otro esquema (o el server no contestó): el backend
+  // manda SIEMPRE el motivo y el motivo dice qué hacer. Nunca una pantalla vacía sin
+  // explicación. Sin base o con la base vacía la pantalla SIGUE: elegir una playlist la llena.
+  const sigue = ['ok', 'sin-base', 'base-vacia'].includes(lib.estado)
+  if (!sigue) {
     return (
       <div className="empty">
         <div className="empty-art"><IconRadio size={26} /></div>
-        <h3 ref={tituloRef} tabIndex={-1}>{lib.configurada ? 'La radio no puede leer la biblioteca' : 'Conectá la biblioteca del motor'}</h3>
+        <h3 ref={tituloRef} tabIndex={-1}>{BLOQUEANTES.includes(lib.estado) || lib.estado === 'base-ocupada' ? 'La radio no puede usar la biblioteca del motor' : 'La radio no está disponible'}</h3>
         <p>{lib.motivo}</p>
         <p className="rnota mono">estado: {lib.estado}</p>
         <button type="button" className="btn btn-secondary"
-          onClick={() => { setLib(null); setSet(null); setGuardado(null); setElegida(null); setIntento((n) => n + 1) }}>
+          onClick={() => { setLib(null); setSet(null); setGuardado(null); setPlId(null); setIntento((n) => n + 1) }}>
           Reintentar
         </button>
       </div>
@@ -708,13 +928,39 @@ export default function Radio() {
       <div className="radiodj-head">
         <h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
         <p className="muted">
-          {lib.total} tracks analizados por el motor · el set lo arma el motor y cada paso dice por qué está ahí
+          El set sale de una playlist tuya y solo con temas del mismo género que la semilla · el set lo arma el motor y cada paso dice por qué está ahí
         </p>
+        {lib.estado !== 'ok' && (
+          // Sin base o vacía: no bloquea (el análisis de la playlist la llena), pero se dice.
+          <p className="rnota rbase-nota">{lib.motivo}</p>
+        )}
       </div>
 
       <div className="radiodj-grid">
         <div className="radiodj-col">
-          <Semillero tracks={lib.tracks} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
+          {lib.playlists.length === 0 ? (
+            <section className="rpanel rsin-playlists" aria-labelledby="r-pl-h">
+              <h2 id="r-pl-h" className="rpanel-h">1 · La playlist</h2>
+              <p className="rnota">Todavía no tenés playlists. La radio arma el set solo desde una playlist tuya:
+                creala desde el buscador (el <b>+</b> de cada resultado → «Nueva playlist…») o desde la home
+                (el <b>+</b> de cada tema de tu biblioteca → «Agregar a playlist»). Después volvé acá y elegila.</p>
+            </section>
+          ) : (
+            <ElegirPlaylist playlists={lib.playlists} plId={plId} onElegir={setPlId} />
+          )}
+          {plId != null && !pl && !errorPl && (
+            <p className="rnota"><span className="spinner" aria-hidden="true" /> Leyendo la playlist…</p>
+          )}
+          {errorPl && <p className="rnota rnota-err" role="alert">No pude leer la playlist: {errorPl}</p>}
+          {pl && (
+            <>
+              {pl.ocupada && <p className="rnota" role="status">{pl.ocupada}</p>}
+              <Analisis pl={pl} error={errorAnalisis} onAnalizar={() => { autoRef.current = null; analizar() }} />
+              <Semillero items={listos} total={pl.playlist.total} leyenda={leyenda} elegida={elegida}
+                onElegir={(it) => setElegidaId(it.id)} q={q} setQ={setQ} pool={poolSemilla} />
+              <Afuera items={pl.items} />
+            </>
+          )}
           {cfg
             ? <Controles cfg={cfg} setCfg={setCfg} curvas={curvas} elegida={elegida} onArmar={armar} armando={armando} />
             : <p className="rnota">No puedo dibujar los controles: el servidor no mandó los valores del motor.</p>}
@@ -723,7 +969,7 @@ export default function Radio() {
 
         <section className="rpanel rpanel-set" aria-labelledby="r-set-h">
           <div className="rset-head">
-            <h2 id="r-set-h" className="rpanel-h" ref={setTituloRef} tabIndex={-1}>3 · El set</h2>
+            <h2 id="r-set-h" className="rpanel-h" ref={setTituloRef} tabIndex={-1}>4 · El set</h2>
             {vista && (
               <span className="rset-cuenta mono">
                 {vista.total} track{vista.total === 1 ? '' : 's'}
@@ -759,6 +1005,11 @@ export default function Radio() {
             <div className="rguardar-nota"><p className="rnota">Guardá el set para calificar cada transición (OK, regular o mala) mientras lo escuchás.</p></div>
           )}
 
+          {/* Con qué se armó ESTE set (lo dice el backend en la respuesta del set). */}
+          {set_ && !guardado && set_.genero != null && (
+            <ResumenPool id="r-pool-set" p={{ genero: set_.genero, entran: set_.entran, total: set_.total_playlist, excluidos: set_.excluidos }} />
+          )}
+
           {errorGuardar && (
             <div className="alert alert-warn rguardar-error" role="alert">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
@@ -769,7 +1020,7 @@ export default function Radio() {
                     set usó muestra el set de hoy, y ESE es el que se puede guardar. */}
                 {errorGuardar.conflicto && set_ && set_.semilla && (
                   <button type="button" className="btn btn-secondary btn-sm rrearmar"
-                    onClick={() => armar({ track: set_.semilla.id, ...set_.config })}>
+                    onClick={() => armar({ playlist: set_.playlist.id, track: set_.semilla.id, ...set_.config })}>
                     Re-armar el set
                   </button>
                 )}

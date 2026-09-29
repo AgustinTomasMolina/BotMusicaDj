@@ -108,22 +108,41 @@ export async function sourceAudioReason(src) {
    base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
    rutas distintos → endpoints distintos (ver el comentario de /api/radio/* en server.py). */
 
-// Biblioteca del motor: tracks para elegir semilla + `opciones` (curvas, defaults de
-// RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
-// Nunca `.then(json)` a secas, por lo mismo que `getRadioSet`: un 500 de FastAPI viene en
-// text/plain y el parseo explotaba, así que la pantalla decía "no pude conectar" cuando el
-// servidor sí había contestado. Un fallo del server se devuelve con la misma forma que usa
-// el backend para degradar (`estado`/`motivo`), así la pantalla lo muestra sin casos nuevos.
-export async function getRadioBiblioteca() {
-  const r = await fetch('/api/radio/biblioteca')
+// Desde f33 la radio arma SOLO desde una playlist de MusiFlix, y solo con temas del mismo
+// género que la semilla (el motor no sabe de géneros).
+//
+// Las playlists para elegir con cuál arma la radio + `opciones` (curvas, defaults de
+// RadioConfig y leyenda del `?`) + el estado de la base del motor. Siempre 200: sin base
+// contesta con `estado`/`motivo`. Nunca `.then(json)` a secas, por lo mismo que
+// `getRadioSet`: un 500 de FastAPI viene en text/plain y el parseo explotaba, así que la
+// pantalla decía "no pude conectar" cuando el servidor sí había contestado. Un fallo del
+// server se devuelve con la misma forma que usa el backend para degradar (`estado`/`motivo`),
+// así la pantalla lo muestra sin casos nuevos.
+export async function getRadioPlaylists() {
+  const r = await fetch('/api/radio/playlists')
   const data = await cuerpoRadio(r)
-  if (r.ok && Array.isArray(data?.tracks)) return data
+  if (r.ok && Array.isArray(data?.playlists)) return data
   const suelto = data?.error_texto || data?.error || data?.detail
   return {
-    configurada: false, estado: `http-${r.status}`, total: 0, tracks: [], opciones: null,
-    motivo: `El servidor no pudo darme la biblioteca del motor (HTTP ${r.status})`
+    configurada: false, estado: `http-${r.status}`, playlists: [], opciones: null,
+    motivo: `El servidor no pudo darme las playlists de la radio (HTTP ${r.status})`
       + (suelto ? `: ${typeof suelto === 'string' ? suelto : JSON.stringify(suelto)}` : '.'),
   }
+}
+
+// Una playlist para la radio: cada item con su estado y su motivo (qué entra y por qué no),
+// los datos del motor de los que están listos, el resumen por estado, qué entra con cada
+// género y cómo va el análisis en segundo plano. {ok, status, data}.
+export async function getRadioPlaylist(id) {
+  const r = await fetch(`/api/radio/playlists/${encodeURIComponent(id)}`)
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}
+
+// Arranca el análisis en segundo plano de lo que el motor no analizó (idempotente). 409 si
+// se está analizando otra playlist (uno a la vez) o si la base no se puede escribir.
+export async function analizarRadioPlaylist(id) {
+  const r = await fetch(`/api/radio/playlists/${encodeURIComponent(id)}/analizar`, { method: 'POST' })
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
 
 // Cuerpo de una respuesta de la radio, sin asumir que es JSON.

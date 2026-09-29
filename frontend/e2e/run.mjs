@@ -127,7 +127,7 @@ async function esperarServer(base, proceso, log, limiteMs = 30000) {
   while (Date.now() - t0 < limiteMs) {
     if (proceso.exitCode !== null) throw new Error(`uvicorn terminó con código ${proceso.exitCode} antes de contestar:\n${log.join('')}`)
     try {
-      const r = await fetch(`${base}/api/radio/biblioteca`)
+      const r = await fetch(`${base}/api/radio/playlists`)
       if (r.ok) return
     } catch { /* todavía no escucha */ }
     await new Promise((res) => setTimeout(res, 100))
@@ -223,8 +223,9 @@ async function main() {
         MUSIFLIX_LIBRARY_ROOTS: base.library_roots.join(path.delimiter),
         MUSIFLIX_DATA_DIR: path.join(tmp, 'datos'),
         MUSIFLIX_DOWNLOADS: path.join(tmp, 'descargas-server'),
-        // Sin el calentamiento de librosa al arrancar (f32): acá no se analiza audio y son
-        // 10-30 s de CPU que solo harían más lentos los casos.
+        // Sin el calentamiento de librosa al arrancar (f32): son 10-30 s de CPU que solo
+        // harían más lentos los casos. El único caso que analiza audio (la radio desde una
+        // playlist, f33) paga la compilación en su primer tema y espera con un tope largo.
         MUSIFLIX_SIN_CALENTAR: '1',
         // Vacía y no ausente: server.py hace load_dotenv(), que NO pisa lo que ya está en el
         // entorno. Así un REDIS_URL del .env no manda nada a una cola real.
