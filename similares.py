@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
+import track_identity
 
 logger = logging.getLogger("similares")
 DEEZER = "https://api.deezer.com"
@@ -68,40 +69,6 @@ def _get(url: str) -> dict:
     return {}
 
 
-def _seed_limpio(t: str) -> str:
-    """Saca corchetes de sello/tags y paréntesis de ruido (conserva ' - ' y remixes)."""
-    t = re.sub(r"\[[^\]]*\]", " ", t or "")   # [Ultra Records], [Free DL]…
-    t = _RUIDO.sub(" ", t)                    # (Official Video), (HD)…
-    return re.sub(r"\s+", " ", t).strip(" -")
-
-
-def _variantes_seed(titulo: str, artista: str) -> list[str]:
-    """Distintas formas de buscar el tema en Deezer, de la más específica a la más
-    laxa. Los títulos de YouTube vienen sucios ('Artista - Tema [Sello]', 'A x B'…),
-    así que probamos varias hasta que una matchee."""
-    titulo, artista = (titulo or "").strip(), (artista or "").strip()
-    limpio = _seed_limpio(titulo)
-    out: list[str] = []
-
-    def add(q: str):
-        q = re.sub(r"\s+", " ", q or "").strip(" -")
-        if q and q.lower() not in {v.lower() for v in out}:
-            out.append(q)
-
-    add(f"{artista} {limpio}")
-    add(limpio)
-    # Título tipo 'Artista - Tema': separar y quedarse con el artista principal
-    if " - " in limpio:
-        izq, der = (p.strip() for p in limpio.split(" - ", 1))
-        principal = re.split(r"\s*(?:\bx\b|&|,|\bfeat\.?\b|\bft\.?\b)\s*", izq, flags=re.I)[0].strip()
-        add(f"{izq} {der}")
-        add(f"{principal} {der}")
-        add(der)
-    add(f"{artista} {titulo}")   # crudo, por si la limpieza sacó de más
-    add(titulo)
-    return out
-
-
 # Familias de género (agrupan los géneros finos de Deezer). Sirven para NO mezclar
 # hard techno con rap: comparamos por familia, no por el nombre exacto.
 _FAMILIAS = {
@@ -131,25 +98,60 @@ def _familia(genero: str | None) -> str | None:
     return "otros"
 
 
-def _resolver_seed(titulo: str, artista: str, genero_hint: str | None = None) -> dict | None:
-    """Resuelve la semilla en Deezer. Si hay pista de género, entre los primeros
-    resultados elige el que sea de esa familia (evita agarrar el 'Rise of the
-    Machines' de rap cuando buscás el de hard techno)."""
-    fam = _familia(genero_hint) if genero_hint else None
-    fallback = None
-    for q in _variantes_seed(titulo, artista):
-        data = _get(f"{DEEZER}/search?q={quote(q)}&limit=5").get("data") or []
-        if not data:
-            continue
-        if fallback is None:
-            fallback = data[0]
-        if not fam:
-            return data[0]
-        for t in data:
-            g = _genero_de_album((t.get("album") or {}).get("id"))
-            if _familia(g) == fam:
-                return t
-    return fallback
+# Por qué no hay semilla (va en la respuesta de /api/parecidas_lista, el front lo muestra).
+SEED_NOT_FOUND = "semilla_no_resuelta"          # Deezer contestó y ningún resultado es el tema
+DEEZER_UNAVAILABLE = "deezer_no_disponible"     # Deezer no contestó: no se sabe si está
+_SEARCH_LIMIT = 10
+
+
+def _buscar_verificado(entrada: track_identity.Identity) -> tuple[dict | None, bool]:
+    """(track de Deezer que ES la entrada o None, Deezer contestó alguna consulta).
+
+    Todas las consultas de la entrada van en paralelo y se juntan (sin repetir ids, en el
+    orden de las consultas); de ese pool se acepta solo lo que pasa la regla de identidad
+    (`track_identity.pick_track`). Nunca el primer resultado "porque sí"."""
+    consultas = track_identity.deezer_queries(entrada)
+    if not consultas:
+        return None, True
+    with ThreadPoolExecutor(max_workers=min(4, len(consultas))) as ex:
+        respuestas = list(ex.map(lambda q: _get(f"{DEEZER}/search?q={quote(q)}&limit={_SEARCH_LIMIT}"), consultas))
+    contesto = any(isinstance(r, dict) and "data" in r for r in respuestas)
+    pool, vistos = [], set()
+    for r in respuestas:
+        for t in (r or {}).get("data") or []:
+            if t.get("id") not in vistos:
+                vistos.add(t.get("id"))
+                pool.append(t)
+    return track_identity.pick_track(entrada, pool), contesto
+
+
+def resolver_seed_detalle(titulo: str, artista: str, isrc: str | None = None) -> tuple[dict | None, str | None]:
+    """(semilla de Deezer, None) o (None, motivo). La semilla es el tema pedido o nada:
+    1) si hay ISRC (lo trae SoundCloud) y Deezer lo tiene, es ese track, exacto;
+    2) si no, título y artista normalizados y la regla de identidad de `track_identity`.
+    Medido sobre 40 entradas reales (diseño de parecidas §8): 0 sustituciones."""
+    contesto = False
+    if isrc:
+        t = _get(f"{DEEZER}/track/isrc:{quote(isrc)}")
+        contesto = bool(t)
+        if t.get("id") and (t.get("artist") or {}).get("id"):
+            logger.info(f"🎯 Semilla por ISRC {isrc}: '{t.get('title')}' — {t['artist'].get('name')}")
+            return t, None
+    seed, contesto_busqueda = _buscar_verificado(track_identity.parse_entry(titulo, artista))
+    if seed:
+        return seed, None
+    motivo = SEED_NOT_FOUND if (contesto or contesto_busqueda) else DEEZER_UNAVAILABLE
+    logger.info(f"🚫 Sin semilla para '{titulo}' — {artista}: {motivo}")
+    return None, motivo
+
+
+def _resolver_seed(titulo: str, artista: str, genero_hint: str | None = None,
+                   isrc: str | None = None) -> dict | None:
+    """Resuelve la semilla en Deezer, o None. Nunca otra canción: antes devolvía el primer
+    resultado de la primera búsqueda con resultados (From The Top de IMMINENT → WAP de Cardi B).
+    `genero_hint` ya no elige entre resultados: con la regla de identidad no hace falta y
+    elegir "el de la familia" era otra forma de aceptar un tema distinto."""
+    return resolver_seed_detalle(titulo, artista, isrc)[0]
 
 
 def _bpm(track_id: int) -> int:
@@ -234,31 +236,7 @@ def _bpm_de_preview(preview_url: str) -> int | None:
                 pass
 
 
-_RUIDO = re.compile(
-    r"[\(\[][^\)\]]*?(official|video|audio|lyric|visualizer|\bhd\b|\b4k\b|\bmv\b|"
-    r"remaster|explicit|full\s*album|monstercat|free\s*download)[^\)\]]*?[\)\]]",
-    re.I,
-)
-
-
-def _limpiar_titulo(titulo: str, artista: str) -> tuple[str, str]:
-    """Devuelve (artista, track) limpios para matchear en Deezer."""
-    t = _RUIDO.sub(" ", titulo)
-    t = re.sub(r"\s+", " ", t).strip(" -")
-    art = (artista or "").strip()
-    if " - " in t:  # típico "Artista - Tema"
-        izq, der = (s.strip() for s in t.split(" - ", 1))
-        if not art:
-            art, t = izq, der
-        elif izq.lower() == art.lower():
-            t = der
-    if art and art.lower() in t.lower():  # no repetir el artista dentro del track
-        t = re.sub(re.escape(art), " ", t, flags=re.I)
-        t = re.sub(r"\s+", " ", t).strip(" -")
-    return art, t
-
-
-_META_CACHE: dict[tuple[str, str], dict] = {}
+_META_CACHE: dict[tuple, dict] = {}
 
 
 def _genero_de_album(album_id) -> str | None:
@@ -268,41 +246,31 @@ def _genero_de_album(album_id) -> str | None:
     return gens[0]["name"] if gens else None
 
 
-def _buscar_meta(art: str, track: str, usar_preview: bool) -> dict:
-    """Busca el tema en Deezer y devuelve {bpm, genero}."""
-    consultas = []
-    if art:
-        consultas.append(f'artist:"{art}" track:"{track}"')  # estructurada
-        consultas.append(f"{art} {track}".strip())           # libre
-    else:
-        consultas.append(track)
-    for q in consultas:
-        data = _get(f"{DEEZER}/search?q={quote(q)}&limit=1").get("data") or []
-        if not data:
-            continue
-        t = data[0]
-        bpm = int(t.get("bpm") or 0) or _bpm(t["id"])
-        if not bpm and usar_preview and t.get("preview"):  # Deezer sin BPM → librosa
-            bpm = _bpm_de_preview(t["preview"])
-        genero = _genero_de_album((t.get("album") or {}).get("id"))
-        return {"bpm": bpm or None, "genero": genero}
-    return {"bpm": None, "genero": None}
-
-
-def _meta_core(art: str, track: str, usar_preview: bool = True) -> dict:
-    if not track:
+def _buscar_meta(entrada: track_identity.Identity, usar_preview: bool) -> dict:
+    """Busca el tema en Deezer y devuelve {bpm, genero}. Con la MISMA regla de identidad que
+    la semilla: si no se puede demostrar que el resultado es el tema, los dos quedan vacíos
+    (la fila no muestra nada; antes mostraba el BPM y el género del primer resultado, que
+    podía ser otra canción)."""
+    t, _ = _buscar_verificado(entrada)
+    if not t:
         return {"bpm": None, "genero": None}
-    clave = (art.lower(), track.lower())
-    if clave not in _META_CACHE:
-        _META_CACHE[clave] = _buscar_meta(art, track, usar_preview)
-    return _META_CACHE[clave]
+    bpm = int(t.get("bpm") or 0) or _bpm(t["id"])
+    if not bpm and usar_preview and t.get("preview"):  # Deezer sin BPM → librosa
+        bpm = _bpm_de_preview(t["preview"])
+    genero = _genero_de_album((t.get("album") or {}).get("id"))
+    return {"bpm": bpm or None, "genero": genero}
 
 
 def meta_de(titulo: str, artista: str = "", usar_preview: bool = True) -> dict:
     """BPM + género de un tema. 1º metadato de Deezer; si no tiene BPM, lo
     calcula con librosa sobre el preview de 30s. Cacheado."""
-    art, track = _limpiar_titulo(titulo, artista)
-    return _meta_core(art, track, usar_preview)
+    entrada = track_identity.parse_entry(titulo, artista)
+    if not entrada.base_title:
+        return {"bpm": None, "genero": None}
+    clave = (entrada.artists, entrada.feat, entrada.base_title, entrada.version)
+    if clave not in _META_CACHE:
+        _META_CACHE[clave] = _buscar_meta(entrada, usar_preview)
+    return _META_CACHE[clave]
 
 
 def bpm_de(titulo: str, artista: str = "", usar_preview: bool = True) -> int | None:
@@ -349,12 +317,27 @@ def _tracks_de_album(album_id, release: str, cover: str, max_tracks: int = 2) ->
     return out
 
 
+_DETALLE_SIN_SEMILLA = {
+    SEED_NOT_FOUND: "No está en Deezer: no encontré este tema con el mismo artista y título, "
+                    "y sin el tema no hay con qué comparar.",
+    DEEZER_UNAVAILABLE: "No pude consultar Deezer (no contestó), así que no sé si el tema está. "
+                        "Probá de nuevo en un rato.",
+}
+
+
+def sin_semilla(motivo: str) -> dict:
+    """Respuesta cuando no hay semilla verificada: nunca una lista armada con otro tema."""
+    return {"exito": False, "motivo": motivo, "mensaje": "Similitud no disponible para este track",
+            "detalle": _DETALLE_SIN_SEMILLA.get(motivo, _DETALLE_SIN_SEMILLA[SEED_NOT_FOUND])}
+
+
 def construir_playlist(titulo: str, artista: str = "", total: int = 25,
-                       analizar_tono: bool = True, genero_hint: str | None = None) -> dict:
+                       analizar_tono: bool = True, genero_hint: str | None = None,
+                       isrc: str | None = None) -> dict:
     import datetime
-    seed = _resolver_seed(titulo, artista, genero_hint)
+    seed, motivo = resolver_seed_detalle(titulo, artista, isrc)
     if not seed:
-        return {"exito": False, "mensaje": "No encontré el tema en Deezer."}
+        return sin_semilla(motivo or SEED_NOT_FOUND)
 
     artist_id = seed["artist"]["id"]
     seed_gen = _genero_de_album((seed.get("album") or {}).get("id"))

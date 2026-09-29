@@ -41,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 
 import db
 import jobs
+import track_identity
 from search_agent import SearchAgent
 from recommendation_agent import RecommendationAgent
 from scrapers import FUENTES_SCRAPER
@@ -295,15 +296,23 @@ def _rank_calidad(fuente: str, formato: str) -> int:
     return base.get(f, 9)
 
 
-def _opciones_de(linea: str, formato: str, n: int = 3) -> list:
+def _opciones_de(linea: str, formato: str, n: int = 3, identidad=None) -> list:
     """Busca UNA línea de la lista y devuelve N opciones de PLATAFORMAS DISTINTAS
     (una por fuente, en orden de prioridad para el formato). Así el usuario compara
     YouTube vs SoundCloud vs MP3 directo con el Spek y elige la de mejor calidad.
-    Lista vacía si no hubo resultado."""
+    Lista vacía si no hubo resultado.
+
+    Con `identidad` (un `track_identity.Identity`, lo pasa parecidas) solo quedan las
+    opciones que SON ese tema (mismo artista, título y versión): medido, de 36 opciones de
+    parecidas solo 13 lo eran ("Thottie Frutti" por "Thootie", "ruth b - dandelions" por
+    "BIA - TWIN"). Una plataforma sin ninguna que pase no aparece: nunca un tema distinto."""
     linea = (linea or "").strip()
     if not linea:
         return []
     cands = _buscar_mix(linea, 12)
+    if identidad is not None:
+        cands = [c for c in cands if track_identity.is_same_track(
+            identidad, track_identity.parse_entry(c.get("titulo") or "", c.get("artista") or ""))]
     if not cands:
         return []
     cands.sort(key=lambda c: _rank_calidad(c.get("fuente", ""), formato))
@@ -432,16 +441,19 @@ def _agrupar_por_track(cands: list, formato: str, query: str = "") -> list:
 _LIST_WORKERS = 12
 
 
-def _buscar_lista(lineas: list, formato: str) -> list:
+def _buscar_lista(lineas: list, formato: str, identidades: list | None = None) -> list:
     """Busca cada línea EN PARALELO y devuelve sus opciones (lista de candidatos,
-    vacía si esa línea no tuvo resultados), conservando el orden de la lista."""
+    vacía si esa línea no tuvo resultados), conservando el orden de la lista.
+    `identidades` (una por línea, parecidas) filtra las opciones que no son ese tema."""
     from concurrent.futures import ThreadPoolExecutor
 
     out: list = [[] for _ in lineas]
+    idents = identidades if identidades is not None else [None] * len(lineas)
     # 12 líneas a la vez (antes 6: las 12 parecidas iban en dos tandas). Cada línea abre 5
     # fuentes, así que el tope real es ~60 pedidos de red simultáneos; más no se gana nada.
     with ThreadPoolExecutor(max_workers=max(1, min(_LIST_WORKERS, len(lineas)))) as ex:
-        futs = {ex.submit(_opciones_de, ln, formato): idx for idx, ln in enumerate(lineas)}
+        futs = {ex.submit(_opciones_de, ln, formato, 3, ident): idx
+                for idx, (ln, ident) in enumerate(zip(lineas, idents, strict=True))}
         for fut in futs:
             idx = futs[fut]
             try:
@@ -546,11 +558,14 @@ async def parecidas(titulo: str, artista: str = "", total: int = 25):
 
 @app.get("/api/parecidas_lista")
 async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
-                          formato: str = "wav", genero: str = ""):
+                          formato: str = "wav", genero: str = "", fuente: str = "", fuente_id: str = ""):
     """Como /api/parecidas, pero por CADA tema parecido trae hasta 3 opciones de
     plataformas distintas (YouTube, SoundCloud, MP3 directo…) para comparar con el
     Spek y elegir la mejor. Devuelve 'grupos' como el modo lista + la semilla.
-    `genero` es una pista opcional para acertar el género de las parecidas."""
+    `genero` es una pista opcional para acertar el género de las parecidas.
+    `fuente` + `fuente_id` (el id del resultado): si es SoundCloud se le pide el ISRC y la
+    semilla se resuelve exacta por ISRC en Deezer. Sin semilla verificada contesta
+    {exito: false, motivo, mensaje: "Similitud no disponible para este track", detalle}."""
     titulo = (titulo or "").strip()
     if not titulo:
         return JSONResponse({"exito": False, "mensaje": "Falta el título."}, status_code=400)
@@ -558,14 +573,20 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     logger.info(f"🎵 Parecidas con opciones a: '{titulo}' — {artista} (hasta {total})"
                 + (f" [género: {genero}]" if genero else ""))
     import similares
-    res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True, genero or None)
+    isrc = None
+    if (fuente or "").lower() == "soundcloud" and fuente_id:
+        isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
+    res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
+                                  genero or None, isrc)
     if not res.get("exito"):
-        logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}")
+        logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
+                       + (f" ({res['motivo']})" if res.get("motivo") else ""))
         return res
 
     formato = (formato or "wav").lower()
     lineas = [f"{c['artista']} - {c['titulo']}".strip(" -") for c in res["canciones"]]
-    resultados = await asyncio.to_thread(_buscar_lista, lineas, formato)
+    identidades = [track_identity.parse_fields(c["artista"], c["titulo"]) for c in res["canciones"]]
+    resultados = await asyncio.to_thread(_buscar_lista, lineas, formato, identidades)
 
     grupos, no_encontradas = [], []
     for ln, opciones in zip(lineas, resultados):

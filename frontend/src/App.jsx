@@ -128,8 +128,12 @@ export default function App() {
     try {
       // Prioridad: el filtro de género elegido > el género conocido del tema
       const gen = genero || c.genero || (metaMap[metaKey(c)] || {}).genero || ''
-      const d = await parecidasLista(c.titulo, c.artista, formato, gen)
+      const d = await parecidasLista(c.titulo, c.artista, formato, gen, c.fuente, c.video_id)
       if (d.exito) applyLista(d)
+      // Sin semilla verificada el backend no arma nada (nunca "Parecidas a <otro tema>"): se
+      // dice que no hay similitud para ESTE track y por qué (no está en Deezer / no contestó).
+      else if (d.motivo) setView({ kind: 'error', emoji: '🚫', message: d.mensaje || 'Similitud no disponible para este track',
+        hint: `«${c.titulo}» — ${c.artista || 'artista desconocido'}. ${d.detalle || ''}`.trim() })
       else setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'No se pudo armar la playlist de parecidas.', hint: 'Probá con otro tema.' })
     } catch {
       setView({ kind: 'error', emoji: '⚠️', message: 'Error al armar la playlist de parecidas.', hint: HINT_CONEXION })
