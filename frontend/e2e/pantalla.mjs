@@ -1256,6 +1256,52 @@ const CASOS = [
     igual(suena, { texto: 'Sonando: opción 1 · YouTube', nombre: 'Opción 1: YouTube (elegida, sonando ahora)', animada: true },
       'ya sonando, la pastilla tiene que decirlo')
   }],
+
+  ['parecidas: sin semilla en Deezer dice "Similitud no disponible" y no muestra otro tema', async (page, ctx) => {
+    // Sin red. La respuesta de /api/parecidas_lista es el archivo que el test de Python
+    // (tests/test_parecidas_semilla.py) compara contra lo que el endpoint REALMENTE devuelve
+    // para «From The Top» / «IMMINENT - Topic» con Deezer grabado: acá hace de API.
+    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'parecidas_no_disponible.json'), 'utf8'))
+    const tema = { titulo: 'From The Top', artista: 'IMMINENT - Topic', duracion: 187, fuente: 'youtube', thumbnail: null,
+      url: 'https://www.youtube.com/watch?v=ddddddddddd', video_id: 'ddddddddddd' }
+    const pedidos = []
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
+      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+      if (u.pathname === '/api/parecidas_lista') {
+        pedidos.push(Object.fromEntries(u.searchParams))
+        return responder(respuesta)
+      }
+      if (u.origin !== new URL(ctx.url).origin) return req.abort()
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'imminent from the top')
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('button[aria-label="Temas parecidos a From The Top"]', { timeout: ESPERA_MS })
+    await page.click('button[aria-label="Temas parecidos a From The Top"]')
+
+    const leer = () => page.evaluate(() => ({
+      textos: [...document.querySelectorAll('.empty p')].map((p) => p.textContent),
+      semilla: !!document.querySelector('.seedbar'),
+      filas: document.querySelectorAll('.trk').length,
+      parecidasA: /Parecidas a/.test(document.body.textContent || ''),
+    }))
+    const v = await hasta(leer, (x) => x.textos.some((t) => t.includes(respuesta.mensaje)),
+      'no apareció "Similitud no disponible" en la pantalla')
+    igual(pedidos.map((q) => [q.titulo, q.artista, q.fuente, q.fuente_id, q.duracion]),
+      [[tema.titulo, tema.artista, 'youtube', 'ddddddddddd', String(tema.duracion)]],
+      'el pedido a /api/parecidas_lista no lleva el tema, la fuente, su id y la duración (desempate)')
+    afirmar(v.textos.some((t) => t.includes(respuesta.detalle)), `la pantalla no dice el motivo que dio la API: ${json(v.textos)}`)
+    afirmar(v.textos.some((t) => t.includes(tema.titulo) && t.includes(tema.artista)),
+      `la pantalla no dice para qué tema no hay similitud: ${json(v.textos)}`)
+    igual({ semilla: v.semilla, filas: v.filas, parecidasA: v.parecidasA }, { semilla: false, filas: 0, parecidasA: false },
+      'sin semilla no puede haber "Parecidas a…" ni una lista de otro tema')
+  }],
 ]
 
 // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del

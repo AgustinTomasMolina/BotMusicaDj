@@ -1,0 +1,6 @@
+{
+ "exito": false,
+ "motivo": "semilla_no_resuelta",
+ "mensaje": "Similitud no disponible para este track",
+ "detalle": "No está en Deezer: no encontré este tema con el mismo artista y título, y sin el tema no hay con qué comparar."
+}
