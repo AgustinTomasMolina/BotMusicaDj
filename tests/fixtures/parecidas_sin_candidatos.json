@@ -1,0 +1,18 @@
+{
+  "exito": true,
+  "seed": {
+    "titulo": "Eiskalt (Short Mix)",
+    "artista": "Kuko",
+    "bpm": null,
+    "tono": null,
+    "camelot": null,
+    "evidencia": "isrc"
+  },
+  "total": 0,
+  "encontradas": 0,
+  "grupos": [],
+  "no_encontradas": [],
+  "motivo": "sin_candidatos",
+  "mensaje": "No encontré temas parecidos a «Eiskalt (Short Mix)»",
+  "detalle": "Deezer dio 2 artistas relacionados con Kuko, pero ningún tema con preview para comparar."
+}

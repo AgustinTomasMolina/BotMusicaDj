@@ -602,8 +602,36 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
             no_encontradas.append(ln)
 
     logger.info(f"✅ Parecidas con opciones: {len(grupos)}/{len(lineas)} con plataformas.")
-    return {"exito": True, "seed": res["seed"], "total": len(lineas),
-            "encontradas": len(grupos), "grupos": grupos, "no_encontradas": no_encontradas}
+    respuesta = {"exito": True, "seed": res["seed"], "total": len(lineas),
+                 "encontradas": len(grupos), "grupos": grupos, "no_encontradas": no_encontradas}
+    if not grupos:
+        # Hay semilla pero no hay nada que mostrar. Sin un motivo propio el front lo mostraba
+        # con el cartel del modo lista ("revisá que haya un tema por línea"): un pedido que
+        # el DJ no hizo. Se dice cuál de los dos vacíos es.
+        respuesta.update(_parecidas_vacias(res["seed"], lineas, res.get("relacionados")))
+    return respuesta
+
+
+def _parecidas_vacias(seed: dict, lineas: list[str], relacionados: int | None) -> dict:
+    """`motivo`, `mensaje` y `detalle` de una lista de parecidas vacía con semilla."""
+    tema, quien = seed.get("titulo") or "", seed.get("artista") or "el artista"
+    if not lineas:
+        if relacionados == 0:
+            detalle = f"Deezer no tiene artistas relacionados con {quien} ni otros temas suyos para comparar."
+        elif relacionados:
+            s = "s" if relacionados != 1 else ""
+            detalle = (f"Deezer dio {relacionados} artista{s} relacionado{s} con {quien}, pero "
+                       f"ningún tema con preview para comparar.")
+        else:
+            detalle = "Deezer no devolvió temas para comparar."
+        return {"motivo": "sin_candidatos", "mensaje": f"No encontré temas parecidos a «{tema}»",
+                "detalle": detalle}
+    faltan = ", ".join(lineas[:5]) + (f" y {len(lineas) - 5} más" if len(lineas) > 5 else "")
+    s = "s" if len(lineas) != 1 else ""
+    return {"motivo": "sin_plataformas",
+            "mensaje": (f"Encontré {len(lineas)} tema{s} parecido{s} a «{tema}», pero ninguno en "
+                        f"YouTube, SoundCloud ni MP3"),
+            "detalle": f"No aparecieron: {faltan}."}
 
 
 def _safe_name(name: str) -> str:

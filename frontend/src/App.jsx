@@ -129,7 +129,12 @@ export default function App() {
       // Prioridad: el filtro de género elegido > el género conocido del tema
       const gen = genero || c.genero || (metaMap[metaKey(c)] || {}).genero || ''
       const d = await parecidasLista(c.titulo, c.artista, formato, gen, c.fuente, c.video_id, c.duracion)
-      if (d.exito) applyLista(d)
+      if (d.exito && d.grupos && d.grupos.length) applyLista(d)
+      // Semilla sí, parecidas no: el backend dice cuál de los dos vacíos es (sin candidatos en
+      // Deezer, o candidatos que no están en ninguna plataforma). Antes caía en `applyLista` y
+      // mostraba el cartel del modo lista ("un tema por línea"), que no es lo que pasó.
+      else if (d.exito) setView({ kind: 'error', emoji: '🔍', message: d.mensaje || 'No encontré temas parecidos.',
+        hint: d.detalle || 'Probá con otro tema.' })
       // Sin semilla verificada el backend no arma nada (nunca "Parecidas a <otro tema>"): se
       // dice que no hay similitud para ESTE track y por qué (no está en Deezer / no contestó).
       else if (d.motivo) setView({ kind: 'error', emoji: '🚫', message: d.mensaje || 'Similitud no disponible para este track',

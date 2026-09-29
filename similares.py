@@ -503,6 +503,9 @@ def construir_playlist(titulo: str, artista: str = "", total: int = 25,
             "evidencia": evidencia,
         },
         "canciones": canciones,
+        # Cuántos artistas relacionados dio Deezer: con `canciones` vacía es el porqué que la
+        # pantalla puede decir (sin esto, una lista vacía no se distingue de un error).
+        "relacionados": len(related),
     }
 
 
