@@ -128,7 +128,7 @@ export default function App() {
     try {
       // Prioridad: el filtro de género elegido > el género conocido del tema
       const gen = genero || c.genero || (metaMap[metaKey(c)] || {}).genero || ''
-      const d = await parecidasLista(c.titulo, c.artista, formato, gen, c.fuente, c.video_id)
+      const d = await parecidasLista(c.titulo, c.artista, formato, gen, c.fuente, c.video_id, c.duracion)
       if (d.exito) applyLista(d)
       // Sin semilla verificada el backend no arma nada (nunca "Parecidas a <otro tema>"): se
       // dice que no hay similitud para ESTE track y por qué (no está en Deezer / no contestó).

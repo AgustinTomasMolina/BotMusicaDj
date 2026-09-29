@@ -558,13 +558,16 @@ async def parecidas(titulo: str, artista: str = "", total: int = 25):
 
 @app.get("/api/parecidas_lista")
 async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
-                          formato: str = "wav", genero: str = "", fuente: str = "", fuente_id: str = ""):
+                          formato: str = "wav", genero: str = "", fuente: str = "", fuente_id: str = "",
+                          duracion: float | None = None):
     """Como /api/parecidas, pero por CADA tema parecido trae hasta 3 opciones de
     plataformas distintas (YouTube, SoundCloud, MP3 directo…) para comparar con el
     Spek y elegir la mejor. Devuelve 'grupos' como el modo lista + la semilla.
     `genero` es una pista opcional para acertar el género de las parecidas.
     `fuente` + `fuente_id` (el id del resultado): si es SoundCloud se le pide el ISRC y la
-    semilla se resuelve exacta por ISRC en Deezer. Sin semilla verificada contesta
+    semilla se resuelve por ISRC en Deezer (si el track confirma lo que dice el upload).
+    `duracion` (segundos del resultado) solo desempata entre lanzamientos del mismo tema.
+    Sin semilla verificada contesta
     {exito: false, motivo, mensaje: "Similitud no disponible para este track", detalle}."""
     titulo = (titulo or "").strip()
     if not titulo:
@@ -577,7 +580,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     if (fuente or "").lower() == "soundcloud" and fuente_id:
         isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
     res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
-                                  genero or None, isrc)
+                                  genero or None, isrc, duracion)
     if not res.get("exito"):
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
                        + (f" ({res['motivo']})" if res.get("motivo") else ""))

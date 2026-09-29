@@ -1293,8 +1293,9 @@ const CASOS = [
     }))
     const v = await hasta(leer, (x) => x.textos.some((t) => t.includes(respuesta.mensaje)),
       'no apareció "Similitud no disponible" en la pantalla')
-    igual(pedidos.map((q) => [q.titulo, q.artista, q.fuente, q.fuente_id]), [[tema.titulo, tema.artista, 'youtube', 'ddddddddddd']],
-      'el pedido a /api/parecidas_lista no lleva el tema, la fuente y su id')
+    igual(pedidos.map((q) => [q.titulo, q.artista, q.fuente, q.fuente_id, q.duracion]),
+      [[tema.titulo, tema.artista, 'youtube', 'ddddddddddd', String(tema.duracion)]],
+      'el pedido a /api/parecidas_lista no lleva el tema, la fuente, su id y la duración (desempate)')
     afirmar(v.textos.some((t) => t.includes(respuesta.detalle)), `la pantalla no dice el motivo que dio la API: ${json(v.textos)}`)
     afirmar(v.textos.some((t) => t.includes(tema.titulo) && t.includes(tema.artista)),
       `la pantalla no dice para qué tema no hay similitud: ${json(v.textos)}`)

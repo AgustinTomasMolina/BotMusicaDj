@@ -20,6 +20,7 @@ import track_identity as ti
 FIX = Path(__file__).parent / "fixtures"
 DATOS = json.loads((FIX / "parecidas_semilla_40.json").read_text(encoding="utf-8"))
 E = {e["n"]: e for e in DATOS["entradas"]}
+A = {e["n"]: e for e in DATOS["hallazgos"]}      # casos de la auditoría (160 entradas nuevas)
 
 
 def fila_deezer(t: dict) -> dict:
@@ -56,11 +57,14 @@ class DeezerGrabado:
         return {}
 
 
-def resolver(monkeypatch, n: int, con_isrc: bool = True):
-    e = E[n]
+def resolver(monkeypatch, n, con_isrc: bool = True):
+    """Resuelve la entrada `n` (del set de 40, o "aNN" de los hallazgos) como el endpoint:
+    título, uploader, ISRC y duración del resultado."""
+    e = E[n] if n in E else A[n]
     dz = DeezerGrabado(e)
     monkeypatch.setattr(similares, "_get", dz)
-    seed, motivo = similares.resolver_seed_detalle(e["titulo"], e["artista"], e["isrc"] if con_isrc else None)
+    seed, motivo = similares.resolver_seed_detalle(e["titulo"], e["artista"], e["isrc"] if con_isrc else None,
+                                                   e["duracion"])
     assert dz.no_grabadas == [], f"el código hizo consultas que el fixture no tiene: {dz.no_grabadas}"
     return seed, motivo
 
@@ -192,6 +196,225 @@ def test_otra_version_del_mismo_tema_no_se_acepta():
     assert not ti.is_same_track(pedido, ti.parse_fields("Fisher", "Losing It (Radio Edit)"))
 
 
+# --- auditoría: paréntesis que son título, versiones, alfabetos, formatos -------------------
+
+@pytest.mark.parametrize("pedido, deezer_artista, deezer_titulo", [
+    ("Underworld - Born Slippy (Nuxx)", "Underworld", "Born slippy"),      # (Nuxx) es parte del título
+    ("Swedish House Mafia - One (Your Name) (Official Video)", "Swedish House Mafia", "One"),
+    ("Pink Floyd - Another Brick In The Wall (Part 1)", "Pink Floyd", "Another Brick in the Wall (Part 2)"),
+    ("Ed Sheeran - Perfect (Acoustic)", "Ed Sheeran", "Perfect"),
+    ("Avicii - Levels (Instrumental Radio Edit)", "Avicii", "Levels (Radio Edit)"),
+    ("Avicii - Levels (Radio Edit)", "Avicii", "Levels (Cazzette's NYC Mode Radio Mix)"),
+    ("Ed Sheeran - 'Perfect' (Exclusive Live Session For Global's 'Make Some Noise')", "Ed Sheeran", "Perfect (Live)"),
+    ("Simon & Garfunkel - The Sound of Silence (from The Concert in Central Park)", "Simon & Garfunkel", "The Sound Of Silence"),
+])
+def test_un_parentesis_que_no_es_ruido_cambia_el_tema(pedido, deezer_artista, deezer_titulo):
+    assert not ti.is_same_track(ti.parse_entry(pedido, "x"), ti.parse_fields(deezer_artista, deezer_titulo))
+
+
+@pytest.mark.parametrize("pedido, uploader, deezer_artista, deezer_titulo", [
+    ("Underworld - Born Slippy .NUXX", "MuteSong", "Underworld", "Born Slippy (Nuxx)"),
+    ("Kraftwerk - The Model (official video)", "x", "Kraftwerk", "The Model (2009 Remaster)"),
+    ("Oasis - Live Forever (Official HD Remastered Video)", "Oasis", "Oasis", "Live Forever"),
+    ("Kanye West - Stronger (Album Version)", "x", "Kanye West", "Stronger"),
+    ("Bomfunk MC's - Freestyler (Video Original Version)", "x", "Bomfunk MC's", "Freestyler"),
+    ("Bound 2 (Album Version (Explicit))", "Kanye West", "Kanye West", "Bound 2"),
+    ("Black Skinhead (Digital Album Version (Explicit))", "Kanye West", "Kanye West", "Black Skinhead"),
+    ("Swedish House Mafia (feat. John Martin) - Don't You Worry Child (Original Radio Edit)", "x",
+     "Swedish House Mafia", "Don't You Worry Child (Radio Edit)"),
+    ("Sub Focus, Wilkinson - Air I Breathe", "x", "Sub Focus", "Air I Breathe (Sub Focus & Wilkinson)"),
+    ("Кино - Группа крови", "x", "Кино", "Группа крови"),
+    ("Группа крови", "Кино - Topic", "Кино", "Группа крови"),
+    ("BTS (방탄소년단) '봄날 (Spring Day)' Official MV", "HYBE LABELS", "BTS", "Spring Day"),
+    ("Perfume - ポリリズム", "x", "Perfume", "ポリリズム"),
+    ("BICEP | GLUE (Official Video)", "BICEP", "Bicep", "Glue"),
+    ("björk : army of me (HD)", "björk", "Björk", "Army Of Me"),
+    ("M83 'Midnight City' Official video", "M83", "M83", "Midnight City"),
+    ("Kanye West- Stronger (Explicit)", "x", "Kanye West", "Stronger"),
+    ("10.Avicii - Levels (Radio Edit)", "x", "Avicii", "Levels (Radio Edit)"),
+    ("B1. Daydream", "I HATE MODELS", "I Hate Models", "Daydream"),
+    ("Regal - Fenix (Amelie Lens Remix) PREMIERE", "x", "REGAL", "Fenix (Amelie Lens Remix)"),
+    ("Another Brick in the Wall, Pt. 1 - Pink Floyd", "Pink Floyd", "Pink Floyd", "Another Brick in the Wall, Pt. 1"),
+    ("Eric prydz - pjanoo radio edit", "x", "Eric Prydz", "Pjanoo (Radio Edit)"),
+    ("Stronger", "KanyeWestVEVO", "Kanye West", "Stronger"),
+    ("Perfume - ポリリズム（take Remix)", "x", "Perfume", "ポリリズム (take Remix)"),
+    ("Muse - Uprising (Official (HD) Video)", "x", "Muse", "Uprising"),
+    ("Tiësto - Adagio For Strings (BYØRN EDIT).mp3", "x", "Tiësto", "Adagio For Strings (BYØRN Edit)"),
+])
+def test_formatos_reales_que_si_son_el_tema(pedido, uploader, deezer_artista, deezer_titulo):
+    ident = ti.parse_entry(pedido, uploader)
+    assert ti.is_same_track(ident, ti.parse_fields(deezer_artista, deezer_titulo)), ident
+
+
+def test_normalize_conserva_otros_alfabetos():
+    assert ti.normalize("Группа КРОВИ") == "группа крови"
+    assert ti.normalize("봄날 (Spring Day)") == ti.normalize("봄날") + " spring day" and ti.normalize("봄날")
+    assert ti.parse_entry("Кино - Группа крови", "x").base_title == "группа крови"
+
+
+@pytest.mark.parametrize("texto, version", [
+    ("Instrumental Radio Edit", "instrumental"), ("Radio Edit", "radio"), ("Original Radio Edit", "radio"),
+    ("Remastered 2011", "original"), ("2009 Remaster", "original"), ("Album Version", "original"),
+    ("Single Version", "original"), ("Explicit Version", "original"), ("Official HD Remastered Video", "original"),
+    ("Original Mix", "original"), ("Extended Mix", "extended"), ("Acoustic", "acoustic"),
+    ("Cazzette's NYC Mode Radio Mix", "radio:cazzettes nyc mode"), ("Live", "live:"),
+    ("Live at Wembley", "live:at wembley"), ("Diplo & Jauz Remix", "remix:diplo jauz"),
+])
+def test_version_canonica(texto, version):
+    assert ti.version_of(texto) == version
+
+
+def test_la_version_va_en_la_consulta_y_el_limite_sube():
+    e = ti.parse_entry("Adagio For Strings (Radio Edit)", "Tiësto")
+    assert ti.deezer_queries(e) == ['artist:"Tiësto" track:"adagio for strings"', "Tiësto adagio for strings",
+                                    "Tiësto adagio for strings radio edit"]
+    assert ti.search_limit(e) == 25 and ti.search_limit(ti.parse_entry("Adagio For Strings", "Tiësto")) == 10
+
+
+def test_artistas_en_las_dos_direcciones_y_vevo():
+    avicii = ti.parse_fields("Avicii", "Levels")
+    assert not ti.artists_match(avicii, ti.parse_fields("Avicii Tribute", "Levels")), "un tributo no es el artista"
+    assert not ti.artists_match(ti.parse_fields("Avicii Tribute", "Levels"), avicii)
+    assert ti.artists_match(ti.parse_entry("Stronger", "KanyeWestVEVO"), ti.parse_fields("Kanye West", "Stronger"))
+    assert ti.artists_match(ti.parse_entry("Baddadan", "Chase and Status"), ti.parse_fields("Chase & Status", "Baddadan"))
+
+
+def test_la_duracion_desempata_entre_lanzamientos_del_mismo_tema():
+    # Filas GRABADAS de «björk : army of me»: dos "Army Of Me" de Björk (234 s y 318 s).
+    a = A["a10"]
+    filas = [fila_deezer(t) for q in a["deezer"] for t in a["deezer"][q] if t["title"] == "Army Of Me"]
+    cortas, largas = [t for t in filas if t["duration"] == 234], [t for t in filas if t["duration"] == 318]
+    assert cortas and largas
+    entrada = ti.parse_entry(a["titulo"], a["artista"])
+    for orden in ([largas[0], cortas[0]], [cortas[0], largas[0]]):
+        assert ti.pick_track(entrada, orden, 267)["duration"] == 234, "tiene que ganar la más cercana a 267 s"
+        assert ti.pick_track(entrada, orden, 300)["duration"] == 318, "y la más cercana a 300 s"
+
+
+@pytest.mark.parametrize("n", sorted(A))
+def test_hallazgos_de_la_auditoria(monkeypatch, n):
+    a = A[n]
+    seed, _ = resolver(monkeypatch, n)
+    v = a["verdad"]
+    if v["estado"] == "none":
+        assert seed is None, f"{a['titulo']} ({a['motivo']}): aceptó {nombre(seed)}"
+    else:
+        assert seed is None or seed["id"] in v["ids"], f"{a['titulo']} ({a['motivo']}): aceptó {nombre(seed)}"
+
+
+# Resultado esperado de cada hallazgo (id, o None = rechazo honesto con su motivo).
+ESPERADO = {
+    "a50": None, "a131": None, "a118": 424036432, "a140": 14383882, "a137": 14383880, "a138": None, "a16": None,
+    "a67": 1178682, "a19": 448260732, "a20": 1783253587, "a68": 389034231, "a145": 373789461, "a100": 3212563611,
+    "a2": None, "a26": None, "a34": None, "a119": None, "a115": 68350113, "a10": 2629694162, "a44": 92198180,
+    "a112": 1178682, "a141": 14383880, "a97": 144535404, "a106": 116914090, "a60": None,
+}
+
+
+def test_hallazgos_resultado_exacto(monkeypatch):
+    assert set(ESPERADO) == set(A)
+    real = {n: (resolver(monkeypatch, n)[0] or {}).get("id") for n in sorted(A)}
+    assert real == ESPERADO
+
+
+def test_el_isrc_se_verifica_contra_el_upload(monkeypatch):
+    # SoundCloud «Stronger» con el ISRC de «Stronger (instrumental)»: el ISRC no se toma.
+    a = A["a67"]
+    assert a["deezer"][f"isrc:{a['isrc']}"][0]["title"] == "Stronger (instrumental)"
+    seed, _ = resolver(monkeypatch, "a67")
+    assert seed and seed["id"] == 1178682, f"aceptó {nombre(seed)}"
+
+
+def test_sin_artista_no_se_pregunta_a_deezer(monkeypatch):
+    pedidos = []
+    monkeypatch.setattr(similares, "_get", lambda url: pedidos.append(url) or {"data": []})
+    assert similares.resolver_seed_detalle("Halo", ".", None) == (None, similares.NOT_SEARCHABLE)
+    assert pedidos == []
+    detalle = similares.sin_semilla(similares.NOT_SEARCHABLE)["detalle"]
+    assert "no busqué" in detalle and "No está en Deezer" not in detalle
+
+
+def test_cada_motivo_tiene_su_detalle():
+    detalles = {m: similares.sin_semilla(m)["detalle"] for m in
+                (similares.SEED_NOT_FOUND, similares.DEEZER_UNAVAILABLE, similares.NOT_SEARCHABLE)}
+    assert len(set(detalles.values())) == 3
+    assert detalles[similares.DEEZER_UNAVAILABLE].startswith("No pude consultar Deezer")
+    assert detalles[similares.SEED_NOT_FOUND].startswith("No está en Deezer")
+
+
+# --- ISRC de SoundCloud ----------------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, status, body=None):
+        self.status_code, self.ok, self._body = status, status < 400, body
+
+    def json(self):
+        return self._body
+
+
+def _fake_sc(monkeypatch, respuestas, cid="CID_SECRETO"):
+    import requests
+    import yt_dlp
+    llamadas, renovaciones = [], []
+
+    class Cache:
+        def load(self, *a):
+            return cid
+
+    class YDL:
+        def __init__(self, *a, **k):
+            self.cache = Cache()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, **k):
+            renovaciones.append(url)
+            return {}
+
+    def get(url, params=None, headers=None, timeout=None):
+        llamadas.append((url, params))
+        r = respuestas.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", YDL)
+    return llamadas, renovaciones
+
+
+def test_isrc_de_soundcloud_normaliza(monkeypatch):
+    llamadas, renov = _fake_sc(monkeypatch, [_Resp(200, {"publisher_metadata": {"isrc": "us-at2 2005111"}})])
+    assert ti.fetch_soundcloud_isrc("1234567") == "USAT22005111"
+    assert [u for u, _ in llamadas] == ["https://api-v2.soundcloud.com/tracks/1234567"] and renov == []
+
+
+def test_isrc_con_client_id_vencido_renueva_y_reintenta(monkeypatch):
+    llamadas, renov = _fake_sc(monkeypatch, [_Resp(401), _Resp(200, {"publisher_metadata": {"isrc": "USAT22005111"}})])
+    assert ti.fetch_soundcloud_isrc("1234567") == "USAT22005111"
+    assert len(llamadas) == 2 and renov == ["https://api.soundcloud.com/tracks/1234567"]
+
+
+def test_isrc_con_timeout_da_none_sin_filtrar_el_client_id(monkeypatch, caplog):
+    import requests
+    _fake_sc(monkeypatch, [requests.exceptions.ConnectTimeout(
+        "HTTPSConnectionPool: /tracks/1234567?client_id=CID_SECRETO (timeout)")])
+    caplog.set_level("INFO", logger="track_identity")
+    assert ti.fetch_soundcloud_isrc("1234567") is None
+    assert "CID_SECRETO" not in caplog.text and "ConnectTimeout" in caplog.text
+
+
+@pytest.mark.parametrize("tid", ["", None, "abc", "123abc", "-1", "²", "١٢٣", "𝟙𝟚", "1" * 21])
+def test_isrc_con_id_invalido_no_sale_a_la_red(monkeypatch, tid):
+    llamadas, renov = _fake_sc(monkeypatch, [_Resp(200, {"publisher_metadata": {"isrc": "USAT22005111"}})])
+    assert ti.fetch_soundcloud_isrc(tid) is None
+    assert llamadas == [] and renov == []
+
+
 # --- las 40 entradas ----------------------------------------------------------------------
 
 def clasificar(e: dict, seed: dict | None) -> str:
@@ -284,6 +507,18 @@ def test_opciones_de_descarta_las_de_otro_tema(server, monkeypatch):
     assert [(o["fuente"], o["titulo"]) for o in bia] == [("youtube", "BIA - TWIN (Official Audio)")]
     # Modo lista (sin identidad): sigue igual que antes, una opción por plataforma.
     assert [o["fuente"] for o in server._opciones_de("BIA - TWIN", "wav")] == ["youtube", "soundcloud", "ligaudio"]
+
+
+def test_buscar_lista_le_pasa_la_identidad_a_cada_linea(server, monkeypatch):
+    # El camino real de parecidas: _buscar_lista (en paralelo) con una identidad por línea.
+    monkeypatch.setattr(server, "_buscar_mix", lambda q, limite: [dict(c) for c in MIX[q]])
+    lineas = ["Ice Spice - Thootie", "BIA - TWIN"]
+    idents = [ti.parse_fields("Ice Spice", "Thootie"), ti.parse_fields("BIA", "TWIN")]
+    res = server._buscar_lista(lineas, "wav", idents)
+    assert [[(o["fuente"], o["titulo"]) for o in ops] for ops in res] == [
+        [("youtube", "Ice Spice, Tokischa - Thootie"), ("soundcloud", "Thootie")],
+        [("youtube", "BIA - TWIN (Official Audio)")]]
+    assert [len(ops) for ops in server._buscar_lista(lineas, "wav")] == [3, 3], "modo lista: sin filtro"
 
 
 def test_parecidas_lista_sin_semilla_dice_similitud_no_disponible(server, monkeypatch):

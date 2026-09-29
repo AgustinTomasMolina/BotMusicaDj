@@ -1120,7 +1120,8 @@
     "Right Round (HBz Hard-Bounce Remix) deejay vhyral": [],
     "artist:\"DeeJay Vhyral\" track:\"Right Round (HBz Hard-Bounce Remix) #deejayvhyral #remix #rightround\"": [],
     "artist:\"DeeJay Vhyral\" track:\"right round\"": [],
-    "artist:\"Right Round (HBz Hard-Bounce Remix)\" track:\"deejay vhyral\"": []
+    "artist:\"Right Round (HBz Hard-Bounce Remix)\" track:\"deejay vhyral\"": [],
+    "DeeJay Vhyral right round hbz hard bounce remix": []
    }
   },
   {
@@ -5506,11 +5507,125 @@
       "artist": "Thomas Schmid",
       "artist_id": 3500731,
       "duration": 155
+     },
+     {
+      "id": 1808182487,
+      "title": "Kapitel 81 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 128
+     },
+     {
+      "id": 1808182477,
+      "title": "Kapitel 80 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 187
+     },
+     {
+      "id": 1808182437,
+      "title": "Kapitel 76 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 156
+     },
+     {
+      "id": 1808181827,
+      "title": "Kapitel 15 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 138
+     },
+     {
+      "id": 1808182127,
+      "title": "Kapitel 45 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 137
+     },
+     {
+      "id": 1808182257,
+      "title": "Kapitel 58 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 140
+     },
+     {
+      "id": 1808181787,
+      "title": "Kapitel 11 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 136
+     },
+     {
+      "id": 1808181757,
+      "title": "Kapitel 8 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 124
+     },
+     {
+      "id": 1808182197,
+      "title": "Kapitel 52 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 141
+     },
+     {
+      "id": 1808181917,
+      "title": "Kapitel 24 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 158
+     },
+     {
+      "id": 1808181907,
+      "title": "Kapitel 23 - Die Wilden Küken 2. Eisalarm",
+      "artist": "Thomas Schmid",
+      "artist_id": 3500731,
+      "duration": 132
+     },
+     {
+      "id": 6583836,
+      "title": "Ral si ton koukoune (Live)",
+      "artist": "Ziskakan",
+      "artist_id": 55617,
+      "duration": 348
+     },
+     {
+      "id": 14192397,
+      "title": "Ral si ton koukoune",
+      "artist": "Ziskakan",
+      "artist_id": 55617,
+      "duration": 292
+     },
+     {
+      "id": 2597102,
+      "title": "Euskal Herrian euskaraz",
+      "artist": "Oskorri",
+      "artist_id": 97430,
+      "duration": 265
+     },
+     {
+      "id": 6599880,
+      "title": "Koko",
+      "artist": "Ziskakan",
+      "artist_id": 55617,
+      "duration": 277
      }
     ],
     "artist:\"KOBOSIL\" track:\"eiskalt\"": [],
     "artist:\"KUKO\" track:\"Eiskalt (Short Mix)\"": [],
-    "artist:\"KUKO\" track:\"eiskalt\"": []
+    "artist:\"KUKO\" track:\"eiskalt\"": [],
+    "KUKO eiskalt short mix": [
+     {
+      "id": 2988969511,
+      "title": "Eiskalt (Short Mix)",
+      "artist": "Kuko",
+      "artist_id": 186647907,
+      "duration": 213
+     }
+    ]
    }
   },
   {
@@ -5655,6 +5770,15 @@
       "artist_id": 186647907,
       "duration": 213
      }
+    ],
+    "Kobosil eiskalt short mix": [
+     {
+      "id": 2988969511,
+      "title": "Eiskalt (Short Mix)",
+      "artist": "Kuko",
+      "artist_id": 186647907,
+      "duration": 213
+     }
     ]
    }
   },
@@ -5745,6 +5869,111 @@
       "artist": "Bad Gyal Jade",
       "artist_id": 55749272,
       "duration": 132
+     },
+     {
+      "id": 1816064697,
+      "title": "Client",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 153
+     },
+     {
+      "id": 1675700087,
+      "title": "Heart On Ice",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 239
+     },
+     {
+      "id": 1161475732,
+      "title": "Pon Di Side",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 201
+     },
+     {
+      "id": 1852154917,
+      "title": "Mixed Emotions",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 190
+     },
+     {
+      "id": 761808112,
+      "title": "Other Side",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 179
+     },
+     {
+      "id": 2280588337,
+      "title": "Me Time",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 178
+     },
+     {
+      "id": 989802632,
+      "title": "No Strings (feat. Bad Gyal Jade)",
+      "artist": "Chevoney",
+      "artist_id": 97516542,
+      "duration": 185
+     },
+     {
+      "id": 1484019462,
+      "title": "Make Dat Money",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 163
+     },
+     {
+      "id": 1793726907,
+      "title": "Killa Killa",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 182
+     },
+     {
+      "id": 2365830915,
+      "title": "Bad Gyal",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 156
+     },
+     {
+      "id": 712393342,
+      "title": "Independent",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 165
+     },
+     {
+      "id": 2193379247,
+      "title": "Black Tears",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 229
+     },
+     {
+      "id": 638275342,
+      "title": "Pum Pum Pic",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 202
+     },
+     {
+      "id": 2109146267,
+      "title": "Wounds",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 179
+     },
+     {
+      "id": 2808463292,
+      "title": "Split Freak",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 195
      }
     ],
     "Contraproducentes BAD GYAL - DA ME (Charly Chaser HARD BOUNCE EDIT)": [],
@@ -5752,7 +5981,8 @@
     "DA ME (Charly Chaser HARD BOUNCE EDIT) bad gyal": [],
     "artist:\"BAD GYAL\" track:\"da me\"": [],
     "artist:\"Contraproducentes\" track:\"BAD GYAL - DA ME (Charly Chaser HARD BOUNCE EDIT)\"": [],
-    "artist:\"DA ME (Charly Chaser HARD BOUNCE EDIT)\" track:\"bad gyal\"": []
+    "artist:\"DA ME (Charly Chaser HARD BOUNCE EDIT)\" track:\"bad gyal\"": [],
+    "BAD GYAL da me charly chaser hard bounce edit": []
    }
   },
   {
@@ -5843,6 +6073,111 @@
       "artist": "Bad Gyal Jade",
       "artist_id": 55749272,
       "duration": 132
+     },
+     {
+      "id": 1816064697,
+      "title": "Client",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 153
+     },
+     {
+      "id": 1675700087,
+      "title": "Heart On Ice",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 239
+     },
+     {
+      "id": 1161475732,
+      "title": "Pon Di Side",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 201
+     },
+     {
+      "id": 1852154917,
+      "title": "Mixed Emotions",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 190
+     },
+     {
+      "id": 761808112,
+      "title": "Other Side",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 179
+     },
+     {
+      "id": 2280588337,
+      "title": "Me Time",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 178
+     },
+     {
+      "id": 989802632,
+      "title": "No Strings (feat. Bad Gyal Jade)",
+      "artist": "Chevoney",
+      "artist_id": 97516542,
+      "duration": 185
+     },
+     {
+      "id": 1484019462,
+      "title": "Make Dat Money",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 163
+     },
+     {
+      "id": 1793726907,
+      "title": "Killa Killa",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 182
+     },
+     {
+      "id": 2365830915,
+      "title": "Bad Gyal",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 156
+     },
+     {
+      "id": 712393342,
+      "title": "Independent",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 165
+     },
+     {
+      "id": 2193379247,
+      "title": "Black Tears",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 229
+     },
+     {
+      "id": 638275342,
+      "title": "Pum Pum Pic",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 202
+     },
+     {
+      "id": 2109146267,
+      "title": "Wounds",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 179
+     },
+     {
+      "id": 2808463292,
+      "title": "Split Freak",
+      "artist": "Bad Gyal Jade",
+      "artist_id": 55749272,
+      "duration": 195
      }
     ],
     "CHARLY CHASER BAD GYAL - DA ME ( HARD BOUNCE EDIT) FREE DL <3": [],
@@ -5854,7 +6189,8 @@
     "artist:\"CHARLY CHASER\" track:\"BAD GYAL - DA ME ( HARD BOUNCE EDIT) FREE DL <3\"": [],
     "artist:\"CHARLY CHASER\" track:\"BAD GYAL - DA ME (Charly Chaser HARD BOUNCE EDIT) FREE DL <3\"": [],
     "artist:\"CHARLY CHASER\" track:\"da me\"": [],
-    "artist:\"DA ME (Charly Chaser HARD BOUNCE EDIT)\" track:\"bad gyal\"": []
+    "artist:\"DA ME (Charly Chaser HARD BOUNCE EDIT)\" track:\"bad gyal\"": [],
+    "BAD GYAL da me charly chaser hard bounce edit": []
    }
   },
   {
@@ -5900,7 +6236,9 @@
     "DOETS hard techno closing set": [],
     "HARD TECHNO CLOSING SET ( FANTASM X DYEN X NICO MORENO X AZYR X SARA LANDRY X HADES)": [],
     "artist:\"DOETS\" track:\"HARD TECHNO CLOSING SET ( FANTASM X DYEN X NICO MORENO X AZYR X SARA LANDRY X HADES)\"": [],
-    "artist:\"DOETS\" track:\"hard techno closing set\"": []
+    "artist:\"DOETS\" track:\"hard techno closing set\"": [],
+    "artist:\"DOETS\" track:\"hard techno closing set fantasm x dyen x nico moreno x azyr x sara landry x hades\"": [],
+    "DOETS hard techno closing set fantasm x dyen x nico moreno x azyr x sara landry x hades": []
    }
   },
   {
@@ -7452,7 +7790,8 @@
     "artist:\"Christopher Coe\" track:\"inferno\"": [],
     "artist:\"Inferno (Original Mix)\" track:\"carl cox reinier zonneveld christopher coe\"": [],
     "artist:\"Reinier Zonneveld\" track:\"Carl Cox, , Christopher Coe - Inferno (Original Mix)\"": [],
-    "artist:\"Reinier Zonneveld\" track:\"inferno\"": []
+    "artist:\"Reinier Zonneveld\" track:\"inferno\"": [],
+    "Carl Cox, Reinier Zonneveld, Christopher Coe inferno original mix": []
    }
   },
   {
@@ -7667,7 +8006,8 @@
     "artist:\"Chris Coe\" track:\"inferno\"": [],
     "artist:\"Inferno (Original Mix)\" track:\"carl cox reinier zonneveld chris coe\"": [],
     "artist:\"Reinier Zonneveld\" track:\"PREMIERE: Carl Cox & & Chris Coe - Inferno (Original Mix) [Filth on Acid]\"": [],
-    "artist:\"Reinier Zonneveld\" track:\"inferno\"": []
+    "artist:\"Reinier Zonneveld\" track:\"inferno\"": [],
+    "Carl Cox & Reinier Zonneveld & Chris Coe inferno original mix": []
    }
   },
   {
@@ -8233,7 +8573,8 @@
     "artist:\"Saving Up\" track:\"dom dolla\"": [],
     "artist:\"SoDown \" track:\"Saving Up - Dom Dolla (SoDown Remix)\"": [],
     "artist:\"SoDown\" track:\"Saving Up - Dom Dolla ( Remix)\"": [],
-    "artist:\"SoDown\" track:\"dom dolla\"": []
+    "artist:\"SoDown\" track:\"dom dolla\"": [],
+    "Saving Up dom dolla sodown remix": []
    }
   },
   {
@@ -8693,5 +9034,3560 @@
     ]
    }
   }
- ]
+ ],
+ "hallazgos": [
+  {
+   "n": "a50",
+   "fuente": "youtube",
+   "titulo": "Underworld - Born Slippy (Nuxx)",
+   "artista": "Underworld",
+   "duracion": 268,
+   "isrc": null,
+   "motivo": "Born Slippy (Nuxx) no es 'Born slippy'; 268 s es la Radio Edit (264 s), no el original de 454 s",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     140857827
+    ]
+   },
+   "antes": {
+    "id": 121126078,
+    "artist": "Underworld",
+    "title": "Born Slippy (Nuxx / Remastered)"
+   },
+   "deezer": {
+    "artist:\"Underworld\" track:\"born slippy nuxx\"": [],
+    "Underworld born slippy nuxx": [
+     {
+      "id": 82265248,
+      "title": "Born Slippy (Nuxx)",
+      "artist": "Underworld",
+      "artist_id": 276,
+      "duration": 454
+     },
+     {
+      "id": 121126078,
+      "title": "Born Slippy (Nuxx / Remastered)",
+      "artist": "Underworld",
+      "artist_id": 276,
+      "duration": 705
+     },
+     {
+      "id": 140857827,
+      "title": "Born Slippy (Nuxx) (Radio Edit)",
+      "artist": "Underworld",
+      "artist_id": 276,
+      "duration": 264
+     },
+     {
+      "id": 81292382,
+      "title": "Born Slippy (Nuxx) (Live / Brussels, Belgium / 1999)",
+      "artist": "Underworld",
+      "artist_id": 276,
+      "duration": 656
+     },
+     {
+      "id": 113413236,
+      "title": "Born Slippy.Nuxx (Deep Pan / Remastered)",
+      "artist": "Underworld",
+      "artist_id": 276,
+      "duration": 598
+     }
+    ]
+   }
+  },
+  {
+   "n": "a131",
+   "fuente": "youtube",
+   "titulo": "Swedish House Mafia - One (Your Name) (Official Video)",
+   "artista": "Swedish House Mafia",
+   "duracion": 196,
+   "isrc": null,
+   "motivo": "One (Your Name) no es 'One'; 196 s no es ninguna edición de Deezer",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     6588199
+    ]
+   },
+   "antes": {
+    "id": 6588199,
+    "artist": "Swedish House Mafia",
+    "title": "One (Your Name) (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Swedish House Mafia\" track:\"one your name\"": [],
+    "Swedish House Mafia one your name": [
+     {
+      "id": 6588199,
+      "title": "One (Your Name) (Radio Edit)",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 163
+     },
+     {
+      "id": 6588200,
+      "title": "One (Radio Edit)",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 167
+     },
+     {
+      "id": 6517508,
+      "title": "One",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 349
+     },
+     {
+      "id": 6588206,
+      "title": "One (Caspa Dub Remix)",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 250
+     },
+     {
+      "id": 6588207,
+      "title": "One (Netsky Remix)",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 339
+     },
+     {
+      "id": 6588204,
+      "title": "One (Your Name) (Caspa Vocal Remix)",
+      "artist": "Swedish House Mafia",
+      "artist_id": 407188,
+      "duration": 250
+     },
+     {
+      "id": 7354044,
+      "title": "One (Your Name) (Made Famous by Swedish House Mafia)",
+      "artist": "Cardio Workout Crew",
+      "artist_id": 317669,
+      "duration": 158
+     },
+     {
+      "id": 1613746622,
+      "title": "One (Your Name) [Originally Performed by Swedish House Mafia Ft. Pharrell] (Instrumental Version)",
+      "artist": "Hit The Button Karaoke",
+      "artist_id": 9777878,
+      "duration": 159
+     },
+     {
+      "id": 7565305,
+      "title": "One (Your Name) (Acapella Swedish House Mafia Cover Version)",
+      "artist": "Tribute Mega Stars",
+      "artist_id": 368669,
+      "duration": 174
+     },
+     {
+      "id": 7565304,
+      "title": "One (Your Name) (Instrumental Swedish House Mafia Cover Version)",
+      "artist": "Tribute Mega Stars",
+      "artist_id": 368669,
+      "duration": 164
+     }
+    ]
+   }
+  },
+  {
+   "n": "a118",
+   "fuente": "youtube",
+   "titulo": "Perfect (Acoustic)",
+   "artista": "Ed Sheeran",
+   "duracion": 261,
+   "isrc": null,
+   "motivo": "Perfect (Acoustic) es la acústica, no el original",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     424036432
+    ]
+   },
+   "antes": {
+    "id": 424036432,
+    "artist": "Ed Sheeran",
+    "title": "Perfect (Acoustic)"
+   },
+   "deezer": {
+    "artist:\"Ed Sheeran\" track:\"perfect\"": [],
+    "Ed Sheeran perfect": [
+     {
+      "id": 142986206,
+      "title": "Perfect",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 263
+     },
+     {
+      "id": 435031622,
+      "title": "Perfect Duet (with Beyoncé)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 259
+     },
+     {
+      "id": 424036432,
+      "title": "Perfect (Acoustic)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 260
+     },
+     {
+      "id": 439222652,
+      "title": "Perfect Symphony (with Andrea Bocelli)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 265
+     },
+     {
+      "id": 4160175562,
+      "title": "Ed Sheeran-Perfect (Remix)",
+      "artist": "Ferrison",
+      "artist_id": 272837492,
+      "duration": 353
+     },
+     {
+      "id": 1385889942,
+      "title": "Ed Sheeran-Perfect (Chill hop Version)",
+      "artist": "Voyage",
+      "artist_id": 113217232,
+      "duration": 289
+     },
+     {
+      "id": 431576552,
+      "title": "Perfect (Robin Schulz Remix)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 249
+     },
+     {
+      "id": 424036012,
+      "title": "Perfect (Mike Perry Remix)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 221
+     },
+     {
+      "id": 3134389211,
+      "title": "Perfect (Live)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 239
+     },
+     {
+      "id": 2969947571,
+      "title": "Perfect (Instrumental, Violin Version)",
+      "artist": "ViOLiNiA Zhanna Stelmakh",
+      "artist_id": 117804812,
+      "duration": 225
+     },
+     {
+      "id": 1138555982,
+      "title": "Perfect (Karaoke Version) [ Originally Performed by Ed Sheeran]",
+      "artist": "Il Laboratorio del Ritmo",
+      "artist_id": 1451476,
+      "duration": 260
+     },
+     {
+      "id": 524200842,
+      "title": "Perfect Ed Sheeran Beyoncé",
+      "artist": "Boyce Avenue",
+      "artist_id": 372617,
+      "duration": 257
+     },
+     {
+      "id": 2393216655,
+      "title": "Ed Sheeran - Perfect - Piano Cover",
+      "artist": "Ed Sheeran - Piano Covers",
+      "artist_id": 224018195,
+      "duration": 306
+     },
+     {
+      "id": 682733932,
+      "title": "Perfect (Ed Sheeran Piano Cover)",
+      "artist": "Steve Siu",
+      "artist_id": 3382221,
+      "duration": 258
+     },
+     {
+      "id": 365406801,
+      "title": "Perfect (In the Style of Ed Sheeran)",
+      "artist": "UK Top 40 Backing Tracks 2017",
+      "artist_id": 12489874,
+      "duration": 264
+     },
+     {
+      "id": 2085992197,
+      "title": "Perfect Exito De Ed Sheeran en Saxophone",
+      "artist": "SAXO MARAVILLOSO",
+      "artist_id": 168510847,
+      "duration": 250
+     },
+     {
+      "id": 712521842,
+      "title": "Perfect (Ed Sheeran) (Karaoke Version)",
+      "artist": "Fredo",
+      "artist_id": 74066792,
+      "duration": 268
+     },
+     {
+      "id": 401187862,
+      "title": "Perfect (Piano Rendition)",
+      "artist": "L'orchestra Cinematique",
+      "artist_id": 891594,
+      "duration": 293
+     },
+     {
+      "id": 470727462,
+      "title": "Perfect",
+      "artist": "Carmine De Martino",
+      "artist_id": 7952242,
+      "duration": 267
+     },
+     {
+      "id": 455608732,
+      "title": "Perfect",
+      "artist": "Acoustic Heartstrings",
+      "artist_id": 14175089,
+      "duration": 250
+     },
+     {
+      "id": 4281695072,
+      "title": "Ed Sheeran Perfect",
+      "artist": "Astiyan",
+      "artist_id": 94025292,
+      "duration": 248
+     },
+     {
+      "id": 3145023721,
+      "title": "Perfect Ed Sheeran",
+      "artist": "Any Lilior",
+      "artist_id": 294019941,
+      "duration": 153
+     },
+     {
+      "id": 4233704052,
+      "title": "Perfect_-_Ed_Sheeran",
+      "artist": "IRON VEX",
+      "artist_id": 388553651,
+      "duration": 273
+     },
+     {
+      "id": 2932107411,
+      "title": "Your Perfect World (Ed Sheeran Version)",
+      "artist": "Pfv",
+      "artist_id": 5145244,
+      "duration": 138
+     },
+     {
+      "id": 3571678791,
+      "title": "Shape of You",
+      "artist": "Melodi-fi",
+      "artist_id": 345357601,
+      "duration": 254
+     }
+    ],
+    "Ed Sheeran perfect acoustic": [
+     {
+      "id": 424036432,
+      "title": "Perfect (Acoustic)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 260
+     },
+     {
+      "id": 455608732,
+      "title": "Perfect",
+      "artist": "Acoustic Heartstrings",
+      "artist_id": 14175089,
+      "duration": 250
+     },
+     {
+      "id": 4281695072,
+      "title": "Ed Sheeran Perfect",
+      "artist": "Astiyan",
+      "artist_id": 94025292,
+      "duration": 248
+     },
+     {
+      "id": 1884093687,
+      "title": "Perfect",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 263
+     },
+     {
+      "id": 3890773221,
+      "title": "Perfect (Originally Performed By Ed Sheeran) (Acoustic Guitar Karaoke)",
+      "artist": "Sing2Guitar",
+      "artist_id": 7173560,
+      "duration": 268
+     },
+     {
+      "id": 3890773231,
+      "title": "Perfect (Higher Key) [Originally Performed By Ed Sheeran] (Acoustic Guitar Karaoke)",
+      "artist": "Sing2Guitar",
+      "artist_id": 7173560,
+      "duration": 268
+     },
+     {
+      "id": 367897581,
+      "title": "Perfect (Instrumental)",
+      "artist": "Guitar Tribute Players",
+      "artist_id": 4192880,
+      "duration": 253
+     },
+     {
+      "id": 2262873187,
+      "title": "Perfect (Acoustic Cover)",
+      "artist": "Acoustic Guitar Revival",
+      "artist_id": 76132202,
+      "duration": 258
+     }
+    ]
+   }
+  },
+  {
+   "n": "a140",
+   "fuente": "soundcloud",
+   "titulo": "Avicii - Levels (Instrumental Radio Edit)",
+   "artista": "uploader",
+   "duracion": 198.341,
+   "isrc": null,
+   "motivo": "Levels (Instrumental Radio Edit) es la instrumental, no la Radio Edit",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     14383882
+    ]
+   },
+   "antes": {
+    "id": 14383882,
+    "artist": "Avicii",
+    "title": "Levels (Instrumental Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Avicii\" track:\"levels\"": [],
+    "Avicii levels": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383881,
+      "title": "Levels (Original Version)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 339
+     },
+     {
+      "id": 3276239401,
+      "title": "Avicii - Levels ('Aro Remix)",
+      "artist": "'ARO",
+      "artist_id": 91649272,
+      "duration": 217
+     },
+     {
+      "id": 15421140,
+      "title": "Levels (Skrillex Remix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 281
+     },
+     {
+      "id": 15421142,
+      "title": "Levels (Cazzette's NYC Mode Radio Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 218
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 15421141,
+      "title": "Levels (Cazzette's NYC Mode Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 354
+     },
+     {
+      "id": 15175255,
+      "title": "Levels",
+      "artist": "Avicii Cover Band",
+      "artist_id": 1540054,
+      "duration": 205
+     },
+     {
+      "id": 98143616,
+      "title": "Levels By Avicii And Skrilex Remix Meets Metal",
+      "artist": "Erock",
+      "artist_id": 5382499,
+      "duration": 249
+     },
+     {
+      "id": 3551971881,
+      "title": "Avici Levels (Remix)",
+      "artist": "Law-Dj",
+      "artist_id": 343751811,
+      "duration": 272
+     },
+     {
+      "id": 58252091,
+      "title": "Levels (Original von Avicii)",
+      "artist": "Pop Kidz",
+      "artist_id": 3893081,
+      "duration": 196
+     },
+     {
+      "id": 516175152,
+      "title": "I Could Be the One / Levels (Tribute to Avicii)",
+      "artist": "Mark Lanzetta",
+      "artist_id": 5206973,
+      "duration": 290
+     },
+     {
+      "id": 393460732,
+      "title": "Without You",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 181
+     },
+     {
+      "id": 65190853,
+      "title": "Outer Level (Eduardo De Rosa Remix)",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 309
+     },
+     {
+      "id": 65190855,
+      "title": "Outer Level",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 441
+     },
+     {
+      "id": 63058828,
+      "title": "Levels (Originally By Avicil)",
+      "artist": "DJ Covers",
+      "artist_id": 1623221,
+      "duration": 339
+     },
+     {
+      "id": 724740712,
+      "title": "Levels (Piano Arrangement)",
+      "artist": "Niko Kotoulas",
+      "artist_id": 8146056,
+      "duration": 151
+     },
+     {
+      "id": 855966182,
+      "title": "Pearls",
+      "artist": "Kandace Springs",
+      "artist_id": 6646688,
+      "duration": 284
+     },
+     {
+      "id": 397709022,
+      "title": "Leaves in the Stream (feat. Alissa White-Gluz)",
+      "artist": "Aurelio Voltaire",
+      "artist_id": 1931811,
+      "duration": 230
+     },
+     {
+      "id": 850590312,
+      "title": "When she Leaves",
+      "artist": "Javier Girotto",
+      "artist_id": 471152,
+      "duration": 421
+     },
+     {
+      "id": 4062685181,
+      "title": "Levels (For Avicii)",
+      "artist": "Crow",
+      "artist_id": 184688,
+      "duration": 225
+     },
+     {
+      "id": 4078968061,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 248
+     },
+     {
+      "id": 115174420,
+      "title": "Levels (Inspired by Avicii)",
+      "artist": "DJ Mat",
+      "artist_id": 94821822,
+      "duration": 227
+     },
+     {
+      "id": 3857974611,
+      "title": "Avicii Levels Bootleg",
+      "artist": "Heartless boyz musiq",
+      "artist_id": 200075247,
+      "duration": 310
+     },
+     {
+      "id": 3592399252,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 246
+     }
+    ],
+    "Avicii levels instrumental radio edit": [
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     }
+    ]
+   }
+  },
+  {
+   "n": "a137",
+   "fuente": "youtube",
+   "titulo": "Avicii - Levels (Radio Edit)",
+   "artista": "uploader",
+   "duracion": 238,
+   "isrc": null,
+   "motivo": "Levels (Radio Edit): no el 'Cazzette's NYC Mode Radio Mix'",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     14383880
+    ]
+   },
+   "antes": {
+    "id": 14383880,
+    "artist": "Avicii",
+    "title": "Levels (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Avicii\" track:\"levels\"": [],
+    "Avicii levels": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383881,
+      "title": "Levels (Original Version)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 339
+     },
+     {
+      "id": 3276239401,
+      "title": "Avicii - Levels ('Aro Remix)",
+      "artist": "'ARO",
+      "artist_id": 91649272,
+      "duration": 217
+     },
+     {
+      "id": 15421140,
+      "title": "Levels (Skrillex Remix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 281
+     },
+     {
+      "id": 15421142,
+      "title": "Levels (Cazzette's NYC Mode Radio Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 218
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 15421141,
+      "title": "Levels (Cazzette's NYC Mode Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 354
+     },
+     {
+      "id": 15175255,
+      "title": "Levels",
+      "artist": "Avicii Cover Band",
+      "artist_id": 1540054,
+      "duration": 205
+     },
+     {
+      "id": 98143616,
+      "title": "Levels By Avicii And Skrilex Remix Meets Metal",
+      "artist": "Erock",
+      "artist_id": 5382499,
+      "duration": 249
+     },
+     {
+      "id": 3551971881,
+      "title": "Avici Levels (Remix)",
+      "artist": "Law-Dj",
+      "artist_id": 343751811,
+      "duration": 272
+     },
+     {
+      "id": 58252091,
+      "title": "Levels (Original von Avicii)",
+      "artist": "Pop Kidz",
+      "artist_id": 3893081,
+      "duration": 196
+     },
+     {
+      "id": 516175152,
+      "title": "I Could Be the One / Levels (Tribute to Avicii)",
+      "artist": "Mark Lanzetta",
+      "artist_id": 5206973,
+      "duration": 290
+     },
+     {
+      "id": 393460732,
+      "title": "Without You",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 181
+     },
+     {
+      "id": 65190853,
+      "title": "Outer Level (Eduardo De Rosa Remix)",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 309
+     },
+     {
+      "id": 65190855,
+      "title": "Outer Level",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 441
+     },
+     {
+      "id": 63058828,
+      "title": "Levels (Originally By Avicil)",
+      "artist": "DJ Covers",
+      "artist_id": 1623221,
+      "duration": 339
+     },
+     {
+      "id": 724740712,
+      "title": "Levels (Piano Arrangement)",
+      "artist": "Niko Kotoulas",
+      "artist_id": 8146056,
+      "duration": 151
+     },
+     {
+      "id": 855966182,
+      "title": "Pearls",
+      "artist": "Kandace Springs",
+      "artist_id": 6646688,
+      "duration": 284
+     },
+     {
+      "id": 397709022,
+      "title": "Leaves in the Stream (feat. Alissa White-Gluz)",
+      "artist": "Aurelio Voltaire",
+      "artist_id": 1931811,
+      "duration": 230
+     },
+     {
+      "id": 850590312,
+      "title": "When she Leaves",
+      "artist": "Javier Girotto",
+      "artist_id": 471152,
+      "duration": 421
+     },
+     {
+      "id": 4062685181,
+      "title": "Levels (For Avicii)",
+      "artist": "Crow",
+      "artist_id": 184688,
+      "duration": 225
+     },
+     {
+      "id": 4078968061,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 248
+     },
+     {
+      "id": 115174420,
+      "title": "Levels (Inspired by Avicii)",
+      "artist": "DJ Mat",
+      "artist_id": 94821822,
+      "duration": 227
+     },
+     {
+      "id": 3857974611,
+      "title": "Avicii Levels Bootleg",
+      "artist": "Heartless boyz musiq",
+      "artist_id": 200075247,
+      "duration": 310
+     },
+     {
+      "id": 3592399252,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 246
+     }
+    ],
+    "Avicii levels radio edit": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     }
+    ]
+   }
+  },
+  {
+   "n": "a138",
+   "fuente": "youtube",
+   "titulo": "Avicii - Levels",
+   "artista": "Avicii",
+   "duracion": 199,
+   "isrc": null,
+   "motivo": "Levels (199 s = la Radio Edit): no 'Levels (Original Version)' de 339 s",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     14383880
+    ]
+   },
+   "antes": {
+    "id": 14383880,
+    "artist": "Avicii",
+    "title": "Levels (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Avicii\" track:\"levels\"": [],
+    "Avicii levels": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383881,
+      "title": "Levels (Original Version)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 339
+     },
+     {
+      "id": 3276239401,
+      "title": "Avicii - Levels ('Aro Remix)",
+      "artist": "'ARO",
+      "artist_id": 91649272,
+      "duration": 217
+     },
+     {
+      "id": 15421140,
+      "title": "Levels (Skrillex Remix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 281
+     },
+     {
+      "id": 15421142,
+      "title": "Levels (Cazzette's NYC Mode Radio Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 218
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 15421141,
+      "title": "Levels (Cazzette's NYC Mode Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 354
+     },
+     {
+      "id": 15175255,
+      "title": "Levels",
+      "artist": "Avicii Cover Band",
+      "artist_id": 1540054,
+      "duration": 205
+     },
+     {
+      "id": 98143616,
+      "title": "Levels By Avicii And Skrilex Remix Meets Metal",
+      "artist": "Erock",
+      "artist_id": 5382499,
+      "duration": 249
+     },
+     {
+      "id": 3551971881,
+      "title": "Avici Levels (Remix)",
+      "artist": "Law-Dj",
+      "artist_id": 343751811,
+      "duration": 272
+     }
+    ]
+   }
+  },
+  {
+   "n": "a16",
+   "fuente": "youtube",
+   "titulo": "[Official Music Video] Perfume「ポリリズム」",
+   "artista": "Perfume",
+   "duracion": 258,
+   "isrc": null,
+   "motivo": "Perfume「ポリリズム」: nunca la canción 'Perfume'; en Deezer está como 'Polyrhythm' (no demostrable)",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     753988052
+    ]
+   },
+   "antes": {
+    "id": 67954625,
+    "artist": "Perfume",
+    "title": "Polyrhythm"
+   },
+   "deezer": {
+    "artist:\"Perfume\" track:\"ポリリズム\"": [],
+    "Perfume ポリリズム": [
+     {
+      "id": 753988052,
+      "title": "Polyrhythm",
+      "artist": "Perfume",
+      "artist_id": 515029,
+      "duration": 250
+     },
+     {
+      "id": 1397624352,
+      "title": "ポリリズム -2Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624282,
+      "title": "ポリリズム (原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624322,
+      "title": "ポリリズム +4Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624382,
+      "title": "ポリリズム -5Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624302,
+      "title": "ポリリズム +2Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624342,
+      "title": "ポリリズム -1Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624312,
+      "title": "ポリリズム +3Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624372,
+      "title": "ポリリズム -4Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     },
+     {
+      "id": 1397624292,
+      "title": "ポリリズム +1Key(原曲歌手:Perfume)",
+      "artist": "歌っちゃ王",
+      "artist_id": 96234122,
+      "duration": 255
+     }
+    ]
+   }
+  },
+  {
+   "n": "a67",
+   "fuente": "soundcloud",
+   "titulo": "Stronger",
+   "artista": "Kanye West",
+   "duracion": 30.0,
+   "isrc": "USUM70741299",
+   "motivo": "el ISRC de 'Stronger' es 'Stronger (instrumental)': no se toma; por texto es el original",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     1178682
+    ]
+   },
+   "antes": {
+    "id": 1178682,
+    "artist": "Kanye West",
+    "title": "Stronger"
+   },
+   "deezer": {
+    "artist:\"Kanye West\" track:\"stronger\"": [],
+    "Kanye West stronger": [
+     {
+      "id": 1178682,
+      "title": "Stronger",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 312
+     },
+     {
+      "id": 58015861,
+      "title": "Kanye West - Stronger (Instrumental Version)",
+      "artist": "DJ Playback",
+      "artist_id": 3238641,
+      "duration": 276
+     },
+     {
+      "id": 68350110,
+      "title": "Blood On The Leaves",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 359
+     },
+     {
+      "id": 4338812,
+      "title": "Stronger (as made famous by Kanye West)",
+      "artist": "Hip Hop Chart Toppers",
+      "artist_id": 299392,
+      "duration": 315
+     },
+     {
+      "id": 12708380,
+      "title": "Stronger (Workout Remix + 135 BPM) (As Made Famous by Kanye West)",
+      "artist": "My Workout DJ",
+      "artist_id": 1371397,
+      "duration": 285
+     },
+     {
+      "id": 1495056442,
+      "title": "Stronger (16-Bit Kanye West Emulation)",
+      "artist": "Arcade Player",
+      "artist_id": 14605457,
+      "duration": 310
+     },
+     {
+      "id": 1178683,
+      "title": "Can't Tell Me Nothing",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 274
+     },
+     {
+      "id": 346509651,
+      "title": "Stronger",
+      "artist": "Vitamin String Quartet",
+      "artist_id": 275309,
+      "duration": 221
+     },
+     {
+      "id": 2758006331,
+      "title": "Stronger Kanye West",
+      "artist": "Aiden Yoo",
+      "artist_id": 236089191,
+      "duration": 161
+     },
+     {
+      "id": 2798388182,
+      "title": "Stronger Kanye West",
+      "artist": "Lee Sang Gul",
+      "artist_id": 65185792,
+      "duration": 133
+     }
+    ],
+    "isrc:USUM70741299": [
+     {
+      "id": 177476,
+      "title": "Stronger (instrumental)",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 313
+     }
+    ]
+   }
+  },
+  {
+   "n": "a19",
+   "fuente": "soundcloud",
+   "titulo": "Кино - Группа крови",
+   "artista": "uploader",
+   "duracion": 286.766,
+   "isrc": null,
+   "motivo": "Кино - Группа крови (cirílico)",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     448260732
+    ]
+   },
+   "antes": {
+    "id": 448260732,
+    "artist": "Кино",
+    "title": "Группа крови"
+   },
+   "deezer": {
+    "artist:\"Кино\" track:\"группа крови\"": [],
+    "Кино группа крови": [
+     {
+      "id": 448260732,
+      "title": "Группа крови",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 284
+     },
+     {
+      "id": 491201482,
+      "title": "Группа крови",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 240
+     },
+     {
+      "id": 410639582,
+      "title": "Группа крови (Английская версия)",
+      "artist": "Виктор Цой",
+      "artist_id": 4549736,
+      "duration": 284
+     },
+     {
+      "id": 448260682,
+      "title": "Спокойная ночь",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 364
+     },
+     {
+      "id": 448260752,
+      "title": "Война",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 244
+     },
+     {
+      "id": 448260672,
+      "title": "Закрой за мной дверь, я ухожу",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 256
+     },
+     {
+      "id": 448260762,
+      "title": "В наших глазах",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 214
+     },
+     {
+      "id": 448260692,
+      "title": "Бошетунмай",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 247
+     },
+     {
+      "id": 448260742,
+      "title": "Легенда",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 248
+     },
+     {
+      "id": 448260772,
+      "title": "Мама, мы все сошли с ума",
+      "artist": "Кино",
+      "artist_id": 4505880,
+      "duration": 247
+     }
+    ]
+   }
+  },
+  {
+   "n": "a20",
+   "fuente": "youtube",
+   "titulo": "BTS (방탄소년단) '봄날 (Spring Day)' Official MV",
+   "artista": "HYBE LABELS",
+   "duracion": 329,
+   "isrc": null,
+   "motivo": "BTS '봄날 (Spring Day)': el nombre en latino entre paréntesis vale",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     1783253587
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"BTS\" track:\"봄날 spring day\"": [],
+    "BTS 봄날 spring day": [
+     {
+      "id": 1783253587,
+      "title": "Spring Day",
+      "artist": "BTS",
+      "artist_id": 6982223,
+      "duration": 274
+     },
+     {
+      "id": 3462560701,
+      "title": "Spring Day - Live",
+      "artist": "BTS",
+      "artist_id": 6982223,
+      "duration": 296
+     },
+     {
+      "id": 3879928841,
+      "title": "Spring Day",
+      "artist": "Vita",
+      "artist_id": 300125911,
+      "duration": 256
+     },
+     {
+      "id": 4014097311,
+      "title": "Spring Day (봄날) (Originally Perfomed By BTS) (Instrumental Karaoke Version)",
+      "artist": "ZZang KARAOKE",
+      "artist_id": 248387262,
+      "duration": 275
+     },
+     {
+      "id": 1532568852,
+      "title": "Spring Day (봄날) (Piano Version)",
+      "artist": "ICEBLAN",
+      "artist_id": 149433632,
+      "duration": 335
+     }
+    ],
+    "artist:\"BTS\" track:\"spring day\"": [],
+    "artist:\"BTS\" track:\"봄날\"": []
+   }
+  },
+  {
+   "n": "a68",
+   "fuente": "youtube",
+   "titulo": "BICEP | GLUE (Official Video)",
+   "artista": "BICEP",
+   "duracion": 285,
+   "isrc": null,
+   "motivo": "BICEP | GLUE: 'Artista | Tema' cuando la izquierda es el uploader",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     389034231
+    ]
+   },
+   "antes": {
+    "id": 416422892,
+    "artist": "Bicep",
+    "title": "Metro"
+   },
+   "deezer": {
+    "artist:\"BICEP\" track:\"glue\"": [],
+    "BICEP glue": [
+     {
+      "id": 389034231,
+      "title": "Glue",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 269
+     },
+     {
+      "id": 795642332,
+      "title": "Glue (Mixed)",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 240
+     },
+     {
+      "id": 1994409247,
+      "title": "Glue x How Deep Is Your Love - 8D Audio",
+      "artist": "(((())))",
+      "artist_id": 194524817,
+      "duration": 220
+     },
+     {
+      "id": 416422892,
+      "title": "Metro",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 300
+     },
+     {
+      "id": 416422902,
+      "title": "DLR",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 227
+     },
+     {
+      "id": 105278288,
+      "title": "How Deep Is Your Love (Disciples & Unorthodox Remix)",
+      "artist": "Calvin Harris",
+      "artist_id": 12178,
+      "duration": 364
+     },
+     {
+      "id": 2016927747,
+      "title": "GLUE (TECHNO)",
+      "artist": "BassTon",
+      "artist_id": 11106372,
+      "duration": 186
+     },
+     {
+      "id": 3215024491,
+      "title": "Say It Right x Glue (Medley Version)",
+      "artist": "Turbocharged Titans",
+      "artist_id": 199126927,
+      "duration": 190
+     },
+     {
+      "id": 4244429321,
+      "title": "Lemonder",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 268
+     },
+     {
+      "id": 3266187311,
+      "title": "Getcha Boi",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 382
+     }
+    ]
+   }
+  },
+  {
+   "n": "a145",
+   "fuente": "soundcloud",
+   "titulo": "BICEP | GLUE // CLIP",
+   "artista": "BICEP",
+   "duracion": 103.43,
+   "isrc": "GBCFB1700229",
+   "motivo": "BICEP | GLUE // CLIP con ISRC: lo que va después de // no es título",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     373789461,
+     389034231
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"BICEP\" track:\"glue\"": [],
+    "BICEP glue": [
+     {
+      "id": 389034231,
+      "title": "Glue",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 269
+     },
+     {
+      "id": 795642332,
+      "title": "Glue (Mixed)",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 240
+     },
+     {
+      "id": 1994409247,
+      "title": "Glue x How Deep Is Your Love - 8D Audio",
+      "artist": "(((())))",
+      "artist_id": 194524817,
+      "duration": 220
+     },
+     {
+      "id": 416422892,
+      "title": "Metro",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 300
+     },
+     {
+      "id": 416422902,
+      "title": "DLR",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 227
+     },
+     {
+      "id": 105278288,
+      "title": "How Deep Is Your Love (Disciples & Unorthodox Remix)",
+      "artist": "Calvin Harris",
+      "artist_id": 12178,
+      "duration": 364
+     },
+     {
+      "id": 2016927747,
+      "title": "GLUE (TECHNO)",
+      "artist": "BassTon",
+      "artist_id": 11106372,
+      "duration": 186
+     },
+     {
+      "id": 3215024491,
+      "title": "Say It Right x Glue (Medley Version)",
+      "artist": "Turbocharged Titans",
+      "artist_id": 199126927,
+      "duration": 190
+     },
+     {
+      "id": 4244429321,
+      "title": "Lemonder",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 268
+     },
+     {
+      "id": 3266187311,
+      "title": "Getcha Boi",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 382
+     }
+    ],
+    "isrc:GBCFB1700229": [
+     {
+      "id": 373789461,
+      "title": "Glue",
+      "artist": "Bicep",
+      "artist_id": 369056,
+      "duration": 269
+     }
+    ]
+   }
+  },
+  {
+   "n": "a100",
+   "fuente": "youtube",
+   "titulo": "Adagio For Strings (Radio Edit)",
+   "artista": "Tiësto",
+   "duracion": 206,
+   "isrc": null,
+   "motivo": "Adagio For Strings (Radio Edit): la versión va en la consulta y el límite sube",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     132560802,
+     3212563611
+    ]
+   },
+   "antes": {
+    "id": 3212563611,
+    "artist": "Tiësto",
+    "title": "Adagio For Strings (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Tiësto\" track:\"adagio for strings\"": [],
+    "Tiësto adagio for strings": [
+     {
+      "id": 132560802,
+      "title": "Adagio For Strings",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 206
+     },
+     {
+      "id": 3212473641,
+      "title": "Adagio for Strings",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 443
+     },
+     {
+      "id": 3212433091,
+      "title": "Adagio For Strings (Original LP Version)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 573
+     },
+     {
+      "id": 3212504981,
+      "title": "Adagio for Strings (Blasterjaxx Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 413
+     },
+     {
+      "id": 3212439931,
+      "title": "Adagio For Strings (Phynn Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 499
+     },
+     {
+      "id": 1242298532,
+      "title": "Adagio For Strings (Throwback) [WYM358]",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 363
+     },
+     {
+      "id": 3212433101,
+      "title": "Adagio For Strings (Fred Baker Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 431
+     },
+     {
+      "id": 3212439921,
+      "title": "Adagio For Strings (Danjo & Styles Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 683
+     },
+     {
+      "id": 2196337157,
+      "title": "Adagio For Strings (Mixed)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 373
+     },
+     {
+      "id": 84087113,
+      "title": "Adagio For Strings (Blasterjaxx Edit)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 241
+     },
+     {
+      "id": 1218451902,
+      "title": "Adagio For Strings (ASOT 1000)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 349
+     },
+     {
+      "id": 70795069,
+      "title": "Adagio For Strings [Mix Cut] (Blasterjaxx Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 134
+     },
+     {
+      "id": 70253622,
+      "title": "Adagio For Strings [Mix Cut] (Blasterjaxx Remix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 138
+     },
+     {
+      "id": 85963059,
+      "title": "Adagio For Strings (Jack Eye Jones Festival Mix)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 276
+     },
+     {
+      "id": 672287212,
+      "title": "Adagio For Strings (WYM264)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 381
+     },
+     {
+      "id": 2768019211,
+      "title": "Adagio For Strings (ASOT 1170)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 405
+     },
+     {
+      "id": 1217255942,
+      "title": "Adagio For Strings (Mixed)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 76
+     },
+     {
+      "id": 8308935,
+      "title": "Vivaldica (Vivaldi; Spring)",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 413
+     },
+     {
+      "id": 2824321322,
+      "title": "tiesto adagio for strings",
+      "artist": "Lee Sang Gul",
+      "artist_id": 65185792,
+      "duration": 133
+     },
+     {
+      "id": 5184559,
+      "title": "Adagio for Strings (as made famous by Tiesto Chill Mix)",
+      "artist": "Freecastle Inc.",
+      "artist_id": 344265,
+      "duration": 493
+     },
+     {
+      "id": 2291378485,
+      "title": "Adagio For Strings (Inspired By Tiësto)",
+      "artist": "Dömény Krisztián",
+      "artist_id": 13205865,
+      "duration": 331
+     },
+     {
+      "id": 8308946,
+      "title": "EnTrance",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 339
+     },
+     {
+      "id": 8308938,
+      "title": "Overdose: UltraMax vs. Bach",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 440
+     },
+     {
+      "id": 8308940,
+      "title": "All You Need",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 485
+     },
+     {
+      "id": 8308944,
+      "title": "Evocations of Happiness",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 381
+     }
+    ],
+    "Tiësto adagio for strings radio edit": [
+     {
+      "id": 3212563611,
+      "title": "Adagio For Strings (Radio Edit)",
+      "artist": "Tiësto",
+      "artist_id": 434,
+      "duration": 205
+     },
+     {
+      "id": 8308939,
+      "title": "Arwen's Song (Radio Edit)",
+      "artist": "UltraMax",
+      "artist_id": 1070158,
+      "duration": 195
+     }
+    ]
+   }
+  },
+  {
+   "n": "a2",
+   "fuente": "youtube",
+   "titulo": "Lil Nas X - Old Town Road (Official Video) ft. Billy Ray Cyrus",
+   "artista": "Lil Nas X",
+   "duracion": 158,
+   "isrc": null,
+   "motivo": "Old Town Road ft. Billy Ray Cyrus: el aceptado no tiene al invitado y el Remix sí → nada",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     699056192
+    ]
+   },
+   "antes": {
+    "id": 699056192,
+    "artist": "Lil Nas X",
+    "title": "Old Town Road (feat. Billy Ray Cyrus) (Remix)"
+   },
+   "deezer": {
+    "artist:\"Lil Nas\" track:\"old town road\"": [],
+    "Lil Nas X old town road": [
+     {
+      "id": 699056192,
+      "title": "Old Town Road (feat. Billy Ray Cyrus) (Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 157
+     },
+     {
+      "id": 699056262,
+      "title": "Old Town Road",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 113
+     },
+     {
+      "id": 671579702,
+      "title": "Old Town Road (Diplo Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 204
+     },
+     {
+      "id": 711063052,
+      "title": "Old Town Road (feat. Billy Ray Cyrus, Young Thug & Mason Ramsey) (Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 171
+     },
+     {
+      "id": 670998062,
+      "title": "Old Town Road (8-Bit Lil Nas X & Billy Ray Cyrus Emulation)",
+      "artist": "8-Bit Arcade",
+      "artist_id": 5845951,
+      "duration": 158
+     },
+     {
+      "id": 688085582,
+      "title": "Old Town Road (Lil Nas X Cover Mix)",
+      "artist": "Rick Jayson",
+      "artist_id": 53691582,
+      "duration": 157
+     },
+     {
+      "id": 674499152,
+      "title": "Old Town Road (16-Bit Lil Nas X & Billy Ray Cyrus Emulation)",
+      "artist": "Arcade Player",
+      "artist_id": 14605457,
+      "duration": 155
+     },
+     {
+      "id": 664757572,
+      "title": "Old Town Road (Originally Performed by Lil Nas X feat. Billy Ray Cyrus) (Karaoke Version)",
+      "artist": "Cover Guru",
+      "artist_id": 377176,
+      "duration": 112
+     },
+     {
+      "id": 723050512,
+      "title": "Old Town Road (Originally Performed by Lil Nas X) [Instrumental]",
+      "artist": "Vox Freaks",
+      "artist_id": 12779911,
+      "duration": 114
+     },
+     {
+      "id": 2607776752,
+      "title": "Old Town Road (Originally Perfomed By Lil Nas X) (Melody Karaoke Version)",
+      "artist": "ZZang KARAOKE",
+      "artist_id": 248387262,
+      "duration": 155
+     }
+    ],
+    "Lil Nas old town road": [
+     {
+      "id": 699056262,
+      "title": "Old Town Road",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 113
+     },
+     {
+      "id": 699056192,
+      "title": "Old Town Road (feat. Billy Ray Cyrus) (Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 157
+     },
+     {
+      "id": 671579702,
+      "title": "Old Town Road (Diplo Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 204
+     },
+     {
+      "id": 711063052,
+      "title": "Old Town Road (feat. Billy Ray Cyrus, Young Thug & Mason Ramsey) (Remix)",
+      "artist": "Lil Nas X",
+      "artist_id": 15166511,
+      "duration": 171
+     },
+     {
+      "id": 670998062,
+      "title": "Old Town Road (8-Bit Lil Nas X & Billy Ray Cyrus Emulation)",
+      "artist": "8-Bit Arcade",
+      "artist_id": 5845951,
+      "duration": 158
+     },
+     {
+      "id": 688085582,
+      "title": "Old Town Road (Lil Nas X Cover Mix)",
+      "artist": "Rick Jayson",
+      "artist_id": 53691582,
+      "duration": 157
+     },
+     {
+      "id": 674499152,
+      "title": "Old Town Road (16-Bit Lil Nas X & Billy Ray Cyrus Emulation)",
+      "artist": "Arcade Player",
+      "artist_id": 14605457,
+      "duration": 155
+     },
+     {
+      "id": 664757572,
+      "title": "Old Town Road (Originally Performed by Lil Nas X feat. Billy Ray Cyrus) (Karaoke Version)",
+      "artist": "Cover Guru",
+      "artist_id": 377176,
+      "duration": 112
+     },
+     {
+      "id": 723050512,
+      "title": "Old Town Road (Originally Performed by Lil Nas X) [Instrumental]",
+      "artist": "Vox Freaks",
+      "artist_id": 12779911,
+      "duration": 114
+     },
+     {
+      "id": 2607776752,
+      "title": "Old Town Road (Originally Perfomed By Lil Nas X) (Melody Karaoke Version)",
+      "artist": "ZZang KARAOKE",
+      "artist_id": 248387262,
+      "duration": 155
+     }
+    ]
+   }
+  },
+  {
+   "n": "a26",
+   "fuente": "youtube",
+   "titulo": "Daft Punk - Get Lucky (Official Audio) ft. Pharrell Williams, Nile Rodgers",
+   "artista": "Daft Punk",
+   "duracion": 249,
+   "isrc": null,
+   "motivo": "Get Lucky (Official Audio) 249 s = Radio Edit 248 s, no el de 367 s → nada",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     66609426
+    ]
+   },
+   "antes": {
+    "id": 66609426,
+    "artist": "Daft Punk",
+    "title": "Get Lucky (Radio Edit - feat. Pharrell Williams and Nile Rodgers)"
+   },
+   "deezer": {
+    "artist:\"Daft Punk\" track:\"get lucky\"": [],
+    "Daft Punk get lucky": [
+     {
+      "id": 66609426,
+      "title": "Get Lucky (Radio Edit - feat. Pharrell Williams and Nile Rodgers)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 248
+     },
+     {
+      "id": 67238735,
+      "title": "Get Lucky (feat. Pharrell Williams and Nile Rodgers)",
+      "artist": "Daft Punk",
+      "artist_id": 27,
+      "duration": 367
+     },
+     {
+      "id": 68265035,
+      "title": "Get Lucky - Tribute to Daft Punk",
+      "artist": "Get Lucky",
+      "artist_id": 998222,
+      "duration": 248
+     },
+     {
+      "id": 1862307467,
+      "title": "Daft Punk Medley: One More Time / Harder, Better, Faster, Stronger / Technologic / Get Lucky / Digital Love",
+      "artist": "6erBlas",
+      "artist_id": 73334742,
+      "duration": 179
+     },
+     {
+      "id": 649202962,
+      "title": "Get Lucky (Daft Punk)",
+      "artist": "Charlie Parra Del Riego",
+      "artist_id": 5584181,
+      "duration": 222
+     },
+     {
+      "id": 825146922,
+      "title": "Get Lucky (Originally performed by Daft Punk)",
+      "artist": "Lowland",
+      "artist_id": 472973,
+      "duration": 290
+     },
+     {
+      "id": 1819285597,
+      "title": "Get Lucky",
+      "artist": "Daft Punk Experience",
+      "artist_id": 176017197,
+      "duration": 204
+     },
+     {
+      "id": 127409391,
+      "title": "Get Lucky (Lullaby Version of Daft Punk)",
+      "artist": "Twinkle Twinkle Little Rock Star",
+      "artist_id": 383307,
+      "duration": 222
+     },
+     {
+      "id": 87381241,
+      "title": "Get Lucky (Originally by Daft Punk) [Karaoke Version]",
+      "artist": "Thematic Pianos",
+      "artist_id": 1547232,
+      "duration": 250
+     },
+     {
+      "id": 86694785,
+      "title": "Get Lucky (Backing Track Minus Lead Guitar) [In the style of Daft Punk & Pharrell Williams]",
+      "artist": "Zoom Entertainments Limited",
+      "artist_id": 6448376,
+      "duration": 257
+     }
+    ]
+   }
+  },
+  {
+   "n": "a34",
+   "fuente": "youtube",
+   "titulo": "Simon & Garfunkel - The Sound of Silence (from The Concert in Central Park)",
+   "artista": "Simon & Garfunkel",
+   "duracion": 239,
+   "isrc": null,
+   "motivo": "The Sound of Silence (from The Concert in Central Park) es un vivo, no el de estudio",
+   "verdad": {
+    "estado": "none",
+    "ids": []
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Simon\" track:\"the sound of silence\"": [],
+    "artist:\"Garfunkel\" track:\"the sound of silence\"": [],
+    "Simon & Garfunkel the sound of silence": [
+     {
+      "id": 2468570,
+      "title": "The Sound Of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 183
+     },
+     {
+      "id": 15275985,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 680015062,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 679967372,
+      "title": "The Sound of Silence (Reprise)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 188
+     },
+     {
+      "id": 607843,
+      "title": "The Sound of Silence (Live at Madison Square Garden, New York, NY - December 2003)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 300
+     },
+     {
+      "id": 545033,
+      "title": "The Sound of Silence (Live at Lincoln Center, New York City, NY - January 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 205
+     },
+     {
+      "id": 70099780,
+      "title": "The Sound of Silence (Live at Southern Illinois University, Carbondale, IL - November 1969)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 233
+     },
+     {
+      "id": 394830442,
+      "title": "The Sound Of Silence (Live Broadcast 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 211
+     },
+     {
+      "id": 3503938641,
+      "title": "The Sound of Silence (live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 348
+     },
+     {
+      "id": 1088678012,
+      "title": "The Sound Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 257
+     },
+     {
+      "id": 909703492,
+      "title": "The Sound Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 357
+     },
+     {
+      "id": 1233493362,
+      "title": "The Sound Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 210
+     },
+     {
+      "id": 394830132,
+      "title": "The Sound Of Silence (Live 1970 FM Broadcast)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 246
+     },
+     {
+      "id": 895339062,
+      "title": "The Sound Of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 190
+     },
+     {
+      "id": 90409411,
+      "title": "The Sounds of Silence (Live at Central Park, New York, NY - September 19, 1981)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 256
+     },
+     {
+      "id": 94845532,
+      "title": "Simon & Garfunkel Medley: Sound of Silence / Scarborough Fair / April Come She Will (Live)",
+      "artist": "Naturally 7",
+      "artist_id": 9084,
+      "duration": 284
+     },
+     {
+      "id": 757964302,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel Experience",
+      "artist_id": 74334152,
+      "duration": 175
+     },
+     {
+      "id": 1869203397,
+      "title": "Simon & Garfunkel Impression: Sound of Silence / Bridge Over Troubled Water",
+      "artist": "Dick Bakker Orchestra",
+      "artist_id": 8901326,
+      "duration": 236
+     },
+     {
+      "id": 66619214,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel Revival Band",
+      "artist_id": 450613,
+      "duration": 196
+     },
+     {
+      "id": 63186699,
+      "title": "The Sound of Silence (Tribute to Simon & Garfunkel)",
+      "artist": "Michael Marc",
+      "artist_id": 4327235,
+      "duration": 214
+     },
+     {
+      "id": 1397942652,
+      "title": "The Sound Of Silence (Simon & Garfunkel Piano Cover)",
+      "artist": "Pierre j",
+      "artist_id": 5103831,
+      "duration": 222
+     },
+     {
+      "id": 354316671,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 210
+     },
+     {
+      "id": 2349357225,
+      "title": "The Sounds of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 283
+     },
+     {
+      "id": 2468575,
+      "title": "Anji",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 133
+     },
+     {
+      "id": 2468583,
+      "title": "Rose Of Aberdeen (Demo)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 119
+     }
+    ],
+    "Simon & Garfunkel the sound of silence from the concert in central park": [],
+    "Simon the sound of silence": [
+     {
+      "id": 2468570,
+      "title": "The Sound Of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 183
+     },
+     {
+      "id": 15275985,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 680015062,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 90409411,
+      "title": "The Sounds of Silence (Live at Central Park, New York, NY - September 19, 1981)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 256
+     },
+     {
+      "id": 679967372,
+      "title": "The Sound of Silence (Reprise)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 188
+     },
+     {
+      "id": 612001,
+      "title": "The Sound of Silence",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 186
+     },
+     {
+      "id": 607843,
+      "title": "The Sound of Silence (Live at Madison Square Garden, New York, NY - December 2003)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 300
+     },
+     {
+      "id": 557720862,
+      "title": "The Sound of Silence (Live at Webster Hall, New York City - June 2011)",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 274
+     },
+     {
+      "id": 750119282,
+      "title": "Simon: The Sound Of Silence (Arr. Lawson, Trueman)",
+      "artist": "Milos Karadaglic",
+      "artist_id": 4085106,
+      "duration": 166
+     },
+     {
+      "id": 545033,
+      "title": "The Sound of Silence (Live at Lincoln Center, New York City, NY - January 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 205
+     },
+     {
+      "id": 70099780,
+      "title": "The Sound of Silence (Live at Southern Illinois University, Carbondale, IL - November 1969)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 233
+     },
+     {
+      "id": 2313742,
+      "title": "The Sound Of Silence (Album Version)",
+      "artist": "All Angels",
+      "artist_id": 16673,
+      "duration": 244
+     },
+     {
+      "id": 6599401,
+      "title": "The Sound of Silence (Live at Central Park, New York, NY - August 15, 1991)",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 346
+     },
+     {
+      "id": 1178133182,
+      "title": "The Sound of Silence (Bonus Track)",
+      "artist": "Nick & Simon",
+      "artist_id": 317166,
+      "duration": 191
+     },
+     {
+      "id": 1191652762,
+      "title": "Sound Of Silence",
+      "artist": "Nick & Simon",
+      "artist_id": 317166,
+      "duration": 206
+     },
+     {
+      "id": 1223793762,
+      "title": "The Sounds Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 210
+     },
+     {
+      "id": 1199941652,
+      "title": "Sound Of Silence (Live in Carré)",
+      "artist": "Nick & Simon",
+      "artist_id": 317166,
+      "duration": 208
+     },
+     {
+      "id": 70132441,
+      "title": "The Sound of Silence (with The Jessy Dixon Singers & Urubamba) (Live 1973)",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 256
+     },
+     {
+      "id": 358224061,
+      "title": "The Sound of Silence (Live at Hyde Park, London, UK - July 2012)",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 265
+     },
+     {
+      "id": 3050311381,
+      "title": "The Sound Of Silence (Live 1991)",
+      "artist": "Paul Simon",
+      "artist_id": 1445,
+      "duration": 346
+     },
+     {
+      "id": 94845532,
+      "title": "Simon & Garfunkel Medley: Sound of Silence / Scarborough Fair / April Come She Will (Live)",
+      "artist": "Naturally 7",
+      "artist_id": 9084,
+      "duration": 284
+     },
+     {
+      "id": 963359872,
+      "title": "the sound of silence (remix)",
+      "artist": "simone lupino",
+      "artist_id": 62335222,
+      "duration": 135
+     },
+     {
+      "id": 757964302,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel Experience",
+      "artist_id": 74334152,
+      "duration": 175
+     },
+     {
+      "id": 394830442,
+      "title": "The Sound Of Silence (Live Broadcast 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 211
+     },
+     {
+      "id": 1869203397,
+      "title": "Simon & Garfunkel Impression: Sound of Silence / Bridge Over Troubled Water",
+      "artist": "Dick Bakker Orchestra",
+      "artist_id": 8901326,
+      "duration": 236
+     }
+    ],
+    "Garfunkel the sound of silence": [
+     {
+      "id": 2468570,
+      "title": "The Sound Of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 183
+     },
+     {
+      "id": 15275985,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 680015062,
+      "title": "The Sound of Silence (Acoustic Version)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 185
+     },
+     {
+      "id": 90409411,
+      "title": "The Sounds of Silence (Live at Central Park, New York, NY - September 19, 1981)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 256
+     },
+     {
+      "id": 679967372,
+      "title": "The Sound of Silence (Reprise)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 188
+     },
+     {
+      "id": 607843,
+      "title": "The Sound of Silence (Live at Madison Square Garden, New York, NY - December 2003)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 300
+     },
+     {
+      "id": 545033,
+      "title": "The Sound of Silence (Live at Lincoln Center, New York City, NY - January 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 205
+     },
+     {
+      "id": 70099780,
+      "title": "The Sound of Silence (Live at Southern Illinois University, Carbondale, IL - November 1969)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 233
+     },
+     {
+      "id": 3731916162,
+      "title": "The Sound of Silence",
+      "artist": "Art Garfunkel jr.",
+      "artist_id": 146820132,
+      "duration": 209
+     },
+     {
+      "id": 1223793762,
+      "title": "The Sounds Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 210
+     },
+     {
+      "id": 94845532,
+      "title": "Simon & Garfunkel Medley: Sound of Silence / Scarborough Fair / April Come She Will (Live)",
+      "artist": "Naturally 7",
+      "artist_id": 9084,
+      "duration": 284
+     },
+     {
+      "id": 757964302,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel Experience",
+      "artist_id": 74334152,
+      "duration": 175
+     },
+     {
+      "id": 394830442,
+      "title": "The Sound Of Silence (Live Broadcast 1967)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 211
+     },
+     {
+      "id": 1869203397,
+      "title": "Simon & Garfunkel Impression: Sound of Silence / Bridge Over Troubled Water",
+      "artist": "Dick Bakker Orchestra",
+      "artist_id": 8901326,
+      "duration": 236
+     },
+     {
+      "id": 3503938641,
+      "title": "The Sound of Silence (live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 348
+     },
+     {
+      "id": 1088678012,
+      "title": "The Sound Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 257
+     },
+     {
+      "id": 909703492,
+      "title": "The Sound Of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 357
+     },
+     {
+      "id": 66619214,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel Revival Band",
+      "artist_id": 450613,
+      "duration": 196
+     },
+     {
+      "id": 63186699,
+      "title": "The Sound of Silence (Tribute to Simon & Garfunkel)",
+      "artist": "Michael Marc",
+      "artist_id": 4327235,
+      "duration": 214
+     },
+     {
+      "id": 1397942652,
+      "title": "The Sound Of Silence (Simon & Garfunkel Piano Cover)",
+      "artist": "Pierre j",
+      "artist_id": 5103831,
+      "duration": 222
+     },
+     {
+      "id": 354316671,
+      "title": "The Sounds of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 210
+     },
+     {
+      "id": 2349357225,
+      "title": "The Sounds of Silence (Live)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 283
+     },
+     {
+      "id": 394830132,
+      "title": "The Sound Of Silence (Live 1970 FM Broadcast)",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 246
+     },
+     {
+      "id": 895339062,
+      "title": "The Sound Of Silence",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 190
+     },
+     {
+      "id": 2468575,
+      "title": "Anji",
+      "artist": "Simon & Garfunkel",
+      "artist_id": 2707,
+      "duration": 133
+     }
+    ]
+   }
+  },
+  {
+   "n": "a119",
+   "fuente": "youtube",
+   "titulo": "Ed Sheeran - 'Perfect' (Exclusive Live Session For Global's 'Make Some Noise')",
+   "artista": "Capital",
+   "duracion": 242,
+   "isrc": null,
+   "motivo": "'Perfect' (Exclusive Live Session…) no es 'Perfect (Live)'",
+   "verdad": {
+    "estado": "none",
+    "ids": []
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"Ed Sheeran\" track:\"perfect\"": [],
+    "Ed Sheeran perfect": [
+     {
+      "id": 142986206,
+      "title": "Perfect",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 263
+     },
+     {
+      "id": 435031622,
+      "title": "Perfect Duet (with Beyoncé)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 259
+     },
+     {
+      "id": 424036432,
+      "title": "Perfect (Acoustic)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 260
+     },
+     {
+      "id": 439222652,
+      "title": "Perfect Symphony (with Andrea Bocelli)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 265
+     },
+     {
+      "id": 4160175562,
+      "title": "Ed Sheeran-Perfect (Remix)",
+      "artist": "Ferrison",
+      "artist_id": 272837492,
+      "duration": 353
+     },
+     {
+      "id": 1385889942,
+      "title": "Ed Sheeran-Perfect (Chill hop Version)",
+      "artist": "Voyage",
+      "artist_id": 113217232,
+      "duration": 289
+     },
+     {
+      "id": 431576552,
+      "title": "Perfect (Robin Schulz Remix)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 249
+     },
+     {
+      "id": 424036012,
+      "title": "Perfect (Mike Perry Remix)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 221
+     },
+     {
+      "id": 3134389211,
+      "title": "Perfect (Live)",
+      "artist": "Ed Sheeran",
+      "artist_id": 384236,
+      "duration": 239
+     },
+     {
+      "id": 2969947571,
+      "title": "Perfect (Instrumental, Violin Version)",
+      "artist": "ViOLiNiA Zhanna Stelmakh",
+      "artist_id": 117804812,
+      "duration": 225
+     },
+     {
+      "id": 1138555982,
+      "title": "Perfect (Karaoke Version) [ Originally Performed by Ed Sheeran]",
+      "artist": "Il Laboratorio del Ritmo",
+      "artist_id": 1451476,
+      "duration": 260
+     },
+     {
+      "id": 524200842,
+      "title": "Perfect Ed Sheeran Beyoncé",
+      "artist": "Boyce Avenue",
+      "artist_id": 372617,
+      "duration": 257
+     },
+     {
+      "id": 2393216655,
+      "title": "Ed Sheeran - Perfect - Piano Cover",
+      "artist": "Ed Sheeran - Piano Covers",
+      "artist_id": 224018195,
+      "duration": 306
+     },
+     {
+      "id": 682733932,
+      "title": "Perfect (Ed Sheeran Piano Cover)",
+      "artist": "Steve Siu",
+      "artist_id": 3382221,
+      "duration": 258
+     },
+     {
+      "id": 365406801,
+      "title": "Perfect (In the Style of Ed Sheeran)",
+      "artist": "UK Top 40 Backing Tracks 2017",
+      "artist_id": 12489874,
+      "duration": 264
+     },
+     {
+      "id": 2085992197,
+      "title": "Perfect Exito De Ed Sheeran en Saxophone",
+      "artist": "SAXO MARAVILLOSO",
+      "artist_id": 168510847,
+      "duration": 250
+     },
+     {
+      "id": 712521842,
+      "title": "Perfect (Ed Sheeran) (Karaoke Version)",
+      "artist": "Fredo",
+      "artist_id": 74066792,
+      "duration": 268
+     },
+     {
+      "id": 401187862,
+      "title": "Perfect (Piano Rendition)",
+      "artist": "L'orchestra Cinematique",
+      "artist_id": 891594,
+      "duration": 293
+     },
+     {
+      "id": 470727462,
+      "title": "Perfect",
+      "artist": "Carmine De Martino",
+      "artist_id": 7952242,
+      "duration": 267
+     },
+     {
+      "id": 455608732,
+      "title": "Perfect",
+      "artist": "Acoustic Heartstrings",
+      "artist_id": 14175089,
+      "duration": 250
+     },
+     {
+      "id": 4281695072,
+      "title": "Ed Sheeran Perfect",
+      "artist": "Astiyan",
+      "artist_id": 94025292,
+      "duration": 248
+     },
+     {
+      "id": 3145023721,
+      "title": "Perfect Ed Sheeran",
+      "artist": "Any Lilior",
+      "artist_id": 294019941,
+      "duration": 153
+     },
+     {
+      "id": 4233704052,
+      "title": "Perfect_-_Ed_Sheeran",
+      "artist": "IRON VEX",
+      "artist_id": 388553651,
+      "duration": 273
+     },
+     {
+      "id": 2932107411,
+      "title": "Your Perfect World (Ed Sheeran Version)",
+      "artist": "Pfv",
+      "artist_id": 5145244,
+      "duration": 138
+     },
+     {
+      "id": 3571678791,
+      "title": "Shape of You",
+      "artist": "Melodi-fi",
+      "artist_id": 345357601,
+      "duration": 254
+     }
+    ],
+    "Ed Sheeran perfect exclusive live session for globals make some noise": []
+   }
+  },
+  {
+   "n": "a115",
+   "fuente": "soundcloud",
+   "titulo": "Bound 2 (Album Version (Explicit))",
+   "artista": "Kanye West",
+   "duracion": 30.0,
+   "isrc": "USUM71307523",
+   "motivo": "Bound 2 (Album Version (Explicit)): paréntesis anidados = original",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     68350113
+    ]
+   },
+   "antes": {
+    "id": 68350113,
+    "artist": "Kanye West",
+    "title": "Bound 2"
+   },
+   "deezer": {
+    "artist:\"Kanye West\" track:\"bound 2\"": [],
+    "Kanye West bound 2": [
+     {
+      "id": 68350113,
+      "title": "Bound 2",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 229
+     },
+     {
+      "id": 1098066,
+      "title": "The Bounce",
+      "artist": "JAY Z",
+      "artist_id": 1309,
+      "duration": 258
+     },
+     {
+      "id": 1365899322,
+      "title": "Bound 2 (Kanye West)",
+      "artist": "Lon tha Don",
+      "artist_id": 15057999,
+      "duration": 112
+     },
+     {
+      "id": 475324172,
+      "title": "Only One / Christmas In Harlem / Bound 2 / Dark Fantasy",
+      "artist": "Nicholas Yee",
+      "artist_id": 11727517,
+      "duration": 245
+     },
+     {
+      "id": 76803450,
+      "title": "Bound 2 (Tribute to Kanye West)",
+      "artist": "Bugatti Flow",
+      "artist_id": 5611201,
+      "duration": 255
+     },
+     {
+      "id": 73597027,
+      "title": "Bound 2 - Ringtone Tribute to Kanye West",
+      "artist": "2013 Ringtone Legends",
+      "artist_id": 5029218,
+      "duration": 30
+     },
+     {
+      "id": 74977974,
+      "title": "Bound 2 (In the Style of Kanye West) [Karaoke Version]",
+      "artist": "Karaoke Pop Stars",
+      "artist_id": 5208713,
+      "duration": 230
+     },
+     {
+      "id": 73693411,
+      "title": "Bound 2 (In the Style of Kanye West) [Instrumental Karaoke Version]",
+      "artist": "Off The Record Instrumentals",
+      "artist_id": 1040895,
+      "duration": 229
+     },
+     {
+      "id": 89957161,
+      "title": "Bound 2 (Instrumental Karaoke Version) [In the Style of Kanye West feat. Charlie Wilson]",
+      "artist": "K-Hitz!",
+      "artist_id": 5329531,
+      "duration": 207
+     }
+    ],
+    "Kanye West bound 2 album version": [],
+    "isrc:USUM71307523": [
+     {
+      "id": 68350113,
+      "title": "Bound 2",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 229
+     }
+    ]
+   }
+  },
+  {
+   "n": "a10",
+   "fuente": "youtube",
+   "titulo": "björk : army of me (HD)",
+   "artista": "björk",
+   "duracion": 267,
+   "isrc": null,
+   "motivo": "björk : army of me (HD): separador ' : '",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     2629694162
+    ]
+   },
+   "antes": {
+    "id": 2629551712,
+    "artist": "Björk",
+    "title": "Army Of Me (ABA All-Stars Mix)"
+   },
+   "deezer": {
+    "artist:\"björk\" track:\"army of me\"": [],
+    "björk army of me": [
+     {
+      "id": 2629694162,
+      "title": "Army Of Me",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 234
+     },
+     {
+      "id": 2629551732,
+      "title": "Army Of Me (Sucker Punch Remix)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 279
+     },
+     {
+      "id": 2629697262,
+      "title": "Army Of Me (Live)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 244
+     },
+     {
+      "id": 2629697622,
+      "title": "Army Of Me",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 318
+     },
+     {
+      "id": 2629551712,
+      "title": "Army Of Me (ABA All-Stars Mix)",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 233
+     },
+     {
+      "id": 2259094817,
+      "title": "Sweet Intuition",
+      "artist": "Björk",
+      "artist_id": 630,
+      "duration": 283
+     },
+     {
+      "id": 502480552,
+      "title": "Take Good Care Of Your Children",
+      "artist": "Agnetha Fältskog",
+      "artist_id": 8240,
+      "duration": 225
+     },
+     {
+      "id": 1913594157,
+      "title": "Army Of Me (Bjork)",
+      "artist": "Elephant Music",
+      "artist_id": 8075127,
+      "duration": 141
+     },
+     {
+      "id": 123463812,
+      "title": "Army of Me",
+      "artist": "Midnite String Quartet",
+      "artist_id": 5174833,
+      "duration": 229
+     },
+     {
+      "id": 635344822,
+      "title": "Army of Me",
+      "artist": "Vitamin String Quartet",
+      "artist_id": 275309,
+      "duration": 186
+     }
+    ]
+   }
+  },
+  {
+   "n": "a44",
+   "fuente": "youtube",
+   "titulo": "M83 'Midnight City' Official video",
+   "artista": "M83",
+   "duracion": 244,
+   "isrc": null,
+   "motivo": "M83 'Midnight City' Official video: título entre comillas",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     92198180
+    ]
+   },
+   "antes": null,
+   "deezer": {
+    "artist:\"M83\" track:\"midnight city\"": [],
+    "M83 midnight city": [
+     {
+      "id": 92198180,
+      "title": "Midnight City",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 244
+     },
+     {
+      "id": 67878055,
+      "title": "M83 - Midnight City (Instrumental Version)",
+      "artist": "Party Machine",
+      "artist_id": 3076211,
+      "duration": 219
+     },
+     {
+      "id": 139691215,
+      "title": "Midnight City (Eric Prydz Private Remix)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 362
+     },
+     {
+      "id": 92198184,
+      "title": "Midnight City (Trentemoller Remix)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 449
+     },
+     {
+      "id": 92198186,
+      "title": "Midnight City (Man Without Country Remix)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 253
+     },
+     {
+      "id": 92198182,
+      "title": "Midnight City (Big Black Delta Remix)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 220
+     },
+     {
+      "id": 92198188,
+      "title": "Midnight City (Team Ghost Remix)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 238
+     },
+     {
+      "id": 1382312382,
+      "title": "Midnight City (Trentemøller Remix) (Mixed)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 181
+     },
+     {
+      "id": 3490575631,
+      "title": "M83 Midnight City dfx remix",
+      "artist": "DFX",
+      "artist_id": 1045670,
+      "duration": 253
+     },
+     {
+      "id": 527570981,
+      "title": "Run Into Flowers (Midnight Fuck Remix by Jackson)",
+      "artist": "M83",
+      "artist_id": 678,
+      "duration": 451
+     }
+    ]
+   }
+  },
+  {
+   "n": "a112",
+   "fuente": "youtube",
+   "titulo": "Kanye West- Stronger (Explicit)",
+   "artista": "uploader",
+   "duracion": 316,
+   "isrc": null,
+   "motivo": "Kanye West- Stronger (Explicit): guion pegado al artista",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     1178682
+    ]
+   },
+   "antes": {
+    "id": 1178682,
+    "artist": "Kanye West",
+    "title": "Stronger"
+   },
+   "deezer": {
+    "artist:\"Kanye West\" track:\"stronger\"": [],
+    "Kanye West stronger": [
+     {
+      "id": 1178682,
+      "title": "Stronger",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 312
+     },
+     {
+      "id": 58015861,
+      "title": "Kanye West - Stronger (Instrumental Version)",
+      "artist": "DJ Playback",
+      "artist_id": 3238641,
+      "duration": 276
+     },
+     {
+      "id": 68350110,
+      "title": "Blood On The Leaves",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 359
+     },
+     {
+      "id": 4338812,
+      "title": "Stronger (as made famous by Kanye West)",
+      "artist": "Hip Hop Chart Toppers",
+      "artist_id": 299392,
+      "duration": 315
+     },
+     {
+      "id": 12708380,
+      "title": "Stronger (Workout Remix + 135 BPM) (As Made Famous by Kanye West)",
+      "artist": "My Workout DJ",
+      "artist_id": 1371397,
+      "duration": 285
+     },
+     {
+      "id": 1495056442,
+      "title": "Stronger (16-Bit Kanye West Emulation)",
+      "artist": "Arcade Player",
+      "artist_id": 14605457,
+      "duration": 310
+     },
+     {
+      "id": 1178683,
+      "title": "Can't Tell Me Nothing",
+      "artist": "Kanye West",
+      "artist_id": 230,
+      "duration": 274
+     },
+     {
+      "id": 346509651,
+      "title": "Stronger",
+      "artist": "Vitamin String Quartet",
+      "artist_id": 275309,
+      "duration": 221
+     },
+     {
+      "id": 2758006331,
+      "title": "Stronger Kanye West",
+      "artist": "Aiden Yoo",
+      "artist_id": 236089191,
+      "duration": 161
+     },
+     {
+      "id": 2798388182,
+      "title": "Stronger Kanye West",
+      "artist": "Lee Sang Gul",
+      "artist_id": 65185792,
+      "duration": 133
+     }
+    ]
+   }
+  },
+  {
+   "n": "a141",
+   "fuente": "soundcloud",
+   "titulo": "10.Avicii - Levels (Radio Edit)",
+   "artista": "uploader",
+   "duracion": 198.263,
+   "isrc": null,
+   "motivo": "10.Avicii - Levels (Radio Edit): número de pista pegado",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     14383880
+    ]
+   },
+   "antes": {
+    "id": 14383880,
+    "artist": "Avicii",
+    "title": "Levels (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Avicii\" track:\"levels\"": [],
+    "Avicii levels": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383881,
+      "title": "Levels (Original Version)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 339
+     },
+     {
+      "id": 3276239401,
+      "title": "Avicii - Levels ('Aro Remix)",
+      "artist": "'ARO",
+      "artist_id": 91649272,
+      "duration": 217
+     },
+     {
+      "id": 15421140,
+      "title": "Levels (Skrillex Remix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 281
+     },
+     {
+      "id": 15421142,
+      "title": "Levels (Cazzette's NYC Mode Radio Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 218
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 15421141,
+      "title": "Levels (Cazzette's NYC Mode Mix)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 354
+     },
+     {
+      "id": 15175255,
+      "title": "Levels",
+      "artist": "Avicii Cover Band",
+      "artist_id": 1540054,
+      "duration": 205
+     },
+     {
+      "id": 98143616,
+      "title": "Levels By Avicii And Skrilex Remix Meets Metal",
+      "artist": "Erock",
+      "artist_id": 5382499,
+      "duration": 249
+     },
+     {
+      "id": 3551971881,
+      "title": "Avici Levels (Remix)",
+      "artist": "Law-Dj",
+      "artist_id": 343751811,
+      "duration": 272
+     },
+     {
+      "id": 58252091,
+      "title": "Levels (Original von Avicii)",
+      "artist": "Pop Kidz",
+      "artist_id": 3893081,
+      "duration": 196
+     },
+     {
+      "id": 516175152,
+      "title": "I Could Be the One / Levels (Tribute to Avicii)",
+      "artist": "Mark Lanzetta",
+      "artist_id": 5206973,
+      "duration": 290
+     },
+     {
+      "id": 393460732,
+      "title": "Without You",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 181
+     },
+     {
+      "id": 65190853,
+      "title": "Outer Level (Eduardo De Rosa Remix)",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 309
+     },
+     {
+      "id": 65190855,
+      "title": "Outer Level",
+      "artist": "Aaron Smith",
+      "artist_id": 7887,
+      "duration": 441
+     },
+     {
+      "id": 63058828,
+      "title": "Levels (Originally By Avicil)",
+      "artist": "DJ Covers",
+      "artist_id": 1623221,
+      "duration": 339
+     },
+     {
+      "id": 724740712,
+      "title": "Levels (Piano Arrangement)",
+      "artist": "Niko Kotoulas",
+      "artist_id": 8146056,
+      "duration": 151
+     },
+     {
+      "id": 855966182,
+      "title": "Pearls",
+      "artist": "Kandace Springs",
+      "artist_id": 6646688,
+      "duration": 284
+     },
+     {
+      "id": 397709022,
+      "title": "Leaves in the Stream (feat. Alissa White-Gluz)",
+      "artist": "Aurelio Voltaire",
+      "artist_id": 1931811,
+      "duration": 230
+     },
+     {
+      "id": 850590312,
+      "title": "When she Leaves",
+      "artist": "Javier Girotto",
+      "artist_id": 471152,
+      "duration": 421
+     },
+     {
+      "id": 4062685181,
+      "title": "Levels (For Avicii)",
+      "artist": "Crow",
+      "artist_id": 184688,
+      "duration": 225
+     },
+     {
+      "id": 4078968061,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 248
+     },
+     {
+      "id": 115174420,
+      "title": "Levels (Inspired by Avicii)",
+      "artist": "DJ Mat",
+      "artist_id": 94821822,
+      "duration": 227
+     },
+     {
+      "id": 3857974611,
+      "title": "Avicii Levels Bootleg",
+      "artist": "Heartless boyz musiq",
+      "artist_id": 200075247,
+      "duration": 310
+     },
+     {
+      "id": 3592399252,
+      "title": "Levels (Ode to Avicii)",
+      "artist": "Misterioso",
+      "artist_id": 1605914,
+      "duration": 246
+     }
+    ],
+    "Avicii levels radio edit": [
+     {
+      "id": 14383880,
+      "title": "Levels (Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     },
+     {
+      "id": 14383882,
+      "title": "Levels (Instrumental Radio Edit)",
+      "artist": "Avicii",
+      "artist_id": 293585,
+      "duration": 199
+     }
+    ]
+   }
+  },
+  {
+   "n": "a97",
+   "fuente": "soundcloud",
+   "titulo": "Eric prydz - pjanoo radio edit",
+   "artista": "uploader",
+   "duracion": 157.478,
+   "isrc": null,
+   "motivo": "Eric prydz - pjanoo radio edit: versión sin paréntesis",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     144535404
+    ]
+   },
+   "antes": {
+    "id": 144535404,
+    "artist": "Eric Prydz",
+    "title": "Pjanoo (Radio Edit)"
+   },
+   "deezer": {
+    "artist:\"Eric prydz\" track:\"pjanoo\"": [],
+    "Eric prydz pjanoo": [
+     {
+      "id": 144535404,
+      "title": "Pjanoo (Radio Edit)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 157
+     },
+     {
+      "id": 144535406,
+      "title": "Pjanoo (Club Mix)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 450
+     },
+     {
+      "id": 28883351,
+      "title": "Pjanoo (Eric's Intro Edit)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 359
+     },
+     {
+      "id": 144535408,
+      "title": "Pjanoo (High Contrast Remix)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 424
+     },
+     {
+      "id": 144535412,
+      "title": "Pjanoo (Fred Falke Remix)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 384
+     },
+     {
+      "id": 144535414,
+      "title": "Pjanoo (Guy J Remix)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 170
+     },
+     {
+      "id": 144535048,
+      "title": "Pjanoo (Afterlife Remix)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 338
+     },
+     {
+      "id": 1092960572,
+      "title": "Eric Prydz-Pjanoo [Radio Edit] (GuruTech Remix)",
+      "artist": "GuruTech",
+      "artist_id": 72401432,
+      "duration": 179
+     },
+     {
+      "id": 16008508,
+      "title": "Pjanoo (Karaoke Version) (Originally Performed By Eric Prydz)",
+      "artist": "Amazing Karaoke",
+      "artist_id": 1528045,
+      "duration": 159
+     }
+    ],
+    "Eric prydz pjanoo radio edit": [
+     {
+      "id": 144535404,
+      "title": "Pjanoo (Radio Edit)",
+      "artist": "Eric Prydz",
+      "artist_id": 30,
+      "duration": 157
+     },
+     {
+      "id": 1092960572,
+      "title": "Eric Prydz-Pjanoo [Radio Edit] (GuruTech Remix)",
+      "artist": "GuruTech",
+      "artist_id": 72401432,
+      "duration": 179
+     }
+    ]
+   }
+  },
+  {
+   "n": "a106",
+   "fuente": "youtube",
+   "titulo": "Another Brick in the Wall, Pt. 1",
+   "artista": "Pink Floyd",
+   "duracion": 193,
+   "isrc": null,
+   "motivo": "Another Brick in the Wall, Pt. 1 no es Pt. 2",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     116914090
+    ]
+   },
+   "antes": {
+    "id": 116914090,
+    "artist": "Pink Floyd",
+    "title": "Another Brick in the Wall, Pt. 1"
+   },
+   "deezer": {
+    "artist:\"Pink Floyd\" track:\"another brick in the wall pt 1\"": [],
+    "Pink Floyd another brick in the wall pt 1": [
+     {
+      "id": 116914090,
+      "title": "Another Brick in the Wall, Pt. 1",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 191
+     },
+     {
+      "id": 116914094,
+      "title": "Another Brick in the Wall, Pt. 2",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 238
+     },
+     {
+      "id": 116914108,
+      "title": "Another Brick in the Wall, Pt. 3",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 74
+     },
+     {
+      "id": 1520204672,
+      "title": "Another Brick in the Wall, (Pt. 2) (Live)",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 427
+     },
+     {
+      "id": 3445419981,
+      "title": "Happiest Days of our Lives > Another Brick in the Wall (Pts. 1 & 2) (Live At The Keswick)",
+      "artist": "The Machine Performs Pink Floyd",
+      "artist_id": 391530,
+      "duration": 403
+     },
+     {
+      "id": 4051822001,
+      "title": "Another Brick in the Wall, Pt. 2",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 238
+     },
+     {
+      "id": 116914284,
+      "title": "Another Brick in the Wall, Pt. 2",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 241
+     },
+     {
+      "id": 116914070,
+      "title": "Another Brick in the Wall, Pt. 2 (Live)",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 329
+     },
+     {
+      "id": 116926568,
+      "title": "Another Brick in the Wall, Pt. 2",
+      "artist": "Pink Floyd",
+      "artist_id": 860,
+      "duration": 238
+     },
+     {
+      "id": 15375842,
+      "title": "Another Brick in the Wall, Pt. 1, 2, 3 (Pink Floyd Cover)",
+      "artist": "KoЯn",
+      "artist_id": 1327,
+      "duration": 428
+     }
+    ]
+   }
+  },
+  {
+   "n": "a60",
+   "fuente": "youtube",
+   "titulo": "Boris Brejcha - Gravity feat. Laura Korinth (Visualizer Video) [Ultra Music]",
+   "artista": "Ultra Records",
+   "duracion": 217,
+   "isrc": null,
+   "motivo": "Gravity (Visualizer) 217 s = Gravity (Edit) 216 s, no el de 564 s → nada",
+   "verdad": {
+    "estado": "en_deezer",
+    "ids": [
+     699067122
+    ]
+   },
+   "antes": {
+    "id": 699067122,
+    "artist": "Boris Brejcha",
+    "title": "Gravity (feat. Laura Korinth) (Edit)"
+   },
+   "deezer": {
+    "artist:\"Boris Brejcha\" track:\"gravity\"": [],
+    "Boris Brejcha gravity": [
+     {
+      "id": 699067122,
+      "title": "Gravity (feat. Laura Korinth) (Edit)",
+      "artist": "Boris Brejcha",
+      "artist_id": 133863,
+      "duration": 216
+     },
+     {
+      "id": 759015342,
+      "title": "Gravity (feat. Laura Korinth)",
+      "artist": "Boris Brejcha",
+      "artist_id": 133863,
+      "duration": 564
+     },
+     {
+      "id": 699067132,
+      "title": "Gravity (feat. Laura Korinth) (Nick Schwenderling Piano Edit)",
+      "artist": "Boris Brejcha",
+      "artist_id": 133863,
+      "duration": 166
+     },
+     {
+      "id": 2722493472,
+      "title": "Pictures Of You",
+      "artist": "Anyma",
+      "artist_id": 1014142,
+      "duration": 175
+     }
+    ]
+   }
+  }
+ ],
+ "descripcion_hallazgos": "Casos de la auditoría de f33 (160 entradas reales nuevas, 2026-09-29): cada uno con el motivo, la verdad etiquetada a mano (ids de Deezer que es correcto aceptar; 'none' = no hay que aceptar nada) y las respuestas de Deezer grabadas. Uploaders personales reemplazados por 'uploader' donde el título ya trae el artista."
 }
