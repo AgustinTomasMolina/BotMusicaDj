@@ -33,9 +33,10 @@ Solo stdlib (unicodedata, re): no agrega dependencias. Lo único con red es
 from __future__ import annotations
 
 import logging
+import math
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 logger = logging.getLogger("track_identity")
 
@@ -48,14 +49,32 @@ _CHANNEL_SUFFIX = re.compile(r"\s*-\s*topic\s*$|\s*vevo\s*$|\s*official\s*$", re
 _VERSION_KW = re.compile(
     r"remix|\bmix\b|\bedit\b|\bvip\b|bootleg|\bflip\b|rework|version|instrumental|a\s?capp?ella|"
     r"acoustic|sped\s*up|slowed|nightcore|\b8d\b|bass\s*boosted|\blive\b|en\s+vivo|\bconcert\b|remaster|"
-    r"\bdub\b|\bdemo\b", re.I)
+    r"\bdub\b|\bdemo\b|\boriginal\b", re.I)
 # Palabras de ruido del upload (el diseño §8.3): un paréntesis que las tiene y no habla de
 # versión se descarta entero ("(Last Night in Vegas Visual)", "(Official Video - 4K)").
 _NOISE = re.compile(
     r"official|oficial|\bvideo\b|\bv[ií]deo\b|\baudio\b|\blyrics?\b|\bletra\b|visuali[sz]er|\bvisual\b|"
     r"\bhd\b|\bhq\b|\b4k\b|\bmv\b|\bm/v\b|out\s+now|free\s*d(?:ownload|l)|premiere|\bexplicit\b|"
     r"\bclip\b|full\s*album|music\s*video|subtitulad|con\s+letra|\bprod\b|produced\s+by|^\s*from\b|"
-    r"^\s*\d{4}\s*$|^\s*(?:19|20)\d{2}\b", re.I)
+    r"^\s*\d{4}\s*$|^\s*(?:19|20)\d{2}\b|\bdir\.?\s+by\b|directed\s+by|performance\s+ver|"
+    r"dance\s+(?:practice|performance)", re.I)
+# Lo que viene después de " | " y dice evento, vivo, versión o año: el upload es OTRA cosa que
+# el tema de estudio ("Coldplay - Fix You | Glastonbury 2024" es el vivo de 7:47).
+_EVENT = re.compile(
+    r"\b(?:19|20)\d{2}\b|festival|glastonbury|coachella|tomorrowland|lollapalooza|\btour\b|\bgira\b|"
+    r"concierto|\bsessions?\b|boiler\s*room|tiny\s*desk|\bkexp\b|\bawards?\b|\bstage\b|\ben\s+vivo\b", re.I)
+_STRONG_VERSION = re.compile(
+    r"\blive\b|remix|\bmix\b|\bedit\b|acoustic|instrumental|a\s?capp?ella|sped\s*up|slowed|nightcore|"
+    r"bootleg|\bvip\b|\bcover\b", re.I)
+# [..] que es sello, catálogo o género (no título): "[Monstercat Release]", "[KNTXT010]", "[Techno]".
+_LABEL_BRACKET = re.compile(
+    r"records?|recordings|\bmusic\b|release|label|exclusive|\bep\b|\blp\b|album|single|\bfree\b|\bdl\b|"
+    r"download|premiere|out\s+now|^\s*[A-Za-z]{2,}\s?-?\d{2,}\s*$|^\s*(?:hard\s+)?(?:techno|house|trance|dnb|"
+    r"drum\s*(?:&|and|n)\s*bass|dubstep|hardstyle|psytrance|edm|electronic|minimal|progressive|bounce|"
+    r"hardcore|garage|breakbeat|trap|phonk)\s*$", re.I)
+# Palabras que en un "artista" dicen que no es el artista (tributos, covers, karaoke…).
+_NOT_THE_ARTIST = {"tribute", "cover", "covers", "band", "karaoke", "orchestra", "quartet", "experience",
+                   "players", "piano", "lullaby", "arcade", "emulation", "ringtone", "ringtones", "singers"}
 _GROUP = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
 _FEAT_GROUP = re.compile(r"[\(\[]([^\(\)\[\]]*?)[\s,\-–]*\b(?:feat\.?|ft\.?|featuring)\s+([^\(\)\[\]]+)[\)\]]", re.I)
 _FEAT = re.compile(r"\s*\b(?:feat\.?|ft\.?|featuring)\s+([^\(\)\[\]\-–—|]+)", re.I)
@@ -66,7 +85,7 @@ _ARTIST_TITLE_SEP = re.compile(r"\s+[-–—]\s*|\s*[-–—]\s+|\s+:\s+")
 # Ruido suelto al final del título, sin paréntesis: "M83 'Midnight City' Official video".
 _TRAILING_NOISE = re.compile(
     r"\s*[-|]?\s*\b(?:official\s+(?:music\s+)?(?:video|audio|visuali[sz]er|lyric\s+video|mv)|"
-    r"(?:official\s+)?lyric\s+video|music\s+video|official\s+mv|official|premiere)\s*$", re.I)
+    r"(?:official\s+)?lyric\s+video|music\s+video|official\s+mv|official|premiere|m/v|mv)\s*$", re.I)
 # Prefijo de número de pista de un vinilo/álbum: "10. Tema", "10.Tema", "B1. Tema", "A2) Tema".
 _TRACK_PREFIX = re.compile(r"^\s*[A-Da-d]?\d{1,2}\s*[.)]\s*(?=[^\d\s.])")
 # Versión escrita sin paréntesis ni guion al final: "pjanoo radio edit".
@@ -140,7 +159,10 @@ def version_of(text: str) -> str | None:
             return canon
     # Un vivo es UNA grabación: "(Live)" no es "(Live at Wembley)" ni "(Live Session For…)".
     if re.search(r"\blive\b|\ben vivo\b|\bconcert\b", t):
-        return "live:" + re.sub(r"\s+", " ", re.sub(r"\blive\b|\ben vivo\b", " ", t)).strip()
+        detail = re.sub(r"\s+", " ", re.sub(r"\blive\b|\ben vivo\b", " ", t)).strip()
+        # El año no distingue si queda otro dato ("Live Aid 1985" = "Live Aid"); solo, sí ("Live 1991").
+        sin_anio = re.sub(r"\s+", " ", re.sub(r"\b(?:19|20)\d{2}\b", " ", detail)).strip()
+        return "live:" + (sin_anio or detail)
     # 2) Remix / bootleg / flip / rework de alguien: otra obra.
     m = re.search(r"^(.*?)\b(remix|bootleg|flip|rework)\b", t)
     if m:
@@ -189,18 +211,28 @@ class Identity:
 def _clean_title(t: str | None) -> str:
     """Saca del título el ruido del upload y nada más (el resto es parte del título)."""
     t = unicodedata.normalize("NFKC", t or "")            # （…） de ancho completo → (…)
-    t = re.sub(r"#\w+", " ", t)
+    t = re.sub(r"#[^\W\d]\w*", " ", t)                    # "#techno" es ruido; "#52" es parte del título
     t = re.sub(r"\.(?:mp3|wav|flac|m4a|aiff?|ogg)\s*$", "", t, flags=re.I)
     t = re.sub(r"^\s*premiere\s*[:\-|–]\s*", "", t, flags=re.I)
     t = re.sub(r"\bfree\s*d(?:ownload|l)\b|<3", " ", t, flags=re.I)
     t = _TRACK_PREFIX.sub("", t)
-    # Grupos de adentro hacia afuera: (..)/[..] con ruido y sin versión → afuera; [..] sin
-    # versión = sello / catálogo / "OUT NOW" → afuera. Los demás (…) quedan: son del título.
+    # Grupos de adentro hacia afuera: (..)/[..] con ruido y sin versión → afuera; [..] de sello,
+    # catálogo, género u "OUT NOW", o puesto después de otro grupo ("(Original Mix) [Filth on
+    # Acid]") → afuera. Los demás quedan: son del título ("Creep [Part 2]", "(Nuxx)").
+    def _inner(m):
+        g = m.group(1)
+        if _VERSION_KW.search(g):
+            return m.group(0)
+        if _NOISE.search(g):
+            return " "
+        if m.group(0).startswith("[") and (
+                _LABEL_BRACKET.search(g) or m.string[:m.start()].rstrip().endswith((")", "]"))
+                or (len(g.split()) == 1 and not re.search(r"\d", g))):     # "[Drumcode]": una marca
+            return " "
+        return "\x00" + g + "\x01"
+
     for _ in range(3):
-        t = _INNER_GROUP.sub(
-            lambda m: m.group(0) if _VERSION_KW.search(m.group(1))
-            else (" " if (m.group(0).startswith("[") or _NOISE.search(m.group(1))) else "\x00" + m.group(1) + "\x01"),
-            t)
+        t = _INNER_GROUP.sub(_inner, t)
     t = t.replace("\x00", "(").replace("\x01", ")")
     t = re.sub(r"\s*[\(\[]\s*[\)\]]", " ", t)
     t = re.sub(r"\s+", " ", t).strip(" -–—|")
@@ -225,6 +257,7 @@ def _alt_titles(base: str) -> frozenset:
 def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, str, frozenset, str, str, frozenset]:
     """(título base normalizado, versión, invitados, título para consultar, versión escrita,
     títulos alternativos)."""
+    t = t.strip().strip("'\"‘’“”").strip()          # "BLACKPINK - ‘뚜두뚜두 (DDU-DU DDU-DU)’"
     feat: set = set()
 
     def _feat_in_group(m):
@@ -268,14 +301,18 @@ def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, s
         if version == "original":
             version, version_text = version_of(m.group(1)), m.group(1)
         base = base[:m.start()]
+    # "Matador Remasterizado 2008", "De Música Ligera Remasterizado 2007": el original, sin paréntesis.
+    base = re.sub(r"\s(?:remasterizad[oa]|remastered|remaster)(?:\s+(?:19|20)\d{2})?\s*$", " ", base, flags=re.I)
     return (normalize(base), version, frozenset(feat), query_text(base), query_text(version_text),
             _alt_titles(re.sub(r"\s+", " ", base)))
 
 
-def _make(artist_field: str, song: str) -> Identity:
+def _make(artist_field: str, song: str, extra_alts: frozenset = frozenset()) -> Identity:
     artist_field = unicodedata.normalize("NFKC", artist_field or "")
     arts = split_artists(artist_field)
     base, version, feat, qt, vt, alts = _title_and_version(song, arts)
+    if extra_alts:
+        alts = frozenset(alts | extra_alts | {base}) - {""}
     names = tuple(n for n in _artist_names(artist_field) if normalize(n))
     return Identity(arts, base, version, feat, names,
                     _CHANNEL_SUFFIX.sub("", _strip_artist_groups(artist_field)).strip(), qt, vt, alts)
@@ -286,30 +323,57 @@ def _same_artist_text(a: str, b: str) -> bool:
     return bool(x and y) and (bool(x & y) or {n.replace(" ", "") for n in x} == {n.replace(" ", "") for n in y})
 
 
+def _split_sides(t: str, uploader: str) -> tuple[str, str] | None:
+    parts = _ARTIST_TITLE_SEP.split(t, maxsplit=1)
+    if len(parts) == 2 and normalize(parts[0]) and normalize(parts[1]):
+        return parts[0], parts[1]
+    return None
+
+
 def parse_entry(title: str, uploader: str) -> Identity:
     """Identidad de un resultado de YouTube/SoundCloud: el título manda ("Artista - Tema");
     si no trae artista, el artista es el uploader (sin " - Topic")."""
     t = _clean_title(title)
-    # "Artista「Tema」" (Japón) y "Artista 'Tema'" / "Artista "Tema"" (videos oficiales).
-    m = (re.fullmatch(r"(?P<a>[^「『]+?)\s*[「『](?P<t>[^」』]+)[」』]\s*(?P<r>.*)", t)
-         or re.fullmatch(r"(?P<a>[^'\"“‘]+?)\s+[\"“'‘](?P<t>[^\"”'’]+)[\"”'’](?P<r>\s.*)?", t))
+    # "Artista「Tema」" (Japón) y "Artista 'Tema'" / "Artista "Tema"" (videos oficiales). Lo que
+    # sigue en latino después de 「…」 es el nombre en inglés: "YOASOBI「夜に駆ける」Racing Into The Night".
+    m = re.fullmatch(r"(?P<a>[^「『]+?)\s*[「『](?P<t>[^」』]+)[」』]\s*(?P<r>.*)", t)
+    if m and m.group("a").strip() and not _ARTIST_TITLE_SEP.search(m.group("a")):
+        resto = m.group("r") or ""
+        if not normalize(resto):
+            return _make(m.group("a"), m.group("t"))
+        if re.fullmatch(r"[A-Za-z0-9 ,.'!?&-]+", resto.strip()):
+            return _make(m.group("a"), m.group("t"), frozenset({normalize(resto)}))
+    m = re.fullmatch(r"(?P<a>[^'\"“‘]+?)\s+[\"“'‘](?P<t>[^\"”'’]+)[\"”'’](?P<r>\s.*)?", t)
     if (m and m.group("a").strip() and not normalize(m.group("r") or "")
             and not _ARTIST_TITLE_SEP.search(m.group("a"))):     # "A - Tema 'Remix'" no es esto
         return _make(m.group("a"), m.group("t"))
-    # "Artista | Tema" solo si lo de la izquierda es el uploader; si no, "Tema | Boiler Room…".
     # " // CLIP", " // Visualizer": lo que va después de // no es el título.
     t = re.split(r"\s+//\s+", t)[0]
-    parts = re.split(r"\s+\|\s+", t)
+    forced = None
+    parts = re.split(r"\s+\|{1,2}\s+", t)
     if len(parts) >= 2:
-        if _same_artist_text(parts[0], uploader) and normalize(parts[1]):
-            return _make(parts[0], parts[1])
+        rest = " ".join(parts[1:])
+        if _same_artist_text(parts[0], uploader) and normalize(parts[1]) and not _EVENT.search(rest):
+            return _make(parts[0], parts[1])                  # "BICEP | GLUE"
+        if _EVENT.search(rest) or _STRONG_VERSION.search(rest) or (_VERSION_KW.search(rest) and not _NOISE.search(rest)):
+            # "Fix You | Glastonbury 2024": es un vivo/evento; la versión queda desconocida.
+            # ("| Official Music Video - HD Version" es ruido, no versión.)
+            forced = "desconocida:" + normalize(rest)
+        elif (not _ARTIST_TITLE_SEP.search(parts[0]) and not _NOISE.search(rest) and normalize(parts[1])
+              and len(parts) == 2):
+            return _make(parts[0], parts[1])                  # "Adele | Hello" (subido por otro)
         t = parts[0]
-    parts = _ARTIST_TITLE_SEP.split(t, maxsplit=1)
-    if len(parts) == 2 and normalize(parts[0]) and normalize(parts[1]):
-        left, right = parts
+    ident = _parse_plain(t, uploader)
+    return replace(ident, version=forced) if forced else ident
+
+
+def _parse_plain(t: str, uploader: str, swap: bool = False) -> Identity:
+    sides = _split_sides(t, uploader)
+    if sides:
+        left, right = sides
         # "Tema - Artista": el artista es el uploader y está a la derecha, no a la izquierda.
         # Los (…) que venían pegados al artista ("Tema - Artista (X Remix)") son del tema.
-        if _same_artist_text(right, uploader) and not _same_artist_text(left, uploader):
+        if swap or (_same_artist_text(right, uploader) and not _same_artist_text(left, uploader)):
             groups = " ".join(re.findall(r"[\(\[][^\)\]]*[\)\]]", right))
             left, right = _strip_artist_groups(right), f"{left} {groups}".strip()
         return _make(left, right)
@@ -322,9 +386,36 @@ def parse_entry(title: str, uploader: str) -> Identity:
     return _make(uploader or "", t)
 
 
+def parse_entry_swapped(title: str, uploader: str) -> Identity | None:
+    """La otra lectura de "A - B" ("God's Plan - Drake", subido por un tercero): B artista, A
+    tema. Solo se usa si la lectura normal no encontró nada; el resultado igual tiene que pasar
+    la regla de identidad entera (artista Y título), así que no abre sustituciones."""
+    t = _clean_title(title)
+    if re.search(r"\s+\|{1,2}\s+|[「『\"“]", t):
+        return None
+    t = re.split(r"\s+//\s+", t)[0]
+    sides = _split_sides(t, uploader)
+    if not sides or (_same_artist_text(sides[1], uploader) and not _same_artist_text(sides[0], uploader)):
+        return None                                   # sin separador, o ya se leyó al revés
+    return _parse_plain(t, uploader, swap=True)
+
+
 def parse_fields(artist: str, title: str) -> Identity:
-    """Identidad de campos ya separados (Deezer: artist.name + title)."""
-    return _make(artist or "", _clean_title(title))
+    """Identidad de campos ya separados (Deezer: artist.name + title). Algunos títulos de Deezer
+    repiten al artista adelante ("Beethoven - Moonlight Sonata", "Richter: On the Nature of
+    Daylight"): si lo de la izquierda es el artista, se saca."""
+    t = _clean_title(title)
+    m = re.match(r"\s*(.+?)(?:\s+[-–—]\s+|:\s+)(.+)$", t)
+    if m and _is_artist_prefix(m.group(1), artist or ""):
+        t = m.group(2)
+    return _make(artist or "", t)
+
+
+def _is_artist_prefix(prefix: str, artist: str) -> bool:
+    p, a = normalize(prefix), normalize(_CHANNEL_SUFFIX.sub("", artist))
+    if not p or not a:
+        return False
+    return p == a or p == a.replace(" ", "") or (len(p) >= 4 and a.split()[-1] == p)
 
 
 def artists_match(a: Identity, b: Identity) -> bool:
@@ -338,9 +429,34 @@ def artists_match(a: Identity, b: Identity) -> bool:
         return True
     tokens_a = {w for x in all_a for w in x.split()}
     tokens_b = {w for x in all_b for w in x.split()}
-    return (bool(a.artists) and bool(b.artists)
+    if (bool(a.artists) and bool(b.artists)
             and any(set(x.split()) <= tokens_b for x in a.artists)
-            and any(set(y.split()) <= tokens_a for y in b.artists))
+            and any(set(y.split()) <= tokens_a for y in b.artists)):
+        return True
+    return any(_alias(x, y) or _alias(y, x) for x in a.artists for y in b.artists)
+
+
+def _latin(w: str) -> bool:
+    return bool(re.search(r"[a-z]", w))
+
+
+def _alias(short: str, long: str) -> bool:
+    """Un nombre contenido en otro que igual es el mismo artista (una sola dirección):
+    - el mismo nombre en dos alfabetos: "Kenshi Yonezu" dentro de "米津玄師 Kenshi Yonezu";
+    - el apellido de un nombre completo: "Beethoven" = "Ludwig van Beethoven" (apellido de 5+
+      letras y nombre de 3+ palabras: "Snake" no es "DJ Snake", "The" no es "The Weeknd").
+    Nunca si lo que sobra dice tributo/cover/karaoke…: "Avicii" no es "Avicii Tribute"."""
+    s, lw = short.split(), long.split()
+    if not s or not set(s) < set(lw):
+        return False
+    extra = set(lw) - set(s)
+    if extra & _NOT_THE_ARTIST:
+        return False
+    if all(_latin(w) for w in s) and not any(_latin(w) for w in extra):
+        return True
+    if not any(_latin(w) for w in s) and all(_latin(w) for w in extra):
+        return True
+    return len(s) == 1 and len(s[0]) >= 5 and len(lw) >= 3 and lw[-1] == s[0]
 
 
 def same_title(a: Identity, b: Identity) -> bool:
@@ -367,9 +483,20 @@ def isrc_confirms(wanted: Identity, found: Identity, wanted_s: float | None, fou
         return False
     if same_title(wanted, found):
         return True
-    if wanted_s and found_s and wanted_s > _DURATION_UNKNOWN_S:
-        return abs(wanted_s - found_s) <= 0.05 * wanted_s
+    w, f = duration_or_none(wanted_s), duration_or_none(found_s)
+    if w and f:
+        return abs(w - f) <= 0.05 * w
     return False
+
+
+def duration_or_none(s) -> float | None:
+    """Duración utilizable o None: nan, inf, ≤ 0 y el 30.0 de los previews de SoundCloud Go+
+    son "no se sabe" (con inf, una tolerancia en % confirmaba cualquier cosa)."""
+    try:
+        s = float(s)
+    except (TypeError, ValueError):
+        return None
+    return s if math.isfinite(s) and s > _DURATION_UNKNOWN_S else None
 
 
 def search_limit(entry: Identity) -> int:
@@ -415,13 +542,19 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
     (dos lanzamientos, "Levels" y "Levels (Original Version)") gana el de duración más cercana
     a la entrada; sin duración, el primero.
 
-    Dos casos en que el texto no alcanza y se rechaza (nunca se elige otra versión):
+    Casos en que el texto no alcanza y se rechaza (nunca se elige otra versión):
     - la entrada nombra invitados ("Old Town Road ft. Billy Ray Cyrus") que el aceptado no
-      tiene, y en Deezer hay OTRA versión del tema con esos invitados (el Remix): no se sabe
-      cuál es;
+      tiene, en Deezer hay otra versión del tema con esos invitados (el Remix) y la duración
+      del aceptado no cuadra (113 s contra 158 s). Si cuadra ("Latch" 257 s, el crédito que
+      Deezer no escribe) se acepta;
+    - la entrada NO nombra invitados, todos los aceptados traen invitados que la entrada no
+      menciona ("Alors On Danse (Featuring Erik Hassle)") y hay una edición del mismo tema sin
+      ellos: es otra grabación;
+    - la entrada dura más del doble que el candidato (un "Humble" de 706 s no es el de 3 min);
     - la duración delata otra edición del mismo tema: el aceptado está lejos (> 10 %) y otra
       edición (Radio Edit, Extended…) coincide (±max(10 s, 5 %)). "Born Slippy (Nuxx)" de
       268 s es la Radio Edit de 264 s, no el original de 454 s."""
+    dur = duration_or_none(duration_s)
     pool = [(t, deezer_identity(t)) for t in tracks]
     accepted = [(t, i) for t, i in pool if is_same_track(entry, i)]
     if not accepted:
@@ -431,15 +564,35 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
         if not artists_match(first, i):
             logger.info(f"🔎 Identidad ambigua: «{accepted[0][0].get('title')}» de dos artistas distintos; no elijo ninguno.")
             return None
+
+    def cerca(t):
+        d = duration_or_none(t.get("duration"))
+        return bool(dur and d) and abs(d - dur) <= max(10.0, 0.10 * dur)
+
     if entry.feat:
         con_feat = [(t, i) for t, i in accepted if _has_guests(i, entry.feat)]
         if con_feat:
             accepted = con_feat
         elif any(same_title(entry, i) and artists_match(entry, i) and i.version != entry.version
                  and _has_guests(i, entry.feat) for _, i in pool):
-            logger.info(f"🔎 «{accepted[0][0].get('title')}» no tiene a los invitados; otra versión sí: no elijo.")
+            accepted = [(t, i) for t, i in accepted if cerca(t)]
+            if not accepted:
+                logger.info("🔎 El aceptado no tiene a los invitados, otra versión sí y la duración no cuadra: no elijo.")
+                return None
+    else:
+        sin_extra = [(t, i) for t, i in accepted if not _unnamed_guests(entry, i)]
+        if sin_extra:
+            accepted = sin_extra
+        elif any(same_title(entry, i) and i.version in _SAME_WORK and artists_match(entry, i)
+                 and not _unnamed_guests(entry, i) for _, i in pool):
+            logger.info(f"🔎 «{accepted[0][0].get('title')}» trae invitados que el upload no nombra: no elijo.")
             return None
-    dur = duration_s if duration_s and duration_s > _DURATION_UNKNOWN_S else None
+    if dur:
+        accepted = [(t, i) for t, i in accepted
+                    if not (duration_or_none(t.get("duration")) and dur > 2 * duration_or_none(t.get("duration")))]
+        if not accepted:
+            logger.info(f"🔎 El upload dura {dur:.0f} s, más del doble que el tema: no elijo.")
+            return None
     if not dur:
         return accepted[0][0]
     best, _ = min(accepted, key=lambda ti: abs((ti[0].get("duration") or 0) - dur))   # min es estable
@@ -455,6 +608,13 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
 def _has_guests(ident: Identity, guests: frozenset) -> bool:
     todos = {n.replace(" ", "") for n in ident.artists | ident.feat}
     return all(g.replace(" ", "") in todos for g in guests)
+
+
+def _unnamed_guests(entry: Identity, cand: Identity) -> frozenset:
+    """Artistas del candidato que la entrada no nombra (ni como artista ni como invitado)."""
+    nombrados = entry.artists | entry.feat
+    return frozenset(n for n in cand.artists | cand.feat
+                     if not artists_match(Identity(frozenset({n}), ""), Identity(nombrados, "")))
 
 
 # ---------------------------------------------------------------- SoundCloud → ISRC

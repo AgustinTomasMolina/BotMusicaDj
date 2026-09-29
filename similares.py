@@ -150,6 +150,14 @@ def resolver_seed_detalle(titulo: str, artista: str, isrc: str | None = None,
     seed, contesto_busqueda = _buscar_verificado(entrada, duracion)
     if seed:
         return seed, None
+    # "God's Plan - Drake" subido por un tercero: la otra lectura de "A - B", con la misma regla.
+    al_reves = track_identity.parse_entry_swapped(titulo, artista)
+    if al_reves is not None:
+        seed, contesto_swap = _buscar_verificado(al_reves, duracion)
+        if seed:
+            return seed, None
+        if contesto_swap is not None:
+            contesto_busqueda = bool(contesto_busqueda) or contesto_swap
     if contesto_busqueda is not None:
         consulto = True
     if not consulto:

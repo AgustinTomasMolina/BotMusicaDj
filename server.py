@@ -297,10 +297,11 @@ def _rank_calidad(fuente: str, formato: str) -> int:
 
 
 def _opciones_de(linea: str, formato: str, n: int = 3, identidad=None) -> list:
-    """Busca UNA línea de la lista y devuelve N opciones de PLATAFORMAS DISTINTAS
-    (una por fuente, en orden de prioridad para el formato). Así el usuario compara
-    YouTube vs SoundCloud vs MP3 directo con el Spek y elige la de mejor calidad.
-    Lista vacía si no hubo resultado.
+    """Busca UNA línea de la lista y devuelve hasta N opciones: primero la mejor de cada
+    plataforma distinta (en orden de prioridad para el formato), así el usuario compara
+    YouTube vs SoundCloud vs MP3 directo con el Spek; si hay menos de N plataformas, completa
+    con otros resultados de las mismas (puede repetir plataforma: ['youtube', 'soundcloud',
+    'youtube']). Lista vacía si no hubo resultado.
 
     Con `identidad` (un `track_identity.Identity`, lo pasa parecidas) solo quedan las
     opciones que SON ese tema (mismo artista, título y versión): medido, de 36 opciones de
@@ -566,7 +567,8 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     `genero` es una pista opcional para acertar el género de las parecidas.
     `fuente` + `fuente_id` (el id del resultado): si es SoundCloud se le pide el ISRC y la
     semilla se resuelve por ISRC en Deezer (si el track confirma lo que dice el upload).
-    `duracion` (segundos del resultado) solo desempata entre lanzamientos del mismo tema.
+    `duracion` (segundos del resultado) solo desempata entre lanzamientos del mismo tema;
+    nan, inf o ≤ 0 cuentan como "no se sabe".
     Sin semilla verificada contesta
     {exito: false, motivo, mensaje: "Similitud no disponible para este track", detalle}."""
     titulo = (titulo or "").strip()
@@ -580,7 +582,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     if (fuente or "").lower() == "soundcloud" and fuente_id:
         isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
     res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
-                                  genero or None, isrc, duracion)
+                                  genero or None, isrc, track_identity.duration_or_none(duracion))
     if not res.get("exito"):
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
                        + (f" ({res['motivo']})" if res.get("motivo") else ""))

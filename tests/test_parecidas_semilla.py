@@ -308,6 +308,11 @@ ESPERADO = {
     "a67": 1178682, "a19": 448260732, "a20": 1783253587, "a68": 389034231, "a145": 373789461, "a100": 3212563611,
     "a2": None, "a26": None, "a34": None, "a119": None, "a115": 68350113, "a10": 2629694162, "a44": 92198180,
     "a112": 1178682, "a141": 14383880, "a97": 144535404, "a106": 116914090, "a60": None,
+    # auditoría 2
+    "b205": None, "b30": None, "b201": None, "b28": 75526535, "b56": 2333553245, "b208": 60904700,
+    "b185": 1355376732, "b157": 2966772721, "b69": 3786035712, "b119": 6686670, "b94": 533609232,
+    "b137": 70322130, "b133": 4091936771, "b194": 1843514397, "b189": 824731152, "b123": 13247459,
+    "b8": 2393352885, "b90": None, "b102": None, "b63": None,
 }
 
 
@@ -315,6 +320,118 @@ def test_hallazgos_resultado_exacto(monkeypatch):
     assert set(ESPERADO) == set(A)
     real = {n: (resolver(monkeypatch, n)[0] or {}).get("id") for n in sorted(A)}
     assert real == ESPERADO
+
+
+@pytest.mark.parametrize("pedido, uploader, deezer_artista, deezer_titulo, es", [
+    # segmento después de | con evento/año/vivo → la versión queda desconocida
+    ("Coldplay - Fix You | Glastonbury 2024", "BBC Music", "Coldplay", "Fix You", False),
+    ("Coldplay - Fix You | Live", "x", "Coldplay", "Fix You", False),
+    ("Meek Mill - Dreams and Nightmares | Lyrics", "x", "Meek Mill", "Dreams and Nightmares", True),
+    ("Amr Diab - Tamally Maak | Official Music Video - HD Version", "x", "Amr Diab", "Tamally Maak", True),
+    ("Adele | Hello", "Lionel Richie", "Adele", "Hello", True),
+    ("KANYE WEST | STRONGER", "KanyeWestVEVO", "Kanye West", "Stronger", True),
+    ("QUEVEDO || Gran Via #52", "x", "Quevedo", "Gran Via #52", True),        # '||' parte, '#52' no es hashtag
+    ("QUEVEDO || BZRP Music Sessions #52", "x", "Quevedo", "BZRP Music Sessions #52", False),   # "Sessions" = evento
+    # corchetes: título, sello o marca
+    ("Radiohead - Creep [Part 2]", "x", "Radiohead", "Creep", False),
+    ("SHM - One [Your Name]", "x", "SHM", "One", False),
+    ("SHM - One [Your Name]", "x", "SHM", "One (Your Name)", True),
+    ("Pegboard Nerds - Hero [Monstercat Release]", "Monstercat", "Pegboard Nerds", "Hero", True),
+    ("Adam Beyer - Your Mind [Drumcode]", "x", "Adam Beyer", "Your Mind", True),
+    # original con otro nombre
+    ("Nena - 99 Luftballons (ORIGINAL)", "x", "Nena", "99 Luftballons", True),
+    ("Soda Stereo - De Música Ligera", "x", "Soda Stereo", "De Música Ligera Remasterizado 2007", True),
+    # vivos: el año no separa si hay otro dato, solo sí
+    ("Queen - Bohemian Rhapsody (Live Aid 1985)", "x", "Queen", "Bohemian Rhapsody (Live Aid)", True),
+    ("Queen - Bohemian Rhapsody (Live 1986)", "x", "Queen", "Bohemian Rhapsody (Live)", False),
+    # artistas: dos alfabetos y apellido
+    ("米津玄師 Kenshi Yonezu - Lemon", "x", "Kenshi Yonezu", "Lemon", True),
+    ("Beethoven - Moonlight Sonata", "x", "Ludwig van Beethoven", "Moonlight Sonata", True),
+    ("Beethoven - Moonlight Sonata", "x", "Ludwig van Beethoven", "Beethoven - Moonlight Sonata", True),
+    ("Avicii - Levels", "x", "Avicii Tribute Band", "Levels", False),
+    ("Snake - Song", "x", "DJ Snake", "Song", False),
+    ("The - Song", "x", "The Weeknd", "Song", False),
+    # números al principio del título que no son número de pista
+    ("1.5 Degrees", "Artist", "Artist", "1.5 Degrees", True),
+    ("22. Tema", "Artist", "Artist", "Tema", True),
+    ("Molchat Doma - Sudno (dir. by @blood.doves)", "x", "Molchat Doma", "Sudno", True),
+    ("NewJeans (뉴진스) 'Hype Boy' Official MV (Performance ver.1)", "HYBE LABELS", "NewJeans", "Hype Boy", True),
+    ("BLACKPINK - '뚜두뚜두 (DDU-DU DDU-DU)' M/V", "BLACKPINK", "BLACKPINK", "DDU-DU DDU-DU", True),
+])
+def test_formatos_de_la_auditoria_2(pedido, uploader, deezer_artista, deezer_titulo, es):
+    ident = ti.parse_entry(pedido, uploader)
+    assert ti.is_same_track(ident, ti.parse_fields(deezer_artista, deezer_titulo)) is es, ident
+
+
+def test_pipe_con_el_uploader_a_la_izquierda():
+    # Tres segmentos: solo se lee "Artista | Tema" si la izquierda es el uploader (también
+    # un canal VEVO pegado, "KanyeWestVEVO").
+    for pedido, uploader in (("BICEP | GLUE | Lyrics", "BICEP"), ("KANYE WEST | STRONGER | Lyrics", "KanyeWestVEVO")):
+        ident = ti.parse_entry(pedido, uploader)
+        assert (ident.base_title, ident.version) == (pedido.split(" | ")[1].lower(), "original"), ident
+    assert ti.parse_entry("QUEVEDO || Gran Via #52", "x").base_title == "gran via 52", "'#52' no es un hashtag"
+
+
+def test_un_tributo_no_es_el_artista_ni_por_apellido():
+    beethoven = ti.parse_fields("Beethoven", "Für Elise")
+    assert ti.artists_match(beethoven, ti.parse_fields("Ludwig van Beethoven", "Für Elise"))
+    assert not ti.artists_match(beethoven, ti.parse_fields("Tribute to Beethoven", "Für Elise"))
+
+
+def test_titulo_con_numero_y_punto_no_pierde_el_numero():
+    assert ti.parse_entry("1.5 Degrees", "Artist").base_title == "1 5 degrees"
+    assert ti.parse_entry("7. rings", "Ariana Grande").base_title == "rings"          # número de pista
+    assert ti.parse_entry("24.7", "Artist").base_title == "24 7"
+
+
+def test_lectura_al_reves_solo_si_la_normal_no_encuentra(monkeypatch):
+    seed, _ = resolver(monkeypatch, "b94")
+    assert seed and seed["id"] == 533609232
+    assert ti.parse_entry_swapped("God's Plan - Drake", "uploader").artists == {"drake"}
+    assert ti.parse_entry_swapped("Pink Floyd - Money", "Pink Floyd") is not None
+    assert ti.parse_entry_swapped("Money - Pink Floyd", "Pink Floyd") is None, "ya se leyó al revés"
+    assert ti.parse_entry_swapped("Money", "Pink Floyd") is None, "sin separador no hay otra lectura"
+
+
+@pytest.mark.parametrize("titulo_deezer, dur_deezer, dur_upload, esperado", [
+    ("Otra Cosa", 312, 310, True),         # título distinto, duración a ±5 %: confirma
+    ("Otra Cosa", 312, 250, False),        # título distinto, 20 % afuera: no
+    ("Otra Cosa", 312, None, False),       # título distinto, sin duración: no
+    ("Otra Cosa", 312, float("inf"), False),
+    ("Otra Cosa", 312, float("nan"), False),
+    ("Otra Cosa", 312, -5, False),
+    ("Stronger", 312, None, True),         # mismo título: confirma sin duración
+    ("Stronger (Instrumental)", 312, 312, False),
+])
+def test_isrc_confirms(titulo_deezer, dur_deezer, dur_upload, esperado):
+    assert ti.isrc_confirms(ti.parse_entry("Kanye West - Stronger", "x"), ti.parse_fields("Kanye West", titulo_deezer),
+                            dur_upload, dur_deezer) is esperado
+
+
+@pytest.mark.parametrize("dur", [None, 900.0])
+def test_isrc_con_titulo_distinto_no_se_acepta(monkeypatch, dur):
+    # El ISRC de un upload "Otra Cosa" que en Deezer es "Stronger" de 312 s: ni sin duración ni
+    # con una duración que no cuadra.
+    fila = {"id": 1178682, "title": "Stronger", "artist": {"id": 230, "name": "Kanye West"}, "duration": 312}
+    monkeypatch.setattr(similares, "_get", lambda url: fila if "/track/isrc:" in url else {"data": []})
+    assert similares.resolver_seed_detalle("Otra Cosa", "Kanye West", "USUM70741299", dur) == \
+        (None, similares.SEED_NOT_FOUND)
+
+
+@pytest.mark.parametrize("dur", [float("inf"), float("nan"), 0.0, -3.0])
+def test_duracion_invalida_es_no_se_sabe(monkeypatch, dur):
+    # "Levels" de 199 s sin duración utilizable: se elige el primero, no se desempata ni se veta.
+    filas = [{"id": 1, "title": "Levels", "artist": {"id": 9, "name": "Avicii"}, "duration": 339},
+             {"id": 2, "title": "Levels", "artist": {"id": 9, "name": "Avicii"}, "duration": 199}]
+    assert ti.pick_track(ti.parse_entry("Avicii - Levels", "x"), filas, dur)["id"] == 1
+    assert ti.duration_or_none(dur) is None
+
+
+def test_upload_de_mas_del_doble_no_es_el_tema():
+    filas = [{"id": 1, "title": "HUMBLE.", "artist": {"id": 9, "name": "Kendrick Lamar"}, "duration": 177}]
+    e = ti.parse_entry("Kendrick Lamar - Humble", "x")
+    assert ti.pick_track(e, filas, 706)is None
+    assert ti.pick_track(e, filas, 184)["id"] == 1
 
 
 def test_el_isrc_se_verifica_contra_el_upload(monkeypatch):
@@ -534,6 +651,17 @@ def test_parecidas_lista_sin_semilla_dice_similitud_no_disponible(server, monkey
     assert r.json() == esperado, "el front (y el E2E) dependen de esta forma exacta"
     assert esperado["mensaje"] == "Similitud no disponible para este track" and "seed" not in r.json()
     assert busco == [], "sin semilla no se busca ninguna opción de plataforma"
+
+
+@pytest.mark.parametrize("dur, llega", [("inf", None), ("nan", None), ("-1", None), ("0", None), ("187", 187.0)])
+def test_parecidas_lista_limpia_la_duracion(server, monkeypatch, dur, llega):
+    from fastapi.testclient import TestClient
+    recibido = []
+    monkeypatch.setattr(similares, "construir_playlist",
+                        lambda *a: recibido.append(a) or similares.sin_semilla(similares.SEED_NOT_FOUND))
+    TestClient(server.app).get("/api/parecidas_lista", params={"titulo": "From The Top", "artista": "IMMINENT - Topic",
+                                                               "duracion": dur})
+    assert recibido and recibido[0][-1] == llega, recibido
 
 
 def test_parecidas_lista_de_soundcloud_usa_el_isrc(server, monkeypatch):
