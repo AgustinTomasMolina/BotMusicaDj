@@ -16,8 +16,9 @@ que son el contrato de este módulo:
    el mismo camino que `python -m motor scan` (`motor.cli.analizar_para_guardar`).
 6. Licencia y origen (spec §5: obligatorios, no se inventan) salen de reglas fijas
    (`licencia_y_origen`). Sin origen no se analiza.
-7. Duplicados (mismo artista + título normalizados, o el mismo archivo): entra el PRIMERO
-   en el orden de la playlist; los demás quedan como "duplicado" y dicen de cuál.
+7. Duplicados (mismo artista + título normalizados DENTRO del mismo género, o el mismo
+   archivo): entra el PRIMERO en el orden de la playlist; los demás quedan como "duplicado" y
+   dicen de cuál. Un tema en dos géneros son dos items, uno por set (ver `clasificar`).
 8. El scoring NO se toca: esto solo FILTRA el pool antes de `motor.radio.build_set`, y lo
    filtra conservando el orden de la biblioteca (`pool_para`), así una playlist que tiene
    toda la biblioteca da exactamente el set de la CLI.
@@ -208,7 +209,13 @@ def clasificar(items: Sequence[Mapping], analizados: Mapping[str, object], *,
         identidades = [("archivo", claves[-1])]
         titulo, artista = normalizar(it.get("titulo")), normalizar(it.get("artista"))
         if titulo:   # sin título no hay tema que comparar: "" == "" no es el mismo tema
-            identidades.append(("tema", artista, titulo))
+            # El tema se compara DENTRO de su género. El caso real: el mismo master en dos
+            # carpetas, una rotulada Hard Bounce y la otra Hard Techno. Sin el género en la
+            # clave, la segunda quedaba "duplicado" de la primera y el tema no entraba NUNCA a
+            # un set de Hard Techno (la primera tampoco entra ahí: es de otro género). Como un
+            # set es de un solo género, dos copias de géneros distintos no pueden coincidir en
+            # el mismo set. El archivo, en cambio, se compara sin género: es el mismo audio.
+            identidades.append(("tema", cg, artista, titulo))
         primero = next((vistos[k] for k in identidades if k in vistos), None)
         if primero is not None:
             c.estado, c.duplicado_de = DUPLICADO, primero.item.get("id")
