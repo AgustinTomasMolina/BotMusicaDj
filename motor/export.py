@@ -35,6 +35,57 @@ from motor.modelos import Track
 NEWLINE = "\r\n"
 
 
+def _una_linea(texto: str) -> str:
+    r"""El texto en UNA línea: cada salto adentro se vuelve un espacio.
+
+    En el M3U8 la estructura ES el salto de línea: ``#EXTINF`` y la ruta van en renglones
+    propios. Un título con un salto adentro (pasa: tags ID3 pegados de una descripción de
+    Bandcamp o de YouTube) partía el ``#EXTINF`` en dos, y el pedazo de abajo quedaba como
+    un renglón suelto que un reproductor lee como RUTA — un archivo roto en la playlist, y
+    el track verdadero corrido de lugar.
+
+    "Salto" es todo lo que `str.splitlines` corta: ``\n``, ``\r``, ``\r\n`` y los
+    separadores Unicode (``\x85``, ``\u2028``, ...). Se usa esa lista y no solo
+    ``\n``/``\r`` porque es la de cualquier lector hecho en Python, y un lector que
+    corta de más rompe el archivo igual. Un texto sin saltos vuelve TAL CUAL, byte a
+    byte: los títulos normales no cambian.
+    """
+    partes = texto.splitlines()
+    if len(partes) <= 1 and texto == "".join(partes):
+        return texto
+    return " ".join(p.strip() for p in partes if p.strip())
+
+
+def m3u8_text(tracks: Sequence[Track], relative_to: Path | None = None) -> str:
+    """El contenido del M3U8, tal cual lo escribe `write_m3u8`, sin tocar el disco.
+
+    Existe para la API (`/api/radio/set.m3u8`), que manda el archivo por HTTP: así el
+    formato vive en UN solo lugar y lo que baja el navegador es, byte a byte, lo que
+    escribe `python -m motor radio --m3u8` para el mismo set. Las reglas de cada renglón
+    están en `write_m3u8`.
+    """
+    lines = ["#EXTM3U"]
+
+    for track in tracks:
+        # EXTINF va en segundos enteros. -1 es el "no sé cuánto dura" del formato: mejor
+        # eso que un 0, que algunos reproductores muestran como track de duración cero.
+        duration = int(round(track.duration)) if track.duration and track.duration > 0 else -1
+        lines.append(f"#EXTINF:{duration},{_una_linea(track.label)}")
+        lines.append(f"#DJRADIO:bpm={track.bpm:.1f} key={track.key} energy={track.energy:.2f}")
+
+        path = track.path
+        if relative_to is not None:
+            # Si cae fuera del árbol, `relative_to` levanta ValueError y la ruta queda
+            # absoluta: es lo correcto, no un caso que tapar.
+            with contextlib.suppress(ValueError):
+                path = path.relative_to(relative_to)
+        lines.append(str(path))
+
+    # La última línea también termina en salto: un archivo de texto sin salto final es el
+    # clásico que le come la última entrada a algún parser.
+    return NEWLINE.join(lines) + NEWLINE
+
+
 def write_m3u8(
     tracks: Sequence[Track],
     output: Path | str,
@@ -64,26 +115,7 @@ def write_m3u8(
     parsers que entonces no reconocen la cabecera.
     """
     output = Path(output)
-    lines = ["#EXTM3U"]
-
-    for track in tracks:
-        # EXTINF va en segundos enteros. -1 es el "no sé cuánto dura" del formato: mejor
-        # eso que un 0, que algunos reproductores muestran como track de duración cero.
-        duration = int(round(track.duration)) if track.duration and track.duration > 0 else -1
-        lines.append(f"#EXTINF:{duration},{track.label}")
-        lines.append(f"#DJRADIO:bpm={track.bpm:.1f} key={track.key} energy={track.energy:.2f}")
-
-        path = track.path
-        if relative_to is not None:
-            # Si cae fuera del árbol, `relative_to` levanta ValueError y la ruta queda
-            # absoluta: es lo correcto, no un caso que tapar.
-            with contextlib.suppress(ValueError):
-                path = path.relative_to(relative_to)
-        lines.append(str(path))
-
-    # El salto se pone a mano y `newline=""` apaga la traducción del sistema, así lo que
-    # se escribe es exactamente lo que dice `NEWLINE` en cualquier SO. La última
-    # línea también termina en salto: un archivo de texto sin salto final es el clásico
-    # que le come la última entrada a algún parser.
-    output.write_text(NEWLINE.join(lines) + NEWLINE, encoding="utf-8", newline="")
+    # El salto lo pone `m3u8_text` a mano y `newline=""` apaga la traducción del sistema,
+    # así lo que se escribe es exactamente lo que dice `NEWLINE` en cualquier SO.
+    output.write_text(m3u8_text(tracks, relative_to), encoding="utf-8", newline="")
     return output

@@ -102,6 +102,17 @@ def test_cabecera_y_estructura_de_tres_lineas_por_track(tmp_path):
     assert len(lines) == 7
 
 
+def test_la_duracion_del_extinf_se_redondea_no_se_trunca(tmp_path):
+    """301.6 s son 302 s, no 301. Los casos de arriba (301.4, 180.0) dan lo mismo redondeando
+    que truncando, así que no distinguían `round` de `int`: el cambio pasaba la suite."""
+    tracks = [_track("a.mp3", duration=301.6), _track("b.mp3", duration=59.5)]
+    extinf = _extinf(write_m3u8(tracks, tmp_path / "set.m3u8"))
+
+    assert extinf[0].startswith("#EXTINF:302,"), extinf[0]
+    # 59.5 → 60 con el redondeo de Python (al par); truncando daría 59.
+    assert extinf[1].startswith("#EXTINF:60,"), extinf[1]
+
+
 def test_el_bpm_sale_con_un_decimal(tmp_path):
     """spec §6: redondear el BPM a entero es mentir. 128.0 y 128.4 no mezclan igual."""
     tracks = [_track("a.mp3", bpm=128.0), _track("b.mp3", bpm=128.4),
@@ -169,6 +180,33 @@ def test_fin_de_linea_crlf_fijo_y_salto_final(tmp_path):
     assert crudo.endswith(b"\r\n")
     assert crudo.count(b"\n") == crudo.count(b"\r\n") == 4, "algún salto quedó sin \\r"
     assert b"\xef\xbb\xbf" not in crudo, "el BOM le rompe la cabecera a algunos parsers"
+
+
+def test_un_salto_de_linea_en_el_titulo_no_rompe_la_estructura(tmp_path):
+    """Un tag con saltos adentro (pasa con descripciones pegadas de Bandcamp o YouTube)
+    partía el #EXTINF en dos, y el pedazo de abajo quedaba como un renglón suelto que el
+    reproductor lee como RUTA: un archivo roto en la playlist (anotado en la tarea #15).
+    Se prueban los saltos de Windows, Unix y Mac viejo y el separador Unicode, cada uno
+    en el artista o en el título."""
+    tracks = [_track("a.mp3", title="Real Love\r\n(ONYX002)"),
+              _track("b.mp3", artist="Cuatro\nMil", title="Hz"),
+              _track("c.mp3", artist=None, title="Linea\runo dos"),
+              _track("d.mp3", title=" Normal  con  dobles   espacios")]
+    destino = write_m3u8(tracks, tmp_path / "set.m3u8")
+    crudo = _crudo(destino)
+
+    assert _parse_m3u8(destino) == [str(t.path) for t in tracks], \
+        "un salto en un título metió un renglón suelto que se lee como ruta"
+    assert _extinf(destino) == ["#EXTINF:300,Artista — Real Love (ONYX002)",
+                                "#EXTINF:300,Cuatro Mil — Hz",
+                                "#EXTINF:300,Linea uno dos",
+                                "#EXTINF:300,Artista —  Normal  con  dobles   espacios"]
+    # Un título SIN saltos sale tal cual, espacios incluidos (el parser de arriba strippea,
+    # por eso se mira el crudo).
+    assert "\r\n#EXTINF:300,Artista —  Normal  con  dobles   espacios\r\n" in crudo
+    # 1 cabecera + 3 renglones por track, y ningún salto que no sea el CRLF del formato.
+    assert crudo.splitlines() == crudo.split("\r\n")[:-1], "quedó un salto suelto adentro"
+    assert len(crudo.splitlines()) == 1 + 3 * len(tracks)
 
 
 def test_set_vacio_escribe_solo_la_cabecera(tmp_path):

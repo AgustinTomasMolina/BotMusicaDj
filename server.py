@@ -19,8 +19,11 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Set
 
@@ -32,7 +35,7 @@ except Exception:
     pass
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -130,7 +133,41 @@ async def lifespan(app: FastAPI):
     broker.set_loop(asyncio.get_running_loop())
     await asyncio.to_thread(db.init_db)  # crea las tablas del historial si faltan
     logger.info("🌐 Servidor web iniciado. Buscador listo.")
+    threading.Thread(target=_calentar_librosa, name="calentar-librosa", daemon=True).start()
     yield
+
+
+def _calentar_librosa() -> None:
+    """Primera llamada a librosa en segundo plano, al arrancar (f32).
+
+    Medido: en un proceso nuevo, el primer análisis tarda 11-17 s (importar librosa y cargar
+    lo que numba compila) y el segundo 0,2 s. Sin esto, ese costo lo pagaba el primer
+    "parecidas" después de levantar el server (y con 16 análisis a la vez, más). Se analiza
+    una señal sintética de 2 s en un temporal; si algo falla no pasa nada: el primer pedido
+    real paga el costo como antes."""
+    if os.getenv("MUSIFLIX_SIN_CALENTAR"):
+        return
+    import tempfile
+    from contextlib import suppress
+    ruta = None
+    try:
+        import analisis_audio
+        import numpy as np
+        import soundfile as sf
+        sr = 22050
+        t = np.arange(sr * 2) / sr
+        fd, ruta = tempfile.mkstemp(suffix=".wav", prefix="musiflix-calentar-")
+        os.close(fd)
+        sf.write(ruta, (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), sr)
+        t0 = time.perf_counter()
+        analisis_audio.bpm_y_tono(ruta, dur=2)
+        logger.info(f"🔥 Análisis de audio listo ({time.perf_counter() - t0:.1f} s de arranque).")
+    except Exception as e:
+        logger.debug(f"calentar librosa: {e}")
+    finally:
+        if ruta:
+            with suppress(OSError):
+                os.remove(ruta)
 
 
 app = FastAPI(title="Bot de Música - Web", lifespan=lifespan)
@@ -166,9 +203,40 @@ async def ws_console(websocket: WebSocket):
         broker.unsubscribe(q)
 
 
+# Tope de espera por fuente en una búsqueda (f32). Antes era `fut.result(timeout=30)` futuro
+# por futuro DENTRO del `with ThreadPoolExecutor`: el tope se reiniciaba con cada fuente y, al
+# salir del `with`, se esperaba igual a la que colgaba — medido, una búsqueda de YouTube de
+# 56 s se descartaba por "timeout" y además se la esperaba entera. Ahora es un plazo único:
+# lo que no contestó a tiempo queda afuera y NO se espera.
+_SOURCE_DEADLINE_S = 20.0
+# Cache de búsquedas (f32): la misma consulta se repite (reabrir parecidas del mismo tema,
+# buscar de nuevo). Solo se guarda si contestaron TODAS las fuentes: un resultado recortado
+# por una fuente caída no se cachea. TTL corto porque los MP3 directos traen URLs firmadas.
+_MIX_TTL_S = 10 * 60
+_MIX_MAX = 500
+_MIX_CACHE: dict = {}
+_MIX_LOCK = threading.Lock()
+
+
 def _buscar_mix(q: str, limite: int) -> list:
     """Consulta todas las fuentes EN PARALELO y las intercala (round-robin)."""
-    from concurrent.futures import ThreadPoolExecutor
+    clave = (q, limite)
+    with _MIX_LOCK:
+        hit = _MIX_CACHE.get(clave)
+        if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
+            return [dict(c) for c in hit[1]]
+    mezcla, completa = _buscar_mix_fuentes(q, limite)
+    if completa:
+        with _MIX_LOCK:
+            if len(_MIX_CACHE) >= _MIX_MAX:
+                _MIX_CACHE.clear()
+            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
+    return mezcla
+
+
+def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
+    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo."""
+    from concurrent.futures import ThreadPoolExecutor, wait
 
     por_fuente = max(4, limite // 4)
 
@@ -182,14 +250,26 @@ def _buscar_mix(q: str, limite: int) -> list:
     ]
 
     resultados = {}
-    with ThreadPoolExecutor(max_workers=len(tareas)) as ex:
+    completa = True
+    ex = ThreadPoolExecutor(max_workers=len(tareas))
+    try:
         futuros = {ex.submit(fn): nombre for nombre, fn in tareas}
+        wait(futuros, timeout=_SOURCE_DEADLINE_S)
         for fut, nombre in futuros.items():
+            if not fut.done():
+                logger.warning(f"⚠️ Fuente '{nombre}' no contestó en {_SOURCE_DEADLINE_S:.0f} s: queda afuera.")
+                resultados[nombre] = []
+                completa = False
+                continue
             try:
-                resultados[nombre] = fut.result(timeout=30) or []
+                resultados[nombre] = fut.result() or []
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
+                completa = False
+    finally:
+        # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
+        ex.shutdown(wait=False, cancel_futures=True)
 
     # Orden de intercalado: primero las que se reproducen/descargan directo
     orden = ["youtube", "ligaudio", "hitplayer", "soundcloud", "spotify"]
@@ -201,7 +281,7 @@ def _buscar_mix(q: str, limite: int) -> list:
             if i < len(g):
                 mezcla.append(g[i])
         i += 1
-    return mezcla[:limite]
+    return mezcla[:limite], completa
 
 
 def _rank_calidad(fuente: str, formato: str) -> int:
@@ -349,13 +429,18 @@ def _agrupar_por_track(cands: list, formato: str, query: str = "") -> list:
     return grupos
 
 
+_LIST_WORKERS = 12
+
+
 def _buscar_lista(lineas: list, formato: str) -> list:
     """Busca cada línea EN PARALELO y devuelve sus opciones (lista de candidatos,
     vacía si esa línea no tuvo resultados), conservando el orden de la lista."""
     from concurrent.futures import ThreadPoolExecutor
 
     out: list = [[] for _ in lineas]
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    # 12 líneas a la vez (antes 6: las 12 parecidas iban en dos tandas). Cada línea abre 5
+    # fuentes, así que el tope real es ~60 pedidos de red simultáneos; más no se gana nada.
+    with ThreadPoolExecutor(max_workers=max(1, min(_LIST_WORKERS, len(lineas)))) as ex:
         futs = {ex.submit(_opciones_de, ln, formato): idx for idx, ln in enumerate(lineas)}
         for fut in futs:
             idx = futs[fut]
@@ -1055,6 +1140,9 @@ def _cargar_biblioteca() -> tuple[list[dict], str]:
             "bpm": round(t["bpm"], 1) if t["bpm"] else None,
             "camelot": t["camelot"] or None, "tonalidad": t["tonality"] or None,
             "genero": (t["genre"] or "").strip() or "Sin género", "dur": t["duration_s"] or 0,
+            # Contenedor real del archivo (la extensión del que se resolvió), para que el
+            # reproductor diga qué suena. Sin extensión → None, no un formato adivinado.
+            "formato": Path(r.ruta).suffix.lstrip(".").lower() or None,
         })
     _lib_audio = audio
     return out, _LIB_OK
@@ -1084,6 +1172,164 @@ async def audio(track_id: str):
     if not ruta or not Path(ruta).exists():
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# Audio de YouTube/SoundCloud para la barra, sin video (f32): /api/fuente/audio[/info].
+# Todo el detalle (proxy con Range, validación anti-SSRF, cache) está en source_audio.py.
+import source_audio  # noqa: E402
+
+app.include_router(source_audio.router)
+
+
+# Motivos de /api/cover cuando no hay imagen que servir. El front dibuja el placeholder en
+# todos los casos; el motivo es para quien mire la respuesta (y los tests).
+_SIN_CARATULA = "el archivo no trae carátula"
+_CARATULA_GRANDE = "carátula demasiado grande"
+_CARATULA_FORMATO = "la carátula no es JPEG, PNG, GIF ni WebP"
+_ARCHIVO_ILEGIBLE = "no pude leer el archivo"
+_SIN_MUTAGEN = "esta instalación no tiene mutagen: no se pueden leer carátulas"
+# Tope de lo que se devuelve: una tapa normal pesa < 1 MB. Un APIC de 40 MB iba entero a
+# memoria y a la red (medido en la auditoría de f28).
+_CARATULA_MAX_BYTES = 10 * 1024 * 1024
+# Cuántos archivos se abren a la vez: la home pide ~18 carátulas juntas.
+_caratulas_sem = asyncio.Semaphore(4)
+_aviso_sin_mutagen = False
+
+
+def _cabeceras_plausibles(ruta: str) -> bool:
+    """¿Los tamaños que DECLARA el archivo entran en el archivo? Se mira antes de mutagen.
+
+    Medido en la auditoría de f28: un MP3 de 3 KB con la cabecera ID3 corrupta (tamaño
+    declarado de 256 MB) hacía que mutagen pidiera `read(256 MB)`, y Python reserva el búfer
+    entero antes de leer. Se revisan las dos cabeceras que mutagen lee de una: la ID3 del
+    principio (MP3) y los chunks de RIFF/FORM (WAV/AIFF, donde vive el chunk 'id3 ').
+    FLAC no lo necesita (sus bloques declaran 24 bits: ≤ 16 MB). MP4/M4A no se revisa acá:
+    sus átomos se leen de a partes y no se midió el mismo problema."""
+    try:
+        total = os.path.getsize(ruta)
+        with open(ruta, "rb") as f:
+            cab = f.read(12)
+            if cab[:3] == b"ID3" and len(cab) >= 10:
+                b = cab[6:10]
+                if any(x & 0x80 for x in b):             # syncsafe: el bit alto va en 0
+                    return False
+                tam = (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+                return 10 + tam <= total
+            if cab[:4] in (b"RIFF", b"FORM"):
+                orden = "little" if cab[:4] == b"RIFF" else "big"
+                pos = 12
+                for _ in range(10_000):                  # tope de chunks: un archivo real tiene pocos
+                    if pos + 8 > total:
+                        return True
+                    f.seek(pos)
+                    h = f.read(8)
+                    tam = int.from_bytes(h[4:8], orden)
+                    if pos + 8 + tam > total:
+                        return False
+                    pos += 8 + tam + (tam & 1)           # los chunks se alinean a 2 bytes
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def _caratula_embebida(ruta: str) -> tuple[bytes, str] | str:
+    """Carátula embebida en el archivo de audio: APIC de ID3 (MP3, y el chunk ID3 de WAV y
+    AIFF), PICTURE de FLAC o `covr` de MP4/M4A. Prefiere la de tipo 3 (tapa). Solo lee: el
+    archivo original no se toca.
+
+    Devuelve (bytes, mime) o el MOTIVO por el que no hay nada que servir. El MIME sale SOLO
+    del contenido (tagger.mime_por_contenido: JPEG/PNG/GIF/WebP), nunca del tag: un APIC
+    "image/svg+xml" con <script> ejecutaba en el origen de la app (auditoría de f28).
+    No se leen carátulas de OGG/Opus (METADATA_BLOCK_PICTURE en base64) ni de APEv2: esos
+    archivos responden "no trae carátula" aunque tengan una."""
+    global _aviso_sin_mutagen
+    try:
+        from mutagen import File as MutagenFile
+    except ImportError:
+        if not _aviso_sin_mutagen:
+            logger.warning("⚠️ Carátulas: falta mutagen; /api/cover no puede leer ninguna.")
+            _aviso_sin_mutagen = True
+        return _SIN_MUTAGEN
+    from tagger import mime_por_contenido
+    if not _cabeceras_plausibles(ruta):
+        logger.debug(f"Carátula: cabeceras que no entran en el archivo, no se parsea {ruta}")
+        return _ARCHIVO_ILEGIBLE
+    try:
+        audio = MutagenFile(ruta)
+    except Exception as e:  # noqa: BLE001 — archivo raro o ilegible: sin carátula, no un 500
+        logger.debug(f"Carátula: no pude leer {ruta}: {e}")
+        return _ARCHIVO_ILEGIBLE
+    if audio is None:
+        return _SIN_CARATULA
+    candidatos: list[tuple[int, bytes, str | None]] = []   # (tipo, datos, MIME declarado)
+    for p in getattr(audio, "pictures", None) or []:       # FLAC
+        candidatos.append((p.type, p.data, p.mime))
+    tags = audio.tags
+    if tags is not None:
+        if hasattr(tags, "getall"):                          # ID3
+            candidatos += [(a.type, a.data, a.mime) for a in tags.getall("APIC")]
+        else:
+            try:
+                covr = tags.get("covr")                      # MP4
+            except Exception:  # noqa: BLE001
+                covr = None
+            candidatos += [(3, bytes(c), None) for c in covr or []]
+    candidatos.sort(key=lambda c: c[0] != 3)                 # la tapa primero
+    motivo = _SIN_CARATULA
+    for _, data, _declarado in candidatos:
+        if not data:
+            continue
+        if len(data) > _CARATULA_MAX_BYTES:
+            motivo = _CARATULA_GRANDE
+            continue
+        mime = mime_por_contenido(bytes(data))              # el declarado NO se usa
+        if not mime:
+            if motivo == _SIN_CARATULA:
+                motivo = _CARATULA_FORMATO
+            continue
+        return bytes(data), mime
+    return motivo
+
+
+# La respuesta es una imagen y nada más: sin sniffing del navegador y, si algo se colara
+# igual, sin permiso para ejecutar ni cargar nada (CSP con sandbox).
+_CABECERAS_CARATULA = {
+    "Cache-Control": "private, max-age=3600",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+}
+
+
+@app.get("/api/cover/{track_id}")
+async def caratula(track_id: str, request: Request):
+    """Carátula EMBEBIDA en el archivo de un track de la biblioteca (el XML de Rekordbox no
+    trae imágenes, así que la home no mostraba ninguna). 404 con motivo cuando el track no
+    existe o no hay imagen que servir: el front dibuja su placeholder, nunca una imagen
+    inventada. Mismo criterio que /api/audio: el id no es una ruta.
+
+    `Last-Modified` = mtime del archivo: re-taggear un tema cambia la tapa al recargar (con
+    solo max-age se veía la vieja una hora). `If-Modified-Since` igual o posterior → 304."""
+    if not _lib_audio:
+        await asyncio.to_thread(_cargar_biblioteca)
+    ruta = _lib_audio.get(track_id)
+    if not ruta or not Path(ruta).exists():
+        return JSONResponse({"error": "track no encontrado"}, status_code=404)
+    mtime = int(os.path.getmtime(ruta))
+    cabeceras = {**_CABECERAS_CARATULA, "Last-Modified": formatdate(mtime, usegmt=True)}
+    ims = request.headers.get("if-modified-since")
+    if ims:
+        try:
+            if int(parsedate_to_datetime(ims).timestamp()) >= mtime:
+                return Response(status_code=304, headers=cabeceras)
+        except (TypeError, ValueError):
+            pass                                          # fecha ilegible: se sirve entera
+    async with _caratulas_sem:
+        art = await asyncio.to_thread(_caratula_embebida, ruta)
+    if isinstance(art, str):
+        return JSONResponse({"error": art}, status_code=404)
+    data, mime = art
+    return Response(content=data, media_type=mime, headers=cabeceras)
 
 
 # --- Radio DJ (motor/): biblioteca del motor, set armado por `motor.radio.build_set` y el
@@ -1151,29 +1397,41 @@ def _num(valor) -> float | None:
     return v if math.isfinite(v) else None
 
 
-def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
-    """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
+def _usar_store_motor(accion) -> tuple[object, str, str | None]:
+    """`(accion(store), estado, motivo)` sobre la base del motor. Nunca levanta por la base.
+
+    Una sola función para abrir la base y clasificar lo que puede salir mal (sin motor, sin
+    base, esquema de otro código, ocupada, ilegible): la usan la biblioteca de la radio y los
+    sets guardados, y dos copias de esta clasificación terminarían diciendo "ilegible" en una
+    pantalla y "ocupada" en otra para la misma base. Con `estado != ok` el resultado es None.
+
+    Lo que SÍ levanta son los errores del pedido (`InvalidSavedSet`, `SavedSetNotFound`):
+    no son de la base, y cada endpoint los contesta con su 400 / 404.
+    """
     try:
         from motor.cli import db_por_defecto, esta_bloqueada
+        from motor.saved_sets import InvalidSavedSet, SavedSetNotFound
         from motor.store import EsquemaIncompatible, Store
     except ImportError as e:
         logger.warning(f"⚠️ Radio: falta el paquete motor ({e}); la radio queda desactivada.")
-        return [], _RADIO_SIN_MOTOR, (
+        return None, _RADIO_SIN_MOTOR, (
             "Esta instalación no incluye el motor de radio (motor/), así que la radio está "
             "desactivada.")
 
     db = db_por_defecto()
     if not db.exists():
-        return [], _RADIO_SIN_BASE, (
+        return None, _RADIO_SIN_BASE, (
             f"No hay biblioteca del motor en {db}. Analizá una carpeta con "
             f"`python -m motor scan <carpeta> --licencia ... --origen ...`, o apuntá "
             f"DJRADIO_DB a la base que ya tengas.")
     try:
         # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
         with Store(db, espera_bloqueo_s=_RADIO_ESPERA_S) as store:
-            biblioteca = store.load_library()
+            return accion(store), _RADIO_OK, None
+    except (InvalidSavedSet, SavedSetNotFound):
+        raise
     except EsquemaIncompatible as e:
-        return [], _RADIO_ESQUEMA, str(e)
+        return None, _RADIO_ESQUEMA, str(e)
     except sqlite3.OperationalError as e:
         # "Ocupada" se separa de "ilegible" con la MISMA condición que la CLI
         # (`cli.esta_bloqueada`): no es una base rota, es que hay un scan corriendo, y se
@@ -1182,8 +1440,8 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
         # reintentar en un rato.
         if not esta_bloqueada(e):
             logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
-            return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
-        return [], _RADIO_OCUPADA, (
+            return None, _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return None, _RADIO_OCUPADA, (
             f"La biblioteca del motor ({db}) está ocupada: hay un scan u otra instancia "
             f"usándola (se esperó {_RADIO_ESPERA_S:g} s). Reintentá en un rato.")
     except (sqlite3.Error, ValueError) as e:
@@ -1192,8 +1450,18 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
         # al construirla y se lleva puesta la biblioteca entera. Ninguna de las dos es un bug
         # del server, y las dos son arreglables sabiendo qué base se está leyendo.
         logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
-        return [], _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+        return None, _RADIO_ILEGIBLE, f"No pude leer la biblioteca del motor ({db}): {e}"
+
+
+def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
+    """`(tracks, estado, motivo)` de la biblioteca del motor. Nunca levanta."""
+    biblioteca, estado, motivo = _usar_store_motor(lambda store: store.load_library())
+    if estado != _RADIO_OK:
+        return [], estado, motivo
     if not biblioteca:
+        from motor.cli import db_por_defecto
+
+        db = db_por_defecto()
         return [], _RADIO_VACIA, (
             f"La biblioteca del motor ({db}) no tiene ningún track analizado. Corré "
             f"`python -m motor scan <carpeta> --licencia ... --origen ...`.")
@@ -1335,36 +1603,34 @@ async def radio_biblioteca():
             "opciones": _radio_opciones() if estado != _RADIO_SIN_MOTOR else None}
 
 
-@app.get("/api/radio/set")
-async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
-                    artist_gap: int | None = None, mmr_lambda: float | None = None,
-                    semilla: int | None = None, randomness: float | None = None):
-    """Arma un set desde `track` con `motor.radio.build_set`.
+@dataclass(frozen=True)
+class _SetArmado:
+    """Lo que devuelve `_armar_set_radio` cuando el pedido no fue inválido.
 
-    OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
-    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
-    la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
-    `randomness > 0`.
+    Con `estado != ok` (sin base, base ocupada...) `config`, `elegida` y `rset` son None:
+    no hay set, y cada endpoint degrada a su manera (ver `radio_set` y `radio_set_m3u8`).
+    """
+    estado: str
+    motivo: str | None
+    config: object = None
+    elegida: object = None
+    rset: object = None
 
-    Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
-    `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
-    desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+
+async def _armar_set_radio(track: str, largo, curva, artist_gap, mmr_lambda, semilla,
+                           randomness) -> "_SetArmado | JSONResponse":
+    """Arma el set que piden /api/radio/set y /api/radio/set.m3u8, o el 400 que corresponda.
+
+    UNA sola función para los dos endpoints a propósito: el .m3u8 tiene que ser el MISMO
+    set que la pantalla acaba de mostrar, y dos copias de esta lógica (defaults, cómo se
+    resuelve la semilla, qué se rechaza) se desincronizan en silencio — el día que una
+    cambie, el archivo que se lleva el DJ sería otro set que el que escuchó.
     """
     tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
-    vacio = {**_radio_envoltura(estado, motivo), "config": None, "semilla": None, "pasos": [],
-             "total": 0, "pedidos": None, "completo": False, "corte": None, "fragmentos": 0,
-             "aviso_fragmentos": None, "leyenda_key": None}
     if estado != _RADIO_OK:
-        return vacio
+        return _SetArmado(estado, motivo)
 
-    from motor.cli import (
-        LEYENDA_KEY,
-        ErrorDeUso,
-        aviso_fragmentos,
-        motivo_semilla_no_track,
-        resolver_track,
-        titular_corte,
-    )
+    from motor.cli import ErrorDeUso, motivo_semilla_no_track, resolver_track
     from motor.modelos import es_track
     from motor.radio import RadioConfig, build_set
 
@@ -1401,6 +1667,37 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
                              "semilla": _radio_track(elegida)}, status_code=400)
 
     rset = await asyncio.to_thread(build_set, elegida, tracks, config)
+    return _SetArmado(estado, motivo, config, elegida, rset)
+
+
+@app.get("/api/radio/set")
+async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
+                    artist_gap: int | None = None, mmr_lambda: float | None = None,
+                    semilla: int | None = None, randomness: float | None = None):
+    """Arma un set desde `track` con `motor.radio.build_set`.
+
+    OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
+    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
+    la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
+    `randomness > 0`.
+
+    Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
+    `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
+    desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+    """
+    armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
+                                    randomness)
+    if isinstance(armado, JSONResponse):
+        return armado
+    estado, motivo = armado.estado, armado.motivo
+    if armado.rset is None:
+        return {**_radio_envoltura(estado, motivo), "config": None, "semilla": None,
+                "pasos": [], "total": 0, "pedidos": None, "completo": False, "corte": None,
+                "fragmentos": 0, "aviso_fragmentos": None, "leyenda_key": None}
+
+    from motor.cli import LEYENDA_KEY, aviso_fragmentos, titular_corte
+
+    config, elegida, rset = armado.config, armado.elegida, armado.rset
     corte = None if rset.is_complete else {
         "codigo": rset.stop, "titular": titular_corte(rset.stop), "detalle": rset.stop_detail}
     return {
@@ -1419,7 +1716,108 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
         "aviso_fragmentos": (aviso_fragmentos(rset.fragments, "La radio ignoró")
                              if rset.fragments else None),
         "leyenda_key": LEYENDA_KEY,
+        # La huella de lo que se muestra (`saved_sets.fingerprint`): el front la devuelve al
+        # guardar el set (POST /api/radio/sets) y, si el re-armado ya no muestra lo mismo, el
+        # guardado es 409 en vez de guardar otra cosa. Ver `radio_sets_guardar`.
+        "huella": _huella(rset, config),
     }
+
+
+def _huella(rset, config) -> str:
+    from motor.saved_sets import set_fingerprint
+
+    return set_fingerprint(rset, config)
+
+
+# Caracteres que Windows no acepta en un nombre de archivo, más los de control. El nombre
+# del .m3u8 sale del título de la semilla, que es texto de un tag: puede traer cualquiera.
+_NOMBRE_INVALIDO = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]+')
+_NOMBRE_MAX = 120        # sin la extensión: holgado para MAX_PATH con la carpeta Descargas
+
+
+def _nombre_m3u8(semilla_label: str, curva: str) -> str:
+    r"""Nombre del archivo que baja el navegador: seguro en Windows y sin rutas.
+
+    Lleva la semilla y la curva porque es lo que distingue un set de otro en la carpeta
+    Descargas ("DJ Radio - 4000Hz - Real Love - peak.m3u8"). Todo lo que Windows rechaza
+    (``<>:"/\|?*``, controles, un punto o espacio al final) se saca: la barra en
+    particular, porque un título con "/" no puede volverse una carpeta del nombre. El
+    prefijo fijo "DJ Radio - " hace que nunca quede vacío ni sea un nombre reservado
+    (CON, NUL, ...), así que esos dos casos no necesitan código.
+    """
+    base = _NOMBRE_INVALIDO.sub(" ", f"DJ Radio - {semilla_label} - {curva}")
+    base = re.sub(r"\s+", " ", base).strip()[:_NOMBRE_MAX].rstrip(" .")
+    return f"{base}.m3u8"
+
+
+def _content_disposition(nombre: str) -> str:
+    """`attachment` con el nombre en las dos formas de RFC 6266: `filename` en ASCII para
+    los clientes viejos y `filename*` en UTF-8, para que "Señor Coconut" no llegue roto."""
+    import unicodedata
+    from urllib.parse import quote
+
+    # "ñ" → "n" (se descarta el acento suelto); lo que no tiene letra base, como la raya del
+    # label ("Artista — Título"), pasa a "-" en vez de desaparecer y pegar las palabras.
+    ascii_ = "".join(c if c.isascii() else "-"
+                     for c in unicodedata.normalize("NFKD", nombre)
+                     if not unicodedata.combining(c))
+    ascii_ = re.sub(r'["\\]', "", ascii_)
+    # Después de NFKD: un "＜" o "：" de ancho completo es válido en Windows, pero al
+    # normalizarse vuelve a ser "<" o ":", que no. Se sacan también acá, no solo en el nombre.
+    ascii_ = re.sub(r"\s+", " ", _NOMBRE_INVALIDO.sub(" ", ascii_)).strip()
+    return f"attachment; filename=\"{ascii_}\"; filename*=UTF-8''{quote(nombre, safe='')}"
+
+
+@app.get("/api/radio/set.m3u8")
+async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str | None = None,
+                         artist_gap: int | None = None, mmr_lambda: float | None = None,
+                         semilla: int | None = None, randomness: float | None = None,
+                         esperado: str = ""):
+    r"""El set de /api/radio/set como .m3u8, para llevarlo a Rekordbox.
+
+    Mismos parámetros y mismo armado (`_armar_set_radio`), y el archivo lo escribe
+    `motor.export.m3u8_text`, que es lo que usa `python -m motor radio --m3u8`: el mismo
+    contenido byte a byte (CRLF, sin BOM, ``#DJRADIO`` con el BPM a un decimal).
+
+    RUTAS: absolutas, tal cual las guardó el scan (`Store._ruta`), igual que la CLI. No se
+    relativizan: el archivo termina en la carpeta Descargas, y una ruta relativa se
+    resolvería contra ESA carpeta. Con una base escaneada en Windows salen como
+    ``C:\...\x.wav`` también si el server corre en Docker: el .m3u8 es para la PC donde
+    está la música, no para el contenedor, así que acá no se chequea que existan.
+
+    `esperado`: los ids del set que muestra la pantalla, separados por coma. Si el set
+    re-armado no es ese (se escaneó algo entre medio y la radio ahora elige otra cosa), 409
+    en vez de bajar otro set: el DJ se llevaría a Rekordbox una lista que nunca escuchó (§6).
+
+    Errores con la misma forma que /set: 400 con el motivo del motor. Sin base (o base
+    ocupada, ilegible...) no hay set que exportar: 409 con `estado`/`motivo`, y NO un 200,
+    porque un 200 con JSON el navegador lo guardaría como si fuera el .m3u8.
+    """
+    armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
+                                    randomness)
+    if isinstance(armado, JSONResponse):
+        return armado
+    if armado.rset is None:
+        return JSONResponse({**_radio_envoltura(armado.estado, armado.motivo),
+                             "error": armado.motivo}, status_code=409)
+
+    from motor.export import m3u8_text
+
+    rset = armado.rset
+    ids = [_radio_id(t.path) for t in rset.tracks]
+    pedidos = [i.strip() for i in esperado.split(",") if i.strip()]
+    if pedidos and pedidos != ids:
+        return JSONResponse(
+            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
+                      "la misma (¿un scan nuevo?). Armalo de nuevo y exportá ese.",
+             "esperado": pedidos, "armado": ids}, status_code=409)
+
+    nombre = _nombre_m3u8(armado.elegida.label, armado.config.curve)
+    return Response(
+        content=m3u8_text(rset.tracks).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": _content_disposition(nombre),
+                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 @app.get("/api/radio/audio/{track_id}")
@@ -1453,6 +1851,325 @@ async def radio_audio(track_id: str):
                       f"con `docker compose exec web python -m motor scan /musica "
                       f"--licencia ... --origen ...`."}, status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
+
+
+# --- Sets guardados y calificación de transiciones (tarea 16, `motor/saved_sets.py`) -------
+#
+# Un set guardado es la FOTO de lo que se mostró (ver el docstring de `motor/saved_sets.py`):
+# acá nada lo re-arma ni recalcula al leerlo. Las rutas de los tracks salen de la base, nunca
+# del cliente: el cliente manda ids opacos (`_radio_id`) y números de set/transición.
+#
+#   POST   /api/radio/sets                          guardar el set que se está viendo
+#   GET    /api/radio/sets                          listar (con el resumen de calificaciones)
+#   GET    /api/radio/sets/{id}                     uno, con su foto y sus calificaciones
+#   PATCH  /api/radio/sets/{id}                     renombrar: {"nombre": "..."} ("" o null = sin nombre)
+#   DELETE /api/radio/sets/{id}                     borrar el set y sus calificaciones
+#   PUT    /api/radio/sets/{id}/transiciones/{n}    calificar: {"calificacion": "ok|regular|mala", "motivo": "..."}
+#   DELETE /api/radio/sets/{id}/transiciones/{n}    dejarla sin calificar
+#
+# La transición `n` va de la posición `n` a la `n + 1` (las posiciones son las `n` de los pasos).
+# Degradación: los GET contestan 200 con `estado`/`motivo` (como el resto de la radio) y las
+# escrituras 409 con lo mismo más `error`: sin base no hay nada que escribir, y un 200 diría
+# que se guardó. Pedido inválido → 400 con el motivo del motor; set inexistente → 404.
+
+
+def _set_guardado_resumen(info) -> dict:
+    return {"id": info.id, "nombre": info.name, "guardado": info.created_at,
+            "semilla": info.seed_label, "total": info.tracks, "pedidos": info.requested,
+            "curva": info.curve, "resumen": info.summary, "faltan": info.missing}
+
+
+def _set_guardado_json(s) -> dict:
+    """Un set guardado como lo lee la pantalla: la MISMA forma de paso que /api/radio/set
+    (`_radio_paso`) para que el front reuse cómo lo dibuja, más lo propio del set guardado.
+
+    Todo sale de la foto: `bpm` es el `bpm_shown` que se vio, `energia_pct` el percentil que
+    se imprimió, `motivo` el `Transition.reason()` de ese momento. `en_biblioteca: false`
+    dice que el archivo ya no está en la biblioteca (se borró o se movió y se re-escaneó):
+    el paso se muestra igual, entero, y sin audio — no hay qué reproducir.
+    """
+    from motor.cli import LEYENDA_KEY, aviso_fragmentos, titular_corte
+
+    pasos = []
+    for paso in s.steps:
+        f = paso.snapshot
+        tid = _radio_id(f.path)
+        pasos.append({
+            "n": f.position,
+            "track": {
+                "id": tid, "label": f.label, "titulo": f.title_shown, "artista": f.artist or "",
+                "bpm": float(f.bpm_shown), "camelot": f.key or None, "tonalidad": f.key_classic,
+                "key_dudosa": f.key_doubtful, "energia": round(f.energy, 3),
+                "energia_pct": f.energy_pct, "dur": round(f.duration, 1), "es_track": f.is_track,
+                "licencia": f.license, "origen": f.source_url,
+                "en_biblioteca": paso.in_library,
+                "audio": f"/api/radio/audio/{tid}" if paso.in_library else None,
+            },
+            "motivo": f.reason,
+            "es_semilla": f.is_seed,
+            "transicion": {
+                "from_bpm": f.from_bpm, "to_bpm": f.bpm, "bpm_delta_pct": f.bpm_delta_pct,
+                "bpm_octava": f.bpm_octave, "from_key": f.from_key, "to_key": f.key,
+                "key_relacion": f.key_relation, "key_compat": f.key_compat,
+                "mezclabilidad": f.mixability, "encaje_musical": f.musical_fit,
+                "score": f.score, "energia": f.energy, "energia_objetivo": f.energy_goal,
+            },
+        })
+    transiciones = []
+    for n in range(1, s.transitions + 1):
+        r = s.rating_of(n)
+        transiciones.append({
+            "n": n, "desde": n, "hasta": n + 1, "motivo_motor": s.steps[n].snapshot.reason,
+            "calificacion": r.rating if r else None, "motivo": r.reason if r else None,
+            "calificada": r.rated_at if r else None})
+    c = s.config
+    return {
+        "id": s.id, "nombre": s.name, "guardado": s.created_at,
+        # Con los nombres de /api/radio/set; `config_motor` es el RadioConfig entero (pesos
+        # incluidos), tal cual se guardó.
+        "config": {"largo": c.get("length"), "curva": c.get("curve"),
+                   "artist_gap": c.get("artist_gap"), "mmr_lambda": c.get("mmr_lambda"),
+                   "semilla": c.get("seed"), "randomness": c.get("randomness")},
+        "config_motor": c,
+        "pasos": pasos, "total": len(pasos), "pedidos": s.requested,
+        "completo": s.stop is None,
+        "corte": None if s.stop is None else {"codigo": s.stop, "titular": titular_corte(s.stop),
+                                               "detalle": s.stop_detail},
+        "fragmentos": s.fragments,
+        "aviso_fragmentos": (aviso_fragmentos(s.fragments, "La radio ignoró")
+                             if s.fragments else None),
+        "transiciones": transiciones, "resumen": s.summary(), "faltan": s.missing,
+        "leyenda_key": LEYENDA_KEY,
+    }
+
+
+def _sets_sin_base(estado: str, motivo: str | None) -> JSONResponse:
+    """Una escritura sin base utilizable: 409 con el estado, nunca un 200 ni un 500."""
+    return JSONResponse({**_radio_envoltura(estado, motivo), "error": motivo}, status_code=409)
+
+
+async def _sets_escribir(accion) -> tuple[object, JSONResponse | None]:
+    """Corre `accion(store)`; `(resultado, None)` o `(None, la respuesta de error)`."""
+    from motor.saved_sets import InvalidSavedSet, SavedSetNotFound
+
+    try:
+        res, estado, motivo = await asyncio.to_thread(_usar_store_motor, accion)
+    except InvalidSavedSet as e:
+        return None, JSONResponse({"error": str(e)}, status_code=400)
+    except SavedSetNotFound as e:
+        return None, JSONResponse({"error": str(e)}, status_code=404)
+    if estado != _RADIO_OK:
+        return None, _sets_sin_base(estado, motivo)
+    return res, None
+
+
+def _campo(payload: dict, nombre: str, tipo):
+    """Un campo opcional del cuerpo con su tipo, o `ValueError`. `True` no es un int acá: un
+    `largo: true` no puede armar un set de 1."""
+    valor = payload.get(nombre)
+    if valor is None:
+        return None
+    ok = (isinstance(valor, int) and not isinstance(valor, bool)) if tipo is int else \
+        (isinstance(valor, int | float) and not isinstance(valor, bool)) if tipo is float else \
+        isinstance(valor, tipo)
+    if not ok:
+        raise ValueError(f"`{nombre}` tiene que ser {tipo.__name__}, recibí {valor!r}")
+    # Un float que llega como entero en el JSON (`"randomness": 0`, que es como lo manda un
+    # navegador: JSON.stringify(0.0) da "0") se guarda como float, igual que lo parsea
+    # /api/radio/set desde la query. Si quedara int, la huella del set (`shown_header`)
+    # serializaría `0` en vez de `0.0` y el guardado daría 409 con el mismo set.
+    if tipo is not float:
+        return valor
+    try:
+        return float(valor)
+    except OverflowError:
+        # Un entero de cientos de dígitos no entra en un float: es un pedido inválido (400),
+        # no un error del servidor (500).
+        raise ValueError(f"`{nombre}` está fuera de rango: {str(valor)[:20]}…") from None
+
+
+@app.post("/api/radio/sets")
+async def radio_sets_guardar(payload: dict):
+    """Guarda el set que la pantalla está mostrando.
+
+    Cuerpo: los MISMOS parámetros que /api/radio/set (`track`, `largo`, `curva`,
+    `artist_gap`, `mmr_lambda`, `semilla`, `randomness`) más:
+
+    - `esperado` (obligatorio): los ids de los pasos que se mostraron, en orden (lista o
+      separados por coma). Es el mecanismo del export .m3u8: el set se re-arma con la misma
+      config y, si no da esos ids, 409 en vez de guardar otro set.
+    - `huella` (obligatoria): la `huella` que devolvió /api/radio/set. Cubre el caso que los
+      ids no ven: el mismo set de tracks pero con un dato distinto (un re-escaneo cambió un
+      BPM entre que se mostró y se guardó), o la misma lista con otro encabezado o corte.
+      Falta → 400; no coincide → 409.
+    - `nombre` (opcional).
+
+    201 con el set guardado (la misma forma que GET /api/radio/sets/{id}).
+    """
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "el cuerpo tiene que ser un objeto JSON"}, status_code=400)
+    try:
+        track = _campo(payload, "track", str) or ""
+        params = [_campo(payload, "largo", int), _campo(payload, "curva", str),
+                  _campo(payload, "artist_gap", int), _campo(payload, "mmr_lambda", float),
+                  _campo(payload, "semilla", int), _campo(payload, "randomness", float)]
+        huella = _campo(payload, "huella", str)
+        nombre = _campo(payload, "nombre", str)
+        esperado = payload.get("esperado")
+        if isinstance(esperado, str):
+            esperado = [i.strip() for i in esperado.split(",") if i.strip()]
+        if not (isinstance(esperado, list) and esperado
+                and all(isinstance(i, str) for i in esperado)):
+            raise ValueError("falta `esperado`: los ids de los pasos que se mostraron, en "
+                             "orden. Sin eso no hay forma de saber que se guarda lo que se vio.")
+        if not huella:
+            raise ValueError("falta `huella`: la que devolvió /api/radio/set con el set que se "
+                             "muestra. Sin ella un re-escaneo entre mostrar y guardar haría "
+                             "guardar datos que nunca estuvieron en pantalla.")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    armado = await _armar_set_radio(track, *params)
+    if isinstance(armado, JSONResponse):
+        return armado
+    if armado.rset is None:
+        return _sets_sin_base(armado.estado, armado.motivo)
+
+    from motor.saved_sets import config_json, fingerprint, shown_header, snapshot_steps
+
+    rset, config = armado.rset, armado.config
+    ids = [_radio_id(t.path) for t in rset.tracks]
+    if esperado != ids:
+        return JSONResponse(
+            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
+                      "la misma (¿un scan nuevo?). Armalo de nuevo y guardá ese.",
+             "esperado": esperado, "armado": ids}, status_code=409)
+    fotos = snapshot_steps(rset)
+    armada = fingerprint(fotos, shown_header(rset, config))
+    if huella != armada:
+        return JSONResponse(
+            {"error": "Los datos de los tracks cambiaron desde que armaste el set (¿un "
+                      "re-escaneo?): los mismos tracks, pero no lo que se mostró. Armalo de "
+                      "nuevo y guardá ese.", "huella_esperada": huella, "huella_armada": armada},
+            status_code=409)
+
+    def guardar(store):
+        set_id = store.save_set(fotos, config=config_json(config), requested=config.length,
+                                stop=rset.stop, stop_detail=rset.stop_detail,
+                                fragments=rset.fragments, name=nombre)
+        return store.get_saved_set(set_id)
+
+    guardado, error = await _sets_escribir(guardar)
+    if error is not None:
+        return error
+    return JSONResponse({**_radio_envoltura(_RADIO_OK, None), "set": _set_guardado_json(guardado)},
+                        status_code=201)
+
+
+@app.get("/api/radio/sets")
+async def radio_sets_listar():
+    """Los sets guardados, del más nuevo al más viejo, con el resumen de calificaciones."""
+    sets, estado, motivo = await asyncio.to_thread(
+        _usar_store_motor, lambda store: store.list_saved_sets())
+    return {**_radio_envoltura(estado, motivo),
+            "sets": [_set_guardado_resumen(s) for s in sets or []]}
+
+
+@app.get("/api/radio/sets/{set_id}")
+async def radio_sets_ver(set_id: int):
+    """Un set guardado: su foto (sin re-armar ni recalcular), sus calificaciones y el resumen."""
+    from motor.saved_sets import SavedSetNotFound
+
+    try:
+        s, estado, motivo = await asyncio.to_thread(
+            _usar_store_motor, lambda store: store.get_saved_set(set_id))
+    except SavedSetNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return {**_radio_envoltura(estado, motivo),
+            "set": None if s is None else _set_guardado_json(s)}
+
+
+@app.get("/api/radio/sets/{set_id}/m3u8")
+async def radio_sets_m3u8(set_id: int):
+    """El set guardado como .m3u8 para Rekordbox: su FOTO (rutas y datos que se guardaron,
+    en su orden), no un re-armado. Mismo contenido que escribe `motor.export.m3u8_text` (vía
+    `saved_sets.snapshot_m3u8`) y mismas cabeceras y nombre de archivo que
+    /api/radio/set.m3u8.
+
+    Una ruta que ya no está en la biblioteca va igual: es la que había, y el DJ puede tener el
+    archivo en otro lado. `X-DJRadio-Faltan` dice cuántas son, para que la pantalla avise.
+    Errores: 404 si el set no existe; sin base utilizable, 409 con `estado`/`motivo` (un 200
+    con JSON el navegador lo guardaría como si fuera el .m3u8)."""
+    from motor.saved_sets import SavedSetNotFound, snapshot_m3u8
+
+    try:
+        s, estado, motivo = await asyncio.to_thread(
+            _usar_store_motor, lambda store: store.get_saved_set(set_id))
+    except SavedSetNotFound as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    if estado != _RADIO_OK or s is None:
+        return _sets_sin_base(estado, motivo)
+    nombre = _nombre_m3u8(s.steps[0].snapshot.label if s.steps else f"set {s.id}",
+                          s.config.get("curve") or "")
+    return Response(
+        content=snapshot_m3u8(s.steps).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": _content_disposition(nombre),
+                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+                 "X-DJRadio-Faltan": str(s.missing)})
+
+
+@app.patch("/api/radio/sets/{set_id}")
+async def radio_sets_renombrar(set_id: int, payload: dict):
+    if "nombre" not in payload:
+        return JSONResponse({"error": "falta `nombre` (\"\" o null lo deja sin nombre)"},
+                            status_code=400)
+    nombre, error = await _sets_escribir(
+        lambda store: store.rename_saved_set(set_id, payload["nombre"]))
+    if error is not None:
+        return error
+    return {**_radio_envoltura(_RADIO_OK, None), "id": set_id, "nombre": nombre}
+
+
+@app.delete("/api/radio/sets/{set_id}")
+async def radio_sets_borrar(set_id: int):
+    _, error = await _sets_escribir(lambda store: store.delete_saved_set(set_id))
+    if error is not None:
+        return error
+    return {**_radio_envoltura(_RADIO_OK, None), "borrado": set_id}
+
+
+@app.put("/api/radio/sets/{set_id}/transiciones/{n}")
+async def radio_sets_calificar(set_id: int, n: int, payload: dict):
+    """Califica la transición `n` (de la posición `n` a la `n + 1`). Reemplaza la que hubiera.
+    `motivo` es obligatorio con `mala` y opcional con `ok` / `regular`."""
+    def calificar(store):
+        r = store.rate_transition(set_id, n, payload.get("calificacion"), payload.get("motivo"))
+        return r, store.get_saved_set(set_id).summary()
+
+    res, error = await _sets_escribir(calificar)
+    if error is not None:
+        return error
+    r, resumen = res
+    return {**_radio_envoltura(_RADIO_OK, None),
+            "transicion": {"n": r.transition, "desde": r.transition, "hasta": r.transition + 1,
+                           "calificacion": r.rating, "motivo": r.reason,
+                           "calificada": r.rated_at},
+            "resumen": resumen}
+
+
+@app.delete("/api/radio/sets/{set_id}/transiciones/{n}")
+async def radio_sets_descalificar(set_id: int, n: int):
+    """Deja la transición `n` sin calificar. `borrada: false` si ya no tenía calificación."""
+    def borrar(store):
+        return store.delete_rating(set_id, n), store.get_saved_set(set_id).summary()
+
+    res, error = await _sets_escribir(borrar)
+    if error is not None:
+        return error
+    borrada, resumen = res
+    return {**_radio_envoltura(_RADIO_OK, None), "n": n, "borrada": borrada,
+            "resumen": resumen}
 
 
 @app.get("/api/historial")

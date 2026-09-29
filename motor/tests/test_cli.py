@@ -1054,3 +1054,112 @@ def test_scan_lee_artista_y_titulo_de_tags_reales(tmp_path, capsys):
         assert codigo == 0, out
         campos = dict(re.findall(r"^  (\S+(?: \S+)?)\s{2,}(.+)$", out, flags=re.M))
         assert (campos["artista"], campos["título"]) == (artista, titulo), campos
+
+
+# --- puente ----------------------------------------------------------------------------
+
+
+def test_puente_punta_a_punta(tmp_path, capsys, biblioteca):
+    """El criterio de hecho de la tarea 18.5, con audio sintético: de 120 a 134 BPM (10.4%,
+    no mezclan directo) salen 3 o 4 intermedios, ningún salto se sale de ±8% contra el pitch
+    real, cada motivo es el de SUS dos tracks, dos corridas dan lo mismo y el M3U8 va en el
+    orden del puente."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    m3u8 = tmp_path / "puente.m3u8"
+    argv = ("--db", db, "puente", "click_120", "click_134", "--m3u8", m3u8)
+    codigo, out, err = _correr(capsys, *argv)
+    assert codigo == 0, out + err
+    pasos = _pasos(out)
+    with Store(db) as store:
+        por_label = {t.label: t for t in store.load_library()}
+    tracks = [por_label[label] for label, _ in pasos]
+
+    assert [t.path.name for t in (tracks[0], tracks[-1])] == \
+        ["click_120_Amin.wav", "click_134_Bmin.wav"], [t.path.name for t in tracks]
+    assert 3 <= len(tracks) - 2 <= 4, f"{len(tracks) - 2} intermedios:\n{out}"
+    assert "click_170_F#min.wav" not in {t.path.name for t in tracks}, out
+    assert len({t.path for t in tracks}) == len(tracks), f"un track se repite:\n{out}"
+    assert pasos[0][1] == f"origen | {tracks[0].key} | {tracks[0].bpm:.1f} BPM", pasos[0]
+    for (_, motivo), prev, cur in zip(pasos[1:], tracks[:-1], tracks[1:], strict=True):
+        assert _dist_bpm(prev.bpm, cur.bpm) < 0.08, \
+            f"{prev.label} ({prev.bpm}) → {cur.label} ({cur.bpm}) fuera de ±8% (§4)"
+        pct, _ = bpm_delta_pct(prev.bpm, cur.bpm)
+        esperado = (f"{pct:+.1f}% BPM | {prev.key} → {cur.key} "
+                    f"({key_relation(prev.key, cur.key)})")
+        assert motivo == esperado, f"el motivo no es el de {prev.label} → {cur.label}: {motivo!r}"
+    assert f"{len(tracks) - 2} intermedios · costo" in out, out
+
+    rutas_m3u8 = [linea for linea in m3u8.read_text(encoding="utf-8").splitlines()
+                  if linea and not linea.startswith("#")]
+    assert rutas_m3u8 == [str(t.path) for t in tracks], rutas_m3u8
+    _, otra, _ = _correr(capsys, *argv)
+    assert otra == out, f"mismo pedido, dos puentes:\n{out}\n---\n{otra}"
+
+
+def test_puente_imposible_dice_por_que_y_sale_con_1(tmp_path, capsys, biblioteca):
+    """170 BPM no tiene nada a ±8% en el catálogo: no hay puente desde 120, se dice en el
+    titular y en el detalle, y sale con 1 (no es un error de uso)."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    codigo, out, _ = _correr(capsys, "--db", db, "puente", "click_120", "click_170")
+    assert codigo == 1, out
+    assert not _pasos(out), f"imprimió pasos de un puente que no existe:\n{out}"
+    assert ("NO HAY PUENTE: ninguna cadena de tracks une los dos BPM dentro de la "
+            "tolerancia.") in out, out
+    m = re.search(r"^  Por qué \(sin_camino\): (.+)$", out, re.M)
+    assert m and "170.0 BPM" in m.group(1) and "±8%" in m.group(1), out
+
+
+def test_puente_con_un_extremo_que_no_es_track_es_error_de_uso(capsys, con_fragmento):
+    db, por_nombre = con_fragmento
+    loop = por_nombre["loop_126_Cmaj.wav"]
+    codigo, out, err = _correr(capsys, "--db", db, "puente", "loop_126", "click_128")
+    assert codigo == 2, out + err
+    assert not _pasos(out), out
+    assert f"dura {loop.duration:.1f} s" in err and "list" in err, err
+
+
+def test_puente_avisa_si_los_extremos_ya_mezclan(tmp_path, capsys, biblioteca):
+    """126 y 128 mezclan directo: el puente igual trae 3-4 intermedios (criterio de la
+    tarea) y arriba avisa que el rodeo es opcional, con el motivo del motor para ese salto.
+    120 → 134 no mezcla directo (10.4%) y no lleva aviso."""
+    _, db_bib, _ = biblioteca
+    db = tmp_path / "db.sqlite"
+    shutil.copy(db_bib, db)
+    codigo, out, _ = _correr(capsys, "--db", db, "puente", "click_126", "click_128")
+    assert codigo == 0, out
+    with Store(db) as store:
+        por_nombre = {t.path.name: t for t in store.load_library()}
+    a, b = por_nombre["click_126_Cmaj.wav"], por_nombre["click_128_Gmaj.wav"]
+    pct, _ = bpm_delta_pct(a.bpm, b.bpm)
+    motivo = f"{pct:+.1f}% BPM | {a.key} → {b.key} ({key_relation(a.key, b.key)})"
+    assert (f"A y B ya mezclan directo: {motivo} · el puente de abajo es un rodeo opcional"
+            in out), out
+    assert out.index("ya mezclan directo") < out.index(" 1. "), \
+        f"el aviso tiene que ir ARRIBA del puente:\n{out}"
+    assert 3 <= len(_pasos(out)) - 2 <= 4, out
+    _, lejos, _ = _correr(capsys, "--db", db, "puente", "click_120", "click_134")
+    assert "ya mezclan directo" not in lejos, lejos
+
+
+def test_puente_mismo_track_dice_bien_el_motivo(capsys, biblioteca):
+    _, db, _ = biblioteca
+    codigo, _, err = _correr(capsys, "--db", db, "puente", "click_120", "click_120")
+    assert codigo == 2, err
+    assert err.strip().startswith("El origen y el destino son el mismo track (click_120"), err
+
+
+@pytest.mark.parametrize("argv", [("click_120", "click_120"),
+                                  ("click_120", "click_134", "--min-intermedios", "5",
+                                   "--max-intermedios", "4"),
+                                  ("click", "click_134")])
+def test_puente_errores_de_uso(capsys, biblioteca, argv):
+    """Mismo track en las dos puntas, rango invertido y fragmento ambiguo: salen con 2 y el
+    mensaje va a stderr, sin traceback."""
+    _, db, _ = biblioteca
+    codigo, out, err = _correr(capsys, "--db", db, "puente", *argv)
+    assert codigo == 2, out + err
+    assert err.strip() and "Traceback" not in err, err

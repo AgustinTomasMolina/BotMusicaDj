@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getRadioBiblioteca, getRadioSet, radioAudioUrl, radioAudioMotivo } from '../api'
+import {
+  getRadioBiblioteca, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
+  guardarRadioSet, listarRadioSets, getRadioSetGuardado, renombrarRadioSet, borrarRadioSet,
+  calificarTransicion, descalificarTransicion,
+} from '../api'
 import { fmtDur, normalizeText } from '../utils'
-import { IconRadio, IconPause, IconPlayFill, IconSearch } from './icons'
+import { IconRadio, IconPause, IconPlayFill, IconSearch, IconDownload } from './icons'
+import { SetsGuardados, GuardarDialog, CabeceraGuardado, Calificar } from './RadioSets'
 
 /* ============================================================================
    Pantalla de Radio DJ: elegir semilla → ajustar la radio → el set.
@@ -204,10 +209,13 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
 }
 
 /* ---------- 3. El set ---------- */
-function Paso({ paso, leyenda, sonando, onAudio, errorAudio }) {
+function Paso({ paso, leyenda, sonando, onAudio, errorAudio, calificar }) {
   const t = paso.track
+  // Solo un set guardado manda `en_biblioteca`: `false` = el archivo ya no está en la
+  // biblioteca del motor. El paso se ve entero (es la foto) y no se puede reproducir.
+  const falta = t.en_biblioteca === false
   return (
-    <div className="rpaso" role="listitem">
+    <div className={`rpaso${falta ? ' is-falta' : ''}`} role="listitem">
       {/* El porqué TAL CUAL lo escribió el motor (`Transition.reason()`). §6: una
           recomendación sin explicación no genera confianza. No es aria-hidden: es el dato
           más importante de la fila, también para quien usa lector de pantalla. */}
@@ -215,18 +223,26 @@ function Paso({ paso, leyenda, sonando, onAudio, errorAudio }) {
         <span className="rpaso-why-ico" aria-hidden="true">{paso.es_semilla ? '◉' : '↳'}</span>
         <span className="mono">{paso.motivo}</span>
       </p>
+      {/* La calificación va entre el porqué y la fila: califica la transición que llega a
+          este paso desde el anterior, que es lo que dice el porqué. */}
+      {calificar}
       <div className="rpaso-row">
         <span className="rpaso-n mono">{paso.n}</span>
-        <button type="button" className={`rplay${sonando ? ' on' : ''}`}
-          aria-label={`${sonando ? 'Pausar' : 'Reproducir'} ${t.titulo}`} onClick={() => onAudio(t)}>
-          {sonando ? <IconPause size={15} /> : <IconPlayFill size={15} />}
-        </button>
+        {falta
+          ? <span className="rplay is-sin" aria-hidden="true" />
+          : (
+            <button type="button" className={`rplay${sonando ? ' on' : ''}`}
+              aria-label={`${sonando ? 'Pausar' : 'Reproducir'} ${t.titulo}`} onClick={() => onAudio(t)}>
+              {sonando ? <IconPause size={15} /> : <IconPlayFill size={15} />}
+            </button>
+          )}
         <span className="rpaso-id">
           <span className="rpaso-titulo truncate">{t.titulo}</span>
           <span className="rpaso-artista truncate">{t.artista || '—'}</span>
         </span>
         <DatosTrack t={t} leyenda={leyenda} />
         {paso.es_semilla && <span className="rtag-seed">semilla</span>}
+        {falta && <span className="rtag-falta">ya no está en la biblioteca</span>}
       </div>
       {/* El 404 de la radio explica si el archivo se movió o si la base se escaneó en otra
           máquina: se muestra el texto del backend, no uno resumido acá. */}
@@ -266,6 +282,20 @@ export default function Radio() {
   const [sonando, setSonando] = useState(null)
   const [errorAudio, setErrorAudio] = useState(null)   // {id, mensaje}
   const [intento, setIntento] = useState(0)            // el botón «Reintentar» vuelve a pedir
+  const [exportando, setExportando] = useState(false)
+  const [avisoExport, setAvisoExport] = useState(null) // {tipo: 'ok'|'err', texto}
+  // Sets guardados. `guardado` es el set guardado que se está mirando (la respuesta de
+  // POST o GET /api/radio/sets/{id}): mientras hay uno, el panel del set dibuja SU foto y no
+  // `set_`. `set_` no se pierde al abrir uno: «Cerrar» vuelve al set armado.
+  const [guardado, setGuardado] = useState(null)
+  const [sets, setSets] = useState({ cargando: true, sets: [], motivo: null })
+  const [dialogoGuardar, setDialogoGuardar] = useState(false)
+  const [guardando, setGuardando] = useState(false)
+  const [errorGuardar, setErrorGuardar] = useState(null)  // {texto, conflicto}
+  const [errorSets, setErrorSets] = useState('')          // abrir / renombrar / borrar
+  const [aviso, setAviso] = useState('')                  // región viva de guardar y calificar
+  const guardadoTituloRef = useRef(null)
+  const setTituloRef = useRef(null)
   const audioRef = useRef(null)
   // Qué track tiene cargado el <audio>. Sin esto, «Reproducir» después de «Pausar»
   // reasignaba `src` y el track arrancaba de cero: el botón decía Pausar y actuaba como
@@ -306,8 +336,10 @@ export default function Radio() {
     setErrorAudio(null)
   }
 
-  const armar = async () => {
-    if (!elegida) return
+  // `params` solo lo pasa «Re-armar el set» (después de un 409 al guardar): re-arma con lo
+  // que el set dice que usó, no con lo que hoy tengan los controles.
+  const armar = async (params) => {
+    if (!params && !elegida) return
     // Antes esto no paraba el audio: con un paso sonando, armar otro set dejaba el track
     // anterior sonando sin ningún botón en «Pausar», y si el armado fallaba (400) la lista
     // desaparecía y el audio seguía sin un solo control en pantalla. También limpia el
@@ -315,8 +347,13 @@ export default function Radio() {
     pararAudio()
     setArmando(true)
     setError('')
+    setAvisoExport(null)   // el aviso era del set anterior
+    setErrorGuardar(null)
+    setErrorSets('')
+    // Armar muestra el set nuevo: el set guardado que se miraba se cierra (sigue en la lista).
+    setGuardado(null)
     try {
-      const r = await getRadioSet({ track: elegida.id, ...cfg })
+      const r = await getRadioSet(params || { track: elegida.id, ...cfg })
       if (!r.ok) {
         // 400: semilla que no es un track, curva inexistente, randomness fuera de 0..1. El
         // texto lo escribe el motor y se muestra tal cual — inventar uno propio acá sería
@@ -343,6 +380,263 @@ export default function Radio() {
       setError('No pude conectar con el servidor para armar el set. Revisá que esté corriendo y volvé a intentar.')
     } finally {
       setArmando(false)
+    }
+  }
+
+  // Baja el set que está EN PANTALLA como .m3u8 para Rekordbox. Se piden los parámetros que
+  // el set dice que usó (`set_.config`), no los de los controles: si el DJ tocó un control
+  // después de armar, el archivo igual tiene que ser la lista que está viendo. Y viajan los
+  // ids en pantalla: si el backend re-arma otra cosa (un scan entre medio), contesta 409 con
+  // el motivo en vez de bajar otro set.
+  //
+  // Con un set guardado abierto se exporta SU FOTO (decisión del dueño): las rutas y los
+  // datos que se guardaron, en su orden, sin re-armar. Si alguna ruta ya no está en la
+  // biblioteca va igual (es la que había) y el aviso dice cuántas.
+  const exportar = async () => {
+    const v = guardado || set_
+    if (!v || (!guardado && !set_.semilla) || exportando || armando) return
+    setExportando(true)
+    setAvisoExport(null)
+    try {
+      const r = guardado
+        ? await exportarSetGuardadoM3u8(guardado.id)
+        : await exportarRadioM3u8({ track: set_.semilla.id, ...set_.config }, set_.pasos.map((p) => p.track.id))
+      if (!r.ok) {
+        setAvisoExport({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data) })
+        return
+      }
+      // Descarga real: un <a download> con el blob. El nombre es el que eligió el backend
+      // (ya saneado para Windows); el navegador lo deja en la carpeta de descargas.
+      const url = URL.createObjectURL(r.blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = r.nombre
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
+      setAvisoExport({
+        tipo: 'ok',
+        texto: `Se bajó «${r.nombre}» con los ${v.total} tracks en este orden.`
+          + (r.faltan ? ` Ojo: ${r.faltan} ya no está${r.faltan === 1 ? '' : 'n'} en la biblioteca del motor; el archivo trae la ruta que tenía${r.faltan === 1 ? '' : 'n'} al guardar el set y Rekordbox puede no encontrarla${r.faltan === 1 ? '' : 's'}.` : '')
+          + ' En Rekordbox: File → Import → Import Playlist, y elegí ese archivo.',
+      })
+    } catch {
+      setAvisoExport({ tipo: 'err', texto: 'No pude conectar con el servidor para exportar el set. Revisá que esté corriendo y volvé a intentar.' })
+    } finally {
+      setExportando(false)
+    }
+  }
+
+  /* ---------- sets guardados ---------- */
+
+  // La lista con sus resúmenes. Se vuelve a pedir después de cada escritura: el resumen de
+  // cada set lo cuenta la API, no esta pantalla.
+  // Solo se aplica la respuesta de la ÚLTIMA lectura pedida: una más vieja que llega tarde
+  // traería resúmenes de antes.
+  const lecturaSets = useRef(0)
+  const cargarSets = async () => {
+    const mia = ++lecturaSets.current
+    try {
+      const r = await listarRadioSets()
+      if (mia !== lecturaSets.current) return
+      if (r.ok && Array.isArray(r.data?.sets)) {
+        // Sin base (o base ocupada) la API contesta 200 con `estado`/`motivo` y la lista vacía.
+        setSets({ cargando: false, sets: r.data.sets, motivo: r.data.estado === 'ok' ? null : r.data.motivo })
+      } else {
+        setSets({ cargando: false, sets: [], motivo: `No pude leer los sets guardados: ${motivoDelRechazo(r.status, r.data)}` })
+      }
+    } catch {
+      if (mia !== lecturaSets.current) return
+      setSets({ cargando: false, sets: [], motivo: 'No pude conectar con el servidor para leer los sets guardados. Revisá que esté corriendo y volvé a intentar.' })
+    }
+  }
+  useEffect(() => { cargarSets() }, [intento]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Después de que aparece la cabecera de un set guardado (recién guardado o abierto), el
+  // foco va a su título: quien usa teclado sabe qué set está mirando (WCAG 2.4.3). Al
+  // cerrarlo o borrarlo, al título del panel del set. Se hace en un efecto, con lo que ya se
+  // dibujó: con un setTimeout el foco podía llegar antes que la cabecera.
+  const [foco, setFoco] = useState(null)   // {a: 'guardado'|'set', vez}
+  const enfocarGuardado = () => setFoco({ a: 'guardado', vez: Date.now() })
+  const enfocarSet = () => setFoco({ a: 'set', vez: Date.now() })
+  useEffect(() => {
+    if (!foco) return
+    const el = foco.a === 'guardado' ? guardadoTituloRef.current : setTituloRef.current
+    el?.focus()
+  }, [foco])
+
+  // Guarda el set armado que está en pantalla. Viajan los ids de los pasos que se ven y la
+  // huella que devolvió /api/radio/set: si el backend re-arma otra cosa contesta 409 y NO se
+  // guarda nada. Nunca se reintenta solo ni se guarda "lo que haya".
+  const guardar = async (nombre) => {
+    if (!set_ || !set_.semilla || guardando) return
+    setDialogoGuardar(false)
+    setGuardando(true)
+    setErrorGuardar(null)
+    try {
+      const r = await guardarRadioSet({ track: set_.semilla.id, ...set_.config },
+        set_.pasos.map((p) => p.track.id), set_.huella, nombre)
+      if (!r.ok || !r.data?.set) {
+        setErrorGuardar({ texto: motivoDelRechazo(r.status, r.data), conflicto: r.status === 409 })
+        return
+      }
+      const s = r.data.set
+      // Lo que se muestra de acá en más es la foto que devolvió el backend (los mismos pasos:
+      // la huella lo garantiza). `set_` se suelta: ya está guardado, y «Cerrar» no tiene que
+      // volver a ofrecer guardarlo otra vez.
+      setGuardado(s)
+      setSet(null)
+      setAviso(`Set guardado como #${s.id}${s.nombre ? ` «${s.nombre}»` : ''}. Ya podés calificar sus transiciones.`)
+      enfocarGuardado()
+      cargarSets()
+    } catch {
+      setErrorGuardar({ texto: 'No pude conectar con el servidor para guardar el set. Revisá que esté corriendo y volvé a intentar.', conflicto: false })
+    } finally {
+      setGuardando(false)
+    }
+  }
+
+  // Abre un set guardado: su FOTO, de GET /api/radio/sets/{id}. No se re-arma nada.
+  const abrirGuardado = async (id) => {
+    setErrorSets('')
+    try {
+      const r = await getRadioSetGuardado(id)
+      if (!r.ok || !r.data?.set) {
+        setErrorSets(r.ok ? (r.data?.motivo || 'El servidor no devolvió el set.') : motivoDelRechazo(r.status, r.data))
+        if (r.status === 404) cargarSets()   // ya no existe: la lista estaba vieja
+        return
+      }
+      if (!guardado || guardado.id !== r.data.set.id) pararAudio()
+      setAvisoExport(null)
+      setErrorGuardar(null)
+      setGuardado(r.data.set)
+      setAviso(`Abriste el set guardado #${r.data.set.id}${r.data.set.nombre ? ` «${r.data.set.nombre}»` : ' (sin nombre)'}.`)
+      enfocarGuardado()
+    } catch {
+      setErrorSets('No pude conectar con el servidor para abrir el set. Revisá que esté corriendo y volvé a intentar.')
+    }
+  }
+
+  const cerrarGuardado = () => {
+    pararAudio()
+    setAvisoExport(null)
+    setGuardado(null)
+    setErrorSets('')
+    enfocarSet()
+  }
+
+  // Devuelven true si se pudo, para que la cabecera sepa si cerrar su formulario o diálogo.
+  const renombrar = async (nombre) => {
+    if (!guardado) return false
+    setErrorSets('')
+    try {
+      const r = await renombrarRadioSet(guardado.id, nombre)
+      if (!r.ok) { setErrorSets(`No se renombró: ${motivoDelRechazo(r.status, r.data)}`); return false }
+      setGuardado((g) => (g && g.id === r.data.id ? { ...g, nombre: r.data.nombre } : g))
+      setAviso(r.data.nombre ? `Set #${r.data.id} renombrado a «${r.data.nombre}».` : `El set #${r.data.id} quedó sin nombre.`)
+      cargarSets()
+      return true
+    } catch {
+      setErrorSets('No pude conectar con el servidor para renombrar el set. Revisá que esté corriendo y volvé a intentar.')
+      return false
+    }
+  }
+
+  const borrar = async () => {
+    if (!guardado) return false
+    const id = guardado.id
+    setErrorSets('')
+    try {
+      const r = await borrarRadioSet(id)
+      if (!r.ok) { setErrorSets(`No se borró: ${motivoDelRechazo(r.status, r.data)}`); return false }
+      pararAudio()
+      setGuardado(null)
+      setAviso(`Set guardado #${id} borrado.`)
+      cargarSets()
+      enfocarSet()
+      return true
+    } catch {
+      setErrorSets('No pude conectar con el servidor para borrar el set. Revisá que esté corriendo y volvé a intentar.')
+      return false
+    }
+  }
+
+  // Aplica al set abierto lo que contestó la API al calificar: la transición (y el resumen
+  // solo si viene, ver `terminarEscritura`).
+  const aplicarCalificacion = (id, n, cambios, resumen) => {
+    setGuardado((g) => (g && g.id === id
+      ? { ...g, ...(resumen ? { resumen } : {}), transiciones: g.transiciones.map((t) => (t.n === n ? { ...t, ...cambios } : t)) }
+      : g))
+  }
+
+  // Calificaciones en vuelo. Las de transiciones distintas viajan en paralelo y sus
+  // respuestas pueden llegar en cualquier orden: el `resumen` de una respuesta vieja haría
+  // retroceder la cuenta ("4 de 19" → "3 de 19"). Regla: el resumen de una respuesta se
+  // aplica solo si ese pedido viajó SOLO; si hubo otro a la vez, cuando terminan todos se
+  // relee el set y se aplica el resumen de esa lectura (la última pedida, y si no empezó otra
+  // escritura mientras tanto).
+  const vuelo = useRef({ n: 0, solape: false, lectura: 0 })
+  const empezarEscritura = () => {
+    const v = vuelo.current
+    if (v.n > 0) v.solape = true
+    v.n += 1
+  }
+  const terminarEscritura = async (id, resumen) => {
+    const v = vuelo.current
+    v.n -= 1
+    if (v.n > 0) return
+    if (!v.solape) {
+      if (resumen) setGuardado((g) => (g && g.id === id ? { ...g, resumen } : g))
+      return
+    }
+    v.solape = false
+    const mia = ++v.lectura
+    try {
+      const r = await getRadioSetGuardado(id)
+      if (mia !== v.lectura || v.n > 0 || !r.ok || !r.data?.set) return
+      setGuardado((g) => (g && g.id === id ? { ...g, resumen: r.data.set.resumen } : g))
+    } catch { /* sin red: queda el último resumen aplicado; la próxima escritura lo corrige */ }
+  }
+
+  const calificar = async (n, calificacion, motivo) => {
+    if (!guardado) return { ok: false, error: 'no hay un set guardado abierto.' }
+    const id = guardado.id
+    empezarEscritura()
+    let resumen = null
+    try {
+      const r = await calificarTransicion(id, n, calificacion, motivo)
+      if (!r.ok) return { ok: false, error: motivoDelRechazo(r.status, r.data) }
+      const t = r.data.transicion
+      resumen = r.data.resumen
+      aplicarCalificacion(id, n, { calificacion: t.calificacion, motivo: t.motivo, calificada: t.calificada })
+      setAviso(`Transición ${t.desde} → ${t.hasta}: ${t.calificacion}${t.motivo ? ` (${t.motivo})` : ''}, guardada.`)
+      cargarSets()
+      return { ok: true, motivo: t.motivo }
+    } catch {
+      return { ok: false, error: 'no pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.' }
+    } finally {
+      terminarEscritura(id, resumen)
+    }
+  }
+
+  const descalificar = async (n) => {
+    if (!guardado) return { ok: false, error: 'no hay un set guardado abierto.' }
+    const id = guardado.id
+    empezarEscritura()
+    let resumen = null
+    try {
+      const r = await descalificarTransicion(id, n)
+      if (!r.ok) return { ok: false, error: motivoDelRechazo(r.status, r.data) }
+      resumen = r.data.resumen
+      aplicarCalificacion(id, n, { calificacion: null, motivo: null, calificada: null })
+      setAviso(`Transición ${n} → ${n + 1}: sin calificar.`)
+      cargarSets()
+      return { ok: true }
+    } catch {
+      return { ok: false, error: 'no pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.' }
+    } finally {
+      terminarEscritura(id, resumen)
     }
   }
 
@@ -386,7 +680,7 @@ export default function Radio() {
         <p>{lib.motivo}</p>
         <p className="rnota mono">estado: {lib.estado}</p>
         <button type="button" className="btn btn-secondary"
-          onClick={() => { setLib(null); setSet(null); setElegida(null); setIntento((n) => n + 1) }}>
+          onClick={() => { setLib(null); setSet(null); setGuardado(null); setElegida(null); setIntento((n) => n + 1) }}>
           Reintentar
         </button>
       </div>
@@ -395,6 +689,8 @@ export default function Radio() {
 
   const leyenda = lib.opciones ? lib.opciones.leyenda_key : null
   const curvas = lib.opciones ? lib.opciones.curvas : null
+  // Lo que dibuja el panel del set: el set guardado abierto (su foto) o, si no hay, el armado.
+  const vista = guardado || set_
   // El error ya se anuncia solo (role="alert" en el aviso), así que no se repite acá.
   const anuncio = armando
     ? 'Armando el set…'
@@ -404,8 +700,11 @@ export default function Radio() {
 
   return (
     <div className="radiodj">
-      {/* onError: si el archivo falla a mitad de camino el botón no queda en "Pausar". */}
-      <audio ref={audioRef} onEnded={() => setSonando(null)} onError={() => setSonando(null)} preload="none" />
+      {/* onError: si el archivo falla a mitad de camino el botón no queda en "Pausar".
+          onPause: si lo pausa otro (la barra de reproducción, que es el único audio de la app),
+          el botón vuelve a "Reproducir" en vez de quedar en "Pausar" con un click muerto. */}
+      <audio ref={audioRef} onEnded={() => setSonando(null)} onError={() => setSonando(null)}
+        onPause={() => setSonando(null)} preload="none" />
       <div className="radiodj-head">
         <h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
         <p className="muted">
@@ -419,18 +718,86 @@ export default function Radio() {
           {cfg
             ? <Controles cfg={cfg} setCfg={setCfg} curvas={curvas} elegida={elegida} onArmar={armar} armando={armando} />
             : <p className="rnota">No puedo dibujar los controles: el servidor no mandó los valores del motor.</p>}
+          <SetsGuardados estado={sets} abiertoId={guardado ? guardado.id : null} onAbrir={abrirGuardado} />
         </div>
 
         <section className="rpanel rpanel-set" aria-labelledby="r-set-h">
           <div className="rset-head">
-            <h2 id="r-set-h" className="rpanel-h">3 · El set</h2>
-            {set_ && (
+            <h2 id="r-set-h" className="rpanel-h" ref={setTituloRef} tabIndex={-1}>3 · El set</h2>
+            {vista && (
               <span className="rset-cuenta mono">
-                {set_.total} track{set_.total === 1 ? '' : 's'}
-                {set_.pedidos != null && ` · ${set_.total} de ${set_.pedidos} pedidos`}
+                {vista.total} track{vista.total === 1 ? '' : 's'}
+                {vista.pedidos != null && ` · ${vista.total} de ${vista.pedidos} pedidos`}
               </span>
             )}
+            {/* aria-disabled y no disabled, por lo mismo que «Armar el set»: el botón no
+                pierde el foco mientras exporta ni cuando todavía no hay set. */}
+            <button type="button" className="btn btn-secondary rexportar"
+              aria-disabled={!vista || exportando || armando}
+              aria-describedby={vista ? undefined : 'r-exportar-falta'}
+              onClick={exportar}>
+              {exportando
+                ? <><span className="spinner" aria-hidden="true" /> Exportando…</>
+                : <><IconDownload size={15} /> Exportar a Rekordbox</>}
+            </button>
+            {!vista && <span className="sr-only" id="r-exportar-falta">Todavía no hay set: armá uno para poder exportarlo.</span>}
+            {/* Guardar: solo el set ARMADO que se ve (un set guardado ya está guardado). */}
+            {!guardado && (
+              <button type="button" className="btn btn-secondary rguardar"
+                aria-disabled={!set_ || guardando || armando}
+                aria-describedby={set_ ? undefined : 'r-guardar-falta'}
+                onClick={() => { if (set_ && !guardando && !armando) setDialogoGuardar(true) }}>
+                {guardando ? <><span className="spinner" aria-hidden="true" /> Guardando…</> : 'Guardar set'}
+              </button>
+            )}
+            {!set_ && !guardado && <span className="sr-only" id="r-guardar-falta">Todavía no hay set: armá uno para poder guardarlo.</span>}
           </div>
+
+          {/* Calificar se habilita recién guardado: la calificación se escribe contra un set
+              guardado, y guardarlo es un paso explícito (nunca un guardado silencioso). */}
+          {set_ && !guardado && (
+            <div className="rguardar-nota"><p className="rnota">Guardá el set para calificar cada transición (OK, regular o mala) mientras lo escuchás.</p></div>
+          )}
+
+          {errorGuardar && (
+            <div className="alert alert-warn rguardar-error" role="alert">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
+              <div>
+                <div className="alert-title">No se guardó el set</div>
+                <p>{errorGuardar.texto}</p>
+                {/* 409: lo que se ve ya no es lo que el motor arma hoy. Re-armar con lo que el
+                    set usó muestra el set de hoy, y ESE es el que se puede guardar. */}
+                {errorGuardar.conflicto && set_ && set_.semilla && (
+                  <button type="button" className="btn btn-secondary btn-sm rrearmar"
+                    onClick={() => armar({ track: set_.semilla.id, ...set_.config })}>
+                    Re-armar el set
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {errorSets && (
+            <div className="alert alert-warn rsets-error" role="alert">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
+              <div><div className="alert-title">Sets guardados</div><p>{errorSets}</p></div>
+            </div>
+          )}
+
+          {guardado && (
+            <CabeceraGuardado key={guardado.id} set={guardado} tituloRef={guardadoTituloRef}
+              onRenombrar={renombrar} onBorrar={borrar} onCerrar={cerrarGuardado} />
+          )}
+
+          {avisoExport && avisoExport.tipo === 'err' && (
+            <div className="alert alert-warn" role="alert">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
+              <div><div className="alert-title">No se exportó el set</div><p>{avisoExport.texto}</p></div>
+            </div>
+          )}
+          {avisoExport && avisoExport.tipo === 'ok' && (
+            <p className="rnota rexportar-ok" role="status">{avisoExport.texto}</p>
+          )}
 
           {error && (
             <div className="alert alert-warn" role="alert">
@@ -439,40 +806,56 @@ export default function Radio() {
             </div>
           )}
 
-          {!set_ && !error && (
+          {!vista && !error && (
             <p className="rnota">Elegí una semilla y tocá «Armar el set»: acá van los pasos con su porqué.</p>
           )}
 
-          {set_ && (
+          {vista && (
             <>
-              <Curva pasos={set_.pasos} />
+              <Curva pasos={vista.pasos} />
               <div className="rset" role="list">
-                {set_.pasos.map((p) => (
-                  <Paso key={p.n} paso={p} leyenda={leyenda}
-                    sonando={sonando === p.track.id} onAudio={alternarAudio}
-                    errorAudio={errorAudio && errorAudio.id === p.track.id ? errorAudio.mensaje : null} />
-                ))}
+                {vista.pasos.map((p, i) => {
+                  // La transición `n` va del paso n al n + 1: la que LLEGA a este paso es la
+                  // del anterior. Solo existe en un set guardado (lo que dice la API).
+                  const tr = guardado && i > 0 ? guardado.transiciones.find((x) => x.n === vista.pasos[i - 1].n) : null
+                  return (
+                    <Paso key={p.n} paso={p} leyenda={leyenda}
+                      sonando={sonando === p.track.id} onAudio={alternarAudio}
+                      errorAudio={errorAudio && errorAudio.id === p.track.id ? errorAudio.mensaje : null}
+                      calificar={tr && (
+                        <Calificar key={`${guardado.id}-${tr.n}`} setId={guardado.id} t={tr}
+                          desdeTitulo={vista.pasos[i - 1].track.titulo} hastaTitulo={p.track.titulo}
+                          onGuardar={calificar} onQuitar={descalificar} />
+                      )} />
+                  )
+                })}
               </div>
 
               {/* Por qué se cortó: el titular y el detalle son los del motor. */}
-              {set_.corte && (
+              {vista.corte && (
                 <div className="alert alert-warn" role="status">
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
                   <div>
-                    <div className="alert-title">{set_.corte.titular}</div>
-                    <p>{set_.corte.detalle}</p>
-                    {set_.corte.codigo && <p className="rnota mono">{set_.corte.codigo}</p>}
+                    <div className="alert-title">{vista.corte.titular}</div>
+                    <p>{vista.corte.detalle}</p>
+                    {vista.corte.codigo && <p className="rnota mono">{vista.corte.codigo}</p>}
                   </div>
                 </div>
               )}
-              {set_.aviso_fragmentos && <p className="rnota">{set_.aviso_fragmentos}</p>}
-              {set_.leyenda_key && <p className="rnota">{set_.leyenda_key}</p>}
+              {vista.aviso_fragmentos && <p className="rnota">{vista.aviso_fragmentos}</p>}
+              {vista.leyenda_key && <p className="rnota">{vista.leyenda_key}</p>}
             </>
           )}
         </section>
       </div>
 
+      {dialogoGuardar && set_ && (
+        <GuardarDialog total={set_.total} onGuardar={guardar} onClose={() => setDialogoGuardar(false)} />
+      )}
+
       <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>
+      {/* Guardar, abrir, calificar, renombrar y borrar: una frase corta por acción. */}
+      <div className="sr-only rsets-aviso" role="status" aria-live="polite">{aviso}</div>
     </div>
   )
 }

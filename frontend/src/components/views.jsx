@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { getBiblioteca, audioUrl } from '../api'
+import { getBiblioteca } from '../api'
 import { fmtDur, FUENTE_CORTO, songKey, metaKey } from '../utils'
 import { DlButton, PreviewLayer, QualityBadge } from './common'
 import { AddToPlaylist } from './AddToPlaylist'
+import Cover from './Cover'
+import { usePlayer } from '../player/context'
+import { fromLibrary, fromResult, fmtBpm } from '../player/track'
 import { IconDownload, IconActivity, IconCompare, IconSparkles } from './icons'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
@@ -14,12 +17,17 @@ const NoteIcon = () => (
 )
 
 // Tarjeta de un track de la biblioteca: carátula (con play/pausa), título, artista y ＋ a playlist.
+// La carátula es la embebida en el archivo (/api/cover/{id}); sin ella, el placeholder
+// decorativo (antes: un degradado oscuro casi del color del fondo, elegido por posición).
 function LibCard({ t, i, playing, onToggle }) {
   const key = t.camelot || t.tonalidad || ''
-  const meta = [t.bpm ? String(t.bpm) : null, key || null].filter(Boolean).join(' · ')
+  // BPM con un decimal (§6): el XML lo trae medido con decimales; "128" sería redondear.
+  const bpm = fmtBpm({ bpm: t.bpm, bpmMedido: true })
+  const meta = [bpm, key || null].filter(Boolean).join(' · ')
   return (
     <div className="lib-card" style={{ animationDelay: `${Math.min(i, 12) * 0.04}s` }}>
-      <div className={`lib-cover g${(i % 6) + 1}`}>
+      <div className={`lib-cover${playing ? ' is-playing' : ''}`}>
+        <Cover track={fromLibrary(t)} className="lib-cover-img" />
         {/* El nombre incluye el tema: 18 botones "Reproducir" iguales no dicen cuál suena. */}
         <button type="button" className={`lib-play${playing ? ' on' : ''}`}
           aria-label={`${playing ? 'Pausar' : 'Reproducir'} ${t.titulo}`} onClick={onToggle}>
@@ -39,11 +47,12 @@ function LibCard({ t, i, playing, onToggle }) {
 }
 
 /* ---------- Pantalla de inicio: estantes por género desde la biblioteca local ---------- */
-export function Home({ toast }) {
+// Suena en la barra de abajo (antes tenía su propio <audio>, que se cortaba al salir de la
+// home): la cola es el estante desde el que se tocó play.
+export function Home({ onPlay }) {
   const [data, setData] = useState(null)      // {total, configurada, generos:[{genero,tracks}]}
   const [gf, setGf] = useState('Todos')       // filtro de género
-  const [playing, setPlaying] = useState(null) // id del track sonando
-  const audioRef = useRef(null)
+  const player = usePlayer()
 
   useEffect(() => {
     let vivo = true
@@ -57,23 +66,11 @@ export function Home({ toast }) {
       // Sin conexión no es "sin configurar": se explica con motivo en vez de pedir variables.
       .catch(() => vivo && setData({ total: 0, configurada: false, generos: [],
         motivo: 'No pude conectar con el servidor para leer la biblioteca. Revisá que esté corriendo y recargá.' }))
-    // El <audio> se monta DESPUÉS (cuando llegan los datos): el ref se lee al desmontar a propósito.
-    return () => { vivo = false; if (audioRef.current) audioRef.current.pause() } // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { vivo = false }
   }, [])
 
-  const toggle = (t) => {
-    const a = audioRef.current
-    if (!a) return
-    if (playing === t.id) { a.pause(); setPlaying(null); return }
-    a.src = audioUrl(t.id)
-    a.play().then(() => setPlaying(t.id)).catch((e) => {
-      // AbortError = se cambió de tema antes de que arrancara: no es un error para el usuario.
-      if (e && e.name === 'AbortError') return
-      // Antes: toast('…') con toast siendo un objeto → TypeError y el error nunca se mostraba.
-      toast?.danger({ title: 'No pude reproducir ese audio', body: `«${t.titulo}»: puede que el archivo se haya movido o borrado.` })
-      setPlaying(null)
-    })
-  }
+  // Si el archivo no se puede abrir, la barra lo dice (antes era un aviso suelto).
+  const toggle = (shelf, k) => onPlay(shelf.tracks.slice(0, 18).map(fromLibrary), k)
 
   if (!data) return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando tu biblioteca…</p></div>
   if (!data.total) {
@@ -96,8 +93,6 @@ export function Home({ toast }) {
 
   return (
     <div className="home">
-      {/* onError: si el archivo falla a mitad de camino, el botón no queda en "Pausar". */}
-      <audio ref={audioRef} onEnded={() => setPlaying(null)} onError={() => setPlaying(null)} preload="none" />
       <div className="home-head">
         <h1>Para arrancar</h1>
         <p className="muted">{data.total} temas en tu biblioteca · el orden cambia cada vez que entrás</p>
@@ -114,7 +109,7 @@ export function Home({ toast }) {
           <div className="shelf-head"><h2>{shelf.genero}</h2><span className="muted">{shelf.tracks.length}</span></div>
           <div className="shelf-row">
             {shelf.tracks.slice(0, 18).map((t, i) => (
-              <LibCard key={t.id} t={t} i={i} playing={playing === t.id} onToggle={() => toggle(t)} />
+              <LibCard key={t.id} t={t} i={i} playing={player.isPlaying(`biblioteca|${t.id}`)} onToggle={() => toggle(shelf, i)} />
             ))}
           </div>
         </section>
@@ -123,9 +118,27 @@ export function Home({ toast }) {
   )
 }
 
+/* ---------- Estado de las versiones de una fila ----------
+   Dos estados distintos, y los dos se ven sin depender del color:
+   - ELEGIDA (la que bajan Descargar y el play de la fila): pastilla llena con un tilde en vez
+     del número.
+   - SONANDO (la que está cargada en la barra): barritas de nivel en vez del punto y un aro;
+     quietas si la barra está en pausa. La fila además dice en texto qué opción suena. */
+const IconChosen = () => <svg className="vchip-ok" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+const Eq = ({ on }) => <span className={`eq${on ? '' : ' is-quieto'}`} aria-hidden="true"><i /><i /><i /></span>
+const ROW_STATUS = {
+  playing: 'Sonando', loading: 'Cargando', paused: 'En pausa', ended: 'Terminó',
+  error: 'No se pudo reproducir', embed: 'En el reproductor de Spotify', none: 'Sin audio',
+}
+const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || 'fuente desconocida'
+
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
+function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
   const c = g.opciones[sel]
+  // "Sonando" (barritas animadas, aro) SOLO cuando suena de verdad. Mientras carga —2 a 5 s
+  // en frío en YouTube/SoundCloud— decirlo sería mentir (§6); la pastilla dice "cargando"
+  // con las barritas quietas, igual que la fila ("Cargando: opción…").
+  const isLive = loadedIdx >= 0 && playerStatus === 'playing'
   const thumbKey = `t${i}`
   const rowPrev = preview.current && (preview.current.key === thumbKey || preview.current.key.startsWith(`o${i}:`))
     ? preview.current.song : null
@@ -134,21 +147,32 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, on
   const genero = c.genero || m.genero
   const key = c.camelot
   return (
-    <div className="trk"
+    <div className={`trk${loadedIdx >= 0 ? ' is-sonando' : ''}`} aria-current={loadedIdx >= 0 ? 'true' : undefined}
       onMouseEnter={() => preview.schedule(thumbKey, c)}
       onMouseLeave={() => { preview.cancel(); preview.stop() }}>
       <div className="trk-idx">{String(i + 1).padStart(2, '0')}</div>
-      <div className="thumb" onClick={() => onPlay(c)}>
-        {/* Carátula decorativa: el título está al lado. */}
-        {c.thumbnail ? <img src={c.thumbnail} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none' }} /> : <div className="thumb-ph" />}
-        <button type="button" className="thumb-play" aria-label={`Reproducir ${c.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay(c) }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" /></svg>
+      <div className={`thumb${current ? ' is-current' : ''}`} onClick={() => onPlay(i)}>
+        {/* Carátula decorativa: el título está al lado. Si la imagen no carga, prueba la
+            siguiente fuente y después el placeholder (ver src/cover.js). */}
+        <Cover track={c} />
+        <button type="button" className="thumb-play" aria-label={`${playing ? 'Pausar' : 'Reproducir'} ${c.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay(i) }}>
+          {playing
+            ? <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /><rect x="13.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /></svg>
+            : <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" /></svg>}
         </button>
         {/* key por canción: al pasar a otra versión de la fila se monta una capa nueva (volumen y cue incluidos). */}
         {rowPrev && <PreviewLayer key={songKey(rowPrev)} song={rowPrev} />}
       </div>
       <div className="trk-id">
         <div className="trk-title" title={c.titulo}>{c.titulo}</div>
+        {/* Qué versión de esta fila está en la barra, en texto: el color y las barritas solas
+            no alcanzan (pedido del dueño 2026-09-28: "no se ve en qué reproducción estás parado"). */}
+        {loadedIdx >= 0 && (
+          <div className={`trk-now${isLive ? ' is-on' : ''}`}>
+            <Eq on={isLive} />
+            <span>{ROW_STATUS[playerStatus] || 'En la barra'}: opción {loadedIdx + 1} · {sourceName(g.opciones[loadedIdx])}</span>
+          </div>
+        )}
         <div className="trk-artist"><span className="truncate">{c.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(c.duracion)}</span></div>
       </div>
       <div className="trk-meta">
@@ -161,12 +185,21 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, on
         {g.opciones.map((o, k) => {
           const f = (o.fuente || '').toLowerCase()
           const okey = `o${i}:${k}`
+          const chosen = k === sel
+          const sounding = k === loadedIdx
+          // Nombre accesible completo: aria-pressed dice "elegida"; lo que suena va en el texto
+          // (y en aria-current), porque un lector no ve las barritas.
+          const stateText = [chosen ? 'elegida' : null, sounding ? (isLive ? 'sonando ahora' : playerStatus === 'loading' ? 'cargando' : 'cargada en la barra') : null].filter(Boolean).join(', ')
           return (
-            <button key={k} type="button" className={`vchip ${PF[f] || ''}`} aria-pressed={k === sel}
+            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
+              aria-pressed={chosen} aria-current={sounding ? 'true' : undefined}
+              aria-label={`Opción ${k + 1}: ${sourceName(o)}${stateText ? ` (${stateText})` : ''}`}
               onMouseEnter={() => preview.schedule(okey, o)}
               onClick={() => onSelect(i, k)}
-              title={`Opción ${k + 1} · ${o.fuente} — ${o.titulo}`}>
-              <span className="n">{k + 1}</span><span className="dot" />{FUENTE_CORTO[f] || o.fuente || '?'}
+              title={`Opción ${k + 1} · ${o.fuente} — ${o.titulo}${stateText ? ` · ${stateText}` : ''}`}>
+              {chosen ? <IconChosen /> : <span className="n">{k + 1}</span>}
+              {sounding ? <Eq on={isLive} /> : <span className="dot" />}
+              {FUENTE_CORTO[f] || o.fuente || '?'}
             </button>
           )
         })}
@@ -188,6 +221,9 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, onPlay, onSpek, on
 export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onParecidas }) {
   const { groups, sel, seed, encontradas, total, no_encontradas, origen, query } = data
   const esBusqueda = origen === 'busqueda'
+  const player = usePlayer()
+  // Cola de la barra: la versión elegida de cada tema, en el orden de la lista.
+  const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
   const [allLabel, setAllLabel] = useState(null)
   const [allBusy, setAllBusy] = useState(false)
 
@@ -253,7 +289,11 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
         </div>
         {groups.map((g, i) => (
           <TrackRow key={i} g={g} i={i} sel={sel[i]} formato={formato} metaMap={metaMap} preview={preview}
-            dl={dl[songKey(g.opciones[sel[i]])]} onPlay={onPlay} onSpek={onSpek} onDownload={onDownload}
+            dl={dl[songKey(g.opciones[sel[i]])]} onPlay={reproducir} onSpek={onSpek} onDownload={onDownload}
+            current={player.current?.key === songKey(g.opciones[sel[i]])}
+            loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}
+            playerStatus={player.status}
+            playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
             onSelect={onSelect} onCompare={onCompare} onParecidas={onParecidas} />
         ))}
       </div>

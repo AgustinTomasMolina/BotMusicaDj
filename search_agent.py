@@ -34,6 +34,30 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# Tamaños de carátula de SoundCloud, del preferido al último recurso. t500x500 alcanza para
+# el tag del archivo descargado (tagger.py la embebe) y para la pantalla con densidad 2x.
+_SC_THUMB_PREFERIDOS = ('t500x500', 't300x300')
+
+
+def _thumbnail_soundcloud(video: dict) -> str | None:
+    """Carátula de un resultado de SoundCloud.
+
+    Con `extract_flat` yt-dlp deja `thumbnail` en None y la carátula viene solo en la lista
+    `thumbnails` (mini, tiny, small, …, t300x300, t500x500, original). Leer solo `thumbnail`
+    dejaba a TODOS los resultados de SoundCloud sin imagen. Medido con yt-dlp 2026.08.19.
+    Sin ninguna → None (el front dibuja el placeholder, no una imagen inventada)."""
+    if video.get('thumbnail'):
+        return video['thumbnail']
+    thumbs = [t for t in (video.get('thumbnails') or []) if isinstance(t, dict) and t.get('url')]
+    if not thumbs:
+        return None
+    for preferido in _SC_THUMB_PREFERIDOS:
+        for t in thumbs:
+            if t.get('id') == preferido:
+                return t['url']
+    return max(thumbs, key=lambda t: t.get('width') or 0)['url']
+
+
 class SearchAgent:
     """
     Agente inteligente para búsqueda de canciones
@@ -116,6 +140,12 @@ class SearchAgent:
                 # cliente 'android' esquiva el age-gate ("Sign in to confirm your age").
                 'ignoreerrors': True,
                 'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                # Búsqueda PLANA (f32): solo la página de resultados, sin abrir cada video.
+                # Medido con red real: sin esto cada búsqueda resolvía los formatos de sus N
+                # videos (8 s sola, 30-56 s con las 12 de parecidas en paralelo) y era la
+                # mitad del tiempo de /api/parecidas_lista. Plana: ~1,3 s. Trae lo mismo que
+                # se usa acá (id, título, canal, duración); la carátula sale del id.
+                'extract_flat': 'in_playlist',
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,15 +153,17 @@ class SearchAgent:
 
             canciones = []
             for video in (resultados or {}).get('entries') or []:
-                if not video:  # ignoreerrors deja None en los que fallaron
-                    continue
+                if not video or not video.get('id') or not video.get('title'):
+                    continue  # ignoreerrors deja None en los que fallaron
                 if len(canciones) >= limit:
                     break
                 cancion = {
                     'titulo': video['title'],
-                    'artista': video.get('uploader', 'Desconocido'),
-                    'duracion': video.get('duration', 0),
-                    'url': video['webpage_url'],
+                    'artista': video.get('uploader') or video.get('channel') or 'Desconocido',
+                    'duracion': video.get('duration') or 0,
+                    # La entrada plana no trae webpage_url; la URL canónica sale del id (así
+                    # un /shorts/ también queda como watch?v=, que es lo que entiende el resto).
+                    'url': video.get('webpage_url') or f"https://www.youtube.com/watch?v={video['id']}",
                     'fuente': 'youtube',
                     'video_id': video['id'],
                     'thumbnail': video.get('thumbnail') or f"https://i.ytimg.com/vi/{video['id']}/hqdefault.jpg",
@@ -182,7 +214,7 @@ class SearchAgent:
                             'url': video.get('url') or video.get('webpage_url', ''),
                             'fuente': 'soundcloud',
                             'video_id': video.get('id', ''),
-                            'thumbnail': video.get('thumbnail'),
+                            'thumbnail': _thumbnail_soundcloud(video),
                         }
                         if cancion['url']:  # Solo agregar si tiene URL válida
                             canciones.append(cancion)

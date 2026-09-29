@@ -76,6 +76,33 @@ export const getBiblioteca = () => fetch('/api/biblioteca').then(json)
 // URL de audio de un track de la biblioteca (para el <audio> del preview).
 export const audioUrl = (id) => `/api/audio/${encodeURIComponent(id)}`
 
+/* ---------- Audio de YouTube / SoundCloud para la barra (f32) ----------
+   El backend saca el audio del tema con yt-dlp y lo sirve como un archivo más (con Range):
+   la barra lo toca en su <audio>, sin el video. Se pide por fuente + id, nunca por URL. */
+export const sourceAudioUrl = ({ fuente, ref }) =>
+  `/api/fuente/audio?fuente=${encodeURIComponent(fuente)}&ref=${encodeURIComponent(ref)}`
+
+// Qué es lo que suena (misma resolución cacheada en el backend): si es un fragmento, duración…
+export async function sourceAudioInfo({ fuente, ref }) {
+  const r = await fetch(`/api/fuente/audio/info?fuente=${encodeURIComponent(fuente)}&ref=${encodeURIComponent(ref)}`)
+  return r.ok ? r.json() : null
+}
+
+// Por qué no se pudo: el <audio> avisa que falló pero no deja leer la respuesta. El backend
+// recuerda el fallo un rato, así que volver a preguntar no repite la resolución.
+// null = no hay motivo del backend (se muestra el genérico).
+export async function sourceAudioReason(src) {
+  try {
+    const r = await fetch(src, { headers: { Range: 'bytes=0-0' } })
+    if (r.ok) return null
+    const txt = await r.text()
+    let d = null
+    try { d = JSON.parse(txt) } catch { /* no era JSON */ }
+    if (d && d.error) return d.error
+    return `El servidor falló al preparar este audio (HTTP ${r.status}).`
+  } catch { return null }
+}
+
 /* ---------- Radio DJ (motor/) ----------
    OJO: esta biblioteca NO es la de la home. Aquella sale del XML de Rekordbox; esta, de la
    base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
@@ -129,6 +156,88 @@ export async function getRadioSet(params) {
   const r = await fetch(`/api/radio/set?${qs.toString()}`)
   return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
+
+// El set como .m3u8 para Rekordbox (/api/radio/set.m3u8). Mismos parámetros que
+// `getRadioSet` —el backend lo vuelve a armar con la misma función— más `esperado`: los ids
+// que la pantalla muestra, para que el backend se niegue (409) si el set re-armado ya no es
+// ese. Se baja con fetch y no con un <a href> directo porque un error (400/409) tiene que
+// verse en la pantalla con su motivo, no terminar guardado en Descargas como si fuera el
+// archivo. Devuelve {ok, blob, nombre} o {ok: false, status, data}.
+export async function exportarRadioM3u8(params, esperado) {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    qs.set(k, String(v))
+  }
+  if (esperado && esperado.length) qs.set('esperado', esperado.join(','))
+  return descargaM3u8(await fetch(`/api/radio/set.m3u8?${qs.toString()}`))
+}
+
+// El .m3u8 de un set GUARDADO: la foto, en su orden, sin re-armar nada
+// (/api/radio/sets/{id}/m3u8). `faltan` = cuántas rutas de la foto ya no están en la
+// biblioteca del motor (el archivo las trae igual: son las que había).
+export async function exportarSetGuardadoM3u8(id) {
+  const r = await fetch(`/api/radio/sets/${encodeURIComponent(id)}/m3u8`)
+  const d = await descargaM3u8(r)
+  if (d.ok) {
+    const f = Number(r.headers.get('X-DJRadio-Faltan'))
+    d.faltan = Number.isFinite(f) ? f : null
+  }
+  return d
+}
+
+async function descargaM3u8(r) {
+  const disp = r.headers.get('Content-Disposition') || ''
+  if (!r.ok || !/^attachment/i.test(disp)) {
+    return { ok: false, status: r.status, data: await cuerpoRadio(r) }
+  }
+  return { ok: true, blob: await r.blob(), nombre: nombreDeDescarga(disp) }
+}
+
+// El nombre que eligió el backend (ya saneado para Windows). `filename*` primero porque
+// trae el nombre real en UTF-8; `filename` es la versión ASCII de respaldo.
+function nombreDeDescarga(disp) {
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disp)
+  if (utf8) { try { return decodeURIComponent(utf8[1]) } catch { /* cae al ASCII */ } }
+  const ascii = /filename="([^"]+)"/i.exec(disp)
+  return ascii ? ascii[1] : 'DJ Radio.m3u8'
+}
+
+/* ---------- Sets guardados de la radio (tarea 16) ----------
+   Un set guardado es la FOTO de lo que se vio: la pantalla lo dibuja con lo que devuelve
+   GET /api/radio/sets/{id}, nunca re-armándolo. Todas devuelven {ok, status, data} con el
+   cuerpo leído por `cuerpoRadio`, por lo mismo que `getRadioSet`: un 400/404/409 trae el
+   motivo del backend en `data.error` y la pantalla lo muestra tal cual. */
+async function pedirSets(ruta, metodo = 'GET', cuerpo) {
+  const init = { method: metodo }
+  if (cuerpo !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(cuerpo)
+  }
+  const r = await fetch(ruta, init)
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}
+
+// Guarda el set que está EN PANTALLA: los parámetros que el set dice que usó, `esperado`
+// (los ids de los pasos, en orden) y la `huella` que devolvió /api/radio/set. Si el backend
+// re-arma otra cosa contesta 409 con el motivo, y no se guarda nada.
+export const guardarRadioSet = (params, esperado, huella, nombre) => {
+  const cuerpo = { esperado, huella }
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null || v === '') continue
+    cuerpo[k] = v
+  }
+  if (nombre && nombre.trim()) cuerpo.nombre = nombre
+  return pedirSets('/api/radio/sets', 'POST', cuerpo)
+}
+export const listarRadioSets = () => pedirSets('/api/radio/sets')
+export const getRadioSetGuardado = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`)
+export const renombrarRadioSet = (id, nombre) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`, 'PATCH', { nombre })
+export const borrarRadioSet = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`, 'DELETE')
+export const calificarTransicion = (id, n, calificacion, motivo) =>
+  pedirSets(`/api/radio/sets/${encodeURIComponent(id)}/transiciones/${n}`, 'PUT', { calificacion, motivo: motivo ?? null })
+export const descalificarTransicion = (id, n) =>
+  pedirSets(`/api/radio/sets/${encodeURIComponent(id)}/transiciones/${n}`, 'DELETE')
 
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
 

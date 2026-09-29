@@ -28,17 +28,40 @@ def _titulo_sin_artista(titulo, artista):
     return titulo
 
 
+def mime_por_contenido(data: bytes) -> str | None:
+    """MIME de una imagen de carátula mirando sus BYTES, solo para los 4 formatos que se
+    embeben y se muestran: JPEG, PNG, GIF y WebP. Cualquier otra cosa → None.
+
+    Nunca se confía en el MIME declarado (el Content-Type de la fuente o el del tag APIC):
+    un "image/svg+xml" con <script> adentro, servido desde el origen de la app, ejecuta
+    código (XSS almacenado, auditoría de f28). Lo usa también /api/cover en server.py."""
+    if not data:
+        return None
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _descargar_cover(url: str, timeout: int = 15):
-    """Devuelve (bytes, mime) de la carátula, o (None, None)."""
+    """Devuelve (bytes, mime) de la carátula, o (None, None). Solo JPEG/PNG/GIF/WebP según
+    el contenido (ver mime_por_contenido): lo que no lo sea no se embebe."""
     if not url:
         return None, None
     try:
         import requests
         r = requests.get(url, timeout=timeout)
         r.raise_for_status()
-        mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
-        if not mime.startswith("image/"):
-            mime = "image/jpeg"
+        mime = mime_por_contenido(r.content)
+        if not mime:
+            declarado = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+            logger.warning(f"⚠️ Tags: la carátula no es JPEG/PNG/GIF/WebP ({declarado or 'sin tipo'}); no se embebe.")
+            return None, None
         return r.content, mime
     except Exception as e:
         logger.warning(f"⚠️ Tags: no pude bajar la carátula: {e}")

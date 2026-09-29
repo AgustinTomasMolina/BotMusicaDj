@@ -11,6 +11,8 @@ import Modal from './components/Modal'
 import Playlists from './components/Playlists'
 import PlaylistsRail from './components/PlaylistsRail'
 import Radio from './components/Radio'
+import PlayerBar from './components/PlayerBar'
+import { usePlayer } from './player/context'
 import { Home, ResultsView, ListForm, ListResults } from './components/views'
 
 export default function App() {
@@ -34,7 +36,15 @@ export default function App() {
   const toast = useToast()
   const { metaMap, enrich } = useMeta()
   const { connected, lines } = useConsole()
-  const preview = usePreview(previewEnabled, !!modal)
+  const player = usePlayer()
+  // Mientras la barra suena, el preview del mouse no arranca: un solo audio en toda la app.
+  const preview = usePreview(previewEnabled, !!modal || player.status === 'playing' || player.status === 'loading')
+  // …y si la barra arranca con un preview sonando (barra en pausa + mouse encima), se corta.
+  useEffect(() => {
+    const cortar = () => { preview.cancel(); preview.stop() }
+    window.addEventListener('musiflix:player-play', cortar)
+    return () => window.removeEventListener('musiflix:player-play', cortar)
+  }, [preview.cancel, preview.stop]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Escape cierra el modal
   useEffect(() => {
@@ -137,7 +147,17 @@ export default function App() {
   }
 
   /* ---------- Acciones sobre una canción ---------- */
-  const play = (c) => { preview.stop(); setModal({ kind: 'player', song: c }) }
+  // Reproducir = la barra fija de abajo (pedido del dueño 2026-09-25), con la lista desde la
+  // que se tocó play como cola para anterior/siguiente. Tocar el que ya suena lo pausa.
+  // `tracks` viene normalizado (src/player/track.js). El modal de reproducción queda solo
+  // para lo que la barra no puede controlar (Spotify): se abre desde la barra.
+  const play = (tracks, i = 0) => {
+    preview.cancel(); preview.stop()
+    const t = tracks[i]
+    if (t && player.current && player.current.key === t.key && player.status !== 'error') { player.toggle(); return }
+    player.playQueue(tracks, i)
+  }
+  const openEmbed = (song) => { preview.stop(); setModal({ kind: 'player', song }) }
   const openSpek = (c) => { preview.stop(); setModal({ kind: 'spek', song: c }) }
   const openCompare = (options, titulo) => { preview.stop(); setModal({ kind: 'compare', options, titulo }) }
 
@@ -228,7 +248,7 @@ export default function App() {
   /* ---------- Render ---------- */
   const shared = { formato, metaMap, preview, dl, onPlay: play, onSpek: openSpek, onDownload, onCompare: openCompare, onParecidas: doParecidas }
   let body
-  if (view.kind === 'home') body = <Home toast={toast} />
+  if (view.kind === 'home') body = <Home onPlay={play} />
   else if (view.kind === 'loading') body = <div className="empty"><span className="spinner" aria-hidden="true" /><p>{view.message}</p></div>
   else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p>{view.hint && <p>{view.hint}</p>}</div>
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
@@ -283,6 +303,7 @@ export default function App() {
       <HistorialDrawer open={historialOpen} onClose={() => setHistorialOpen(false)} data={historialData}
         onRunSearch={onRunSearch} onOpenPlaylist={onOpenPlaylist} onDeletePlaylist={onDeletePlaylist} onLimpiar={onLimpiar} />
       <Modal modal={modal} onClose={() => setModal(null)} onDownload={onDownload} />
+      <PlayerBar formato={formato} dl={dl} onDownload={onDownload} onOpenEmbed={openEmbed} />
     </div>
   )
 }
