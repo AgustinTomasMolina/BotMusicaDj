@@ -111,7 +111,7 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
               {descargas.map((d) => (
                 <div key={d.id} className="hist-item" style={{ cursor: 'default' }}>
                   <IcoDown />
-                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} ·${hace(d.creado_en)}`} />
+                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} · ${hace(d.creado_en)}`} />
                   {d.grade && d.grade !== '?' && <span className={`grade grade-sm ${gradeClass(d.grade)}`}>{d.grade}</span>}
                 </div>
               ))}
