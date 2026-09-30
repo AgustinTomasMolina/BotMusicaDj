@@ -1,0 +1,267 @@
+{
+ "2134484646": {
+  "tema": {
+   "titulo": "B WITH U",
+   "artista": "SPÆCE",
+   "duracion": 244.8,
+   "video_id": "2134484646",
+   "url": "https://soundcloud.com/spaecesound/b-with-u",
+   "permalink": "https://soundcloud.com/spaecesound/b-with-u",
+   "thumbnail": "https://i1.sndcdn.com/artworks-4Hpsy6fSG3un4yzQ-BGKiBQ-large.jpg",
+   "reproducible": true,
+   "solo_preview": false
+  },
+  "respuesta": {
+   "exito": true,
+   "opciones": [
+    {
+     "titulo": "SPÆCE - B WITH U",
+     "artista": "SPÆCE",
+     "duracion": 245,
+     "url": "https://www.youtube.com/watch?v=bwithu00001",
+     "fuente": "youtube",
+     "video_id": "bwithu00001",
+     "thumbnail": "https://i.ytimg.com/vi/bwithu00001/hqdefault.jpg",
+     "evidencia": "texto+duracion",
+     "calidad": {
+      "ok": true,
+      "badge": "nota B",
+      "calidad": "calidad B",
+      "metodo": "simulado",
+      "grade": "B",
+      "color": "#a3e635"
+     }
+    },
+    {
+     "titulo": "B WITH U",
+     "artista": "SPÆCE",
+     "duracion": 244.8,
+     "url": "https://soundcloud.com/spaecesound/b-with-u",
+     "fuente": "soundcloud",
+     "video_id": "2134484646",
+     "thumbnail": "https://i1.sndcdn.com/artworks-4Hpsy6fSG3un4yzQ-BGKiBQ-large.jpg",
+     "permalink": "https://soundcloud.com/spaecesound/b-with-u",
+     "reproducible": true,
+     "solo_preview": false,
+     "estacion": true,
+     "calidad": {
+      "ok": true,
+      "badge": "nota C",
+      "calidad": "calidad C",
+      "metodo": "simulado",
+      "grade": "C",
+      "color": "#facc15"
+     }
+    },
+    {
+     "titulo": "B WITH U",
+     "artista": "SPÆCE",
+     "duracion": 245,
+     "popularidad": 40,
+     "url": "https://open.spotify.com/track/0bwithu0spotify0000000",
+     "fuente": "spotify",
+     "preview_url": null,
+     "id": "0bwithu0spotify0000000",
+     "thumbnail": null,
+     "evidencia": "texto+duracion"
+    },
+    {
+     "titulo": "B WITH U",
+     "artista": "SPÆCE",
+     "duracion": 244,
+     "url": "https://example.invalid/ligaudio/1.mp3",
+     "stream_url": "https://example.invalid/ligaudio/1.mp3",
+     "fuente": "ligaudio",
+     "thumbnail": null,
+     "evidencia": "texto+duracion",
+     "calidad": {
+      "ok": true,
+      "badge": "nota A",
+      "calidad": "calidad A",
+      "metodo": "simulado",
+      "grade": "A",
+      "color": "#1ed760"
+     }
+    },
+    {
+     "titulo": "B WITH U",
+     "artista": "SPÆCE",
+     "duracion": 0,
+     "url": "https://example.invalid/hitplayer/2.mp3",
+     "stream_url": "https://example.invalid/hitplayer/2.mp3",
+     "fuente": "hitplayer",
+     "thumbnail": null,
+     "evidencia": "texto",
+     "calidad": {
+      "ok": true,
+      "badge": "nota B",
+      "calidad": "calidad B",
+      "metodo": "simulado",
+      "grade": "B",
+      "color": "#a3e635"
+     }
+    }
+   ],
+   "motivo": null,
+   "fallidas": []
+  }
+ },
+ "2094846795": {
+  "tema": {
+   "titulo": "Take that",
+   "artista": "NARCX",
+   "duracion": 227.3,
+   "video_id": "2094846795",
+   "url": "https://soundcloud.com/narcx-mdz/take-that",
+   "permalink": "https://soundcloud.com/narcx-mdz/take-that",
+   "thumbnail": "https://i1.sndcdn.com/artworks-IP4ZqsRatBHEazWU-nh5rPA-large.png",
+   "reproducible": true,
+   "solo_preview": false
+  },
+  "respuesta": {
+   "exito": true,
+   "opciones": [
+    {
+     "titulo": "Take that",
+     "artista": "NARCX",
+     "duracion": 227.3,
+     "url": "https://soundcloud.com/narcx-mdz/take-that",
+     "fuente": "soundcloud",
+     "video_id": "2094846795",
+     "thumbnail": "https://i1.sndcdn.com/artworks-IP4ZqsRatBHEazWU-nh5rPA-large.png",
+     "permalink": "https://soundcloud.com/narcx-mdz/take-that",
+     "reproducible": true,
+     "solo_preview": false,
+     "estacion": true,
+     "calidad": {
+      "ok": true,
+      "badge": "nota B",
+      "calidad": "calidad B",
+      "metodo": "simulado",
+      "grade": "B",
+      "color": "#a3e635"
+     }
+    }
+   ],
+   "motivo": "No lo encontré en otras plataformas (o lo que apareció no era este tema)",
+   "fallidas": []
+  }
+ },
+ "2366118086": {
+  "tema": {
+   "titulo": "One More Time",
+   "artista": "Daft Punk",
+   "duracion": 320.4,
+   "video_id": "2366118086",
+   "url": "https://soundcloud.com/daftpunkofficialmusic/one-more-time-2",
+   "permalink": "https://soundcloud.com/daftpunkofficialmusic/one-more-time-2",
+   "thumbnail": "https://i1.sndcdn.com/artworks-sFq8morPTcqX-0-large.jpg",
+   "reproducible": true,
+   "solo_preview": true
+  },
+  "respuesta": {
+   "exito": true,
+   "opciones": [
+    {
+     "titulo": "Daft Punk - One More Time (Official Video)",
+     "artista": "Daft Punk",
+     "duracion": 320,
+     "url": "https://www.youtube.com/watch?v=daftpunk001",
+     "fuente": "youtube",
+     "video_id": "daftpunk001",
+     "thumbnail": "https://i.ytimg.com/vi/daftpunk001/hqdefault.jpg",
+     "evidencia": "texto+duracion",
+     "calidad": {
+      "ok": true,
+      "badge": "nota B",
+      "calidad": "calidad B",
+      "metodo": "simulado",
+      "grade": "B",
+      "color": "#a3e635"
+     }
+    },
+    {
+     "titulo": "One More Time",
+     "artista": "Daft Punk",
+     "duracion": 320.4,
+     "url": "https://soundcloud.com/daftpunkofficialmusic/one-more-time-2",
+     "fuente": "soundcloud",
+     "video_id": "2366118086",
+     "thumbnail": "https://i1.sndcdn.com/artworks-sFq8morPTcqX-0-large.jpg",
+     "permalink": "https://soundcloud.com/daftpunkofficialmusic/one-more-time-2",
+     "reproducible": true,
+     "solo_preview": true,
+     "estacion": true
+    },
+    {
+     "titulo": "One More Time",
+     "artista": "Daft Punk",
+     "duracion": 322.6,
+     "url": "https://soundcloud.com/daft-punk-id/daft-punk-one-more-time",
+     "fuente": "soundcloud",
+     "video_id": "199428706",
+     "thumbnail": "https://i1.sndcdn.com/avatars-000139637419-zpe8sj-large.jpg",
+     "permalink": "https://soundcloud.com/daft-punk-id/daft-punk-one-more-time",
+     "reproducible": true,
+     "solo_preview": false,
+     "evidencia": "texto+duracion",
+     "calidad": {
+      "ok": true,
+      "badge": "nota A",
+      "calidad": "calidad A",
+      "metodo": "simulado",
+      "grade": "A",
+      "color": "#1ed760"
+     }
+    },
+    {
+     "titulo": "One More Time",
+     "artista": "Daft Punk",
+     "duracion": 320,
+     "popularidad": 40,
+     "url": "https://open.spotify.com/track/0daftpunkspotify000000",
+     "fuente": "spotify",
+     "preview_url": null,
+     "id": "0daftpunkspotify000000",
+     "thumbnail": null,
+     "evidencia": "texto+duracion"
+    }
+   ],
+   "motivo": null,
+   "fallidas": []
+  }
+ },
+ "2374863902": {
+  "tema": {
+   "titulo": "From The Top",
+   "artista": "FblManny",
+   "duracion": 142.3,
+   "video_id": "2374863902",
+   "url": "https://soundcloud.com/user-705464938/from-the-top",
+   "permalink": "https://soundcloud.com/user-705464938/from-the-top",
+   "thumbnail": "https://i1.sndcdn.com/artworks-pn149393QSXO-0-large.jpg",
+   "reproducible": true,
+   "solo_preview": true
+  },
+  "respuesta": {
+   "exito": true,
+   "opciones": [
+    {
+     "titulo": "From The Top",
+     "artista": "FblManny",
+     "duracion": 142.3,
+     "url": "https://soundcloud.com/user-705464938/from-the-top",
+     "fuente": "soundcloud",
+     "video_id": "2374863902",
+     "thumbnail": "https://i1.sndcdn.com/artworks-pn149393QSXO-0-large.jpg",
+     "permalink": "https://soundcloud.com/user-705464938/from-the-top",
+     "reproducible": true,
+     "solo_preview": true,
+     "estacion": true
+    }
+   ],
+   "motivo": "No lo encontré en otras plataformas (o lo que apareció no era este tema)",
+   "fallidas": []
+  }
+ }
+}
