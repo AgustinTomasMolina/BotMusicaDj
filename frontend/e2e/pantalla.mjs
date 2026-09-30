@@ -1362,6 +1362,16 @@ const CASOS = [
     const src = await page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.src)
     igual(new URL(src).pathname + '?' + new URL(src).searchParams.toString(),
       `/api/fuente/audio?fuente=soundcloud&ref=${respuesta.items[0].video_id}`, 'el tema no suena por el proxy de audio con su id')
+
+    // A 400 px el encabezado (título largo) y las filas con el botón nuevo entran sin cortarse.
+    await page.setViewport({ width: 400, height: 860 })
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    const d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `Station a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+    // `desbordeDe` mira cajas, no texto: un título sin partir se sale de su propia caja y la
+    // .seedbar (overflow hidden) lo recorta sin que ninguna caja se pase. Se mide el texto.
+    const h = await page.evaluate(() => { const e = document.querySelector('h1.station-title'); return { texto: e.scrollWidth, caja: e.clientWidth } })
+    afirmar(h.texto <= h.caja, `a 400 px el título de la Station queda cortado: ${json(h)}`)
   }],
 ]
 
