@@ -48,7 +48,9 @@ export function fromResult(c, metaMap, version = null) {
     duracion: n(c.duracion), audioSrc: null, cover: null,
     bpm, bpmMedido: false, camelot: n(c.camelot), tonalidad: null, keyDudosa: false,
     formato: null, grade: null,
-    raw: c, descargable: !!(c.fuente && c.url),
+    // Un tema Go+ de la Station de SoundCloud (`solo_preview`) solo da 30 s: bajarlo sería
+    // guardar un fragmento como si fuera el tema.
+    raw: c, descargable: !!(c.fuente && c.url) && !c.solo_preview,
     paraPlaylist: { ...c, bpm, genero, camelot: c.camelot },
     video_id: c.video_id, url: c.url, stream_url: c.stream_url, preview_url: c.preview_url,
     thumbnail: c.thumbnail, id: c.id,

@@ -613,7 +613,7 @@ def pick_track(entry: Identity, tracks: list[dict], duration_s: float | None = N
 
 
 def pick_track_evidencia(entry: Identity, tracks: list[dict], duration_s: float | None = None,
-                         audio_exacto: bool = False) -> tuple[dict | None, str | None]:
+                         audio_exacto: bool = False, identify=None) -> tuple[dict | None, str | None]:
     """(track de Deezer que es la entrada, grado de evidencia) o (None, None). Cada candidato
     pasa por `evidencia_misma_grabacion`; acá quedan solo las reglas que necesitan ver el pool
     entero (por eso no pueden vivir en la función de a pares). Si los aceptados son de obras distintas
@@ -634,9 +634,13 @@ def pick_track_evidencia(entry: Identity, tracks: list[dict], duration_s: float 
       268 s no es el original de 454 s.
     En ese último caso, y cuando no hay ningún aceptado, un upload SIN versión puede ser una
     edición del tema: se acepta si UNA sola edición coincide a ±max(3 s, 2 %) (regla de la
-    Radio Edit por duración, aprobada por el dueño): Born Slippy de 268 s → la Radio Edit de 264."""
+    Radio Edit por duración, aprobada por el dueño): Born Slippy de 268 s → la Radio Edit de 264.
+
+    `identify` (track → Identity; por defecto `deezer_identity`) permite aplicar las MISMAS
+    reglas a un pool de otra fuente: la Station de SoundCloud lo usa con `parse_entry` sobre
+    el título y el uploader de cada resultado de su búsqueda (cada track con `duration` en s)."""
     dur = duration_or_none(duration_s)
-    pool = [(t, deezer_identity(t)) for t in tracks]
+    pool = [(t, (identify or deezer_identity)(t)) for t in tracks]
     grados = {id(t): evidencia_misma_grabacion(entry, i, dur, t.get("duration"), audio_exacto=audio_exacto)
               for t, i in pool}
     accepted = [(t, i) for t, i in pool if grados[id(t)]]
@@ -729,6 +733,25 @@ def _unnamed_guests(entry: Identity, cand: Identity) -> frozenset:
 _SC_API = "https://api-v2.soundcloud.com/tracks/{}"
 
 
+def soundcloud_client_id(refresh: bool = False, track_id: str | None = None) -> str | None:
+    """El client_id público de la API v2 que yt-dlp saca de la web de SoundCloud y cachea.
+
+    `refresh` (después de un 401/403): con `track_id`, se abre ese track con yt-dlp, que al
+    recibir el 401 con el client_id vencido lo renueva solo (lo que hacía siempre
+    `fetch_soundcloud_isrc`); sin `track_id` (p. ej. antes de una búsqueda), se borra el
+    cacheado y yt-dlp lo vuelve a sacar de la web al inicializar su extractor. Las fallas de
+    red o de yt-dlp suben: el que llama decide y nunca loguea el client_id."""
+    import yt_dlp
+
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as y:
+        if refresh and track_id:
+            y.extract_info(f"https://api.soundcloud.com/tracks/{track_id}", download=False, process=False)
+        elif refresh:
+            y.cache.store("soundcloud", "client_id", None)
+            y.get_info_extractor("Soundcloud").initialize()
+        return y.cache.load("soundcloud", "client_id")
+
+
 def fetch_soundcloud_isrc(track_id: str | int | None, timeout: float = 8.0) -> str | None:
     """ISRC de un track de SoundCloud (publisher_metadata.isrc de la API v2), o None.
 
@@ -742,19 +765,13 @@ def fetch_soundcloud_isrc(track_id: str | int | None, timeout: float = 8.0) -> s
         return None
     try:
         import requests
-        import yt_dlp
+        import yt_dlp  # noqa: F401  (sin yt-dlp no hay client_id: se sigue por título y artista)
     except ImportError:
         return None
 
-    def _client_id(refresh: bool) -> str | None:
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as y:
-            if refresh:
-                y.extract_info(f"https://api.soundcloud.com/tracks/{tid}", download=False, process=False)
-            return y.cache.load("soundcloud", "client_id")
-
     for refresh in (False, True):
         try:
-            cid = _client_id(refresh)
+            cid = soundcloud_client_id(refresh, tid)
             if not cid:
                 continue
             r = requests.get(_SC_API.format(tid), params={"client_id": cid},

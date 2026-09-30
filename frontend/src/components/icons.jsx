@@ -27,5 +27,8 @@ export const IconFilter = (p) => <S {...p}><polygon points="22 3 2 3 10 12.46 10
 // Emisión (ondas saliendo de un punto) y no un ▶: la radio ARMA un set, no lo reproduce sola.
 // Mismo criterio que el mockup de design/dj-radio (README, 2026-09-16).
 export const IconRadio = (p) => <S {...p}><circle cx="12" cy="12" r="2" /><path d="M7.8 16.2a6 6 0 0 1 0-8.4" /><path d="M16.2 7.8a6 6 0 0 1 0 8.4" /><path d="M4.9 19.1a10 10 0 0 1 0-14.2" /><path d="M19.1 4.9a10 10 0 0 1 0 14.2" /></S>
-export const IconPause = (p) => <S {...p} fill="currentColor" stroke="none"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></S>
+// Antena (Lucide "radio-tower"): la Station de SoundCloud de un tema. Distinta a propósito de
+// IconRadio, que es la Radio DJ del motor local (la barra de arriba): son dos cosas distintas.
+export const IconRadioTower = (p) => <S {...p}><path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9" /><path d="M7.8 4.7a6.14 6.14 0 0 0-.8 7.5" /><circle cx="12" cy="9" r="2" /><path d="M16.2 4.8c2 2 2.26 5.11.8 7.47" /><path d="M19.1 1.9a9.96 9.96 0 0 1 0 14.1" /><path d="M9.5 18h5" /><path d="m8 22 4-11 4 11" /></S>
+export const IconPause =(p) => <S {...p} fill="currentColor" stroke="none"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></S>
 export const IconPlayFill = (p) => <S {...p} fill="currentColor" stroke="none"><path d="M8 5v14l11-7z" /></S>
