@@ -1257,145 +1257,78 @@ const CASOS = [
       'ya sonando, la pastilla tiene que decirlo')
   }],
 
-  ['parecidas: sin semilla en Deezer dice "Similitud no disponible" y no muestra otro tema', async (page, ctx) => {
-    // Sin red. La respuesta de /api/parecidas_lista es el archivo que el test de Python
-    // (tests/test_parecidas_semilla.py) compara contra lo que el endpoint REALMENTE devuelve
-    // para «From The Top» / «IMMINENT - Topic» con Deezer grabado: acá hace de API.
-    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'parecidas_no_disponible.json'), 'utf8'))
-    const tema = { titulo: 'From The Top', artista: 'IMMINENT - Topic', duracion: 187, fuente: 'youtube', thumbnail: null,
-      url: 'https://www.youtube.com/watch?v=ddddddddddd', video_id: 'ddddddddddd' }
-    const pedidos = []
-    await page.setRequestInterception(true)
-    page.on('request', (req) => {
-      const u = new URL(req.url())
-      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
-      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
-      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
-      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
-      if (u.pathname === '/api/parecidas_lista') {
-        pedidos.push(Object.fromEntries(u.searchParams))
-        return responder(respuesta)
-      }
-      if (u.origin !== new URL(ctx.url).origin) return req.abort()
-      return req.continue()
-    })
-    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
-    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'imminent from the top')
-    await page.keyboard.press('Enter')
-    await page.waitForSelector('button[aria-label="Temas parecidos a From The Top"]', { timeout: ESPERA_MS })
-    await page.click('button[aria-label="Temas parecidos a From The Top"]')
+  ['station: el botón abre la Station; las filas llegan en orden con "N de 49", la mejor nota elegida y suenan por el proxy', async (page, ctx) => {
+    // Sin red. /api/station y /api/versiones contestan con los archivos que los tests de Python
+    // comparan contra lo que los endpoints REALMENTE devuelven (tests/test_soundcloud_station.py
+    // y tests/test_station_versiones.py): acá hacen de API. Lo esperado sale de esos archivos.
+    const s = await montarStation(page, ctx, { retener: true })
+    const { respuesta, items } = s
+    await abrirStation(page, ctx, s)
 
-    const leer = () => page.evaluate(() => ({
-      textos: [...document.querySelectorAll('.empty p')].map((p) => p.textContent),
-      semilla: !!document.querySelector('.seedbar'),
-      filas: document.querySelectorAll('.trk').length,
-      parecidasA: /Parecidas a/.test(document.body.textContent || ''),
-    }))
-    const v = await hasta(leer, (x) => x.textos.some((t) => t.includes(respuesta.mensaje)),
-      'no apareció "Similitud no disponible" en la pantalla')
-    igual(pedidos.map((q) => [q.titulo, q.artista, q.fuente, q.fuente_id, q.duracion]),
-      [[tema.titulo, tema.artista, 'youtube', 'ddddddddddd', String(tema.duracion)]],
-      'el pedido a /api/parecidas_lista no lleva el tema, la fuente, su id y la duración (desempate)')
-    afirmar(v.textos.some((t) => t.includes(respuesta.detalle)), `la pantalla no dice el motivo que dio la API: ${json(v.textos)}`)
-    afirmar(v.textos.some((t) => t.includes(tema.titulo) && t.includes(tema.artista)),
-      `la pantalla no dice para qué tema no hay similitud: ${json(v.textos)}`)
-    igual({ semilla: v.semilla, filas: v.filas, parecidasA: v.parecidasA }, { semilla: false, filas: 0, parecidasA: false },
-      'sin semilla no puede haber "Parecidas a…" ni una lista de otro tema')
-  }],
+    // Arranca vacía, con el avance en 0, y pide de a 3 (los demás esperan en la cola).
+    const inicio = await hasta(() => leerStation(page), (v) => v.progreso && s.versiones.length === 3,
+      'la Station no arrancó a pedir versiones')
+    igual({ progreso: inicio.progreso, filas: inicio.filas.length }, { progreso: `0 de ${items.length}`, filas: 0 },
+      'antes de la primera fila: 0 de 49 y ninguna fila')
+    igual(s.versiones.map((b) => b.tema.video_id), items.slice(0, 3).map((t) => t.video_id),
+      'los primeros pedidos no son los primeros temas de la Station, en su orden')
+    igual(s.versiones[0].tema, items[0], 'el pedido no lleva el tema de la Station tal cual')
+    igual(s.versiones[0].formato, 'wav', 'el pedido no lleva el formato de descarga')
+    // La 2 contesta antes que la 1: aparecen las dos, en el orden de la Station.
+    s.soltar(items[1].video_id)
+    s.soltar(items[0].video_id)
+    const dos = await hasta(() => leerStation(page), (v) => v.filas.length === 2, 'no aparecieron las dos primeras filas')
+    igual(dos.progreso, `2 de ${items.length}`, 'el avance no dice cuántas filas hay')
+    igual(dos.filas, [items[0].titulo, items[1].titulo], 'las filas no están en el orden de la Station')
+    afirmar(s.versiones.length <= 5, `con 2 filas listas no puede haber más de 5 pedidos (cola de 3): ${s.versiones.length}`)
 
-  ['parecidas: con semilla y sin candidatos dice por qué, no el cartel del modo lista', async (page, ctx) => {
-    // El caso real: Deezer encontró la semilla pero no dio temas para comparar. La respuesta
-    // es el archivo que tests/test_parecidas_semilla.py compara contra el endpoint REAL.
-    // Antes la pantalla decía "Revisá que haya un tema por línea": un pedido que no se hizo.
-    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'parecidas_sin_candidatos.json'), 'utf8'))
-    const tema = { titulo: 'Eiskalt (Short Mix)', artista: 'Kuko', duracion: 190, fuente: 'soundcloud', thumbnail: null,
-      url: 'https://soundcloud.com/kuko/eiskalt', video_id: '1234567' }
-    await page.setRequestInterception(true)
-    page.on('request', (req) => {
-      const u = new URL(req.url())
-      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
-      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
-      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
-      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
-      if (u.pathname === '/api/parecidas_lista') return responder(respuesta)
-      if (u.origin !== new URL(ctx.url).origin) return req.abort()
-      return req.continue()
-    })
-    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
-    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'kuko eiskalt')
-    await page.keyboard.press('Enter')
-    await page.waitForSelector('button[aria-label="Temas parecidos a Eiskalt (Short Mix)"]', { timeout: ESPERA_MS })
-    await page.click('button[aria-label="Temas parecidos a Eiskalt (Short Mix)"]')
+    // Fila 1: viene elegida la de mejor nota (MP3 directo, A), no la primera (YouTube, B).
+    const r0 = s.vx[items[0].video_id].respuesta
+    const mejor = r0.opciones.find((o) => o.calidad?.grade === 'A')
+    igual(mejor.fuente, 'ligaudio', 'el archivo de versiones cambió: la A tenía que ser la de Ligaudio')
+    afirmar(/^Opción \d+: MP3 directo, nota A\b/.test(await elegidaDe(page, 0)), `la elegida por defecto no es la de nota A: ${await elegidaDe(page, 0)}`)
+    await descargarFila(page, 0)
+    await hasta(() => s.descargas.length, (n) => n === 1, 'la descarga de la fila 1 no salió')
+    igual(s.descargas[0].url, mejor.url, 'se descargó otra versión y no la elegida por nota')
+    // La nota vino con la fila: el badge no la vuelve a pedir.
+    const conNota = new Set([...r0.opciones, ...s.vx[items[1].video_id].respuesta.opciones].filter((o) => o.calidad).map((o) => o.url))
+    igual(s.calidades.filter((u) => conNota.has(u)), [], 'se volvió a pedir a /api/calidad una nota que ya vino en /api/versiones')
 
-    const leer = () => page.evaluate(() => [...document.querySelectorAll('.empty p')].map((p) => p.textContent))
-    const textos = await hasta(leer, (x) => x.some((t) => t.includes(respuesta.mensaje)),
-      `no apareció «${respuesta.mensaje}» en la pantalla`)
-    afirmar(textos.some((t) => t.includes(respuesta.detalle)), `la pantalla no dice el motivo que dio la API: ${json(textos)}`)
-    afirmar(!textos.some((t) => /tema por línea|ninguna de la lista/.test(t)),
-      `apareció el cartel del modo lista en una búsqueda de parecidas: ${json(textos)}`)
-  }],
+    // Cambiar la elegida: la descarga usa la nueva.
+    const yt = r0.opciones.find((o) => o.fuente === 'youtube')
+    await elegir(page, 0, 'YouTube')
+    await hasta(() => elegidaDe(page, 0), (t) => /^Opción \d+: YouTube, nota B\b/.test(t || ''), 'no quedó elegida la de YouTube')
+    await descargarFila(page, 0)
+    await hasta(() => s.descargas.length, (n) => n === 2, 'la segunda descarga de la fila 1 no salió')
+    igual(s.descargas[1].url, yt.url, 'después de elegir YouTube se descargó otra versión')
 
-  ['station: el botón de un resultado abre la Station de SoundCloud y sus temas suenan por el proxy', async (page, ctx) => {
-    // Sin red. La respuesta de /api/station es el archivo que tests/test_soundcloud_station.py
-    // compara contra lo que el endpoint REALMENTE devuelve para ELVITO con la API v2 grabada:
-    // acá hace de API. Lo esperado (encabezado, cantidad, primer tema, id) sale de ese archivo.
-    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'station_respuesta.json'), 'utf8'))
-    const lib = await api(ctx, '/api/biblioteca')
-    const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
-    afirmar(uno, '/api/biblioteca no trae «Uno»')
-    const wav = Buffer.from(await (await fetch(`${ctx.url}/api/audio/${uno.id}`)).arrayBuffer())
-    const tema = { titulo: respuesta.semilla.titulo, artista: 'ELVITO', duracion: 291, fuente: 'soundcloud', thumbnail: null,
-      url: 'https://soundcloud.com/elvitoelvito/elvito-x-w-choppa-gib-mir', video_id: respuesta.semilla.video_id }
-    const pedidos = []
-    await page.setRequestInterception(true)
-    page.on('request', (req) => {
-      const u = new URL(req.url())
-      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
-      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
-      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
-      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
-      if (u.pathname === '/api/station') {
-        pedidos.push(Object.fromEntries(u.searchParams))
-        return responder(respuesta)
-      }
-      if (u.pathname === '/api/fuente/audio/info') return responder({ preview: false, duracion: 245 })
-      if (u.pathname === '/api/fuente/audio') return req.respond({ status: 200, contentType: 'audio/wav', body: wav })
-      if (u.origin !== new URL(ctx.url).origin) return req.abort()
-      return req.continue()
-    })
-    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
-    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'elvito gib mir bounce')
-    await page.keyboard.press('Enter')
-    const boton = `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`
-    await page.waitForSelector(boton, { timeout: ESPERA_MS })
-    // Con teclado: el botón se alcanza con foco y se activa con Enter.
-    await page.focus(boton)
-    await page.keyboard.press('Enter')
+    // El resto: al terminar, el avance dice cuántas tienen versiones de otras plataformas.
+    s.soltarTodas()
+    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && !/ de /.test(v.progreso || ''),
+      'no llegaron todas las filas')
+    const conOtras = items.filter((t) => (s.vx[t.video_id]?.respuesta.opciones || []).some((o) => !o.estacion)).length
+    igual(fin.progreso, `${items.length} temas · ${conOtras} con versiones en otras plataformas`, 'el resumen final')
+    // La fila muestra el título de la versión elegida (la 1, ahora la de YouTube); el resto, el
+    // de la Station, en su orden.
+    igual(fin.filas, [yt.titulo, ...items.slice(1).map((t) => t.titulo)], 'las filas no están en el orden de la Station al terminar')
+    igual(s.versiones.map((b) => b.tema.video_id), items.map((t) => t.video_id), 'no se pidió cada tema una vez, en orden')
 
-    const leer = () => page.evaluate(() => ({
+    const v = await page.evaluate(() => ({
       titulo: document.querySelector('h1.station-title')?.textContent ?? null,
-      filas: [...document.querySelectorAll('.trk')].map((r) => ({
-        titulo: r.querySelector('.trk-title')?.textContent, artista: r.querySelector('.trk-artist .truncate')?.textContent })),
       datosSemilla: document.querySelectorAll('.seedbar .mb').length,
     }))
-    const v = await hasta(leer, (x) => x.titulo && x.filas.length > 0, 'no apareció la lista de la Station')
-    igual(pedidos.map((q) => [q.fuente, q.fuente_id, q.titulo, q.artista, q.duracion]),
-      [['soundcloud', tema.video_id, tema.titulo, tema.artista, String(tema.duracion)]],
-      'el pedido a /api/station no lleva la fuente, el id de SoundCloud, el tema y la duración')
     igual(v.titulo, `Radio de «${respuesta.semilla.titulo}» — según la Station de SoundCloud`, 'el encabezado no dice de quién es la recomendación')
-    igual(v.filas.length, respuesta.items.length, 'la cantidad de filas no es la de la Station')
-    igual(v.filas[0], { titulo: respuesta.items[0].titulo, artista: respuesta.items[0].artista }, 'el primer tema no es el primero de la Station')
     igual(v.datosSemilla, 0, 'la Station es de SoundCloud: no puede mostrar BPM/tonalidad de la semilla medidos por nosotros')
 
-    // Play en la primera fila: suena por el proxy de audio con su id de SoundCloud.
-    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
-    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'el primer tema de la Station no quedó sonando')
-    igual(barra.titulo, respuesta.items[0].titulo, 'la barra no muestra el primer tema de la Station')
+    // Play en la fila 2 (solo la de SoundCloud): suena por el proxy de audio con su id.
+    await page.click(`.trk:nth-child(3) .thumb-play`)     // nth-child(1) es el encabezado
+    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'la fila 2 de la Station no quedó sonando')
+    igual(barra.titulo, items[1].titulo, 'la barra no muestra el tema de la fila 2')
     const src = await page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.src)
     igual(new URL(src).pathname + '?' + new URL(src).searchParams.toString(),
-      `/api/fuente/audio?fuente=soundcloud&ref=${respuesta.items[0].video_id}`, 'el tema no suena por el proxy de audio con su id')
+      `/api/fuente/audio?fuente=soundcloud&ref=${items[1].video_id}`, 'el tema no suena por el proxy de audio con su id')
 
-    // A 400 px el encabezado (título largo) y las filas con el botón nuevo entran sin cortarse.
+    // A 400 px el encabezado (título largo) y las filas con sus versiones entran sin cortarse.
     await page.setViewport({ width: 400, height: 860 })
     await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
     const d = await desbordeDe(page)
@@ -1405,7 +1338,277 @@ const CASOS = [
     const h = await page.evaluate(() => { const e = document.querySelector('h1.station-title'); return { texto: e.scrollWidth, caja: e.clientWidth } })
     afirmar(h.texto <= h.caja, `a 400 px el título de la Station queda cortado: ${json(h)}`)
   }],
+
+  ['station: un Go+ se baja completo de otra versión y otro Go+ sin otra versión queda sin descarga', async (page, ctx) => {
+    // Los dos Go+ son temas reales de la API v2 grabada (Daft Punk «One More Time» y FblManny
+    // «From The Top»); sus versiones, las que devuelve el endpoint (tests/test_station_versiones.py).
+    const vx = leerVersiones()
+    const [daft, fbl] = ['2366118086', '2374863902'].map((id) => ({ ...vx[id].tema, fuente: 'soundcloud' }))
+    const s = await montarStation(page, ctx, { primeros: [daft, fbl] })
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+
+    // Daft Punk: la Station solo da 30 s; viene elegido el upload completo (nota A) y lo dice.
+    const completo = vx[daft.video_id].respuesta.opciones.find((o) => o.fuente === 'soundcloud' && !o.solo_preview)
+    const f0 = await filaTexto(page, 0)
+    afirmar(f0.includes('SoundCloud solo da 30 s (Go+): se baja completo de SoundCloud.'), `la fila del Go+ no dice de dónde se baja: ${f0}`)
+    afirmar(!f0.includes('Preview 30 s'), 'con una versión completa elegida la fila no puede decir "Preview 30 s"')
+    await descargarFila(page, 0)
+    await hasta(() => s.descargas.length, (n) => n === 1, 'la descarga del Go+ resuelto no salió')
+    igual(s.descargas[0].url, completo.url, 'del Go+ se bajó otra cosa y no el upload completo')
+
+    // FblManny: nadie más lo tiene; queda el preview marcado, sin descarga, y el motivo.
+    const f1 = await filaTexto(page, 1)
+    afirmar(f1.includes('Preview 30 s'), `la fila del Go+ sin versión no dice que es un preview: ${f1}`)
+    afirmar(f1.includes(vx[fbl.video_id].respuesta.motivo), `la fila no dice el motivo del backend: ${f1}`)
+    const dl1 = await page.evaluate(() => {
+      const b = [...document.querySelectorAll('.trk')][1].querySelector('button[aria-label^="Descargar"]')
+      return b ? { disabled: b.disabled, nombre: b.getAttribute('aria-label') } : null
+    })
+    igual(dl1, { disabled: true, nombre: `Descargar ${fbl.titulo} (no disponible: SoundCloud solo da un fragmento de 30 s)` },
+      'el Go+ sin otra versión no puede descargarse como si fuera el tema')
+
+    // "Descargar todas" salta el preview y lo cuenta.
+    await clickTexto(page, 'button', /^Descargar todas/)
+    const fin = await hasta(() => botonTodas(page), (t) => /^✓/.test(t || ''), '"Descargar todas" no terminó')
+    igual(fin, `✓ ${s.items.length - 1}/${s.items.length - 1} descargadas · 1 sin versión completa`, 'el resumen de "Descargar todas"')
+    afirmar(!s.descargas.slice(1).some((b) => b.url === fbl.url), 'se descargó el preview de 30 s')
+  }],
+
+  ['station: "Descargar todas" con filas pendientes pregunta (bajar las listas / esperar a todas / cancelar)', async (page, ctx) => {
+    const s = await montarStation(page, ctx, { retener: true })
+    const { items } = s
+    await abrirStation(page, ctx, s)
+    await hasta(() => s.versiones.length, (n) => n >= 2, 'no arrancó a pedir versiones')
+    s.soltar(items[0].video_id)
+    s.soltar(items[1].video_id)
+    await hasta(() => leerStation(page), (v) => v.filas.length === 2, 'no aparecieron las dos primeras filas')
+
+    const pregunta = () => page.evaluate(() => {
+      const g = document.querySelector('[role="group"][aria-label="Descargar todas"]')
+      return g ? { texto: g.querySelector('.alert-title')?.textContent, botones: [...g.querySelectorAll('button')].map((b) => b.textContent) } : null
+    })
+    await clickTexto(page, 'button', /^Descargar todas/)
+    const p = await hasta(pregunta, (x) => x, 'con filas pendientes "Descargar todas" no preguntó')
+    igual(p, { texto: `Todavía faltan ${items.length - 2} de ${items.length} temas`,
+      botones: ['Bajar los 2 listos', `Esperar y bajar los ${items.length}`, 'Cancelar'] }, 'la pregunta y sus tres opciones')
+    igual(await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /^Descargar todas/.test(b.textContent))?.getAttribute('aria-expanded')),
+      'true', 'el botón no dice que abrió la pregunta')
+
+    await clickTexto(page, 'button', /^Cancelar$/)
+    await hasta(pregunta, (x) => x === null, 'Cancelar no cerró la pregunta')
+    igual(s.descargas.length, 0, 'Cancelar bajó algo')
+
+    // Bajar las listas: una foto de las 2 filas de ahora, cada una con su elegida.
+    await clickTexto(page, 'button', /^Descargar todas/)
+    await hasta(pregunta, (x) => x, 'no volvió a preguntar')
+    await clickTexto(page, 'button', /^Bajar los 2 listos$/)
+    await hasta(() => s.descargas.length, (n) => n === 2, 'no se bajaron las 2 listas')
+    const elegidas = [0, 1].map((i) => s.vx[items[i].video_id].respuesta.opciones)
+    igual(s.descargas.map((b) => b.url), [elegidas[0].find((o) => o.calidad?.grade === 'A').url, items[1].url],
+      'no se bajó la elegida de cada fila lista')
+
+    // Esperar y bajar todas: no baja nada hasta que llega la última fila; después, las 49.
+    await hasta(() => botonTodas(page), (t) => /^Descargar todas|^✓/.test(t || ''), 'el botón no volvió')
+    await clickTexto(page, 'button', /^(Descargar todas|✓)/)
+    await hasta(pregunta, (x) => x, 'no volvió a preguntar')
+    await clickTexto(page, 'button', new RegExp(`^Esperar y bajar los ${items.length}$`))
+    const esperando = await hasta(() => botonTodas(page), (t) => /^Esperando/.test(t || ''), 'no dice que espera')
+    igual(esperando, `Esperando ${items.length - 2} temas…`, 'el botón mientras espera')
+    igual(s.descargas.length, 2, 'mientras espera no puede bajar nada')
+    s.soltarTodas()
+    await hasta(() => s.descargas.length, (n) => n === 2 + items.length, `al llegar la última fila no se bajaron las ${items.length}`, 20000)
+    const fin = await hasta(() => botonTodas(page), (t) => /^✓/.test(t || ''), 'no terminó')
+    igual(fin, `✓ ${items.length}/${items.length} descargadas`, 'el resumen de "Descargar todas"')
+  }],
+
+  ['station: no queda ningún botón ni texto de "parecidas" (Deezer)', async (page, ctx) => {
+    // "Temas parecidos" salió del front en f36: ni en los resultados, ni en la Station, ni como
+    // plan B cuando no hay Station. El backend de parecidas sigue (sus tests son de Python).
+    const s = await montarStation(page, ctx, { stationFalla: true })
+    const rastros = () => page.evaluate(() => {
+      const re = /parecid|similitud/i
+      const botones = [...document.querySelectorAll('button, a, [role="button"]')]
+        .map((b) => [b.textContent, b.getAttribute('aria-label'), b.getAttribute('title')].join(' | ')).filter((t) => re.test(t))
+      return { botones, texto: re.test(document.body.innerText) ? document.body.innerText.match(/.{0,40}(parecid|similitud).{0,40}/i)[0] : null }
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'elvito gib mir bounce')
+    await page.keyboard.press('Enter')
+    await page.waitForSelector(s.boton, { timeout: ESPERA_MS })
+    igual(await rastros(page), { botones: [], texto: null }, 'en los resultados quedó algo de parecidas')
+    // Sin Station: el error lo dice y no ofrece parecidas de Deezer como plan B.
+    await page.click(s.boton)
+    const err = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.empty p')].map((p) => p.textContent)),
+      (x) => x.some((t) => t.includes(s.falla.mensaje)), 'no apareció el error de la Station')
+    afirmar(err.some((t) => t.includes(s.tema.titulo)), `el error no dice de qué tema: ${json(err)}`)
+    igual(await rastros(page), { botones: [], texto: null }, 'el error de la Station ofrece parecidas')
+    // Con Station: tampoco.
+    s.stationFalla = false
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+    igual(await rastros(page), { botones: [], texto: null }, 'en la Station quedó algo de parecidas')
+    igual(s.parecidas, 0, 'se pidió /api/parecidas_lista')
+  }],
+
+  ['station: salir de la pantalla corta la carga de versiones (no sigue pidiendo)', async (page, ctx) => {
+    const s = await montarStation(page, ctx, { retener: true })
+    const cortados = []
+    page.on('requestfailed', (req) => { if (new URL(req.url()).pathname === '/api/versiones') cortados.push(req.failure()?.errorText) })
+    await abrirStation(page, ctx, s)
+    await hasta(() => s.versiones.length, (n) => n === 3, 'no arrancó a pedir versiones')
+    await page.click('button[aria-label="Radio DJ"]')
+    await page.waitForSelector('.rsem', { timeout: ESPERA_MS })
+    await hasta(() => cortados.length, (n) => n === 3, 'al salir no se cortaron los 3 pedidos en vuelo')
+    // Un pedido cortado que igual contestara no puede disparar el siguiente de la cola.
+    for (const id of [...s.pendientes.keys()]) { const r = s.pendientes.get(id); s.pendientes.delete(id); try { r() } catch { /* ya cortado */ } }
+    await api(ctx, '/api/radio/biblioteca')            // una vuelta al server: si la cola siguiera, ya habría pedido
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))))
+    igual(s.versiones.length, 3, 'después de salir de la Station se siguieron pidiendo versiones')
+  }],
+
+  ['station: las acciones de cada fila miden 32 px o más y tienen nombre y tooltip (1440 y 400 px)', async (page, ctx) => {
+    const s = await montarStation(page, ctx, {})
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+    const medir = () => page.evaluate(() => [...document.querySelectorAll('.trk')].slice(0, 3).flatMap((r, i) =>
+      [...r.querySelectorAll('.trk-acts button')].map((b) => {
+        const rc = b.getBoundingClientRect()
+        return { fila: i, nombre: b.getAttribute('aria-label') || '', tooltip: b.getAttribute('title') || '',
+          ancho: Math.round(rc.width * 10) / 10, alto: Math.round(rc.height * 10) / 10 }
+      })))
+    for (const ancho of [1440, 400]) {
+      await page.setViewport({ width: ancho, height: 900 })
+      await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= ancho, `el viewport no pasó a ${ancho} px`)
+      const botones = await medir()
+      // Espectrograma, Comparar (si hay más de una versión), Station, Agregar, Descargar.
+      afirmar(botones.filter((b) => b.fila === 0).length >= 4, `a ${ancho} px la fila 1 tiene menos acciones de las esperadas: ${json(botones)}`)
+      const malos = botones.filter((b) => b.ancho < 32 || b.alto < 32 || !b.nombre.trim() || !b.tooltip.trim())
+      igual(malos, [], `a ${ancho} px hay acciones de menos de 32 px o sin nombre/tooltip`)
+    }
+  }],
 ]
+
+/* ---------- Station (f36) ---------- */
+
+const leerJson = (...p) => JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', ...p), 'utf8'))
+const leerVersiones = () => leerJson('versiones_respuestas.json')
+
+// Intercepta todo lo que la Station necesita, sin red. /api/station contesta la grabada (con
+// `primeros` adelante, en lugar de los primeros temas); /api/versiones, lo que el endpoint real
+// devuelve (versiones_respuestas.json) y, para los temas que no están ahí, la forma del "no lo
+// encontré" de ese mismo archivo con el tema pedido. Con `retener`, cada /api/versiones espera
+// a que el test lo suelte (s.soltar(id) / s.soltarTodas()).
+async function montarStation(page, ctx, { retener = false, primeros = [], stationFalla = false } = {}) {
+  const respuesta = leerJson('station_respuesta.json')
+  const vx = leerVersiones()
+  const items = [...primeros, ...respuesta.items.slice(primeros.length)]
+  const station = { ...respuesta, items, total: items.length }
+  const noEncontrado = Object.values(vx).find((x) => x.respuesta.opciones.length === 1 && !x.tema.solo_preview).respuesta
+  const lib = await api(ctx, '/api/biblioteca')
+  const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
+  afirmar(uno, '/api/biblioteca no trae «Uno»')
+  const wav = Buffer.from(await (await fetch(`${ctx.url}/api/audio/${uno.id}`)).arrayBuffer())
+  const tema = { titulo: respuesta.semilla.titulo, artista: 'ELVITO', duracion: 291, fuente: 'soundcloud', thumbnail: null,
+    url: 'https://soundcloud.com/elvitoelvito/elvito-x-w-choppa-gib-mir', video_id: respuesta.semilla.video_id }
+  const s = {
+    respuesta: station, items, vx, tema, retener, stationFalla,
+    falla: { exito: false, motivo: 'station_vacia', mensaje: 'SoundCloud no tiene una Station para este tema.' },
+    boton: `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`,
+    versiones: [], descargas: [], calidades: [], parecidas: 0, pendientes: new Map(),
+    soltar(id) { const r = s.pendientes.get(id); afirmar(r, `no hay un pedido de versiones de ${id} para soltar`); s.pendientes.delete(id); r() },
+    soltarTodas() { s.retener = false; for (const id of [...s.pendientes.keys()]) s.soltar(id) },
+  }
+  await page.setRequestInterception(true)
+  page.on('request', (req) => {
+    const u = new URL(req.url())
+    // Un pedido retenido que la página ya cortó (salir de la pantalla) no se puede contestar.
+    const responder = (body, status = 200) => req.respond({ status, contentType: 'application/json', body: JSON.stringify(body) }).catch(() => {})
+    if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
+    if (u.pathname === '/api/calidad') { s.calidades.push(u.searchParams.get('url')); return responder({ ok: false, grade: '?' }) }
+    if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+    if (u.pathname === '/api/station') return responder(s.stationFalla ? s.falla : station)
+    if (u.pathname === '/api/parecidas_lista') { s.parecidas++; return responder({ exito: false }) }
+    if (u.pathname === '/api/versiones') {
+      const b = JSON.parse(req.postData())
+      s.versiones.push(b)
+      const id = b.tema.video_id
+      const r = vx[id]?.respuesta || { ...noEncontrado, opciones: [{ ...b.tema, estacion: true }] }
+      const contestar = () => responder(r)
+      if (s.retener) { s.pendientes.set(id, contestar); return }
+      return contestar()
+    }
+    if (u.pathname === '/api/descargar') { s.descargas.push(JSON.parse(req.postData())); return responder({ exito: true, calidad: { grade: 'A' } }) }
+    if (u.pathname === '/api/fuente/audio/info') return responder({ preview: false, duracion: 245 })
+    if (u.pathname === '/api/fuente/audio') return req.respond({ status: 200, contentType: 'audio/wav', body: wav })
+    if (u.origin !== new URL(ctx.url).origin) return req.abort()
+    return req.continue()
+  })
+  return s
+}
+
+async function abrirStation(page, ctx, s) {
+  await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+  await page.type('input[aria-label="Buscar una canción, artista o género"]', 'elvito gib mir bounce')
+  await page.keyboard.press('Enter')
+  await page.waitForSelector(s.boton, { timeout: ESPERA_MS })
+  // Con teclado: el botón se alcanza con foco y se activa con Enter.
+  await page.focus(s.boton)
+  await page.keyboard.press('Enter')
+  await page.waitForSelector('h1.station-title', { timeout: ESPERA_MS })
+}
+
+// Avance ("N de 49" mientras carga, el resumen al terminar) y el título de cada fila.
+const leerStation = (page) => page.evaluate(() => {
+  const t = document.querySelector('.station-progress')?.textContent.replace(/\s+/g, ' ').trim() || null
+  const m = t && t.match(/^(\d+ de \d+) temas con versiones/)
+  return { progreso: m ? m[1] : t, filas: [...document.querySelectorAll('.trk')].map((r) => r.querySelector('.trk-title')?.textContent ?? null) }
+})
+
+// Todo el texto de una fila, visible y accesible (notas, motivos, nombres de botones).
+const filaTexto = (page, i) => page.evaluate((k) => {
+  const r = [...document.querySelectorAll('.trk')][k]
+  return r ? [r.innerText, ...[...r.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label'))].join(' | ') : ''
+}, i)
+
+// El botón de "Descargar todas" (cambia de texto: Bajando…, Esperando…, ✓ N/M descargadas).
+const botonTodas = (page) => page.evaluate(() => [...document.querySelectorAll('button')]
+  .map((b) => b.textContent.replace(/\s+/g, ' ').trim()).find((t) => /^(Descargar todas|Bajando|Esperando|✓)/.test(t)) ?? null)
+
+async function clickTexto(page, sel, re) {
+  const ok = await page.evaluate((q, fuente) => {
+    const b = [...document.querySelectorAll(q)].find((e) => new RegExp(fuente).test(e.textContent.trim()) && !e.disabled)
+    if (b) b.click()
+    return !!b
+  }, sel, re.source)
+  afirmar(ok, `no hay un ${sel} habilitado que diga ${re}`)
+}
+
+async function descargarFila(page, i) {
+  const ok = await page.evaluate((k) => {
+    const b = [...document.querySelectorAll('.trk')][k]?.querySelector('button[aria-label^="Descargar"]:not([disabled])')
+    if (b) b.click()
+    return !!b
+  }, i)
+  afirmar(ok, `la fila ${i + 1} no tiene un botón de descarga habilitado`)
+}
+
+// La versión elegida de una fila y cómo elegir otra. Son lo ÚNICO de estos casos que depende del
+// markup de la columna VERSIONES (hoy: un botón por versión con aria-pressed y "Opción N:
+// plataforma, nota X" como nombre). Si ese diseño cambia, se adaptan estas dos funciones; los
+// casos verifican comportamiento (qué se elige, qué se descarga), no la disposición.
+const elegidaDe = (page, i) => page.evaluate((k) =>
+  [...document.querySelectorAll('.trk')][k]?.querySelector('[aria-pressed="true"]')?.getAttribute('aria-label') ?? null, i)
+
+async function elegir(page, i, plataforma) {
+  const ok = await page.evaluate((k, p) => {
+    const b = [...[...document.querySelectorAll('.trk')][k].querySelectorAll('[aria-pressed]')]
+      .find((e) => new RegExp(`^Opción \\d+: ${p}\\b`).test(e.getAttribute('aria-label') || ''))
+    if (b) b.click()
+    return !!b
+  }, i, plataforma)
+  afirmar(ok, `la fila ${i + 1} no tiene una versión de ${plataforma} para elegir`)
+}
 
 // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del
 // ancho queda cortado e invisible (peor que un scroll). Por eso no alcanza con mirar
