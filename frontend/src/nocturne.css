@@ -136,7 +136,7 @@
   --pf: #9397ab;
   --grade-c: #9397ab;
   /* Result-list geometry — the seven column carriers and the row height. */
-  --trk-cols: 30px 44px minmax(180px,1.6fr) minmax(140px,0.9fr) 52px minmax(160px,1fr) 128px /* @kind other */;
+  --trk-cols: 30px 44px minmax(180px,1.6fr) minmax(140px,0.9fr) 52px minmax(160px,1fr) 192px /* @kind other */;
   --trk-h: 64px;
   /* Altura de la barra fija (.topbar-stack). TopBar.jsx la mide y la pisa en vivo (cambia cuando
      la barra se parte en dos renglones); este valor es solo el de arranque en escritorio. */
@@ -508,6 +508,10 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 .vchip>.n{font-family:var(--font-mono);font-size:10px;opacity:0.62}
 .vchip>.dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--pf,var(--color-neutral-500))}
 .vchip:disabled{opacity:0.4;cursor:not-allowed}
+/* Nota de la versión dentro de la pastilla (f36): la letra con el color de su nota; "30 s" en
+   un preview Go+ (no es el tema, no tiene nota). */
+.vchip-grade{display:inline-flex;align-items:center;height:16px;padding:0 4px;margin-left:1px;border-radius:4px;font-family:var(--font-heading);font-size:10px;font-weight:700;color:var(--grade-c,var(--color-neutral-300));background:color-mix(in srgb,var(--grade-c,var(--color-neutral-500)) 18%,var(--color-well))}
+.vchip-grade.is-preview{font-family:var(--font-mono);font-weight:600;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,var(--color-well))}
 .pf-yt{--pf:var(--color-pf-yt)}
 .pf-sc{--pf:var(--color-pf-sc)}
 .pf-sp{--pf:var(--color-pf-sp)}
@@ -530,8 +534,22 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 .trk-artist{display:flex;align-items:center;gap:6px;font-size:12px;line-height:1.4;color:var(--color-neutral-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trk-artist .sep{opacity:0.5}
 .trk-meta{display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden}
+/* Acciones (f36): separadas de VERSIONES por una línea; todos los botones de 32×32 con íconos
+   de 16 (antes 30 px, la descarga más ancha y 2 px entre botones: se veían pegados). */
 .trk-acts{display:flex;align-items:center;gap:2px;justify-content:flex-end;opacity:0.55;transition:opacity .15s var(--ease)}
+.results:not(.results-crate) .trk-acts{gap:var(--space-1);align-self:stretch;padding-left:10px;border-left:1px solid var(--color-divider);opacity:0.7}
 .trk:hover .trk-acts,.trk:focus-within .trk-acts,.trk[aria-selected=true] .trk-acts{opacity:1}
+.results:not(.results-crate) .trk-acts .btn{flex:none;width:32px;height:32px;min-height:32px;padding:0;border-radius:7px}
+.results:not(.results-crate) .trk-acts .btn svg{width:16px;height:16px}
+.results:not(.results-crate) .trk-acts .add-pl{flex:none}
+/* Una línea de aviso bajo el artista (f36): por qué faltan versiones, de dónde sale un Go+. */
+.trk-note{margin-top:2px;font-size:11px;line-height:1.35;color:var(--color-neutral-400);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trk-note.is-warn{color:var(--color-warn)}
+/* La próxima fila de la Station mientras busca sus versiones. */
+.trk-pending{display:flex;align-items:center;gap:var(--space-3);min-height:48px;padding:0 var(--space-3);font-size:12px;color:var(--color-neutral-500)}
+.station-progress{display:inline-flex;align-items:center;gap:var(--space-2)}
+.station-progress .spinner{width:12px;height:12px}
+.station-ask .cluster{margin-top:var(--space-2)}
 
 /* Density and separator variants — set on .results, so a whole list changes
    with one class instead of per-row overrides. */
@@ -864,19 +882,19 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    en todas las pantallas, los cortes de viewport dejaban filas más anchas que el lugar real y
    .app las recortaba (se perdían Descargar y Quitar). Cada corte es el de viewport de antes
    menos el padding de .app-main (32px), salvo el de Metadata en resultados (ver abajo). */
-/* Resultados: las 7 columnas de escritorio entran desde 830px de contenido
-   (30+44+180+140+52+160+128 + 6 huecos de 12 + 24 de padding; medido: a 830 no se corta nada).
-   Recién debajo de eso se va Metadata. Antes el corte era 1068 y con el rail Metadata
-   desaparecía hasta ~1360px de viewport. */
+/* Resultados: las 7 columnas de escritorio entran desde 894px de contenido
+   (30+44+180+140+52+160+192 + 6 huecos de 12 + 24 de padding). Recién debajo de eso se va
+   Metadata. f36: Acciones pasó de 128 a 192px (5 botones de 32 + separación), así que el
+   corte pasó de 830 a 894; sin Metadata la fila pide 722px y entra hasta el corte de 728. */
 /* El ocultado de Metadata es solo de resultados: el crate usa sus 7 columnas desde 729px y si
    también se le escondía quedaba un hueco de 140px entre el título y la nota. */
-@container main (max-width:829px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 128px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta{display:none}}
+@container main (max-width:893px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 192px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta{display:none}}
 /* El crate ya no tiene la lista de playlists al lado (es el rail), así que su fila de escritorio
    —que pide 712px: 26+44+170+140+52+112+72 + 6 huecos de 12 + 24 de padding— entra en todo lo que
    no sea la tarjeta de 728px de abajo. Por eso tiene dos layouts y no tres; el bloque de 829
    excluye .results-crate con :not() para no pisarle las columnas. */
 /* Debajo de 728px de contenido la fila pasa a tarjeta: arte, tema y nota arriba; las versiones
-   en su renglón y las acciones en otro, TODAS (Espectrograma, Comparar, Parecidas, Agregar,
+   en su renglón y las acciones en otro, TODAS (Espectrograma, Comparar, Station, Agregar,
    Descargar). Antes se escondían las tres primeras esperando un menú "más" que nunca existió,
    y con el rail eso pasaba también en escritorio (861-1020px). Metadata y el índice se van. */
 @container main (max-width:728px){
@@ -888,7 +906,10 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .trk>.trk-grade{grid-area:grade}
 .trk>.trk-acts{grid-area:acts}
 .trk>.trk-vers{grid-area:vers}
+/* En tarjeta la línea separadora va arriba (las acciones tienen su renglón), con 40px de área. */
 .trk-acts{opacity:1;justify-content:flex-start;flex-wrap:wrap}
+.results:not(.results-crate) .trk-acts{gap:var(--space-2);padding:6px 0 0;border-left:0;border-top:1px solid var(--color-divider)}
+.results:not(.results-crate) .trk-acts .btn{width:40px;height:36px;min-height:36px}
 /* El crate tiene una sola acción (Quitar): va arriba a la derecha, al lado de la nota. */
 .results-crate .trk{grid-template-columns:44px minmax(0,1fr) 52px 40px;grid-template-areas:'art id grade acts' 'art st st st'}
 .results-crate .trk-acts{justify-content:flex-end}

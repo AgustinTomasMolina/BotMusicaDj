@@ -221,22 +221,35 @@ _MIX_LOCK = threading.Lock()
 
 def _buscar_mix(q: str, limite: int) -> list:
     """Consulta todas las fuentes EN PARALELO y las intercala (round-robin)."""
-    clave = (q, limite)
+    return _buscar_mix_detalle(q, limite)[0]
+
+
+def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list]:
+    """(mezcla, fuentes que no contestaron). `fuentes` (f36) limita a qué plataformas se
+    pregunta: las versiones de la Station no le vuelven a preguntar a SoundCloud por cada tema.
+    Cacheado como `_buscar_mix` (solo si contestaron todas)."""
+    clave = (q, limite) if fuentes is None else (q, limite, tuple(sorted(fuentes)))
     with _MIX_LOCK:
         hit = _MIX_CACHE.get(clave)
         if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
-            return [dict(c) for c in hit[1]]
-    mezcla, completa = _buscar_mix_fuentes(q, limite)
-    if completa:
+            return [dict(c) for c in hit[1]], []
+    mezcla, fallidas = _mix_fuentes(q, limite, fuentes)
+    if not fallidas:
         with _MIX_LOCK:
             if len(_MIX_CACHE) >= _MIX_MAX:
                 _MIX_CACHE.clear()
             _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
-    return mezcla
+    return mezcla, fallidas
 
 
 def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
     """(mezcla, completa): completa = contestaron todas las fuentes a tiempo."""
+    mezcla, fallidas = _mix_fuentes(q, limite)
+    return mezcla, not fallidas
+
+
+def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list]:
+    """(mezcla, nombres de las fuentes que fallaron o no contestaron a tiempo)."""
     from concurrent.futures import ThreadPoolExecutor, wait
 
     por_fuente = max(4, limite // 4)
@@ -249,10 +262,12 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
         ("spotify", lambda: search_agent.buscar_en_spotify(q, limit=por_fuente)),
         ("soundcloud", lambda: search_agent.buscar_en_soundcloud(q, limit=por_fuente)),
     ]
+    if fuentes is not None:
+        tareas = [(n, fn) for n, fn in tareas if n in fuentes]
 
     resultados = {}
-    completa = True
-    ex = ThreadPoolExecutor(max_workers=len(tareas))
+    fallidas = []
+    ex = ThreadPoolExecutor(max_workers=max(1, len(tareas)))
     try:
         futuros = {ex.submit(fn): nombre for nombre, fn in tareas}
         wait(futuros, timeout=_SOURCE_DEADLINE_S)
@@ -260,14 +275,14 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
             if not fut.done():
                 logger.warning(f"⚠️ Fuente '{nombre}' no contestó en {_SOURCE_DEADLINE_S:.0f} s: queda afuera.")
                 resultados[nombre] = []
-                completa = False
+                fallidas.append(nombre)
                 continue
             try:
                 resultados[nombre] = fut.result() or []
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
-                completa = False
+                fallidas.append(nombre)
     finally:
         # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
         ex.shutdown(wait=False, cancel_futures=True)
@@ -282,7 +297,7 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
             if i < len(g):
                 mezcla.append(g[i])
         i += 1
-    return mezcla[:limite], completa
+    return mezcla[:limite], fallidas
 
 
 def _rank_calidad(fuente: str, formato: str) -> int:
@@ -680,6 +695,211 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
     except Exception as e:           # build_station no debería lanzar; si lo hace, no es un 500
         logger.warning(f"⚠️ Station: error inesperado {type(e).__name__}")
         return sc.failure(sc.UNEXPECTED_RESPONSE)
+
+
+# ---------------------------------------------------------------- versiones de la Station (f36)
+# Cada tema de la Station se busca en las otras plataformas para bajarlo de donde mejor suene.
+# El front pide UN tema por vez (con una cola de 3) y va mostrando las filas en el orden de la
+# Station a medida que están: un pedido chico por fila es más simple y robusto que un stream
+# (se cancela con un abort, reintenta solo esa fila y no depende de proxies que bufferean).
+#
+# Una versión de otra plataforma se ofrece SOLO si `track_identity` dice que es la misma
+# grabación que el tema de la Station (artista, título, versión y duración): nunca otro tema,
+# un vivo ni un remix. Ver `_version_valida`.
+
+# Plataformas a las que se les pregunta por cada tema. SoundCloud no: el tema YA es de
+# SoundCloud, y 49 búsquedas seguidas es justo lo que la auditoría de f34 marcó como riesgo de
+# 429. Solo se le pregunta cuando el tema de la Station es Go+ (30 s) o no tiene audio abrible,
+# por si otro upload lo tiene completo (y eso por la API v2, que dice si es un preview).
+_VERSION_SOURCES = ("youtube", "ligaudio", "hitplayer", "spotify")
+_VERSION_SEARCH_LIMIT = 12
+_VERSION_MAX = 5                       # opciones por fila (una por plataforma + otro upload de SC)
+_VERSION_CAL_DEADLINE_S = 15.0         # tope para las notas de una fila; lo que falte, el front lo pide lazy
+_VERSION_MAX_TEXT = 300
+# SoundCloud (búsqueda API v2 + nota por yt-dlp): como mucho 2 pedidos a la vez desde versiones
+# y, si contesta 429, una pausa: las filas lo dicen y siguen con las otras plataformas.
+_SC_GATE = threading.BoundedSemaphore(2)
+_SC_GATE_WAIT_S = 10.0
+_SC_PAUSE_S = 60.0
+_sc_pause_until = 0.0
+_SC_URL = re.compile(r"https://(?:soundcloud\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|api\.soundcloud\.com/tracks/[0-9]{1,20})")
+_SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3 directo (Ligaudio)", "hitplayer": "MP3 directo (HitPlayer)",
+                 "spotify": "Spotify", "soundcloud": "SoundCloud"}
+
+
+def _sc_paused() -> bool:
+    return time.monotonic() < _sc_pause_until
+
+
+def _sc_gated(fn):
+    """Corre `fn` con el cupo de SoundCloud. None si SoundCloud está en pausa o no hubo cupo."""
+    if _sc_paused() or not _SC_GATE.acquire(timeout=_SC_GATE_WAIT_S):
+        return None
+    try:
+        return fn()
+    finally:
+        _SC_GATE.release()
+
+
+def _version_identity(c: dict):
+    """Identidad de un candidato: Spotify trae artista y título separados; el resto es un
+    upload ("Artista - Tema" en el título, el canal como artista)."""
+    if (c.get("fuente") or "").lower() in ("spotify", "deezer"):
+        return track_identity.parse_fields(c.get("artista") or "", c.get("titulo") or "")
+    return track_identity.parse_entry(c.get("titulo") or "", c.get("artista") or "")
+
+
+def _version_valida(wanted, wanted_s, c: dict) -> str | None:
+    """Grado de evidencia de que `c` es la misma grabación que el tema de la Station, o None.
+    `audio_exacto`: el tema de la Station ES el audio (no un video con intro), así que una
+    versión más CORTA que no cuadra es otra edición (la Radio Edit de un Extended)."""
+    return track_identity.evidencia_misma_grabacion(
+        wanted, _version_identity(c), wanted_s, c.get("duracion"), audio_exacto=True)
+
+
+def _sc_otros_uploads(q: str, tema_id: str) -> tuple[list, str | None]:
+    """Otros uploads COMPLETOS del tema en SoundCloud (para un tema Go+). (lista, motivo)."""
+    global _sc_pause_until
+    import soundcloud_station as sc
+
+    def buscar():
+        return sc.default_api().search_tracks(q, limit=10)
+
+    try:
+        crudos = _sc_gated(buscar)
+    except sc.SoundCloudError as e:
+        if "429" in (e.detail or ""):
+            _sc_pause_until = time.monotonic() + _SC_PAUSE_S
+            logger.warning("⚠️ SoundCloud contestó 429: pausa de versiones en SoundCloud.")
+            return [], "SoundCloud frenó los pedidos (demasiados seguidos): no busqué otro upload completo"
+        return [], "SoundCloud no contestó la búsqueda de otro upload completo"
+    if crudos is None:
+        return [], ("SoundCloud está en pausa por demasiados pedidos: no busqué otro upload completo"
+                    if _sc_paused() else "SoundCloud estaba ocupado: no busqué otro upload completo")
+    out = []
+    for raw in crudos:
+        m = sc.map_track(raw)
+        # Solo sirve si se puede bajar entero: otro preview de 30 s no suma nada.
+        if m and m["video_id"] != tema_id and not m["solo_preview"]:
+            out.append(m)
+    return out, None
+
+
+def _versiones_de(tema: dict, formato: str) -> dict:
+    """Las versiones de UN tema de la Station: el tema mismo (SoundCloud) + la mejor de cada
+    otra plataforma que pase la regla de identidad, cada una con su nota de /api/calidad.
+    {exito: true, opciones, motivo, fallidas}. `motivo` (o None) dice por qué falta algo."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    t0 = time.perf_counter()
+    base = dict(tema, estacion=True)
+    wanted = track_identity.parse_entry(tema["titulo"], tema["artista"])
+    wanted_s = track_identity.duration_or_none(tema.get("duracion"))
+    motivos, fallidas = [], []
+    candidatos = []
+    if not wanted.query_title or not wanted.artists:
+        motivos.append("No pude leer artista y título de este tema para buscarlo en otras plataformas")
+    else:
+        q = " ".join(p for p in (wanted.artist_text, wanted.query_title, wanted.version_text) if p)
+        mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
+        candidatos = list(mezcla)
+        if tema.get("solo_preview") or tema.get("reproducible") is False:
+            otros, motivo_sc = _sc_otros_uploads(q, tema.get("video_id") or "")
+            candidatos += otros
+            if motivo_sc:
+                motivos.append(motivo_sc)
+
+    # La mejor de cada plataforma que ES el tema (en el orden de prioridad de fuente).
+    aceptadas = []
+    for c in candidatos:
+        grado = _version_valida(wanted, wanted_s, c)
+        if grado:
+            aceptadas.append(dict(c, evidencia=grado))
+    aceptadas.sort(key=lambda c: _rank_calidad(c.get("fuente", ""), formato))
+    elegidas, vistas = [], set()
+    for c in aceptadas:
+        f = (c.get("fuente") or "").lower()
+        if f not in vistas:
+            vistas.add(f)
+            elegidas.append(c)
+    # El tema de la Station primero entre las de SoundCloud; el orden final es el de fuente.
+    opciones = sorted([base] + elegidas, key=lambda c: _rank_calidad(c.get("fuente", ""), formato))[:_VERSION_MAX]
+
+    # Notas de calidad en paralelo (las de SoundCloud con cupo). Sin nota: un preview de 30 s
+    # (no es el tema) y Spotify (se baja buscando en YouTube: la nota sería de otro audio).
+    def nota(c):
+        args = (c["titulo"], c.get("artista") or "", c.get("fuente") or "", c.get("url") or "")
+        if (c.get("fuente") or "").lower() == "soundcloud":
+            return _sc_gated(lambda: _calidad_cacheada(*args))
+        return _calidad_cacheada(*args)
+
+    medir = [i for i, c in enumerate(opciones)
+             if not c.get("solo_preview") and (c.get("fuente") or "").lower() not in ("spotify", "deezer")]
+    ex = ThreadPoolExecutor(max_workers=max(1, len(medir)))
+    try:
+        futs = {ex.submit(nota, opciones[i]): i for i in medir}
+        wait(futs, timeout=_VERSION_CAL_DEADLINE_S)
+        for fut, i in futs.items():
+            try:
+                opciones[i]["calidad"] = fut.result() if fut.done() else None
+            except Exception as e:
+                logger.warning(f"⚠️ Versiones: la nota de {opciones[i].get('fuente')} falló: {type(e).__name__}")
+                opciones[i]["calidad"] = None
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola y queda en caché
+
+    if fallidas:
+        nombres = ", ".join(_SOURCE_NAMES.get(f, f) for f in fallidas)
+        motivos.append(f"No contestó a tiempo: {nombres}")
+    if len(opciones) == 1 and not motivos:
+        motivos.append("No lo encontré en otras plataformas (o lo que apareció no era este tema)")
+    logger.info(f"🎚️ Versiones de «{tema['titulo']}»: {len(opciones)} en {time.perf_counter() - t0:.1f} s"
+                + (f" ({'; '.join(motivos)})" if motivos else ""))
+    return {"exito": True, "opciones": opciones, "motivo": ". ".join(motivos) or None, "fallidas": fallidas}
+
+
+@app.post("/api/versiones")
+async def versiones(payload: dict):
+    """Versiones de un tema de la Station de SoundCloud (f36). Cuerpo:
+    {tema: {titulo, artista, duracion, video_id, url, permalink, thumbnail, reproducible,
+    solo_preview}, formato}. Respuesta: {exito, opciones, motivo, fallidas}; 400 si el pedido
+    es inválido. Nunca 500: si algo falla, la fila queda con la versión de SoundCloud."""
+    import soundcloud_station as sc
+
+    tema = payload.get("tema") if isinstance(payload, dict) else None
+    formato = str((payload or {}).get("formato") or "wav").lower()[:8]
+    malo = None
+    if not isinstance(tema, dict):
+        malo = "Falta el tema."
+    else:
+        texto = {k: tema.get(k) for k in ("titulo", "artista")}
+        if not all(isinstance(v, str) for v in texto.values()) or not texto["titulo"].strip():
+            malo = "Falta el título."
+        elif any(len(v) > _VERSION_MAX_TEXT for v in texto.values()):
+            malo = "Título o artista demasiado largos."
+        elif not sc.SC_ID.fullmatch(str(tema.get("video_id") or "")):
+            malo = "Identificador de SoundCloud inválido."
+        elif not isinstance(tema.get("url"), str) or not _SC_URL.fullmatch(tema["url"]):
+            malo = "URL de SoundCloud inválida."
+    if malo:
+        return JSONResponse({"exito": False, "motivo": "pedido_invalido", "mensaje": malo}, status_code=400)
+
+    # Solo los campos conocidos vuelven en la respuesta (nada de lo que mande el cliente de más).
+    permalink = tema.get("permalink") if isinstance(tema.get("permalink"), str) and _SC_URL.fullmatch(tema["permalink"]) else None
+    thumb = tema.get("thumbnail") if isinstance(tema.get("thumbnail"), str) and len(tema["thumbnail"]) < 500 else None
+    limpio = {
+        "titulo": tema["titulo"].strip(), "artista": tema["artista"].strip(),
+        "duracion": track_identity.duration_or_none(tema.get("duracion")) or None,
+        "url": tema["url"], "fuente": "soundcloud", "video_id": str(tema["video_id"]),
+        "thumbnail": thumb, "permalink": permalink,
+        "reproducible": tema.get("reproducible") is not False, "solo_preview": tema.get("solo_preview") is True,
+    }
+    try:
+        return await asyncio.to_thread(_versiones_de, limpio, formato)
+    except Exception as e:          # un bug acá no es un 500: la fila queda con SoundCloud
+        logger.warning(f"⚠️ Versiones de «{limpio['titulo']}»: error inesperado {type(e).__name__}: {e}")
+        return {"exito": True, "opciones": [dict(limpio, estacion=True)], "fallidas": [],
+                "motivo": "No pude buscar versiones de este tema (error del servidor)"}
 
 
 def _safe_name(name: str) -> str:
@@ -1164,23 +1384,29 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
     return cal
 
 
-@app.get("/api/calidad")
-async def calidad(titulo: str, artista: str = "", fuente: str = "", url: str = ""):
-    """Nota de calidad (A/B/C/D/F) del audio real, ANTES de descargar. Cacheada."""
+def _calidad_cacheada(titulo: str, artista: str, fuente: str, url: str) -> dict:
+    """La respuesta de /api/calidad (bloqueante): misma caché, misma cola. La usan el
+    endpoint y las versiones de la Station (f36), así una nota no se calcula dos veces."""
     clave = f"{fuente}|{url}|{titulo}|{artista}"
     cal = _CALIDAD_CACHE.get(clave)
     if cal is None:
         if jobs.queue_disponible():
             import tasks
             job = jobs.encolar(tasks.calidad_job, titulo, artista, fuente, url, timeout=120)
-            cal = await asyncio.to_thread(jobs.esperar_resultado, job, 90)
+            cal = jobs.esperar_resultado(job, 90)
         else:
-            cal = await asyncio.to_thread(_calidad_preview, titulo, artista, fuente, url)
+            cal = _calidad_preview(titulo, artista, fuente, url)
         if cal:
             _CALIDAD_CACHE[clave] = cal
     if not cal:
         return {"ok": False, "grade": "?", "color": _GRADO_COLOR["?"], "calidad": "no analizable"}
     return {"ok": True, **cal}
+
+
+@app.get("/api/calidad")
+async def calidad(titulo: str, artista: str = "", fuente: str = "", url: str = ""):
+    """Nota de calidad (A/B/C/D/F) del audio real, ANTES de descargar. Cacheada."""
+    return await asyncio.to_thread(_calidad_cacheada, titulo, artista, fuente, url)
 
 
 @app.get("/api/descargas")
