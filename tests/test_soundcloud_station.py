@@ -144,6 +144,46 @@ def test_un_tema_solo_con_hls_cifrado_no_es_reproducible_en_la_barra():
     assert sc.map_track(t)["reproducible"] is False
 
 
+def test_go_plus_alcanza_con_una_de_las_dos_marcas():
+    # SoundCloud marca un Go+ con policy SNIP Y con transcodings `snipped`; alcanza con una
+    # (un cambio de la API puede sacar cualquiera de las dos). Los dos casos salen de la
+    # grabación del Go+ de Daft Punk, sacándole una marca por vez.
+    snip = _de_busqueda("Daft Punk One More Time", 2366118086)
+    solo_policy = dict(snip, media={"transcodings": [dict(x, snipped=False) for x in snip["media"]["transcodings"]]})
+    solo_snipped = dict(snip, policy="ALLOW")
+    assert sc.map_track(solo_policy)["solo_preview"] is True, "policy SNIP sin `snipped` sigue siendo un preview"
+    assert sc.map_track(solo_snipped)["solo_preview"] is True, "`snipped` con policy ALLOW sigue siendo un preview"
+
+
+def test_policy_block_no_es_reproducible_aunque_traiga_progressive():
+    completo = _de_busqueda("Daft Punk One More Time", 199428706)
+    assert sc.map_track(completo)["reproducible"] is True
+    bloqueado = sc.map_track(dict(completo, policy="BLOCK"))
+    assert (bloqueado["reproducible"], bloqueado["solo_preview"]) == (False, False)
+
+
+def test_semilla_con_titulo_al_reves_usa_la_otra_lectura():
+    # «From The Top - IMMINENT» subido por un tercero: la lectura normal busca al artista «From
+    # The Top» con el tema «IMMINENT» y no hay tal cosa; la otra lectura de "A - B" encuentra el
+    # upload de RICOCHET «IMMINENT - From The Top» (247,2 s). SoundCloud contesta a esa búsqueda
+    # con lo mismo que a «IMMINENT From The Top» (grabado).
+    consultas = []
+
+    class Http(FakeHttp):
+        def __call__(self, url, params=None, headers=None, timeout=None):
+            if params and "q" in params:
+                consultas.append(params["q"])
+                if params["q"].lower() == "from the top imminent":
+                    params = dict(params, q="IMMINENT From The Top")
+            return super().__call__(url, params, headers, timeout)
+
+    http = Http()
+    r = sc.build_station("youtube", "aaaaaaaaaaa", "From The Top - IMMINENT", "Subidas de un fan", 247.0, api(http))
+    assert [q.lower() for q in consultas] == ["from the top imminent"], "una sola búsqueda: las dos lecturas usan el mismo pool"
+    assert r["exito"] is True and r["semilla"]["video_id"] == IMMINENT
+    assert r["semilla"]["evidencia"] == "texto+duracion"
+
+
 @pytest.mark.parametrize("raro", [
     None, "x", {"kind": "playlist", "id": 1, "title": "t"}, {"id": "123", "title": "t"},
     {"id": True, "title": "t"}, {"id": 0, "title": "t"}, {"id": 5, "title": "  "}, {"id": 5},
