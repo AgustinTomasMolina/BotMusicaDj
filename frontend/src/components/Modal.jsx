@@ -36,7 +36,7 @@ function Player({ song: c }) {
   } else if (c.preview_url) {
     node = <audio controls autoPlay src={c.preview_url} style={{ width: '100%' }} />
   } else {
-    node = <p className="text-muted">▶ <a href={c.url} target="_blank" rel="noreferrer">Abrir en {c.fuente}</a></p>
+    node = <p className="text-muted">▶ <a href={c.url} target="_blank" rel="noreferrer">Abrir en {FUENTE_CORTO[(c.fuente || '').toLowerCase()] || c.fuente}</a></p>
   }
   return <div ref={ref}>{node}</div>
 }

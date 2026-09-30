@@ -723,7 +723,7 @@ _SC_GATE_WAIT_S = 10.0
 _SC_PAUSE_S = 60.0
 _sc_pause_until = 0.0
 _SC_URL = re.compile(r"https://(?:soundcloud\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|api\.soundcloud\.com/tracks/[0-9]{1,20})")
-_SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3 directo (Ligaudio)", "hitplayer": "MP3 directo (HitPlayer)",
+_SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3", "hitplayer": "MP3",
                  "spotify": "Spotify", "soundcloud": "SoundCloud"}
 
 
@@ -849,7 +849,8 @@ def _versiones_de(tema: dict, formato: str) -> dict:
         ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola y queda en caché
 
     if fallidas:
-        nombres = ", ".join(_SOURCE_NAMES.get(f, f) for f in fallidas)
+        # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
+        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in fallidas))
         motivos.append(f"No contestó a tiempo: {nombres}")
     if len(opciones) == 1 and not motivos:
         motivos.append("No lo encontré en otras plataformas (o lo que apareció no era este tema)")

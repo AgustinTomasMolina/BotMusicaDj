@@ -2,6 +2,7 @@
    descargas. Migrado a la design system Nocturne (.drawer / .hist / .grade). */
 import { useRef } from 'react'
 import { useDialog } from '../hooks'
+import { FUENTE_CORTO } from '../utils'
 
 const IcoX = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
 const IcoSearch = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" /></svg>
@@ -110,7 +111,7 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
               {descargas.map((d) => (
                 <div key={d.id} className="hist-item" style={{ cursor: 'default' }}>
                   <IcoDown />
-                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${d.fuente} · ${hace(d.creado_en)}`} />
+                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} ·${hace(d.creado_en)}`} />
                   {d.grade && d.grade !== '?' && <span className={`grade grade-sm ${gradeClass(d.grade)}`}>{d.grade}</span>}
                 </div>
               ))}

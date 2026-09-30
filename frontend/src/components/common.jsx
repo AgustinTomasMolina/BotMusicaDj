@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { metaKey, songKey, cuePoint, DEFAULT_FORMAT } from '../utils'
+import { metaKey, songKey, cuePoint, DEFAULT_FORMAT, FUENTE_CORTO } from '../utils'
 import { calidad as fetchCalidad } from '../api'
 
 /* ---------- Nota de calidad (A/B/C/D/F) con carga lazy ----------
@@ -96,7 +96,7 @@ export function Badges({ c, formato, metaMap, calidad }) {
         ? <span className="mb" title="Género"><b>{genero}</b></span>
         : (!genDone && <span className="mb" title="Buscando género…"><b>…</b></span>)}
       <span className={`mb${lossless ? ' mb-lossless' : ''}`} title={fijoMp3 ? 'Esta fuente baja siempre en MP3' : 'Formato que se va a descargar'}><b>{fmtVal}</b></span>
-      <span className="mb" title="Fuente"><b>{c.fuente}</b></span>
+      <span className="mb" title="Fuente"><b>{FUENTE_CORTO[src] || c.fuente}</b></span>
       {calidad && calidad.grade &&
         <span className={`grade grade-sm ${gradeClass(calidad.grade)}`} title={`Calidad real — ${calidad.metodo || ''}`}>{calidad.grade}</span>}
     </>

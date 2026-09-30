@@ -551,6 +551,42 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 .station-progress .spinner{width:12px;height:12px}
 .station-ask .cluster{margin-top:var(--space-2)}
 
+/* — Station (f38, opción A): la versión elegida y el resto plegado —
+   La fila muestra solo la versión que se baja (.vbest) y "+N versiones" (.vmore); al desplegar,
+   la sub-lista (.trk-versions) va debajo de la fila, a lo ancho, sobre --color-well.
+   Acciones de 36 px con borde sutil; la descarga con borde del acento. Acciones pide
+   5×36 + 4 huecos de 4 + 10 de separación + 1 de línea = 207 px. */
+/* VERSIONES pide 236 px para que la elegida y "+N versiones" entren en un renglón. */
+.results-station{--trk-cols:30px 44px minmax(160px,1.4fr) minmax(140px,0.8fr) 52px minmax(236px,1.2fr) 208px /* @kind other */}
+.vpick{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;min-width:0}
+.vbest{display:inline-flex;align-items:center;gap:8px;height:36px;max-width:100%;min-width:0;padding:0 10px;border-radius:8px;font-size:13px;font-weight:600;white-space:nowrap;color:var(--color-text);background:color-mix(in srgb,var(--color-accent) 14%,transparent);box-shadow:inset 0 0 0 1px var(--color-accent)}
+.vbest>.dot,.vline-src>.dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--pf,var(--color-neutral-500))}
+.vmore{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 10px;border:1px solid var(--color-divider);border-radius:8px;background:transparent;color:var(--color-neutral-300);font:inherit;font-size:13px;font-weight:500;white-space:nowrap;cursor:pointer;transition:background .14s var(--ease),border-color .14s var(--ease)}
+.vmore:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent);color:var(--color-text)}
+.vmore[aria-expanded=true]{border-color:var(--color-accent);color:var(--color-text)}
+.vsolo{min-width:0;font-size:12px;line-height:1.35;color:var(--color-neutral-500);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.results-station .trk-acts .btn{width:36px;height:36px;min-height:36px;border:1px solid color-mix(in srgb,var(--color-text) 10%,transparent);border-radius:8px}
+.results-station .trk-acts .btn-dl:not([data-state=done]):not([data-state=fail]){border-color:var(--color-accent)}
+.results-station .trk-acts{gap:4px}
+/* La sub-lista: alineada con la columna del tema (30 + 44 + 2 huecos de 12 = 98 px). */
+.trk-versions{margin:0 var(--space-3) var(--space-2);padding:var(--space-2) var(--space-3) var(--space-3) calc(98px + var(--space-3));border-radius:var(--radius-md);background:var(--color-well)}
+.vlist{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none}
+.vline{display:grid;grid-template-columns:20px minmax(90px,180px) minmax(0,1fr) 40px auto 72px;grid-template-areas:'ok src lbl grade play pick';align-items:center;column-gap:var(--space-3);min-height:40px;padding:0 var(--space-3);border:1px solid transparent;border-radius:8px}
+.vline-head{min-height:26px;font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-500)}
+.vline.is-chosen{background:color-mix(in srgb,var(--color-accent) 12%,transparent);border-color:color-mix(in srgb,var(--color-accent) 45%,transparent)}
+.vline-ok{grid-area:ok;display:flex;color:var(--color-accent-400)}
+.vline-src{grid-area:src;display:flex;align-items:center;gap:8px;min-width:0;font-size:13px;font-weight:600}
+.vline-head .vline-src{font-weight:inherit;font-size:inherit}
+.vline-lbl{grid-area:lbl;min-width:0;font-size:12px;color:var(--color-neutral-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vline-grade{grid-area:grade}
+.vline-btn{height:30px;min-height:30px;padding:0 10px;gap:6px;border:1px solid var(--color-divider);border-radius:7px;font-size:12px;font-weight:500;color:var(--color-text);background:transparent}
+.vline-btn:hover{background:color-mix(in srgb,var(--color-text) 8%,transparent)}
+.vline-btn[aria-pressed=true]{border-color:var(--color-accent);color:var(--color-accent-200)}
+.vline>.vline-btn:not(.vline-pick){grid-area:play}
+.vline-pick{grid-area:pick}
+.vline-btn.is-pick{border-color:var(--color-accent);color:var(--color-accent-300);font-weight:600}
+.vline-btn.is-pick:hover{background:color-mix(in srgb,var(--color-accent) 14%,transparent)}
+
 /* Density and separator variants — set on .results, so a whole list changes
    with one class instead of per-row overrides. */
 .results-compact{--trk-h:48px}
@@ -889,6 +925,11 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 /* El ocultado de Metadata es solo de resultados: el crate usa sus 7 columnas desde 729px y si
    también se le escondía quedaba un hueco de 140px entre el título y la nota. */
 @container main (max-width:893px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 192px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta{display:none}}
+/* Station (f38): sus 7 columnas piden 966 px (30+44+160+140+52+236+208 + 6 huecos de 12 + 24),
+   así que Metadata se va desde 965; sin Metadata pide 718 (versiones de 150) y entra hasta la
+   tarjeta. Si VERSIONES queda angosta, "+N versiones" baja a otro renglón (.vpick hace wrap). */
+@container main (max-width:965px){.results.results-station{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(150px,1fr) 208px /* @kind other */}.results-station .results-head>.col-meta,.results-station .trk>.trk-meta{display:none}}
+@container main (max-width:860px){.trk-versions{padding-left:var(--space-3)}}
 /* El crate ya no tiene la lista de playlists al lado (es el rail), así que su fila de escritorio
    —que pide 712px: 26+44+170+140+52+112+72 + 6 huecos de 12 + 24 de padding— entra en todo lo que
    no sea la tarjeta de 728px de abajo. Por eso tiene dos layouts y no tres; el bloque de 829
@@ -915,6 +956,11 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .results-crate .trk-acts{justify-content:flex-end}
 .results-crate .drag{display:none}
 .trk>.trk-status{grid-area:st}
+/* Station (f38): la sub-lista va debajo de la tarjeta, a todo el ancho; el texto tenue
+   ("Elegida · mejor nota", "nota sin medir") baja a un segundo renglón. */
+.trk-versions{padding:var(--space-2)}
+.vline{grid-template-columns:20px minmax(0,1fr) 30px auto auto;grid-template-areas:'ok src grade play pick' '. lbl lbl lbl lbl';column-gap:6px;padding:4px 8px}
+.vline-lbl:empty{display:none}
 }
 @media (max-width:760px){
 .filterbar{flex-wrap:nowrap;overflow-x:auto}

@@ -8,14 +8,16 @@ export const fmtDur = (s) => {
 
 // Nombre de la fila Netflix por fuente
 export const FUENTE_NOMBRES = {
-  youtube: '▶ YouTube', soundcloud: '☁ SoundCloud', ligaudio: '⬇ MP3 directo · Ligaudio',
-  hitplayer: '⬇ MP3 directo · HitPlayer', spotify: '♫ Spotify', deezer: '♫ Deezer',
+  youtube: '▶ YouTube', soundcloud: '☁ SoundCloud', ligaudio: '⬇ MP3',
+  hitplayer: '⬇ MP3', spotify: '♫ Spotify', deezer: '♫ Deezer',
 }
 export const FUENTE_ORDEN = ['youtube', 'soundcloud', 'ligaudio', 'hitplayer', 'spotify', 'deezer']
-// Nombre corto y color de cada plataforma (chips de opciones en modo lista)
+// Nombre corto y color de cada plataforma (chips de opciones en modo lista).
+// Los MP3 directos dicen solo "MP3" (pedido del dueño, f38): el nombre del sitio no se muestra
+// en ningún texto visible; dos versiones MP3 se distinguen por su nota y su posición.
 export const FUENTE_CORTO = {
-  youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3 directo',
-  hitplayer: 'MP3 directo', spotify: 'Spotify', deezer: 'Deezer',
+  youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3',
+  hitplayer: 'MP3', spotify: 'Spotify', deezer: 'Deezer',
 }
 export const SRC_COLOR = {
   youtube: '#ff5c5c', soundcloud: '#ff8a3d', ligaudio: '#6fa8ff',
