@@ -606,6 +606,48 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
             "encontradas": len(grupos), "grupos": grupos, "no_encontradas": no_encontradas}
 
 
+# Fuentes de las que puede venir un resultado (las de _buscar_mix_fuentes).
+_STATION_SOURCES = {"soundcloud", "youtube", "spotify", "deezer", "ligaudio", "hitplayer"}
+_STATION_MAX_TEXT = 300
+
+
+@app.get("/api/station")
+async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artista: str = "",
+                  duracion: str = ""):
+    """Station de SoundCloud del tema (f34): ~50 temas del mismo estilo, en el orden de
+    SoundCloud, sin la semilla. Es el recomendador de SoundCloud, no una medición nuestra.
+    Con `fuente=soundcloud`, `fuente_id` (id numérico) ES la semilla. Con otra fuente se busca
+    el tema en SoundCloud y se acepta solo si pasa la regla de identidad (nunca otra canción).
+    `duracion` (s) solo desempata; nan, inf, ≤ 0 o basura cuentan como "no se sabe".
+    Respuesta: {exito, origen: "soundcloud_station", semilla, items, total} o
+    {exito: false, motivo, mensaje}; 400 si el pedido es inválido. Nunca 500."""
+    import soundcloud_station as sc
+
+    fuente = (fuente or "").strip().lower()
+    fuente_id = (fuente_id or "").strip()
+    titulo = (titulo or "").strip()
+    artista = (artista or "").strip()
+    malo = None
+    if fuente not in _STATION_SOURCES:
+        malo = "Fuente no soportada."
+    elif len(titulo) > _STATION_MAX_TEXT or len(artista) > _STATION_MAX_TEXT or len(duracion or "") > 32:
+        malo = "Título, artista o duración demasiado largos."
+    elif fuente == "soundcloud" and not sc.SC_ID.fullmatch(fuente_id):
+        malo = "Identificador de SoundCloud inválido."
+    elif fuente != "soundcloud" and not titulo:
+        malo = "Falta el título."
+    if malo:
+        return JSONResponse(sc.failure(sc.INVALID_REQUEST, malo), status_code=400)
+
+    logger.info(f"📻 Station de SoundCloud de: '{titulo or fuente_id}' — {artista} [{fuente}]")
+    try:
+        return await asyncio.to_thread(sc.build_station, fuente, fuente_id, titulo, artista,
+                                       track_identity.duration_or_none(duracion))
+    except Exception as e:           # build_station no debería lanzar; si lo hace, no es un 500
+        logger.warning(f"⚠️ Station: error inesperado {type(e).__name__}")
+        return sc.failure(sc.UNEXPECTED_RESPONSE)
+
+
 def _safe_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]+', "_", name)[:60].strip() or "cancion"
 

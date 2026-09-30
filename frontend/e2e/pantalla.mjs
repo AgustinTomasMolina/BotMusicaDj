@@ -1302,6 +1302,67 @@ const CASOS = [
     igual({ semilla: v.semilla, filas: v.filas, parecidasA: v.parecidasA }, { semilla: false, filas: 0, parecidasA: false },
       'sin semilla no puede haber "Parecidas a…" ni una lista de otro tema')
   }],
+
+  ['station: el botón de un resultado abre la Station de SoundCloud y sus temas suenan por el proxy', async (page, ctx) => {
+    // Sin red. La respuesta de /api/station es el archivo que tests/test_soundcloud_station.py
+    // compara contra lo que el endpoint REALMENTE devuelve para ELVITO con la API v2 grabada:
+    // acá hace de API. Lo esperado (encabezado, cantidad, primer tema, id) sale de ese archivo.
+    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'station_respuesta.json'), 'utf8'))
+    const lib = await api(ctx, '/api/biblioteca')
+    const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
+    afirmar(uno, '/api/biblioteca no trae «Uno»')
+    const wav = Buffer.from(await (await fetch(`${ctx.url}/api/audio/${uno.id}`)).arrayBuffer())
+    const tema = { titulo: respuesta.semilla.titulo, artista: 'ELVITO', duracion: 291, fuente: 'soundcloud', thumbnail: null,
+      url: 'https://soundcloud.com/elvitoelvito/elvito-x-w-choppa-gib-mir', video_id: respuesta.semilla.video_id }
+    const pedidos = []
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
+      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+      if (u.pathname === '/api/station') {
+        pedidos.push(Object.fromEntries(u.searchParams))
+        return responder(respuesta)
+      }
+      if (u.pathname === '/api/fuente/audio/info') return responder({ preview: false, duracion: 245 })
+      if (u.pathname === '/api/fuente/audio') return req.respond({ status: 200, contentType: 'audio/wav', body: wav })
+      if (u.origin !== new URL(ctx.url).origin) return req.abort()
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'elvito gib mir bounce')
+    await page.keyboard.press('Enter')
+    const boton = `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`
+    await page.waitForSelector(boton, { timeout: ESPERA_MS })
+    // Con teclado: el botón se alcanza con foco y se activa con Enter.
+    await page.focus(boton)
+    await page.keyboard.press('Enter')
+
+    const leer = () => page.evaluate(() => ({
+      titulo: document.querySelector('h1.station-title')?.textContent ?? null,
+      filas: [...document.querySelectorAll('.trk')].map((r) => ({
+        titulo: r.querySelector('.trk-title')?.textContent, artista: r.querySelector('.trk-artist .truncate')?.textContent })),
+      datosSemilla: document.querySelectorAll('.seedbar .mb').length,
+    }))
+    const v = await hasta(leer, (x) => x.titulo && x.filas.length > 0, 'no apareció la lista de la Station')
+    igual(pedidos.map((q) => [q.fuente, q.fuente_id, q.titulo, q.artista, q.duracion]),
+      [['soundcloud', tema.video_id, tema.titulo, tema.artista, String(tema.duracion)]],
+      'el pedido a /api/station no lleva la fuente, el id de SoundCloud, el tema y la duración')
+    igual(v.titulo, `Radio de «${respuesta.semilla.titulo}» — según la Station de SoundCloud`, 'el encabezado no dice de quién es la recomendación')
+    igual(v.filas.length, respuesta.items.length, 'la cantidad de filas no es la de la Station')
+    igual(v.filas[0], { titulo: respuesta.items[0].titulo, artista: respuesta.items[0].artista }, 'el primer tema no es el primero de la Station')
+    igual(v.datosSemilla, 0, 'la Station es de SoundCloud: no puede mostrar BPM/tonalidad de la semilla medidos por nosotros')
+
+    // Play en la primera fila: suena por el proxy de audio con su id de SoundCloud.
+    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
+    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'el primer tema de la Station no quedó sonando')
+    igual(barra.titulo, respuesta.items[0].titulo, 'la barra no muestra el primer tema de la Station')
+    const src = await page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.src)
+    igual(new URL(src).pathname + '?' + new URL(src).searchParams.toString(),
+      `/api/fuente/audio?fuente=soundcloud&ref=${respuesta.items[0].video_id}`, 'el tema no suena por el proxy de audio con su id')
+  }],
 ]
 
 // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del

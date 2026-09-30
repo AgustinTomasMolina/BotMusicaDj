@@ -6,7 +6,7 @@ import { AddToPlaylist } from './AddToPlaylist'
 import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
-import { IconDownload, IconActivity, IconCompare, IconSparkles } from './icons'
+import { IconDownload, IconActivity, IconCompare, IconSparkles, IconRadioTower } from './icons'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -133,7 +133,7 @@ const ROW_STATUS = {
 const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || 'fuente desconocida'
 
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas }) {
+function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas, onStation }) {
   const c = g.opciones[sel]
   // "Sonando" (barritas animadas, aro) SOLO cuando suena de verdad. Mientras carga —2 a 5 s
   // en frío en YouTube/SoundCloud— decirlo sería mentir (§6); la pastilla dice "cargando"
@@ -179,6 +179,10 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
         {bpm && <span className="mb"><span className="mb-label">BPM</span><b>{bpm}</b></span>}
         {key && <span className="mb mb-key"><span className="mb-label">KEY</span><b>{key}{c.compat ? ' ' + c.compat : ''}</b></span>}
         {genero && <span className="mb"><b>{genero}</b></span>}
+        {/* Station de SoundCloud: un tema Go+ solo suena 30 s acá; decirlo, no mostrarlo como completo. */}
+        {c.solo_preview && <span className="mb mb-warn" title="SoundCloud solo deja escuchar 30 s de este tema (Go+)"><b>Preview 30 s</b></span>}
+        {c.reproducible === false && !c.solo_preview &&
+          <span className="mb mb-warn" title="SoundCloud no ofrece un audio que la barra pueda abrir para este tema"><b>Sin audio acá</b></span>}
       </div>
       <div className="trk-grade"><QualityBadge c={c} formato={formato} /></div>
       <div className="trk-vers vchips">
@@ -210,17 +214,24 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           <button type="button" className="btn btn-icon-sm" onClick={() => onCompare(g.opciones, g.consulta || c.titulo)} title="Comparar versiones" aria-label={`Comparar versiones de ${c.titulo}`}><IconCompare size={16} /></button>}
         {onParecidas &&
           <button type="button" className="btn btn-icon-sm" onClick={() => onParecidas(c)} title="Temas parecidos" aria-label={`Temas parecidos a ${c.titulo}`}><IconSparkles size={16} /></button>}
+        {/* "Station", no "Radio": la Radio de la barra de arriba es la del motor local. */}
+        {onStation &&
+          <button type="button" className="btn btn-icon-sm" onClick={() => onStation(c)} title="Station de SoundCloud: temas del mismo estilo según SoundCloud" aria-label={`Station de SoundCloud de ${c.titulo}`}><IconRadioTower size={16} /></button>}
         <AddToPlaylist track={{ ...c, bpm, genero, camelot: key }} />
-        <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={15} /></DlButton>
+        {c.solo_preview
+          ? <button type="button" className="btn btn-secondary btn-dl" disabled title="SoundCloud solo da 30 s de este tema: no se descarga como si fuera el tema"
+            aria-label={`Descargar ${c.titulo} (no disponible: SoundCloud solo da un fragmento de 30 s)`}><IconDownload size={15} /></button>
+          : <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={15} /></DlButton>}
       </div>
     </div>
   )
 }
 
 /* ---------- Vista de resultados (búsqueda unificada / modo lista / parecidas) ---------- */
-export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onParecidas }) {
-  const { groups, sel, seed, encontradas, total, no_encontradas, origen, query } = data
+export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onParecidas, onStation }) {
+  const { groups, sel, seed, encontradas, total, no_encontradas, origen, query, station } = data
   const esBusqueda = origen === 'busqueda'
+  const esStation = origen === 'station'
   const player = usePlayer()
   // Cola de la barra: la versión elegida de cada tema, en el orden de la lista.
   const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
@@ -232,6 +243,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
     let ok = 0
     for (let i = 0; i < groups.length; i++) {
       const c = groups[i].opciones[sel[i]]
+      if (c.solo_preview) continue           // 30 s de SoundCloud no son el tema
       setAllLabel(`Bajando ${i + 1}/${groups.length}…`)
       const good = await onDownload(c)
       if (good) ok++
@@ -243,7 +255,19 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   return (
     <>
       {/* Sin encabezado visible en esta vista: uno oculto para navegar por títulos con lector. */}
-      <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : seed ? `Parecidas a ${seed.titulo}` : 'Resultados de la lista'}</h1>
+      {esStation
+        ? (
+          // Encabezado honesto: es el recomendador de SoundCloud (su orden, sus temas), no una
+          // medición nuestra; por eso no hay BPM ni tonalidad de la semilla acá.
+          <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="eyebrow">Recomendado por SoundCloud, en su orden</div>
+              <h1 className="station-title">Radio de «{station?.titulo}» — según la Station de SoundCloud</h1>
+              {station?.artista && <p className="muted station-sub">{station.artista}</p>}
+            </div>
+          </div>
+        )
+        : <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : seed ? `Parecidas a ${seed.titulo}` : 'Resultados de la lista'}</h1>}
       {seed && (
         <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
           <div style={{ minWidth: 0 }}>
@@ -259,9 +283,9 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
       )}
 
       <div className="cluster" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
-        <span className="eyebrow">{esBusqueda ? `Resultados${query ? ` · ${query}` : ''}` : `${encontradas}/${total} encontradas`}</span>
+        <span className="eyebrow">{esBusqueda ? `Resultados${query ? ` · ${query}` : ''}` : esStation ? `${total} temas` : `${encontradas}/${total} encontradas`}</span>
         <span className="push cluster" style={{ gap: 'var(--space-2)' }}>
-          {!esBusqueda && <button type="button" className="btn btn-ghost" onClick={onEditar}>Editar lista</button>}
+          {!esBusqueda && !esStation && <button type="button" className="btn btn-ghost" onClick={onEditar}>Editar lista</button>}
           <button type="button" className="btn btn-primary" onClick={descargarTodas} disabled={allBusy}>
             {allBusy ? <><span className="spinner" aria-hidden="true" /> {allLabel}</> : (allLabel || `Descargar todas (${formato.toUpperCase()})`)}
           </button>
@@ -294,7 +318,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
             loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}
             playerStatus={player.status}
             playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
-            onSelect={onSelect} onCompare={onCompare} onParecidas={onParecidas} />
+            onSelect={onSelect} onCompare={onCompare} onParecidas={onParecidas} onStation={onStation} />
         ))}
       </div>
     </>

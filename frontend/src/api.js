@@ -31,6 +31,29 @@ export async function parecidasLista(titulo, artista, formato, genero, fuente, f
   return json(r)
 }
 
+// Station de SoundCloud del tema (f34, /api/station). De SoundCloud va su id numérico (la
+// semilla es ese track); de otra fuente, título/artista/duración y el backend lo busca en
+// SoundCloud con la regla de identidad. Siempre devuelve un objeto con `exito`: un 400/500 o
+// un cuerpo que no es JSON se traduce a {exito:false, mensaje} con el código, no a "no pude
+// conectar" (el servidor sí contestó).
+export async function station(c) {
+  const fuente = (c.fuente || '').toLowerCase()
+  const ref = fuente === 'soundcloud' ? sourceAudioRefId(c) : null
+  const q = new URLSearchParams({ fuente, fuente_id: ref || c.video_id || '', titulo: c.titulo || '', artista: c.artista || '' })
+  if (c.duracion > 0) q.set('duracion', String(c.duracion))
+  const r = await fetch(`/api/station?${q.toString()}`)
+  const d = await cuerpoRadio(r)
+  if (d && typeof d.exito === 'boolean') return d
+  return { exito: false, motivo: `http-${r.status}`, mensaje: `El servidor no pudo pedir la Station (HTTP ${r.status}).` }
+}
+
+// Id numérico de SoundCloud del resultado (video_id o el de su URL de la API), o null.
+function sourceAudioRefId(c) {
+  if (/^\d+$/.test(String(c.video_id || ''))) return String(c.video_id)
+  const m = /\/tracks\/(?:soundcloud%3Atracks%3A|soundcloud:tracks:)?(\d+)/.exec(c.url || '')
+  return m ? m[1] : null
+}
+
 export async function fetchMeta(titulo, artista) {
   const r = await fetch(`/api/meta?titulo=${encodeURIComponent(titulo)}&artista=${encodeURIComponent(artista || '')}`)
   return json(r)
