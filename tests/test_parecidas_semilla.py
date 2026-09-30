@@ -790,3 +790,84 @@ def test_parecidas_lista_de_soundcloud_usa_el_isrc(server, monkeypatch):
     assert pedidos == ["1234567"], "el id de SoundCloud tiene que llegar hasta el pedido del ISRC"
     assert r.json()["exito"] is True and (r.json()["seed"]["titulo"], r.json()["seed"]["artista"]) == ("Eiskalt (Short Mix)", "Kuko")
     assert r.json()["seed"]["evidencia"] == "isrc", "el grado de evidencia va en el detalle de la semilla"
+
+
+# --- semilla sí, parecidas no ---------------------------------------------------------------
+# El caso real (2026-09-29): parecidas de un tema de Electro de un sello chico. Deezer encontró
+# la semilla pero dio un solo artista relacionado y ningún tema para comparar; la respuesta era
+# `exito: true` con la lista vacía y la pantalla mostraba el cartel del MODO LISTA ("revisá que
+# haya un tema por línea"), un pedido que el DJ nunca hizo.
+
+class _ConRelacionados(DeezerGrabado):
+    """El Deezer grabado de una entrada más `n` artistas relacionados. Los relacionados no están
+    grabados (contestan vacío), y sus álbumes y tops tampoco: son artistas sin nada que comparar."""
+
+    def __init__(self, entrada: dict, n: int):
+        super().__init__(entrada)
+        self.n = n
+
+    def __call__(self, url: str) -> dict:
+        if "/related" in url:
+            return {"data": [{"id": 900_000 + i, "name": f"Relacionado {i}"} for i in range(self.n)]}
+        return super().__call__(url)
+
+
+def _parecidas_de_eiskalt(server, monkeypatch, deezer):
+    from fastapi.testclient import TestClient
+    e = E[23]
+    monkeypatch.setattr(similares, "_get", deezer(e))
+    monkeypatch.setattr(server.track_identity, "fetch_soundcloud_isrc", lambda tid: e["isrc"])
+    monkeypatch.setattr(server, "_buscar_lista", lambda lineas, formato, identidades=None: [[] for _ in lineas])
+    return TestClient(server.app).get("/api/parecidas_lista", params={
+        "titulo": e["titulo"], "artista": e["artista"], "fuente": "soundcloud", "fuente_id": "1234567"}).json()
+
+
+def test_parecidas_con_semilla_y_sin_candidatos_dice_por_que(server, monkeypatch):
+    d = _parecidas_de_eiskalt(server, monkeypatch, lambda e: _ConRelacionados(e, 2))
+    esperado = json.loads((FIX / "parecidas_sin_candidatos.json").read_text(encoding="utf-8"))
+    assert d == esperado, "el E2E usa este archivo como respuesta de la API: tienen que coincidir"
+    assert (d["exito"], d["total"], d["grupos"], d["seed"]["titulo"]) == (True, 0, [], "Eiskalt (Short Mix)")
+    assert (d["motivo"], d["mensaje"], d["detalle"]) == (
+        "sin_candidatos", "No encontré temas parecidos a «Eiskalt (Short Mix)»",
+        "Deezer devolvió 2 artistas relacionados con Kuko, pero ningún tema con preview para "
+        "comparar (ni suyos ni de ellos).")
+
+
+def test_parecidas_sin_relacionados_lo_dice_distinto(server, monkeypatch):
+    """"No devolvió", no "no tiene": `_get` contesta vacío igual cuando Deezer no respondió
+    (auditoría de f35), así que el texto describe lo que llegó."""
+    d = _parecidas_de_eiskalt(server, monkeypatch, DeezerGrabado)
+    assert (d["motivo"], d["detalle"]) == (
+        "sin_candidatos", "Deezer no devolvió artistas relacionados con Kuko ni otros temas suyos "
+                          "con preview para comparar.")
+
+
+def test_parecidas_que_no_estan_en_ninguna_plataforma_lo_dicen(server, monkeypatch):
+    from fastapi.testclient import TestClient
+    canciones = [{"titulo": f"Tema {i}", "artista": "Otro"} for i in range(7)]
+    monkeypatch.setattr(similares, "construir_playlist", lambda *a, **k: {
+        "exito": True, "seed": {"titulo": "Semilla", "artista": "A"}, "canciones": canciones,
+        "relacionados": 3})
+    monkeypatch.setattr(server, "_buscar_lista", lambda lineas, formato, identidades=None: [[] for _ in lineas])
+    d = TestClient(server.app).get("/api/parecidas_lista", params={"titulo": "Semilla", "artista": "A"}).json()
+    assert (d["exito"], d["total"], d["encontradas"], d["grupos"]) == (True, 7, 0, [])
+    assert (d["motivo"], d["mensaje"], d["detalle"]) == (
+        "sin_plataformas",
+        "Encontré 7 temas parecidos a «Semilla», pero no encontré ninguno en YouTube, SoundCloud ni MP3",
+        "No aparecieron (o no eran el mismo tema): Otro - Tema 0, Otro - Tema 1, Otro - Tema 2, "
+        "Otro - Tema 3, Otro - Tema 4 y 2 más.")
+
+
+def test_una_lista_con_resultados_no_trae_motivo(server, monkeypatch):
+    """El motivo es solo para la lista vacía: con UN parecido encontrado la respuesta es la de
+    siempre (el front arma la lista y no muestra ningún cartel)."""
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(similares, "construir_playlist", lambda *a, **k: {
+        "exito": True, "seed": {"titulo": "Semilla", "artista": "A"},
+        "canciones": [{"titulo": "Uno", "artista": "B"}, {"titulo": "Dos", "artista": "B"}], "relacionados": 1})
+    opcion = {"fuente": "youtube", "titulo": "B - Uno"}
+    monkeypatch.setattr(server, "_buscar_lista",
+                        lambda lineas, formato, identidades=None: [[opcion], []])
+    d = TestClient(server.app).get("/api/parecidas_lista", params={"titulo": "Semilla", "artista": "A"}).json()
+    assert (d["encontradas"], d["no_encontradas"]) == (1, ["B - Dos"])
+    assert not {"motivo", "mensaje", "detalle"} & d.keys(), d

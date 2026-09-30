@@ -1303,6 +1303,38 @@ const CASOS = [
       'sin semilla no puede haber "Parecidas a…" ni una lista de otro tema')
   }],
 
+  ['parecidas: con semilla y sin candidatos dice por qué, no el cartel del modo lista', async (page, ctx) => {
+    // El caso real: Deezer encontró la semilla pero no dio temas para comparar. La respuesta
+    // es el archivo que tests/test_parecidas_semilla.py compara contra el endpoint REAL.
+    // Antes la pantalla decía "Revisá que haya un tema por línea": un pedido que no se hizo.
+    const respuesta = JSON.parse(fs.readFileSync(path.join(AQUI, '..', '..', 'tests', 'fixtures', 'parecidas_sin_candidatos.json'), 'utf8'))
+    const tema = { titulo: 'Eiskalt (Short Mix)', artista: 'Kuko', duracion: 190, fuente: 'soundcloud', thumbnail: null,
+      url: 'https://soundcloud.com/kuko/eiskalt', video_id: '1234567' }
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const responder = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
+      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+      if (u.pathname === '/api/parecidas_lista') return responder(respuesta)
+      if (u.origin !== new URL(ctx.url).origin) return req.abort()
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'kuko eiskalt')
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('button[aria-label="Temas parecidos a Eiskalt (Short Mix)"]', { timeout: ESPERA_MS })
+    await page.click('button[aria-label="Temas parecidos a Eiskalt (Short Mix)"]')
+
+    const leer = () => page.evaluate(() => [...document.querySelectorAll('.empty p')].map((p) => p.textContent))
+    const textos = await hasta(leer, (x) => x.some((t) => t.includes(respuesta.mensaje)),
+      `no apareció «${respuesta.mensaje}» en la pantalla`)
+    afirmar(textos.some((t) => t.includes(respuesta.detalle)), `la pantalla no dice el motivo que dio la API: ${json(textos)}`)
+    afirmar(!textos.some((t) => /tema por línea|ninguna de la lista/.test(t)),
+      `apareció el cartel del modo lista en una búsqueda de parecidas: ${json(textos)}`)
+  }],
+
   ['station: el botón de un resultado abre la Station de SoundCloud y sus temas suenan por el proxy', async (page, ctx) => {
     // Sin red. La respuesta de /api/station es el archivo que tests/test_soundcloud_station.py
     // compara contra lo que el endpoint REALMENTE devuelve para ELVITO con la API v2 grabada:

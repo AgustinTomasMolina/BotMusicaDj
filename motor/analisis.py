@@ -185,10 +185,10 @@ def analizar_archivo(ruta: str | Path, sr: int = SR,
 def calentar(sr: int = SR) -> float:
     """Fuerza la compilación JIT de numba sobre TODO el camino de `analizar_senal`.
 
-    `benchmark.tiempo_analisis.calentar` solo calienta BPM y tonalidad, que es lo que ese
-    módulo cronometra; el análisis del motor además pasa por MFCC, tonnetz, contraste y
-    onsets, y sin calentarlos el primer track del scan paga la compilación y su tiempo
-    miente. Devuelve lo que tardó.
+    No alcanza con calentar BPM y tonalidad: el análisis del motor además pasa por MFCC,
+    tonnetz, contraste y onsets, y sin calentarlos el primer track del scan paga la
+    compilación y su tiempo miente. `benchmark.tiempo_analisis.calentar` delega acá. Devuelve
+    lo que tardó.
     """
     from motor.sintetico import click_track
 
