@@ -336,8 +336,8 @@ def test_motivo_cuando_una_plataforma_no_contesta_a_tiempo(env, monkeypatch):
         colgada.set()
     assert time.monotonic() - t0 < 5, "el tope de la búsqueda no cortó"
     assert sorted(r["fallidas"]) == ["hitplayer", "ligaudio"]
-    assert r["motivo"] in ("No contestó a tiempo: MP3 directo (Ligaudio), MP3 directo (HitPlayer)",
-                           "No contestó a tiempo: MP3 directo (HitPlayer), MP3 directo (Ligaudio)")
+    # f38: el usuario ve solo "MP3", y dos MP3 caídos lo dicen una sola vez.
+    assert r["motivo"] == "No contestó a tiempo: MP3"
 
 
 def test_motivo_no_lo_encontre(env):
