@@ -26,6 +26,10 @@ export function getCalidad(c) {
   return _limited(() => fetchCalidad(c)).then((r) => { if (r) _calCache.set(key, r); return r })
 }
 
+// Nota que ya vino calculada del backend (las versiones de la Station traen la de cada opción):
+// se guarda en la misma caché, así el badge no vuelve a pedirla.
+export function seedCalidad(c, r) { if (c && r) _calCache.set(songKey(c), r) }
+
 // Ranking de notas para elegir "la mejor" versión.
 export const GRADE_RANK = { A: 6, 'A-': 5, B: 4, C: 3, D: 2, F: 1, '?': 0 }
 
