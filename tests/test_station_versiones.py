@@ -340,6 +340,22 @@ def test_motivo_cuando_una_plataforma_no_contesta_a_tiempo(env, monkeypatch):
     assert r["motivo"] == "No contestó a tiempo: MP3"
 
 
+# f38: el motivo nombra cada plataforma caída una vez, en el orden en que se le pregunta
+# (YouTube, los MP3, Spotify), con los MP3 como "MP3" y nunca con el nombre del sitio.
+@pytest.mark.parametrize("caidas, esperado", [
+    (("ligaudio",), "No contestó a tiempo: MP3"),
+    (("hitplayer",), "No contestó a tiempo: MP3"),
+    (("youtube", "hitplayer"), "No contestó a tiempo: YouTube, MP3"),
+    (("ligaudio", "spotify"), "No contestó a tiempo: MP3, Spotify"),
+    (("youtube", "ligaudio", "hitplayer", "spotify"), "No contestó a tiempo: YouTube, MP3, Spotify"),
+])
+def test_motivo_nombra_cada_plataforma_caida_una_vez(env, caidas, esperado):
+    env.resultados(**{f: RuntimeError(f"{f} roto") for f in caidas})
+    r = env.versiones(B_WITH_U)
+    assert r["fallidas"] == list(caidas)
+    assert r["motivo"] == esperado
+
+
 def test_motivo_no_lo_encontre(env):
     env.resultados(youtube={"narcx take that": [yt("NARCX - Take Me Higher", "NARCX", 227, "narcx000001")]},
                    spotify={"narcx take that": [spotify("Patience", "Take That", 202, "0takethatspotify000000")]})
