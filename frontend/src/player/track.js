@@ -167,5 +167,5 @@ export function fmtBpm(t) {
 
 export const NOMBRE_FUENTE = {
   biblioteca: 'Biblioteca', radio: 'Radio', youtube: 'YouTube', soundcloud: 'SoundCloud',
-  spotify: 'Spotify', deezer: 'Deezer', ligaudio: 'MP3 directo', hitplayer: 'MP3 directo',
+  spotify: 'Spotify', deezer: 'Deezer', ligaudio: 'MP3', hitplayer: 'MP3',  // f38: sin el nombre del sitio
 }
