@@ -1308,9 +1308,9 @@ const CASOS = [
       'no llegaron todas las filas')
     const conOtras = items.filter((t) => (s.vx[t.video_id]?.respuesta.opciones || []).some((o) => !o.estacion)).length
     igual(fin.progreso, `${items.length} temas · ${conOtras} con versiones en otras plataformas`, 'el resumen final')
-    // La fila muestra el título de la versión elegida (la 1, ahora la de YouTube); el resto, el
-    // de la Station, en su orden.
-    igual(fin.filas, [yt.titulo, ...items.slice(1).map((t) => t.titulo)], 'las filas no están en el orden de la Station al terminar')
+    // f40: cada fila muestra el título del tema de la Station, también la 1 con la versión de
+    // YouTube elegida (antes mostraba el del video: parecía otra edición).
+    igual(fin.filas, items.map((t) => t.titulo), 'las filas no muestran los temas de la Station, en su orden, al terminar')
     igual(s.versiones.map((b) => b.tema.video_id), items.map((t) => t.video_id), 'no se pidió cada tema una vez, en orden')
 
     const v = await page.evaluate(() => ({
@@ -1564,7 +1564,11 @@ const CASOS = [
     await hasta(() => lineasDe(page, id), (ls) => ls[ytK].elegida, 'Elegir no cambió la elegida')
     igual(await lineasDe(page, id), esperadas(ytK), 'elegida YouTube (nota B): "Elegida" sin "mejor nota", y la A pasa a tener "Elegir"')
     igual((await plegada(0)).elegida, 'YouTube', 'la fila plegada no muestra la nueva elegida')
-    igual((await leerStation(page)).filas[0], yt.titulo, 'la fila no muestra el título de la versión elegida')
+    // f40: elegida otra plataforma, la fila sigue diciendo el título, el artista y la duración
+    // del tema de la Station (no los del video de YouTube, que dura otra cosa).
+    afirmar(mmss(yt.duracion) !== mmss(items[0].duracion), `el caso no prueba nada: YouTube y la Station duran lo mismo (${mmss(yt.duracion)})`)
+    igual(await fichaDe(page, 0), { titulo: items[0].titulo, artista: items[0].artista, duracion: mmss(items[0].duracion) },
+      'con YouTube elegida, la fila dejó de mostrar el tema de la Station')
     igual(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), `Escuchar la versión YouTube, opción ${ytK + 1}`,
       'después de Elegir el foco tiene que quedar en la misma línea (su "Escuchar"), no perderse')
     await descargarFila(page, 0)
@@ -1656,7 +1660,9 @@ const CASOS = [
     const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
     const estado = () => page.evaluate(() => {
       const b = document.querySelector('.trk .vmore')
+      // colgado: aria-controls apunta a un id que no está en la página (f40: plegada no tiene que tenerlo).
       return { abierta: b.getAttribute('aria-expanded'), grupo: !!document.getElementById(b.getAttribute('aria-controls')),
+        colgado: b.hasAttribute('aria-controls') && !document.getElementById(b.getAttribute('aria-controls')),
         foco: document.activeElement?.getAttribute('aria-label') ?? null }
     })
     const ver = `Ver las otras ${n} versiones de ${items[0].titulo}`
@@ -1664,21 +1670,21 @@ const CASOS = [
 
     await page.focus('.trk .vmore')
     await page.keyboard.press('Enter')
-    igual(await hasta(estado, (v) => v.grupo, 'Enter no desplegó'), { abierta: 'true', grupo: true, foco: ocultar }, 'Enter despliega')
+    igual(await hasta(estado, (v) => v.grupo, 'Enter no desplegó'), { abierta: 'true', grupo: true, colgado: false, foco: ocultar }, 'Enter despliega')
     await page.keyboard.press('Enter')
-    igual(await hasta(estado, (v) => !v.grupo, 'Enter no volvió a plegar'), { abierta: 'false', grupo: false, foco: ver }, 'Enter otra vez pliega')
+    igual(await hasta(estado, (v) => !v.grupo, 'Enter no volvió a plegar'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Enter otra vez pliega')
     await page.keyboard.press('Space')
-    igual(await hasta(estado, (v) => v.grupo, 'Espacio no desplegó'), { abierta: 'true', grupo: true, foco: ocultar }, 'Espacio despliega')
+    igual(await hasta(estado, (v) => v.grupo, 'Espacio no desplegó'), { abierta: 'true', grupo: true, colgado: false, foco: ocultar }, 'Espacio despliega')
     // Escape sobre el mismo botón: pliega y el foco se queda ahí.
     await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape sobre el botón no plegó'), { abierta: 'false', grupo: false, foco: ver }, 'Escape sobre "+N versiones"')
+    igual(await hasta(estado, (v) => !v.grupo, 'Escape sobre el botón no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Escape sobre "+N versiones"')
 
     // Escape desde adentro de la sub-lista: pliega y el foco vuelve al botón (no a <body>).
     await page.keyboard.press('Enter')
     await hasta(estado, (v) => v.grupo, 'no volvió a desplegar')
     await page.focus(`.trk-versions button[aria-label="Escuchar la versión YouTube, opción ${ytK + 1}"]`)
     await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape desde la sub-lista no plegó'), { abierta: 'false', grupo: false, foco: ver },
+    igual(await hasta(estado, (v) => !v.grupo, 'Escape desde la sub-lista no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver },
       'Escape desde la sub-lista devuelve el foco a "+N versiones"')
 
     // Elegir con teclado: el foco queda en la misma línea; después Escape vuelve al botón.
@@ -1689,7 +1695,7 @@ const CASOS = [
     await hasta(() => plegadaDe(page, 0), (t) => t === 'YouTube', 'Enter sobre "Elegir" no eligió YouTube')
     igual((await estado()).foco, `Escuchar la versión YouTube, opción ${ytK + 1}`, 'después de elegir con teclado el foco se perdió')
     await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape no plegó'), { abierta: 'false', grupo: false, foco: ver }, 'Escape después de elegir')
+    igual(await hasta(estado, (v) => !v.grupo, 'Escape no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Escape después de elegir')
     igual(await sonando(page), [], 'desplegar o elegir con teclado puso algo a sonar')
   }],
 
@@ -1768,7 +1774,11 @@ const CASOS = [
     await page.evaluate(() => document.querySelector('.trk button[aria-label^="Comparar versiones de"]').click())
     const cols = await hasta(() => page.$$eval('[role=dialog] .cmp-src', (e) => e.map((x) => x.textContent)), (v) => v.length === r0.opciones.length,
       'el comparador no mostró una columna por versión')
-    igual(cols, r0.opciones.map((o) => NOMBRE[o.fuente]), 'el comparador no nombra cada versión como la fila')
+    // f40: la plataforma, y si se repite (dos MP3), con su número de opción, el mismo de la fila.
+    const repetidas = (n) => r0.opciones.filter((o) => NOMBRE[o.fuente] === n).length > 1
+    afirmar(repetidas('MP3'), 'el caso no prueba nada: la fila 1 tiene que traer dos MP3')
+    igual(cols, r0.opciones.map((o, k) => repetidas(NOMBRE[o.fuente]) ? `${NOMBRE[o.fuente]} · opción ${k + 1}` : NOMBRE[o.fuente]),
+      'el comparador no nombra cada versión como la fila (dos MP3 tienen que distinguirse)')
     igual(await rastrosSitio(page), [], 'el comparador nombra el sitio de un MP3')
     await page.keyboard.press('Escape')
     await hasta(() => page.$$eval('[role=dialog] .cmp-src', (e) => e.length), (x) => x === 0, 'Escape no cerró el comparador')
@@ -1989,6 +1999,13 @@ const leerStation = (page) => page.evaluate(() => {
   return { progreso: m ? m[1] : t, filas: [...document.querySelectorAll('.trk')].map((r) => r.querySelector('.trk-title')?.textContent ?? null) }
 })
 
+// Título, artista y duración que muestra una fila (f40: los del tema de la Station).
+const fichaDe = (page, i) => page.evaluate((k) => {
+  const r = [...document.querySelectorAll('.trk')][k]
+  return r && { titulo: r.querySelector('.trk-title')?.textContent ?? null, artista: r.querySelector('.trk-artist .truncate')?.textContent ?? null,
+    duracion: r.querySelector('.trk-artist .mono')?.textContent ?? null }
+}, i)
+
 // Todo el texto de una fila, visible y accesible (notas, motivos, nombres de botones).
 const filaTexto = (page, i) => page.evaluate((k) => {
   const r = [...document.querySelectorAll('.trk')][k]
@@ -2033,10 +2050,14 @@ async function abrirVersiones(page, i) {
     if (!b) return null
     const abierta = b.getAttribute('aria-expanded') === 'true'
     if (!abierta) b.click()
-    return { abierta, id: b.getAttribute('aria-controls') }
+    return { abierta }
   }, i)
-  if (est) await page.waitForSelector(`#${est.id}`, { timeout: ESPERA_MS })
-  return est
+  if (!est) return est
+  // f40: aria-controls aparece cuando la sub-lista está montada (plegada no apunta a nada).
+  const id = await hasta(() => page.evaluate((k) => [...document.querySelectorAll('.trk')][k]?.querySelector('.vmore')?.getAttribute('aria-controls') ?? null, i),
+    (v) => v, `"+N versiones" de la fila ${i + 1} no apunta a su sub-lista abierta`)
+  await page.waitForSelector(`#${id}`, { timeout: ESPERA_MS })
+  return { ...est, id }
 }
 
 async function cerrarVersiones(page, i, est) {

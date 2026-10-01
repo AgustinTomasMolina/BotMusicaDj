@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { spectroUrl } from '../api'
-import { SRC_COLOR, FUENTE_CORTO } from '../utils'
+import { SRC_COLOR, FUENTE_CORTO, nombresDeVersiones } from '../utils'
 import { getCalidad, GRADE_RANK, gradeClass } from './common'
 import { useDialog } from '../hooks'
 import Cover from './Cover'
@@ -60,7 +60,7 @@ function SpekViewer({ song: c }) {
 }
 
 /* Una columna del comparador: fuente + nota grande + espectrograma + descargar. */
-function CompareColumn({ song: o, best, onDownload }) {
+function CompareColumn({ song: o, nombre, best, onDownload }) {
   const [cal, setCal] = useState(null)
   const [spek, setSpek] = useState('loading') // loading | ok | err
   const [dl, setDl] = useState(null)          // null | busy | ok | err
@@ -75,19 +75,19 @@ function CompareColumn({ song: o, best, onDownload }) {
   return (
     <div className={`cmp-col${best ? ' is-best' : ''}`}>
       <div className="cluster" style={{ gap: 'var(--space-2)' }}>
-        <span className="cmp-src"><span className="dot" style={{ width: 8, height: 8, borderRadius: '50%', background: SRC_COLOR[f] || 'var(--color-neutral-500)' }} />{FUENTE_CORTO[f] || o.fuente || '?'}</span>
+        <span className="cmp-src"><span className="dot" style={{ width: 8, height: 8, borderRadius: '50%', background: SRC_COLOR[f] || 'var(--color-neutral-500)' }} />{nombre}</span>
         {best && <span className="cmp-best-flag push"><IcoCheck />mejor</span>}
       </div>
       <div><span className={`grade grade-lg ${gradeClass(cal?.grade)}`}>{cal?.grade || '…'}</span></div>
       <figure className="spectro">
         {spek === 'loading' && <div className="note-warn" style={{ color: 'var(--color-neutral-500)', padding: 'var(--space-3)' }}><span className="spinner" aria-hidden="true" /><span className="sr-only">Generando espectrograma</span></div>}
         {spek === 'err' && <div className="note-warn" style={{ padding: 'var(--space-3)' }}>sin espectrograma</div>}
-        <img style={{ display: spek === 'ok' ? 'block' : 'none' }} src={spectroUrl(o)} alt={`Espectrograma de la versión de ${FUENTE_CORTO[f] || o.fuente || 'esta fuente'}`}
+        <img style={{ display: spek === 'ok' ? 'block' : 'none' }} src={spectroUrl(o)} alt={`Espectrograma de la versión de ${nombre}`}
           onLoad={() => setSpek('ok')} onError={() => setSpek('err')} />
       </figure>
       <div className="text-muted" style={{ fontSize: 12 }} title={cal?.calidad || ''}>{cal ? (cal.calidad || 'no analizable') : 'analizando…'}</div>
       <button type="button" className="btn btn-secondary btn-block btn-dl" data-state={dlState} onClick={bajar} disabled={dl === 'busy'}
-        aria-label={`${dl === 'busy' ? 'Bajando' : dl === 'ok' ? 'Descargada' : dl === 'err' ? 'Reintentar' : 'Bajar'} la versión de ${FUENTE_CORTO[f] || o.fuente || 'esta fuente'}`}>
+        aria-label={`${dl === 'busy' ? 'Bajando' : dl === 'ok' ? 'Descargada' : dl === 'err' ? 'Reintentar' : 'Bajar'} la versión de ${nombre}`}>
         {dl === 'busy' ? <><span className="spinner" /> Bajando</> : dl === 'ok' ? <><IcoCheck /> Descargada</> : dl === 'err' ? '✗ Reintentar' : <><IcoDown /> Bajar esta</>}
       </button>
     </div>
@@ -110,10 +110,11 @@ function Comparator({ options, onDownload }) {
     if (r > bestRank) { bestRank = r; bestIdx = i }
   })
 
+  const nombres = nombresDeVersiones(options)
   return (
     <>
       <div className="cmp">
-        {options.map((o, i) => <CompareColumn key={i} song={o} best={i === bestIdx && bestRank > 0} onDownload={onDownload} />)}
+        {options.map((o, i) => <CompareColumn key={i} song={o} nombre={nombres[i]} best={i === bestIdx && bestRank > 0} onDownload={onDownload} />)}
       </div>
       <p className="text-muted" style={{ fontSize: 12, lineHeight: 1.5, marginTop: 'var(--space-3)' }}>
         Cada columna es una <b>versión del mismo tema</b> en otra plataforma. Mirá hasta qué altura llega el color del

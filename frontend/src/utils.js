@@ -19,6 +19,14 @@ export const FUENTE_CORTO = {
   youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3',
   hitplayer: 'MP3', spotify: 'Spotify', deezer: 'Deezer',
 }
+// Nombre de cada versión de una lista (el comparador): la plataforma, y si dos dicen lo mismo
+// (dos MP3), con su número de opción — "MP3 · opción 4" —, el mismo número que usan la fila,
+// la sub-lista y la barra ("opción 4 · MP3"). Sin eso dos columnas decían "MP3" y "MP3" (f40).
+export function nombresDeVersiones(opciones) {
+  const base = opciones.map((o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || '?')
+  const veces = base.reduce((m, n) => m.set(n, (m.get(n) || 0) + 1), new Map())
+  return base.map((n, k) => (veces.get(n) > 1 ? `${n} · opción ${k + 1}` : n))
+}
 export const SRC_COLOR = {
   youtube: '#ff5c5c', soundcloud: '#ff8a3d', ligaudio: '#6fa8ff',
   hitplayer: '#27d3c4', spotify: '#1ed760', deezer: '#c98bff',

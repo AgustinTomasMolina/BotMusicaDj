@@ -20,6 +20,19 @@ const vite = await createServer({
 after(() => vite.close())
 const { bestOption, cargarVersiones, CONCURRENCIA, TIMEOUT_FILA_MS } = await vite.ssrLoadModule('/src/stationVersions.js')
 const { GRADE_RANK } = await vite.ssrLoadModule('/src/components/common.jsx')
+const { nombresDeVersiones } = await vite.ssrLoadModule('/src/utils.js')
+
+/* ---------- nombresDeVersiones (el comparador, f40) ---------- */
+
+test('nombresDeVersiones: dos MP3 se distinguen por su número de opción; los únicos, solo la plataforma', () => {
+  const o = [{ fuente: 'youtube' }, { fuente: 'soundcloud' }, { fuente: 'ligaudio' }, { fuente: 'hitplayer' }]
+  assert.deepEqual(nombresDeVersiones(o), ['YouTube', 'SoundCloud', 'MP3 · opción 3', 'MP3 · opción 4'])
+  // Nunca el nombre del sitio (f38), y con un solo MP3, "MP3" a secas.
+  assert.deepEqual(nombresDeVersiones([{ fuente: 'YouTube' }, { fuente: 'hitplayer' }]), ['YouTube', 'MP3'])
+  // Dos de SoundCloud (el Go+ de la Station y otro upload completo) también.
+  assert.deepEqual(nombresDeVersiones([{ fuente: 'soundcloud' }, { fuente: 'soundcloud' }]),
+    ['SoundCloud · opción 1', 'SoundCloud · opción 2'])
+})
 
 /* ---------- bestOption ---------- */
 
@@ -46,11 +59,21 @@ test('bestOption: a igual nota gana la primera (el backend las ordena por fuente
   assert.equal(bestOption([op('youtube', 'C'), op('soundcloud', 'A', { estacion: true }), op('ligaudio', 'A')]), 1)
 })
 
-test('bestOption: una nota "?" (no analizable) o sin nota cuenta como la más baja, no como una A', () => {
-  assert.equal(bestOption([op('youtube', '?'), op('ligaudio', 'F')]), 1)
+test('bestOption: una nota "?" (no analizable) o sin nota cuenta como "no se sabe", no como una A', () => {
   assert.equal(bestOption([op('youtube'), op('ligaudio', 'D')]), 1)
+  assert.equal(bestOption([op('youtube', '?'), op('ligaudio', 'D')]), 1)
   // `ok:false` con una letra: no vale la letra.
   assert.equal(bestOption([op('youtube', 'D'), { ...op('ligaudio'), calidad: { ok: false, grade: 'A' } }]), 0)
+})
+
+test('bestOption: una F medida no le gana a una sin nota (f40), en cualquier orden', () => {
+  // Una F es un audio medido como malo; uno sin nota no se sabe. Antes "sin nota" valía 0 y la F (1) ganaba.
+  assert.equal(bestOption([op('youtube', '?'), op('ligaudio', 'F')]), 0)
+  assert.equal(bestOption([op('ligaudio', 'F'), op('youtube', '?')]), 1)
+  assert.equal(bestOption([op('ligaudio', 'F'), op('hitplayer')]), 1)
+  assert.equal(bestOption([op('ligaudio', 'F'), { ...op('youtube'), calidad: { ok: false, grade: 'A' } }]), 1)
+  // Si la única descargable es una F, queda la F (no la de SoundCloud, que es un preview).
+  assert.equal(bestOption([op('soundcloud', null, { estacion: true, solo_preview: true }), op('ligaudio', 'F')]), 1)
 })
 
 test('bestOption: nunca un preview de 30 s ni Spotify (ni Deezer), aunque tengan la mejor nota', () => {

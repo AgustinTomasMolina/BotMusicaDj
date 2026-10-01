@@ -15,12 +15,16 @@ export const TIMEOUT_FILA_MS = 45000
 // comparador (GRADE_RANK); a igual nota gana la primera (el backend las ordena por fuente).
 // Nunca un preview de 30 s (no es el tema) ni Spotify (se baja buscando en YouTube, sin
 // verificar que sea este tema). Si no hay otra, queda la de SoundCloud: marcada y sin descarga.
+// Sin nota (no se pudo medir, "?") va entre la F y la D (f40): una F es un audio MEDIDO como
+// malo y no le puede ganar a uno que no se sabe; uno que no se sabe tampoco le gana a una D medida.
+export const SIN_NOTA_RANK = (GRADE_RANK.F + GRADE_RANK.D) / 2
 export function bestOption(opciones) {
   let best = -1, bestRank = -1
   opciones.forEach((o, i) => {
     const f = (o.fuente || '').toLowerCase()
     if (o.solo_preview || f === 'spotify' || f === 'deezer') return
-    const r = o.calidad?.ok ? (GRADE_RANK[o.calidad.grade] ?? 0) : 0
+    const g = o.calidad?.ok ? o.calidad.grade : null
+    const r = g && g !== '?' && g in GRADE_RANK ? GRADE_RANK[g] : SIN_NOTA_RANK
     if (r > bestRank) { bestRank = r; best = i }
   })
   if (best >= 0) return best

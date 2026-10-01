@@ -207,6 +207,10 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
   const moreRef = useRef(null)
   const otras = g.opciones.length - 1
   const titulo = g.base?.titulo || c.titulo
+  // Station (f40): la fila ES el tema de la Station. Título, artista y duración son los suyos
+  // aunque se elija la versión de otra plataforma: el título de un video ("… (Official Video)")
+  // o su duración con intro hacían parecer que la fila era otra edición.
+  const ficha = g.base || c
   const subId = `trk-versions-${i}`
   const cerrar = () => { setOpen(false); moreRef.current?.focus() }
   // Sin otras versiones el motivo va en la columna VERSIONES (f38), no repetido bajo el artista.
@@ -246,7 +250,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
         {rowPrev && <PreviewLayer key={songKey(rowPrev)} song={rowPrev} />}
       </div>
       <div className="trk-id">
-        <div className="trk-title" title={c.titulo}>{c.titulo}</div>
+        <div className="trk-title" title={ficha.titulo}>{ficha.titulo}</div>
         {/* Qué versión de esta fila está en la barra, en texto: el color y las barritas solas
             no alcanzan (pedido del dueño 2026-09-28: "no se ve en qué reproducción estás parado"). */}
         {loadedIdx >= 0 && (
@@ -255,7 +259,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
             <span>{ROW_STATUS[playerStatus] || 'En la barra'}: opción {loadedIdx + 1} · {sourceName(g.opciones[loadedIdx])}</span>
           </div>
         )}
-        <div className="trk-artist"><span className="truncate">{c.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(c.duracion)}</span></div>
+        <div className="trk-artist"><span className="truncate">{ficha.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(ficha.duracion)}</span></div>
         {/* Station (f36): por qué faltan versiones (una plataforma que no contestó, SoundCloud
             que frenó) y, si el tema es Go+, de dónde sale el tema completo. */}
         {goPlusResuelto && <div className="trk-note">SoundCloud solo da 30 s (Go+): se baja completo de {sourceName(c)}.</div>}
@@ -280,7 +284,9 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
             {c.solo_preview && <span className="vchip-grade is-preview">30 s</span>}
           </span>
           {otras > 0
-            ? <button type="button" className="vmore" ref={moreRef} aria-expanded={open} aria-controls={subId}
+            // aria-controls solo con la sub-lista montada: plegada no existe y apuntaría a un id
+            // que no está en la página (f40).
+            ? <button type="button" className="vmore" ref={moreRef} aria-expanded={open} aria-controls={open ? subId : undefined}
               aria-label={`${open ? 'Ocultar' : 'Ver'} ${otras === 1 ? 'la otra versión' : `las otras ${otras} versiones`} de ${titulo}`}
               onClick={() => setOpen((o) => !o)}
               onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); cerrar() } }}>
