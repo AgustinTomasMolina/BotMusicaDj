@@ -103,7 +103,11 @@ _PLAIN_PREFIX = {"original", "the", "official", "clean", "explicit", "extended",
 # Familia de ediciones del mismo tema (para ver si la duración delata otra edición).
 _SAME_WORK = {"original", "radio", "extended", "club", "short", "edit"}
 _MAX_ARTIST_QUERIES = 3
-_DURATION_UNKNOWN_S = 31.0          # SoundCloud Go+ reporta 30.0: es el preview, no el tema
+# SoundCloud Go+ reporta 30.0 s: es el preview, no el tema. SOLO ese valor (con un margen de
+# ±1 s por redondeo) y SOLO de SoundCloud (o de una fuente que no se conoce) es "no se sabe".
+# Antes cualquier duración ≤ 31 s era "no se sabe" en todas las fuentes y un ringtone de 16 s
+# de YouTube pasaba como el tema de 306 s (auditoría f40).
+_SC_PREVIEW_S = (29.0, 31.0)
 
 
 def normalize(s: str | None) -> str:
@@ -546,7 +550,7 @@ def evidencia_misma_grabacion(wanted: Identity, cand: Identity, wanted_s=None, c
         return None if rel == "alias" else "texto"
     if w > 2 * c:
         return None
-    cuadra = diff <= max(10.0, 0.10 * w)
+    cuadra = duraciones_cuadran(w, c)
     if not cuadra and ((audio_exacto and w > c) or rel == "alias" or not _names_first_artist(wanted, cand)):
         return None
     return "texto+duracion" if cuadra else "texto"
@@ -557,14 +561,29 @@ def _names_first_artist(wanted: Identity, cand: Identity) -> bool:
     return not primero or artists_match(Identity(primero, ""), Identity(cand.artists | cand.feat, ""))
 
 
-def duration_or_none(s) -> float | None:
-    """Duración utilizable o None: nan, inf, ≤ 0 y el 30.0 de los previews de SoundCloud Go+
-    son "no se sabe" (con inf, una tolerancia en % confirmaba cualquier cosa)."""
+def duration_or_none(s, fuente: str | None = None) -> float | None:
+    """Duración utilizable o None: nan, inf y ≤ 0 son "no se sabe" (con inf, una tolerancia en
+    % confirmaba cualquier cosa). El 30.0 de un preview Go+ también, pero solo si viene de
+    SoundCloud o de una fuente que no se conoce (`fuente=None`): un audio de 30 s de YouTube o
+    de un MP3 directo ES de 30 s, y uno de 16 s es de 16 s (un ringtone, no el tema)."""
     try:
         s = float(s)
     except (TypeError, ValueError):
         return None
-    return s if math.isfinite(s) and s > _DURATION_UNKNOWN_S else None
+    if not math.isfinite(s) or s <= 0:
+        return None
+    if (fuente is None or fuente.lower() == "soundcloud") and _SC_PREVIEW_S[0] <= s <= _SC_PREVIEW_S[1]:
+        return None
+    return s
+
+
+def duraciones_cuadran(w: float, c: float) -> bool:
+    """¿Dos duraciones CONOCIDAS son la misma edición? ±max(10 s, 10 %) de `w`: la tolerancia
+    con la que `evidencia_misma_grabacion` da "+duracion" a una aceptación por texto (cubre el
+    redondeo a segundos y un silencio al principio o al final). La de ±max(3 s, 2 %) es otra
+    cosa: la de la regla de la Radio Edit, que acepta OTRA etiqueta de versión solo por
+    duración y por eso pide más precisión."""
+    return abs(w - c) <= max(10.0, 0.10 * w)
 
 
 def search_limit(entry: Identity) -> int:

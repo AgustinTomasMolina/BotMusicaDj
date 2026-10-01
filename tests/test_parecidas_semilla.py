@@ -535,6 +535,37 @@ def test_duracion_invalida_es_no_se_sabe(monkeypatch, dur):
     assert ti.duration_or_none(dur) is None
 
 
+@pytest.mark.parametrize("dur, fuente, esperado", [
+    (30.0, "soundcloud", None),      # el preview Go+: no se sabe
+    (30.0, "SoundCloud", None),
+    (30.0, None, None),              # fuente desconocida: se lo trata como el preview
+    (29.5, "soundcloud", None),      # con el redondeo
+    (30.0, "youtube", 30.0),         # 30 s de YouTube es un audio de 30 s
+    (30.0, "hitplayer", 30.0),
+    (16.0, "youtube", 16.0),         # f40: un ringtone de 16 s ES de 16 s (antes, ≤ 31 s = no se sabe)
+    (16.0, None, 16.0),
+    (16.0, "soundcloud", 16.0),      # en SoundCloud también: solo el 30 es el preview
+    (31.5, "soundcloud", 31.5),
+])
+def test_duracion_solo_el_30_de_soundcloud_es_no_se_sabe(dur, fuente, esperado):
+    assert ti.duration_or_none(dur, fuente) == esperado
+
+
+def test_un_fragmento_de_16_s_no_es_el_tema():
+    # Antes 16 s era "no se sabe" y el candidato pasaba por texto; ahora es una duración
+    # conocida y el tema de 306 s dura más del doble.
+    e = ti.parse_entry("SPÆCE - B WITH U", "SPÆCE")
+    assert ti.evidencia_misma_grabacion(e, e, 306, 16) is None
+    assert ti.evidencia_misma_grabacion(e, e, 306, 300) == "texto+duracion"
+
+
+@pytest.mark.parametrize("w, c, cuadra", [(244.8, 268.0, True), (244.8, 270.0, False), (60.0, 70.0, True),
+                                          (60.0, 70.5, False), (244.8, 221.0, True), (244.8, 220.0, False)])
+def test_duraciones_cuadran_es_10_s_o_10_por_ciento(w, c, cuadra):
+    # ±max(10 s, 10 %) de la primera: 244,8 → ±24,48 s; 60 → ±10 s.
+    assert ti.duraciones_cuadran(w, c) is cuadra
+
+
 def test_upload_de_mas_del_doble_no_es_el_tema():
     filas = [{"id": 1, "title": "HUMBLE.", "artist": {"id": 9, "name": "Kendrick Lamar"}, "duration": 177}]
     e = ti.parse_entry("Kendrick Lamar - Humble", "x")
