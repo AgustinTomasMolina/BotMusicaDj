@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 import db
 import jobs
 import track_identity
+from fuente_errores import FuenteError, FuenteNoConfigurada
 from search_agent import SearchAgent
 from recommendation_agent import RecommendationAgent
 from scrapers import FUENTES_SCRAPER
@@ -224,32 +225,39 @@ def _buscar_mix(q: str, limite: int) -> list:
     return _buscar_mix_detalle(q, limite)[0]
 
 
-def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list]:
+def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None, *,
+                        con_sin_configurar: bool = False) -> tuple:
     """(mezcla, fuentes que no contestaron). `fuentes` (f36) limita a qué plataformas se
     pregunta: las versiones de la Station no le vuelven a preguntar a SoundCloud por cada tema.
-    Cacheado como `_buscar_mix` (solo si contestaron todas)."""
+    Cacheado como `_buscar_mix` (solo si contestaron todas). `con_sin_configurar` (f40) agrega
+    un tercer elemento: las fuentes que no se buscaron porque no están configuradas."""
     clave = (q, limite) if fuentes is None else (q, limite, tuple(sorted(fuentes)))
     with _MIX_LOCK:
         hit = _MIX_CACHE.get(clave)
         if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
-            return [dict(c) for c in hit[1]], []
-    mezcla, fallidas = _mix_fuentes(q, limite, fuentes)
+            mezcla, fallidas, sin_config = [dict(c) for c in hit[1]], [], list(hit[2])
+            return (mezcla, fallidas, sin_config) if con_sin_configurar else (mezcla, fallidas)
+    mezcla, fallidas, sin_config = _mix_fuentes(q, limite, fuentes)
     if not fallidas:
+        # "Sin configurar" no es una caída: no cambia hasta reiniciar con otra config, se cachea.
         with _MIX_LOCK:
             if len(_MIX_CACHE) >= _MIX_MAX:
                 _MIX_CACHE.clear()
-            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
-    return mezcla, fallidas
+            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla], list(sin_config))
+    return (mezcla, fallidas, sin_config) if con_sin_configurar else (mezcla, fallidas)
 
 
 def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
-    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo."""
-    mezcla, fallidas = _mix_fuentes(q, limite)
+    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo (una sin
+    configurar no la deja incompleta: no hay nada que esperar de ella)."""
+    mezcla, fallidas, _ = _mix_fuentes(q, limite)
     return mezcla, not fallidas
 
 
-def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list]:
-    """(mezcla, nombres de las fuentes que fallaron o no contestaron a tiempo)."""
+def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list, list]:
+    """(mezcla, nombres de las fuentes que fallaron o no contestaron a tiempo, nombres de las
+    que no están configuradas). Una fuente caída SEÑALA el error (`fuente_errores.FuenteCaida`
+    o cualquier excepción) en vez de devolver []: si no, "no lo encontré" mentía (f40)."""
     from concurrent.futures import ThreadPoolExecutor, wait
 
     por_fuente = max(4, limite // 4)
@@ -266,7 +274,7 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
         tareas = [(n, fn) for n, fn in tareas if n in fuentes]
 
     resultados = {}
-    fallidas = []
+    fallidas, sin_config = [], []
     ex = ThreadPoolExecutor(max_workers=max(1, len(tareas)))
     try:
         futuros = {ex.submit(fn): nombre for nombre, fn in tareas}
@@ -279,6 +287,9 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
                 continue
             try:
                 resultados[nombre] = fut.result() or []
+            except FuenteNoConfigurada:
+                resultados[nombre] = []
+                sin_config.append(nombre)
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
@@ -297,7 +308,7 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
             if i < len(g):
                 mezcla.append(g[i])
         i += 1
-    return mezcla[:limite], fallidas
+    return mezcla[:limite], fallidas, sin_config
 
 
 def _rank_calidad(fuente: str, formato: str) -> int:
@@ -597,7 +608,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     if (fuente or "").lower() == "soundcloud" and fuente_id:
         isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
     res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
-                                  genero or None, isrc, track_identity.duration_or_none(duracion),
+                                  genero or None, isrc, track_identity.duration_or_none(duracion, fuente or None),
                                   fuente=(fuente or "").lower() or None)
     if not res.get("exito"):
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
@@ -691,7 +702,7 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
     logger.info(f"📻 Station de SoundCloud de: '{titulo or fuente_id}' — {artista} [{fuente}]")
     try:
         return await asyncio.to_thread(sc.build_station, fuente, fuente_id, titulo, artista,
-                                       track_identity.duration_or_none(duracion))
+                                       track_identity.duration_or_none(duracion, fuente))
     except Exception as e:           # build_station no debería lanzar; si lo hace, no es un 500
         logger.warning(f"⚠️ Station: error inesperado {type(e).__name__}")
         return sc.failure(sc.UNEXPECTED_RESPONSE)
@@ -752,9 +763,66 @@ def _version_identity(c: dict):
 def _version_valida(wanted, wanted_s, c: dict) -> str | None:
     """Grado de evidencia de que `c` es la misma grabación que el tema de la Station, o None.
     `audio_exacto`: el tema de la Station ES el audio (no un video con intro), así que una
-    versión más CORTA que no cuadra es otra edición (la Radio Edit de un Extended)."""
+    versión más CORTA que no cuadra es otra edición (la Radio Edit de un Extended).
+
+    f40 (decisión del dueño, opción "a"): si las dos duraciones se conocen y NO cuadran
+    (±max(10 s, 10 %), `track_identity.duraciones_cuadran`: la misma tolerancia que da
+    "+duracion"), la versión es otra edición y no se ofrece, sea más corta o MÁS LARGA. Antes
+    una más larga pasaba como "texto" y podía quedar elegida: «Hera» de 3:26 en SoundCloud
+    contra «Hera (Original Mix)» de 6:04 en YouTube. El costo, aceptado: un video de YouTube
+    con una intro larga tampoco se ofrece. La duración de cada candidato se lee según su
+    fuente (`duration_or_none`): 30 s es "no se sabe" solo en SoundCloud."""
+    cs = track_identity.duration_or_none(c.get("duracion"), c.get("fuente"))
+    if wanted_s and cs and not track_identity.duraciones_cuadran(wanted_s, cs):
+        return None
     return track_identity.evidencia_misma_grabacion(
-        wanted, _version_identity(c), wanted_s, c.get("duracion"), audio_exacto=True)
+        wanted, _version_identity(c), wanted_s, cs, audio_exacto=True)
+
+
+# MP3 directos sin duración publicada (HitPlayer no la trae: `duracion` 0; medido en la
+# auditoría f40, 30 de 99 versiones entraban sin chequeo de duración): antes de ofrecerlos se
+# mide la duración REAL con ffprobe (`_duracion_audio`, solo lee la cabecera del stream).
+# Costo: ~0,5-2 s por MP3 en paralelo; acotado a 4 a la vez y a un tope total por fila. Los
+# que no se pueden medir a tiempo siguen la regla de siempre para "duración desconocida": se
+# aceptan solo por texto (grado "texto"), nunca con "+duracion".
+_VERSION_DUR_SOURCES = ("ligaudio", "hitplayer")
+_VERSION_DUR_WORKERS = 4
+_VERSION_DUR_DEADLINE_S = 8.0
+
+
+def _medir_duraciones_mp3(wanted, wanted_s, candidatos: list) -> None:
+    """Completa en el lugar la `duracion` de los MP3 directos que la traen desconocida y que
+    por texto SÍ serían el tema (los demás no se miden: se descartan igual). Sin duración de la
+    Station no hay con qué comparar: no se mide nada."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    from scrapers import HEADERS
+
+    if not wanted_s:
+        return
+    medir = [c for c in candidatos
+             if (c.get("fuente") or "").lower() in _VERSION_DUR_SOURCES and c.get("url")
+             and track_identity.duration_or_none(c.get("duracion"), c.get("fuente")) is None
+             and _version_valida(wanted, wanted_s, c)]
+    if not medir:
+        return
+    ua = HEADERS.get("User-Agent", "")
+    ex = ThreadPoolExecutor(max_workers=min(_VERSION_DUR_WORKERS, len(medir)))
+    try:
+        futs = {ex.submit(_duracion_audio, c["url"], ua, _VERSION_DUR_DEADLINE_S): c for c in medir}
+        wait(futs, timeout=_VERSION_DUR_DEADLINE_S)
+        for fut, c in futs.items():
+            try:
+                d = fut.result() if fut.done() else 0.0
+            except Exception:
+                d = 0.0
+            d = track_identity.duration_or_none(d, c.get("fuente"))
+            if d:
+                c["duracion"] = round(d, 1)
+            else:
+                logger.info(f"ℹ️ Versiones: no pude medir la duración de un MP3 ({c.get('fuente')}): queda por texto.")
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)   # ffprobe tiene su propio timeout
 
 
 def _sc_otros_uploads(q: str, tema_id: str) -> tuple[list, str | None]:
@@ -794,20 +862,21 @@ def _versiones_de(tema: dict, formato: str) -> dict:
     t0 = time.perf_counter()
     base = dict(tema, estacion=True)
     wanted = track_identity.parse_entry(tema["titulo"], tema["artista"])
-    wanted_s = track_identity.duration_or_none(tema.get("duracion"))
-    motivos, fallidas = [], []
+    wanted_s = track_identity.duration_or_none(tema.get("duracion"), "soundcloud")
+    motivos, fallidas, sin_configurar = [], [], []
     candidatos = []
     if not wanted.query_title or not wanted.artists:
         motivos.append("No pude leer artista y título de este tema para buscarlo en otras plataformas")
     else:
         q = " ".join(p for p in (wanted.artist_text, wanted.query_title, wanted.version_text) if p)
-        mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
+        mezcla, fallidas, sin_configurar = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES, con_sin_configurar=True)
         candidatos = list(mezcla)
         if tema.get("solo_preview") or tema.get("reproducible") is False:
             otros, motivo_sc = _sc_otros_uploads(q, tema.get("video_id") or "")
             candidatos += otros
             if motivo_sc:
                 motivos.append(motivo_sc)
+        _medir_duraciones_mp3(wanted, wanted_s, candidatos)
 
     # La mejor de cada plataforma que ES el tema (en el orden de prioridad de fuente).
     aceptadas = []
@@ -829,9 +898,12 @@ def _versiones_de(tema: dict, formato: str) -> dict:
     # (no es el tema) y Spotify (se baja buscando en YouTube: la nota sería de otro audio).
     def nota(c):
         args = (c["titulo"], c.get("artista") or "", c.get("fuente") or "", c.get("url") or "")
+        # Con Redis la nota espera al worker: como mucho el tope de la fila, no los 90 s de
+        # /api/calidad (el hilo quedaba vivo mucho después de que la fila se entregó).
+        espera = _VERSION_CAL_DEADLINE_S
         if (c.get("fuente") or "").lower() == "soundcloud":
-            return _sc_gated(lambda: _calidad_cacheada(*args))
-        return _calidad_cacheada(*args)
+            return _sc_gated(lambda: _calidad_cacheada(*args, espera=espera))
+        return _calidad_cacheada(*args, espera=espera)
 
     medir = [i for i, c in enumerate(opciones)
              if not c.get("solo_preview") and (c.get("fuente") or "").lower() not in ("spotify", "deezer")]
@@ -853,7 +925,12 @@ def _versiones_de(tema: dict, formato: str) -> dict:
         nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in fallidas))
         motivos.append(f"No contestó a tiempo: {nombres}")
     if len(opciones) == 1 and not motivos:
-        motivos.append("No lo encontré en otras plataformas (o lo que apareció no era este tema)")
+        # Una plataforma sin configurar (Spotify sin credenciales) no se buscó: "no lo encontré
+        # en otras plataformas" sería decir que se buscó ahí y no estaba (f40).
+        motivos.append("No lo encontré en otras plataformas (o lo que apareció no era este tema)" if not sin_configurar
+                       else "No lo encontré en las otras plataformas que busqué (o lo que apareció no era este tema)")
+    if len(opciones) == 1 and sin_configurar:
+        motivos.append("Sin configurar: " + ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in sin_configurar)))
     logger.info(f"🎚️ Versiones de «{tema['titulo']}»: {len(opciones)} en {time.perf_counter() - t0:.1f} s"
                 + (f" ({'; '.join(motivos)})" if motivos else ""))
     return {"exito": True, "opciones": opciones, "motivo": ". ".join(motivos) or None, "fallidas": fallidas}
@@ -887,10 +964,13 @@ async def versiones(payload: dict):
 
     # Solo los campos conocidos vuelven en la respuesta (nada de lo que mande el cliente de más).
     permalink = tema.get("permalink") if isinstance(tema.get("permalink"), str) and _SC_URL.fullmatch(tema["permalink"]) else None
-    thumb = tema.get("thumbnail") if isinstance(tema.get("thumbnail"), str) and len(tema["thumbnail"]) < 500 else None
+    # La carátula vuelve al front y se pinta: solo una imagen del CDN de SoundCloud, con la misma
+    # regla que `map_track` usa al leer la Station (f40; antes cualquier texto < 500 caracteres).
+    thumb = tema.get("thumbnail") if (isinstance(tema.get("thumbnail"), str) and len(tema["thumbnail"]) < 500
+                                      and sc._IMAGE.fullmatch(tema["thumbnail"])) else None
     limpio = {
         "titulo": tema["titulo"].strip(), "artista": tema["artista"].strip(),
-        "duracion": track_identity.duration_or_none(tema.get("duracion")) or None,
+        "duracion": track_identity.duration_or_none(tema.get("duracion"), "soundcloud") or None,
         "url": tema["url"], "fuente": "soundcloud", "video_id": str(tema["video_id"]),
         "thumbnail": thumb, "permalink": permalink,
         "reproducible": tema.get("reproducible") is not False, "solo_preview": tema.get("solo_preview") is True,
@@ -1178,7 +1258,11 @@ def procesar_descarga(payload: dict) -> dict:
     if fuente in ("spotify", "deezer") or not url:
         consulta = f"{titulo} {artista}".strip()
         logger.info(f"🔁 Fuente sin audio descargable, buscando en YouTube: '{consulta}'")
-        yt = search_agent.buscar_en_youtube(consulta, 1)
+        try:
+            yt = search_agent.buscar_en_youtube(consulta, 1)
+        except FuenteError as e:
+            logger.error(f"❌ YouTube no pudo buscar el equivalente: {e}")
+            return {"exito": False, "mensaje": "YouTube no contestó: no pude buscar audio descargable."}
         if not yt:
             logger.error("❌ No encontré una versión descargable.")
             return {"exito": False, "mensaje": "No se pudo encontrar audio descargable."}
@@ -1242,7 +1326,11 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
     if url and f not in ("spotify", "deezer"):
         targets = [url]
     else:
-        targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+        try:
+            targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+        except FuenteError as e:
+            logger.warning(f"⚠️ Spek: YouTube no pudo buscar el audio: {e}")
+            return None, None
     if not targets:
         return None, None
 
@@ -1261,8 +1349,8 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
     return None, None
 
 
-def _duracion_audio(audio: str, ua: str) -> float:
-    """Duración (segundos) del stream, o 0 si no se puede medir."""
+def _duracion_audio(audio: str, ua: str, timeout: float = 20) -> float:
+    """Duración (segundos) del stream, o 0 si no se puede medir. `timeout` (s) corta ffprobe."""
     import subprocess
     from analizar_calidad import FFPROBE
 
@@ -1271,7 +1359,7 @@ def _duracion_audio(audio: str, ua: str) -> float:
         cmd += ["-user_agent", ua]
     cmd += ["-show_entries", "format=duration", "-of", "csv=p=0", audio]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=20)
+        out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=timeout)
         return float(out.stdout.strip().splitlines()[0])
     except Exception:
         return 0.0
@@ -1364,7 +1452,11 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
         if url and f not in ("spotify", "deezer"):
             targets = [url]
         else:
-            targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+            try:
+                targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+            except FuenteError as e:
+                logger.warning(f"⚠️ Calidad: YouTube no pudo buscar el audio: {e}")
+                return None
         if not targets:
             return None
         opts = {"quiet": True, "no_warnings": True, "format": "bestaudio/best",
@@ -1385,16 +1477,17 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
     return cal
 
 
-def _calidad_cacheada(titulo: str, artista: str, fuente: str, url: str) -> dict:
+def _calidad_cacheada(titulo: str, artista: str, fuente: str, url: str, espera: float = 90) -> dict:
     """La respuesta de /api/calidad (bloqueante): misma caché, misma cola. La usan el
-    endpoint y las versiones de la Station (f36), así una nota no se calcula dos veces."""
+    endpoint y las versiones de la Station (f36), así una nota no se calcula dos veces.
+    `espera` (s): cuánto se espera al worker cuando hay Redis (versiones pasa su tope)."""
     clave = f"{fuente}|{url}|{titulo}|{artista}"
     cal = _CALIDAD_CACHE.get(clave)
     if cal is None:
         if jobs.queue_disponible():
             import tasks
             job = jobs.encolar(tasks.calidad_job, titulo, artista, fuente, url, timeout=120)
-            cal = jobs.esperar_resultado(job, 90)
+            cal = jobs.esperar_resultado(job, espera)
         else:
             cal = _calidad_preview(titulo, artista, fuente, url)
         if cal:

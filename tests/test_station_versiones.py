@@ -200,6 +200,14 @@ class Entorno:
         monkeypatch.setattr(server, "FUENTES_SCRAPER", [("ligaudio", self.fuentes.ligaudio),
                                                         ("hitplayer", self.fuentes.hitplayer)])
         monkeypatch.setattr(server, "_calidad_preview", self.notas)
+        # ffprobe de juguete (f40): la duración medida de cada MP3 por url; sin dato, 0 = "no
+        # pude medir" (lo mismo que devuelve `_duracion_audio` cuando ffprobe falla).
+        self.duraciones, self.medidas = {}, []
+
+        def medir(url, ua, timeout=20):
+            self.medidas.append((url, timeout))
+            return self.duraciones.get(url, 0.0)
+        monkeypatch.setattr(server, "_duracion_audio", medir)
         monkeypatch.setattr(server.jobs, "queue_disponible", lambda: False)
         monkeypatch.setattr(server, "_sc_pause_until", 0.0)
         monkeypatch.setattr(sc, "_default_api", None)
@@ -262,14 +270,47 @@ def test_una_edicion_mas_corta_no_pasa_cuando_la_station_es_extended(env):
     assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
 
 
-def test_acepta_un_video_de_youtube_con_intro_mas_largo(env):
-    # 291 s contra 244,8 s: no cuadra por duración, pero un video con intro es MÁS largo; lo que
-    # delata otra edición es que sea más corto.
-    env.resultados(youtube={Q_B: [YT_B_INTRO]})
+@pytest.mark.parametrize("cand, por_que", [
+    # El caso de la auditoría f40: «Hera» de 3:26 en SoundCloud y «Hera (Original Mix)» de 6:04
+    # en YouTube. "(Original Mix)" es la versión original por texto, pero 432 s contra 244,8 s
+    # es otra edición (la extended de siempre con otro nombre).
+    (yt("SPÆCE - B WITH U (Original Mix)", "SPÆCE", 432, "bwithu00009"), "más larga que no cuadra: otra edición"),
+    # f40, decisión del dueño (opción "a"): un video con intro de 46 s tampoco cuadra (±max(10 s,
+    # 10 %) = ±24,5 s) y ya no se ofrece; antes pasaba como "texto" y podía quedar elegido.
+    (YT_B_INTRO, "un video con intro larga no cuadra en duración: no se ofrece"),
+    # Un ringtone/fragmento de 16 s: duración CONOCIDA (no es el 30 s de un preview de
+    # SoundCloud) y menor que la mitad del tema.
+    (yt("SPÆCE - B WITH U", "SPÆCE", 16, "bwithu00010"), "16 s de YouTube es un fragmento, no el tema"),
+])
+def test_una_version_cuya_duracion_no_cuadra_no_se_ofrece(env, cand, por_que):
+    env.resultados(youtube={Q_B: [cand]})
     r = env.versiones(B_WITH_U)
-    assert opciones(r) == [("youtube", YT_B_INTRO["url"]), BASE_B]
-    assert r["opciones"][0]["evidencia"] == "texto"
-    assert r["motivo"] is None
+    assert opciones(r) == [BASE_B], por_que
+    assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
+
+
+def test_una_version_mas_larga_que_cuadra_se_ofrece(env):
+    # 268 s contra 244,8 s: +23,2 s, dentro de ±max(10 s, 10 %) = ±24,48 s → la misma edición.
+    largo = yt("SPÆCE - B WITH U (Official Video)", "SPÆCE", 268, "bwithu00011")
+    env.resultados(youtube={Q_B: [largo]})
+    r = env.versiones(B_WITH_U)
+    assert opciones(r) == [("youtube", largo["url"]), BASE_B]
+    assert r["opciones"][0]["evidencia"] == "texto+duracion"
+
+
+@pytest.mark.parametrize("dur, esperado", [(30.0, "texto"), (30, "texto")])
+def test_el_30_de_un_preview_de_soundcloud_sigue_siendo_no_se_sabe(env, dur, esperado):
+    # Otro upload de SoundCloud de 30,0 s es la forma de un preview Go+: duración desconocida,
+    # se acepta solo por texto (no se lo trata como un fragmento de 30 s).
+    otro = dict(sc_track(199428706), duracion=dur)
+    assert env.server._version_valida(
+        env.server.track_identity.parse_entry(DAFT_GO["titulo"], DAFT_GO["artista"]), 320.0, otro) == esperado
+
+
+def test_30_s_de_youtube_es_una_duracion_conocida(env):
+    # Solo SoundCloud reporta 30,0 por un preview: 30 s de YouTube es un audio de 30 s.
+    env.resultados(youtube={Q_B: [yt("SPÆCE - B WITH U", "SPÆCE", 30, "bwithu00012")]})
+    assert opciones(env.versiones(B_WITH_U)) == [BASE_B]
 
 
 def test_una_por_plataforma_en_orden_de_fuente_y_con_nota(env):
@@ -286,6 +327,49 @@ def test_una_por_plataforma_en_orden_de_fuente_y_con_nota(env):
         ["texto+duracion", "texto+duracion", "texto+duracion", "texto"]
     assert [(o.get("calidad") or {}).get("grade") for o in r["opciones"]] == ["B", "C", None, "A", "D"]
     assert (r["motivo"], r["fallidas"]) == (None, [])
+
+
+# --- MP3 sin duración publicada: se mide antes de ofrecerlo (f40) ------------------------------------
+
+def test_un_mp3_sin_duracion_se_mide_y_si_cuadra_se_ofrece_con_la_medida(env):
+    env.resultados(hitplayer={Q_B: [HIT_B]})
+    env.duraciones = {HIT_B["url"]: 244.31}
+    r = env.versiones(B_WITH_U)
+    assert opciones(r) == [BASE_B, ("hitplayer", HIT_B["url"])]
+    hp = r["opciones"][1]
+    assert (hp["duracion"], hp["evidencia"]) == (244.3, "texto+duracion"), "la duración medida no se usó"
+    assert env.medidas == [(HIT_B["url"], env.server._VERSION_DUR_DEADLINE_S)]
+
+
+def test_un_mp3_sin_duracion_que_mide_otra_edicion_no_se_ofrece(env):
+    # HitPlayer dice 0 s; medido, es un recorte de 120 s del tema de 244,8 s.
+    env.resultados(hitplayer={Q_B: [HIT_B]})
+    env.duraciones = {HIT_B["url"]: 120.0}
+    r = env.versiones(B_WITH_U)
+    assert opciones(r) == [BASE_B]
+
+
+def test_un_mp3_que_no_se_puede_medir_queda_por_texto(env):
+    # ffprobe no pudo (0): la regla de siempre para "duración desconocida" — solo por texto.
+    env.resultados(hitplayer={Q_B: [HIT_B]})
+    r = env.versiones(B_WITH_U)
+    assert opciones(r) == [BASE_B, ("hitplayer", HIT_B["url"])]
+    assert (r["opciones"][1]["duracion"], r["opciones"][1]["evidencia"]) == (0, "texto")
+    assert [u for u, _ in env.medidas] == [HIT_B["url"]]
+
+
+def test_solo_se_miden_los_mp3_que_por_texto_serian_el_tema(env):
+    otro = mp3("hitplayer", "LOST IN YOU", "SPÆCE", 0, 7)            # otro tema: ni se mide
+    con_dur = mp3("ligaudio", "B WITH U", "SPÆCE", 245, 8)           # ya trae duración: no se mide
+    env.resultados(hitplayer={Q_B: [otro, HIT_B]}, ligaudio={Q_B: [con_dur]}, youtube={Q_B: [YT_B]})
+    env.versiones(B_WITH_U)
+    assert [u for u, _ in env.medidas] == [HIT_B["url"]]
+
+
+def test_sin_duracion_de_la_station_no_se_mide_nada(env):
+    env.resultados(hitplayer={Q_B: [HIT_B]})
+    r = env.versiones(dict(B_WITH_U, duracion=None))
+    assert env.medidas == [] and opciones(r) == [BASE_B, ("hitplayer", HIT_B["url"])]
 
 
 def test_tope_de_cinco_opciones(env):
@@ -362,6 +446,51 @@ def test_motivo_no_lo_encontre(env):
     r = env.versiones(TAKE_THAT)
     assert opciones(r) == [("soundcloud", TAKE_THAT["url"])]
     assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
+
+
+# f40: "no está" ≠ "no contestó" ≠ "no se buscó". Una fuente sin configurar (Spotify sin
+# credenciales) no es una caída: no va en `fallidas`, pero tampoco se puede decir "no lo encontré
+# en otras plataformas" como si se hubiera buscado ahí.
+def test_motivo_con_spotify_sin_configurar_y_sin_otras_versiones(env):
+    from fuente_errores import FuenteNoConfigurada
+    env.resultados(spotify=FuenteNoConfigurada("Spotify sin credenciales"))
+    r = env.versiones(B_WITH_U)
+    assert r["fallidas"] == []
+    assert r["motivo"] == ("No lo encontré en las otras plataformas que busqué (o lo que apareció no era este tema). "
+                           "Sin configurar: Spotify")
+
+
+def test_spotify_sin_configurar_no_ensucia_una_fila_con_versiones(env):
+    from fuente_errores import FuenteNoConfigurada
+    env.resultados(youtube={Q_B: [YT_B]}, spotify=FuenteNoConfigurada("Spotify sin credenciales"))
+    r = env.versiones(B_WITH_U)
+    assert (r["fallidas"], r["motivo"]) == ([], None)
+    assert opciones(r) == [("youtube", YT_B["url"]), BASE_B]
+
+
+def test_sin_configurar_se_cachea_y_vuelve_desde_la_cache(env):
+    from fuente_errores import FuenteNoConfigurada
+    env.resultados(spotify=FuenteNoConfigurada("Spotify sin credenciales"))
+    env.versiones(B_WITH_U)
+    env.fuentes.pedidos.clear()
+    r = env.versiones(B_WITH_U)
+    assert env.fuentes.pedidos == [], "sin configurar no es una caída: la búsqueda se cachea"
+    assert r["motivo"].endswith("Sin configurar: Spotify"), "desde la caché se perdió el 'sin configurar'"
+
+
+def test_un_scraper_caido_de_verdad_llega_como_no_contesto(env, monkeypatch):
+    # Las funciones REALES de scrapers (no los dobles) con la red caída: antes tragaban la
+    # excepción y devolvían [], y la fila decía "No lo encontré en otras plataformas".
+    import requests
+    import scrapers
+
+    def sin_red(*a, **k):
+        raise requests.ConnectionError("sin red")
+    monkeypatch.setattr(scrapers.requests, "get", sin_red)
+    monkeypatch.setattr(env.server, "FUENTES_SCRAPER", scrapers.FUENTES_SCRAPER)
+    r = env.versiones(B_WITH_U)
+    assert r["fallidas"] == ["ligaudio", "hitplayer"]
+    assert r["motivo"] == "No contestó a tiempo: MP3"
 
 
 def test_motivo_texto_ilegible_y_no_busca(env):
@@ -606,6 +735,40 @@ def test_endpoint_no_devuelve_campos_de_mas(env, client):
                          "reproducible", "solo_preview", "estacion", "calidad"}
     assert (base["fuente"], base["titulo"], base["permalink"], base["estacion"]) == ("soundcloud", "B WITH U", None, True)
     assert (base["calidad"]["ok"], base["calidad"]["grade"]) == (False, "?"), "la nota la calcula el server, no la manda el cliente"
+
+
+@pytest.mark.parametrize("thumb, vuelve", [
+    (B_WITH_U["thumbnail"], True),                                    # la del CDN de SoundCloud
+    ("https://evil.example/a.jpg", False),
+    ("javascript:alert(1)", False),
+    ("http://i1.sndcdn.com/artworks-x-large.jpg", False),             # sin https
+    ("https://i1.sndcdn.com.evil.example/a.jpg", False),
+    ("https://i1.sndcdn.com/a.jpg\" onerror=\"x", False),
+    (123, False),
+])
+def test_endpoint_la_caratula_solo_si_es_de_soundcloud(env, client, thumb, vuelve):
+    # f40: antes volvía cualquier texto de menos de 500 caracteres y el front lo pintaba.
+    assert B_WITH_U["thumbnail"].startswith("https://i1.sndcdn.com/")
+    d = client.post("/api/versiones", json=cuerpo(thumbnail=thumb)).json()
+    assert d["opciones"][0]["thumbnail"] == (thumb if vuelve else None)
+
+
+def test_con_redis_la_nota_espera_como_mucho_el_tope_de_la_fila(env, monkeypatch):
+    # f40: con Redis `_calidad_cacheada` esperaba al worker 90 s dentro del hilo, aunque la fila
+    # se entregaba a los 15 s: el hilo quedaba vivo. Ahora espera el tope de la fila.
+    esperas = []
+
+    def esperar(job, timeout=120, intervalo=0.4):
+        esperas.append(timeout)
+        return {"badge": "nota A", "calidad": "calidad A", "metodo": "simulado", "grade": "A",
+                "color": env.server._GRADO_COLOR["A"]}
+    monkeypatch.setattr(env.server.jobs, "queue_disponible", lambda: True)
+    monkeypatch.setattr(env.server.jobs, "encolar", lambda *a, **k: object())
+    monkeypatch.setattr(env.server.jobs, "esperar_resultado", esperar)
+    env.resultados(youtube={Q_B: [YT_B]})
+    r = env.versiones(B_WITH_U)
+    assert esperas == [env.server._VERSION_CAL_DEADLINE_S] * 2, f"esperas al worker: {esperas}"
+    assert [o["calidad"]["grade"] for o in r["opciones"]] == ["A", "A"]
 
 
 def test_endpoint_booleanos_estrictos(env, client):

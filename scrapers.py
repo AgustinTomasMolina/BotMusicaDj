@@ -8,6 +8,7 @@ Sitios soportados que devuelven MP3 directos:
 Cada función devuelve una lista de dicts con el mismo formato que el resto
 del bot:
   {titulo, artista, duracion(seg), url, stream_url, fuente, thumbnail}
+Si el sitio no contesta, lanza `fuente_errores.FuenteCaida` (no [], que es "no lo tiene").
 
 Nota: estos sitios entregan URLs firmadas/temporales. Como el navegador del
 usuario y este servidor comparten la misma IP pública (corre local), las URLs
@@ -20,6 +21,7 @@ import re
 import urllib.parse
 
 import requests
+from fuente_errores import FuenteCaida
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +74,9 @@ def buscar_ligaudio(query: str, limit: int = 10) -> list:
     try:
         doc = _get(url)
     except Exception as e:
+        # f40: una caída se SEÑALA (antes era [], lo mismo que "no lo tiene").
         logger.warning(f"⚠️ ligaudio no respondió: {e}")
-        return []
+        raise FuenteCaida(f"ligaudio: {type(e).__name__}") from e
 
     bloques = doc.split('<div class="item"')[1:]
     out = []
@@ -123,7 +126,7 @@ def buscar_hitplayer(query: str, limit: int = 10) -> list:
         doc = _get(url)
     except Exception as e:
         logger.warning(f"⚠️ hitplayer no respondió: {e}")
-        return []
+        raise FuenteCaida(f"hitplayer: {type(e).__name__}") from e
 
     out = []
     for m in _HIT_RE.finditer(doc):
@@ -131,7 +134,7 @@ def buscar_hitplayer(query: str, limit: int = 10) -> list:
         out.append({
             "titulo": _limpiar(m.group(2)),
             "artista": _limpiar(m.group(3)) or "hitplayer",
-            "duracion": 0,
+            "duracion": 0,       # HitPlayer no publica la duración: 0 = "no se sabe" (versiones la mide)
             "url": descarga,
             "stream_url": descarga,  # el mp3 directo sirve para reproducir
             "fuente": "hitplayer",
