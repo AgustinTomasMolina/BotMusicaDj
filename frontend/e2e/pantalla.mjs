@@ -1362,6 +1362,11 @@ const CASOS = [
     const f1 = await filaTexto(page, 1)
     afirmar(f1.includes('Preview 30 s'), `la fila del Go+ sin versión no dice que es un preview: ${f1}`)
     igual(vx[fbl.video_id].respuesta.motivo, null, 'el archivo de versiones cambió: el Go+ sin otra versión no traía motivo')
+    // Las pastillas marcan el preview con "30 s" (y "solo 30 s (Go+)" para el lector), sin nota.
+    const daftOps = vx[daft.video_id].respuesta.opciones
+    igual(await pastillasDe(page, 0), esperadasStation(daftOps, daftOps.indexOf(completo)), 'las pastillas del Go+ resuelto (el preview con "30 s", elegido el completo)')
+    igual(await pastillasDe(page, 1), esperadasStation(vx[fbl.video_id].respuesta.opciones, 0), 'la pastilla del Go+ sin otra versión: "30 s" y elegida')
+    igual((await pastillasDe(page, 1))[0].texto, 'SoundCloud30 s', 'el caso no prueba nada: la pastilla del Go+ tiene que decir "30 s"')
     igual(await page.evaluate(() => [...document.querySelectorAll('.trk')][1].querySelectorAll('.trk-note').length), 0,
       'la fila del Go+ sin otra versión dice algo bajo el artista sin que el backend mande motivo')
     const dl1 = await page.evaluate(() => {
@@ -1633,7 +1638,7 @@ const CASOS = [
     const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
     igual(ytK, 0, 'el archivo de versiones cambió: YouTube era la opción 1')
     await page.keyboard.press('Enter')
-    await hasta(foco, (f) => f.elegida === 'true', 'Enter sobre la pastilla no la eligió')
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[ytK].elegida === 'true', 'Enter sobre la pastilla no la eligió')
     igual(await foco(), { pastilla: true, nombre: `${esperadasStation(r0.opciones, ytK)[ytK].nombre}`, elegida: 'true' }, 'después de Enter el foco se perdió o no dice "elegida"')
     igual(await elegidaDe(page, 0), esperadasStation(r0.opciones, ytK)[ytK].nombre.replace(/ \(.*\)$/, ''), 'Enter no dejó elegida a YouTube')
 
@@ -1642,7 +1647,7 @@ const CASOS = [
     const p2 = await foco()
     igual(p2.nombre, esperadasStation(r0.opciones, ytK)[1].nombre, 'Tab no pasó a la pastilla 2')
     await page.keyboard.press('Space')
-    await hasta(foco, (f) => f.elegida === 'true', 'Espacio sobre la pastilla no la eligió')
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[1].elegida === 'true', 'Espacio sobre la pastilla no la eligió')
     igual(await pastillasDe(page, 0), esperadasStation(r0.opciones, 1), 'Espacio no dejó elegida a SoundCloud (y solo a ella)')
     igual((await foco()).nombre, esperadasStation(r0.opciones, 1)[1].nombre, 'después de Espacio el foco no quedó en la pastilla')
 
