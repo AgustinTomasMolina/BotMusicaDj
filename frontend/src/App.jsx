@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
-import { buscar, buscarLista, parecidasLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
+import { buscar, buscarLista, parecidasLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
+import { descargas } from './playlistDescarga'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
 import ConsoleDrawer from './components/ConsoleDrawer'
@@ -197,6 +198,24 @@ export default function App() {
   const onDownload = async (c) => {
     const key = songKey(c)
     setDl((p) => ({ ...p, [key]: { ...(p[key] || {}), state: 'busy' } }))
+    // Un tema de una playlist propia (la barra de abajo lo está tocando): se baja AL ITEM, por
+    // el camino de la playlist (f41). /api/descargar lo sumaba a la playlist activa (otra, a
+    // veces) por identidad aproximada y dejaba el item de la playlist en "falta bajar".
+    if (c.playlist_id != null && c.id != null) {
+      const r = await descargas.bajarUno(c.playlist_id, c, formato)
+      const quien = `${c.titulo}${c.artista ? ` — ${c.artista}` : ''}`
+      if (r.exito) {
+        setDl((p) => ({ ...p, [key]: { state: 'ok', calidad: r.calidad, title: '' } }))
+        const g = r.calidad?.grade ?? r.item?.grade
+        toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''} · ${(r.item?.formato || formato).toUpperCase()}.` })
+        avisarPlaylists()
+        return true
+      }
+      setDl((p) => ({ ...p, [key]: { state: 'err', title: r.mensaje || '' } }))
+      toast.danger({ title: `No se bajó: ${quien}`, body: r.mensaje || 'Falló la descarga.',
+        actions: [{ label: 'Reintentar', onClick: () => onDownload(c) }] })
+      return false
+    }
     try {
       // Mandamos los metadatos que ya tenemos (para taggear el archivo: BPM/key/género/carátula).
       const m = metaMap[metaKey(c)] || {}

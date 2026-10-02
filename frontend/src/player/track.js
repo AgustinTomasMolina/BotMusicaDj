@@ -67,7 +67,9 @@ export function fromCrateItem(it) {
     duracion: n(it.duracion), audioSrc: null, cover: null,
     bpm: n(it.bpm), bpmMedido: false, camelot: n(it.camelot), tonalidad: null, keyDudosa: false,
     formato: it.descargado ? n(it.formato) : null, grade: it.grade && it.grade !== '?' ? it.grade : null,
-    raw: it, descargable: !!(it.fuente && it.url) && !it.descargado,
+    // Lo que el server dice que no se puede bajar (sin link, Go+, link interno) tampoco se
+    // ofrece en la barra.
+    raw: it, descargable: !!(it.fuente && it.url) && !it.descargado && !it.motivo_no_bajable,
     paraPlaylist: { titulo: it.titulo, artista: it.artista, fuente: it.fuente, url: it.url, thumbnail: it.thumbnail,
       duracion: it.duracion, bpm: it.bpm, camelot: it.camelot, genero: it.genero },
     url: it.url, thumbnail: it.thumbnail,

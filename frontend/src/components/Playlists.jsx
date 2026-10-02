@@ -159,6 +159,28 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   }
   const bajarTodos = () => { if (crate) descargas.bajarTodos(crate.id, crate.items, formato) }
 
+  // Foco del teclado en la tanda (B5). "Bajar los N que faltan" queda montado mientras baja
+  // (aria-disabled, no `disabled`: un botón deshabilitado pierde el foco). Pero al terminar
+  // puede desaparecer (no falta ninguno) y lo mismo "Detener" o la X del resumen: el foco se
+  // iría a <body> y el teclado arrancaría de cero. Si el foco estaba en esos controles y se
+  // perdió, pasa al resumen (o al botón, si sigue).
+  const resumenRef = useRef(null)
+  const btnTodosRef = useRef(null)
+  const focoEnLote = useRef(false)
+  const marcaFoco = {
+    onFocus: () => { focoEnLote.current = true },
+    // relatedTarget null = el elemento se desmontó (o el foco no fue a ningún lado): se recuerda.
+    onBlur: (e) => { if (e.relatedTarget) focoEnLote.current = false },
+  }
+  useEffect(() => {
+    if (!focoEnLote.current) return
+    const a = document.activeElement
+    if (a && a !== document.body) return
+    const destino = resumenRef.current || btnTodosRef.current
+    if (destino) destino.focus()
+    else focoEnLote.current = false
+  }, [dl.lote, crate]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Antes estas acciones no tenían catch: sin conexión fallaban en silencio.
   const fallo = (title) => toast.danger({ title, body: 'Revisá que el servidor esté corriendo y probá de nuevo.' })
   // Mismo flujo que el ＋ del rail (src/playlists.js), con la playlist nueva ya seleccionada acá.
@@ -187,7 +209,8 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   }
   const quitar = async (itemId) => {
     if (!crate) return
-    try { await quitarItemPlaylist(crate.id, itemId); avisarPlaylists(); refresh() }
+    // Si espera en una tanda, que no se pida (C5): la fila deja de existir.
+    try { await quitarItemPlaylist(crate.id, itemId); descargas.olvidar(itemId); avisarPlaylists(); refresh() }
     catch { fallo('No pude quitar el tema') }
   }
 
@@ -209,7 +232,8 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   const lote = dl.lote
   const loteAca = lote && crate && lote.pid === crate.id
   const loteEnCurso = lote && !lote.terminado
-  const loteHechos = lote ? lote.ok + lote.fallidos.length : 0
+  const loteHechos = lote ? lote.ok + lote.fallidos.length + (lote.quitados || []).length : 0
+  const loteAcaEnCurso = !!(loteAca && loteEnCurso)
 
   return (
     <div className="crates">
@@ -247,11 +271,14 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 </div>
                 <div className="crate-actions cluster" style={{ gap: 'var(--space-2)' }}>
                   {!crate.activa && <button type="button" className="btn btn-secondary btn-sm" onClick={() => activar(crate.id, crate.nombre)}>Marcar activa</button>}
-                  {/* Una sola tanda a la vez (de a un tema): si hay otra en curso, el botón espera. */}
-                  {nFaltan > 0 && !(loteAca && loteEnCurso) && (
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={bajarTodos} disabled={!!loteEnCurso}
-                      title={loteEnCurso ? 'Ya se está bajando otra playlist' : `Bajar en ${formato.toUpperCase()}`}>
-                      <IcoDown /> {nFaltan === 1 ? 'Bajar el que falta' : `Bajar los ${nFaltan} que faltan`}
+                  {/* Una sola tanda a la vez (de a un tema): si hay otra en curso, el botón espera.
+                      Mientras baja la de ESTA playlist sigue montado (con el foco, si lo tenía). */}
+                  {(nFaltan > 0 || loteAcaEnCurso) && (
+                    <button type="button" ref={btnTodosRef} className="btn btn-secondary btn-sm" {...marcaFoco}
+                      onClick={() => { if (!loteEnCurso) bajarTodos() }} aria-disabled={loteEnCurso ? true : undefined}
+                      title={loteAcaEnCurso ? undefined : loteEnCurso ? 'Ya se está bajando otra playlist' : `Bajar en ${formato.toUpperCase()}`}>
+                      {loteAcaEnCurso ? <><span className="spinner" aria-hidden="true" /> Bajando los que faltan…</>
+                        : <><IcoDown /> {nFaltan === 1 ? 'Bajar el que falta' : `Bajar los ${nFaltan} que faltan`}</>}
                     </button>
                   )}
                   <button type="button" className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)} disabled={!crate.items?.length}><IcoExport /> Exportar .m3u8</button>
@@ -262,15 +289,15 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                   ("Bajando 3 de 8 · …") sin mover el foco. */}
               {loteAca && (
                 <div className="crate-dl">
-                  <div role="status" className="crate-dl-txt">{textoLote(lote)}</div>
+                  <div role="status" className="crate-dl-txt" ref={resumenRef} tabIndex={-1}>{textoLote(lote)}</div>
                   <div className="crate-dl-bar" role="progressbar" aria-label="Temas procesados"
                     aria-valuemin={0} aria-valuemax={lote.total} aria-valuenow={loteHechos}
                     aria-valuetext={`${loteHechos} de ${lote.total}`}>
                     <i style={{ width: `${Math.round((loteHechos / lote.total) * 100)}%` }} />
                   </div>
                   {loteEnCurso
-                    ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => descargas.detener()}>Detener después de este</button>
-                    : <button type="button" className="btn btn-icon-sm" aria-label="Cerrar el resumen de la descarga" onClick={() => descargas.cerrarLote()}><IcoX /></button>}
+                    ? <button type="button" className="btn btn-secondary btn-sm" {...marcaFoco} onClick={() => descargas.detener()}>Detener después de este</button>
+                    : <button type="button" className="btn btn-icon-sm" {...marcaFoco} aria-label="Cerrar el resumen de la descarga" onClick={() => descargas.cerrarLote()}><IcoX /></button>}
                 </div>
               )}
               {m && (

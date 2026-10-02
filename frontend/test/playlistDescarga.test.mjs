@@ -157,3 +157,34 @@ caso('bajarTodos: no arranca una segunda tanda mientras hay una en curso', async
   await b.liberar(); await fin
   assert.deepEqual(b.llamadas, [[1, 1, 'wav']])
 })
+
+/* ---------- ronda 2: un tema quitado de la playlist durante la tanda (C5) ---------- */
+
+caso('bajarItem: el 404 de "ya no está en la playlist" y el job que lo dice vuelven como quitado', async () => {
+  const r404 = await bajarItem(1, 2, 'wav', { pedir: async () => ({ ok: false, status: 404, data: { exito: false, mensaje: 'Ese tema no está en esta playlist.', quitado: true } }) })
+  assert.deepEqual(r404, { exito: false, mensaje: 'Ese tema no está en esta playlist.', item: null, calidad: null, quitado: true })
+  const rJob = await bajarItem(1, 2, 'wav', {
+    pedir: async () => ({ ok: true, status: 200, data: { encolado: true, job_id: 'j' } }),
+    esperar: async () => ({ exito: false, mensaje: 'El tema ya no está en esta playlist.', item: null, quitado: true }),
+  })
+  assert.equal(rJob.quitado, true)
+  // Una playlist que no existe NO es un tema quitado (el server manda quitado: false).
+  const rPl = await bajarItem(1, 2, 'wav', { pedir: async () => ({ ok: false, status: 404, data: { exito: false, mensaje: 'Playlist no encontrada.', quitado: false } }) })
+  assert.equal(rPl.quitado, undefined)
+})
+
+caso('bajarTodos: lo quitado mientras espera no se pide y no cuenta como error "en su fila"', async () => {
+  const b = bajadorControlado({ 3: { exito: false, mensaje: 'Ese tema no está en esta playlist.', quitado: true } })
+  const d = crearDescargas({ bajar: b.bajar })
+  const fin = d.bajarTodos(1, [it(1), it(2), it(3), it(4)], 'wav')
+  await new Promise((r) => setImmediate(r))
+  d.olvidar(2)                         // la pantalla lo quitó mientras bajaba el 1
+  await b.liberar(); await b.liberar(); await b.liberar()
+  const lote = await fin
+  assert.deepEqual(b.llamadas.map((l) => l[1]), [1, 3, 4], 'pidió al server un tema que ya se había quitado')
+  assert.deepEqual([lote.ok, lote.fallidos, lote.quitados], [2, [], [2, 3]])
+  assert.deepEqual(d.getSnapshot().items, {}, 'un quitado no puede quedar como error ni en cola')
+  assert.equal(textoLote(lote), '2 de 4 bajados · 2 quitados de la playlist mientras bajaba')
+  assert.equal(textoLote({ ...lote, fallidos: [{ id: 9, titulo: 'x', mensaje: 'y' }], quitados: [3] }),
+    '2 de 4 bajados · 1 con error (el motivo está en cada tema) · 1 quitado de la playlist mientras bajaba')
+})
