@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { metaKey, songKey, cuePoint, DEFAULT_FORMAT } from '../utils'
+import { metaKey, songKey, cuePoint, DEFAULT_FORMAT, FUENTE_CORTO } from '../utils'
 import { calidad as fetchCalidad } from '../api'
 
 /* ---------- Nota de calidad (A/B/C/D/F) con carga lazy ----------
@@ -25,6 +25,10 @@ export function getCalidad(c) {
   if (_calCache.has(key)) return Promise.resolve(_calCache.get(key))
   return _limited(() => fetchCalidad(c)).then((r) => { if (r) _calCache.set(key, r); return r })
 }
+
+// Nota que ya vino calculada del backend (las versiones de la Station traen la de cada opción):
+// se guarda en la misma caché, así el badge no vuelve a pedirla.
+export function seedCalidad(c, r) { if (c && r) _calCache.set(songKey(c), r) }
 
 // Ranking de notas para elegir "la mejor" versión.
 export const GRADE_RANK = { A: 6, 'A-': 5, B: 4, C: 3, D: 2, F: 1, '?': 0 }
@@ -92,7 +96,7 @@ export function Badges({ c, formato, metaMap, calidad }) {
         ? <span className="mb" title="Género"><b>{genero}</b></span>
         : (!genDone && <span className="mb" title="Buscando género…"><b>…</b></span>)}
       <span className={`mb${lossless ? ' mb-lossless' : ''}`} title={fijoMp3 ? 'Esta fuente baja siempre en MP3' : 'Formato que se va a descargar'}><b>{fmtVal}</b></span>
-      <span className="mb" title="Fuente"><b>{c.fuente}</b></span>
+      <span className="mb" title="Fuente"><b>{FUENTE_CORTO[src] || c.fuente}</b></span>
       {calidad && calidad.grade &&
         <span className={`grade grade-sm ${gradeClass(calidad.grade)}`} title={`Calidad real — ${calidad.metodo || ''}`}>{calidad.grade}</span>}
     </>

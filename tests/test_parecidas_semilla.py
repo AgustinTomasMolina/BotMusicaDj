@@ -262,9 +262,69 @@ def test_normalize_conserva_otros_alfabetos():
     ("Original Mix", "original"), ("Extended Mix", "extended"), ("Acoustic", "acoustic"),
     ("Cazzette's NYC Mode Radio Mix", "radio:cazzettes nyc mode"), ("Live", "live:"),
     ("Live at Wembley", "live:at wembley"), ("Diplo & Jauz Remix", "remix:diplo jauz"),
+    # f40-r2: el Extended de un remix es OTRA edición que el remix (antes "Remix Extended" daba
+    # "remix:omnya", igual que el remix a secas).
+    ("Omnya Remix Extended", "remix:omnya+extended"), ("Omnya Extended Remix", "remix:omnya+extended"),
+    ("Omnya Remix", "remix:omnya"), ("Extended Remix", "remix+extended"),
 ])
 def test_version_canonica(texto, version):
     assert ti.version_of(texto) == version
+
+
+@pytest.mark.parametrize("titulo, version", [
+    ("Giolì & Assia - The Point Of Living (Omnya Remix Extended)", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) [Extended Mix]", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) - Extended Mix", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix)", "remix:omnya"),
+    ("Giolì & Assia - The Point Of Living (Extended Mix)", "extended"),
+    # Un segundo grupo que NO es "extended" sigue sin cambiar la versión (manda el primero).
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) (Radio Edit)", "remix:omnya"),
+])
+def test_el_extended_de_un_remix_no_es_el_remix(titulo, version):
+    i = ti.parse_entry(titulo, "x")
+    assert (i.base_title, i.version) == ("the point of living", version)
+
+
+H = ti.parse_entry("Space Motion - Hera", "x")
+P = ti.parse_entry("Giolì & Assia - The Point Of Living (Omnya Remix)", "x")
+
+
+@pytest.mark.parametrize("wanted, cand, es", [
+    (H, "Space Motion - Hera (Original Mix)", True), (H, "Space Motion - Hera (Extended Mix)", True),
+    (H, "Space Motion - Hera - Extended Version", True),
+    (H, "Space Motion - Hera (Club Mix)", False),            # f40-r3: a veces es otra mezcla
+    (H, "Space Motion - Hera (Club Edit)", False),
+    (H, "Space Motion - Hera", False),                       # sin etiqueta: no dice ser la larga
+    (H, "Space Motion - Hera (Album Version)", False),       # "original" para la identidad, no la larga
+    (H, "Space Motion - Hera (Omnya Remix Extended)", False),  # el extended de un remix no es del original
+    (H, "Space Motion - Hera (KHROME Extended Mix)", False),   # de otro (KHROME): otra obra
+    (H, "Space Motion - Hera (Live Extended)", False), (H, "NARCX - Hera (Extended Mix)", False),
+    (H, "Space Motion - Hero (Extended Mix)", False),
+    # La Radio Edit del original: su Extended Mix / Original Mix es el Extended (confirmado, f40-r3).
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Extended Mix)", True),
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Original Mix)", True),
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Club Mix)", False),
+    (P, "Giolì - The Point Of Living (Omnya Remix Extended)", True),
+    (P, "Giolì & Assia - The Point Of Living (Omnya Extended Remix)", True),
+    (P, "Giolì & Assia - The Point Of Living (Extended Mix)", False),     # un remix no es el original
+    (P, "Giolì & Assia - The Point Of Living (Original Mix)", False),
+    (P, "Giolì & Assia - The Point Of Living (KHROME Remix Extended)", False),
+    (P, "Giolì & Assia - The Point Of Living (Omnya Remix)", False),      # el mismo remix, sin extended
+])
+def test_es_extended_de(wanted, cand, es):
+    assert ti.es_extended_de(wanted, ti.parse_entry(cand, "x")) is es
+
+
+@pytest.mark.parametrize("w, c, esperado", [
+    (206, 364, True),            # «Hera» 3:26 → «(Original Mix)» 6:04
+    (232.4, 282, True),          # «The Point Of Living (Omnya Remix)» → «(Omnya Remix Extended)»
+    (206, 216, False),           # +10 s: cuadra, es la misma edición (no otra)
+    (206, 150, False),           # más corta: nunca
+    (206, 618, True), (206, 618.1, False),    # cota: 3× el tema
+    (None, 364, None), (206, None, None), (206, 0, None), (206, float("nan"), None),
+])
+def test_dura_como_extended(w, c, esperado):
+    assert ti.dura_como_extended(w, c) is esperado
 
 
 def test_la_version_va_en_la_consulta_y_el_limite_sube():
@@ -533,6 +593,37 @@ def test_duracion_invalida_es_no_se_sabe(monkeypatch, dur):
              {"id": 2, "title": "Levels", "artist": {"id": 9, "name": "Avicii"}, "duration": 199}]
     assert ti.pick_track(ti.parse_entry("Avicii - Levels", "x"), filas, dur)["id"] == 1
     assert ti.duration_or_none(dur) is None
+
+
+@pytest.mark.parametrize("dur, fuente, esperado", [
+    (30.0, "soundcloud", None),      # el preview Go+: no se sabe
+    (30.0, "SoundCloud", None),
+    (30.0, None, None),              # fuente desconocida: se lo trata como el preview
+    (29.5, "soundcloud", None),      # con el redondeo
+    (30.0, "youtube", 30.0),         # 30 s de YouTube es un audio de 30 s
+    (30.0, "hitplayer", 30.0),
+    (16.0, "youtube", 16.0),         # f40: un ringtone de 16 s ES de 16 s (antes, ≤ 31 s = no se sabe)
+    (16.0, None, 16.0),
+    (16.0, "soundcloud", 16.0),      # en SoundCloud también: solo el 30 es el preview
+    (31.5, "soundcloud", 31.5),
+])
+def test_duracion_solo_el_30_de_soundcloud_es_no_se_sabe(dur, fuente, esperado):
+    assert ti.duration_or_none(dur, fuente) == esperado
+
+
+def test_un_fragmento_de_16_s_no_es_el_tema():
+    # Antes 16 s era "no se sabe" y el candidato pasaba por texto; ahora es una duración
+    # conocida y el tema de 306 s dura más del doble.
+    e = ti.parse_entry("SPÆCE - B WITH U", "SPÆCE")
+    assert ti.evidencia_misma_grabacion(e, e, 306, 16) is None
+    assert ti.evidencia_misma_grabacion(e, e, 306, 300) == "texto+duracion"
+
+
+@pytest.mark.parametrize("w, c, cuadra", [(244.8, 268.0, True), (244.8, 270.0, False), (60.0, 70.0, True),
+                                          (60.0, 70.5, False), (244.8, 221.0, True), (244.8, 220.0, False)])
+def test_duraciones_cuadran_es_10_s_o_10_por_ciento(w, c, cuadra):
+    # ±max(10 s, 10 %) de la primera: 244,8 → ±24,48 s; 60 → ±10 s.
+    assert ti.duraciones_cuadran(w, c) is cuadra
 
 
 def test_upload_de_mas_del_doble_no_es_el_tema():

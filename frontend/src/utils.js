@@ -8,14 +8,24 @@ export const fmtDur = (s) => {
 
 // Nombre de la fila Netflix por fuente
 export const FUENTE_NOMBRES = {
-  youtube: '▶ YouTube', soundcloud: '☁ SoundCloud', ligaudio: '⬇ MP3 directo · Ligaudio',
-  hitplayer: '⬇ MP3 directo · HitPlayer', spotify: '♫ Spotify', deezer: '♫ Deezer',
+  youtube: '▶ YouTube', soundcloud: '☁ SoundCloud', ligaudio: '⬇ MP3',
+  hitplayer: '⬇ MP3', spotify: '♫ Spotify', deezer: '♫ Deezer',
 }
 export const FUENTE_ORDEN = ['youtube', 'soundcloud', 'ligaudio', 'hitplayer', 'spotify', 'deezer']
-// Nombre corto y color de cada plataforma (chips de opciones en modo lista)
+// Nombre corto y color de cada plataforma (chips de opciones en modo lista).
+// Los MP3 directos dicen solo "MP3" (pedido del dueño, f38): el nombre del sitio no se muestra
+// en ningún texto visible; dos versiones MP3 se distinguen por su nota y su posición.
 export const FUENTE_CORTO = {
-  youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3 directo',
-  hitplayer: 'MP3 directo', spotify: 'Spotify', deezer: 'Deezer',
+  youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3',
+  hitplayer: 'MP3', spotify: 'Spotify', deezer: 'Deezer',
+}
+// Nombre de cada versión de una lista (el comparador): la plataforma, y si dos dicen lo mismo
+// (dos MP3), con su número de opción — "MP3 · opción 4" —, el mismo número que usan la fila,
+// las pastillas y la barra ("opción 4 · MP3"). Sin eso dos columnas decían "MP3" y "MP3" (f40).
+export function nombresDeVersiones(opciones) {
+  const base = opciones.map((o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || '?')
+  const veces = base.reduce((m, n) => m.set(n, (m.get(n) || 0) + 1), new Map())
+  return base.map((n, k) => (veces.get(n) > 1 ? `${n} · opción ${k + 1}` : n))
 }
 export const SRC_COLOR = {
   youtube: '#ff5c5c', soundcloud: '#ff8a3d', ligaudio: '#6fa8ff',

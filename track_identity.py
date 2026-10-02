@@ -21,7 +21,9 @@ estrategia "B" del diseño de parecidas, §8.3):
    es instrumental.
 4. Un resultado ES el tema solo si comparten algún artista, el título base es igual y la versión
    es la misma. Otra versión del mismo tema (Radio Edit por Original, Extended…) NO se acepta:
-   decisión conservadora hasta que el dueño diga otra cosa (diseño, UNKNOWN 18).
+   decisión conservadora hasta que el dueño diga otra cosa (diseño, UNKNOWN 18). Lo que el
+   dueño dijo (f40-r2), solo para las versiones de la Station: el EXTENDED del tema se ofrece
+   como otra edición, marcada (`es_extended_de`, `dura_como_extended`).
 5. Si quedan aceptados de dos obras distintas (artistas sin nada en común) es ambiguo: nada.
    Entre varios del mismo tema desempata la duración más cercana (nunca veta: el diseño midió
    que como veto cuesta aciertos, los videos oficiales duran más).
@@ -103,7 +105,11 @@ _PLAIN_PREFIX = {"original", "the", "official", "clean", "explicit", "extended",
 # Familia de ediciones del mismo tema (para ver si la duración delata otra edición).
 _SAME_WORK = {"original", "radio", "extended", "club", "short", "edit"}
 _MAX_ARTIST_QUERIES = 3
-_DURATION_UNKNOWN_S = 31.0          # SoundCloud Go+ reporta 30.0: es el preview, no el tema
+# SoundCloud Go+ reporta 30.0 s: es el preview, no el tema. SOLO ese valor (con un margen de
+# ±1 s por redondeo) y SOLO de SoundCloud (o de una fuente que no se conoce) es "no se sabe".
+# Antes cualquier duración ≤ 31 s era "no se sabe" en todas las fuentes y un ringtone de 16 s
+# de YouTube pasaba como el tema de 306 s (auditoría f40).
+_SC_PREVIEW_S = (29.0, 31.0)
 
 
 def normalize(s: str | None) -> str:
@@ -167,10 +173,17 @@ def version_of(text: str) -> str | None:
         sin_anio = re.sub(r"\s+", " ", re.sub(r"\b(?:19|20)\d{2}\b", " ", detail)).strip()
         return "live:" + (sin_anio or detail)
     # 2) Remix / bootleg / flip / rework de alguien: otra obra.
+    #    f40-r2 (aprobado por el dueño): "Remix Extended" / "Extended Remix" es la edición LARGA
+    #    de ESE remix, otra edición que el remix a secas: lleva el sufijo "+extended" ("Omnya
+    #    Remix Extended" → "remix:omnya+extended"). Antes el "extended" se perdía (quedaba
+    #    "remix:omnya", igual que "(Omnya Remix)") y una versión de 282 s pasaba por la de 232 s.
+    #    No agrega palabras a las listas congeladas: "extended" ya era una de ellas.
     m = re.search(r"^(.*?)\b(remix|bootleg|flip|rework)\b", t)
     if m:
-        who = m.group(1).strip()
-        return f"{m.group(2)}:{who}" if who else m.group(2)
+        extendido = bool(re.search(r"\bextended\b", t))
+        who = re.sub(r"\s+", " ", re.sub(r"\bextended\b", " ", m.group(1))).strip()
+        canon = f"{m.group(2)}:{who}" if who else m.group(2)
+        return canon + "+extended" if extendido else canon
     # 3) El original con otro nombre: Remastered, Original Mix, Album/Single/Explicit Version…
     if re.search(r"\bremaster", t) or re.fullmatch(
             r"(digital )?(original|album|single|explicit|video original|lp|main)( version| mix)?|original", t):
@@ -279,13 +292,22 @@ def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, s
     t = _WITH.sub(" ", t)
     version, version_text = "original", ""
 
-    def _group(m):
+    def _sumar(v, g):
+        """La primera versión manda; la única excepción es un "(Extended Mix)" aparte que sigue
+        a un remix: "(Omnya Remix) (Extended Mix)" es el Extended de ESE remix, igual que
+        "(Omnya Remix Extended)" (f40-r2). Antes el segundo grupo se tiraba sin mirarlo."""
         nonlocal version, version_text
+        if version == "original":
+            version, version_text = v, g
+        elif v == "extended" and re.match(r"(?:remix|bootleg|flip|rework)\b", version) \
+                and not version.endswith("+extended"):
+            version, version_text = version + "+extended", f"{version_text} {g}"
+
+    def _group(m):
         g = m.group(1)
         v = version_of(g)
         if v is not None:
-            if version == "original":
-                version, version_text = v, g
+            _sumar(v, g)
             return " "
         names = split_artists(g)
         if names and artists and names & artists:      # crédito: "(Sub Focus & Wilkinson)"
@@ -297,13 +319,11 @@ def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, s
     # "Tema - Radio Edit" (así lo escriben Deezer y los Topic) → versión
     m = re.search(r"\s[-–—]\s*([^-–—]+)$", base)
     if m and version_of(m.group(1)):
-        if version == "original":
-            version, version_text = version_of(m.group(1)), m.group(1)
+        _sumar(version_of(m.group(1)), m.group(1))
         base = base[:m.start()]
     m = _BARE_VERSION.search(base)
     if m:
-        if version == "original":
-            version, version_text = version_of(m.group(1)), m.group(1)
+        _sumar(version_of(m.group(1)), m.group(1))
         base = base[:m.start()]
     # "Matador Remasterizado 2008", "De Música Ligera Remasterizado 2007": el original, sin paréntesis.
     base = re.sub(r"\s(?:remasterizad[oa]|remastered|remaster)(?:\s+(?:19|20)\d{2})?\s*$", " ", base, flags=re.I)
@@ -546,7 +566,7 @@ def evidencia_misma_grabacion(wanted: Identity, cand: Identity, wanted_s=None, c
         return None if rel == "alias" else "texto"
     if w > 2 * c:
         return None
-    cuadra = diff <= max(10.0, 0.10 * w)
+    cuadra = duraciones_cuadran(w, c)
     if not cuadra and ((audio_exacto and w > c) or rel == "alias" or not _names_first_artist(wanted, cand)):
         return None
     return "texto+duracion" if cuadra else "texto"
@@ -557,14 +577,80 @@ def _names_first_artist(wanted: Identity, cand: Identity) -> bool:
     return not primero or artists_match(Identity(primero, ""), Identity(cand.artists | cand.feat, ""))
 
 
-def duration_or_none(s) -> float | None:
-    """Duración utilizable o None: nan, inf, ≤ 0 y el 30.0 de los previews de SoundCloud Go+
-    son "no se sabe" (con inf, una tolerancia en % confirmaba cualquier cosa)."""
+def duration_or_none(s, fuente: str | None = None) -> float | None:
+    """Duración utilizable o None: nan, inf y ≤ 0 son "no se sabe" (con inf, una tolerancia en
+    % confirmaba cualquier cosa). El 30.0 de un preview Go+ también, pero solo si viene de
+    SoundCloud o de una fuente que no se conoce (`fuente=None`): un audio de 30 s de YouTube o
+    de un MP3 directo ES de 30 s, y uno de 16 s es de 16 s (un ringtone, no el tema)."""
     try:
         s = float(s)
     except (TypeError, ValueError):
         return None
-    return s if math.isfinite(s) and s > _DURATION_UNKNOWN_S else None
+    if not math.isfinite(s) or s <= 0:
+        return None
+    if (fuente is None or fuente.lower() == "soundcloud") and _SC_PREVIEW_S[0] <= s <= _SC_PREVIEW_S[1]:
+        return None
+    return s
+
+
+def duraciones_cuadran(w: float, c: float) -> bool:
+    """¿Dos duraciones CONOCIDAS son la misma edición? ±max(10 s, 10 %) de `w`: la tolerancia
+    con la que `evidencia_misma_grabacion` da "+duracion" a una aceptación por texto (cubre el
+    redondeo a segundos y un silencio al principio o al final). La de ±max(3 s, 2 %) es otra
+    cosa: la de la regla de la Radio Edit, que acepta OTRA etiqueta de versión solo por
+    duración y por eso pide más precisión."""
+    return abs(w - c) <= max(10.0, 0.10 * w)
+
+
+# ---------------------------------------------------------------- el Extended del tema (f40-r2)
+# Decisión del dueño (f40-r2): "el extended dura más, y para los DJ eso es ORO". Una versión
+# del MISMO tema que dice ser la edición larga (Extended / Extended Mix / Original Mix, o
+# "Remix Extended" del MISMO remix) y dura MÁS que el tema de la Station se ofrece como otra
+# edición, marcada. Nunca algo más corto (radio edits, fragmentos) ni algo más largo sin esa
+# etiqueta (un video con intro, un vivo).
+#
+# f40-r3 (decisión del dueño): "Club Mix" NO es el Extended: a veces es otra mezcla. Un Club
+# Mix más largo que el tema cae en la regla de "más largo sin la etiqueta": no se ofrece.
+#
+# Cota superior: 3× la duración del tema. Los casos reales miden 1,22× («The Point Of Living
+# (Omnya Remix Extended)» 282 s contra 232 s), 1,33× («Aria» Extended 314,8 s contra 236 s) y
+# 1,77× («Hera (Original Mix)» 6:04 contra 3:26); una radio edit de 2:30 con su extended de 7
+# minutos da 2,8×. Más de 3× ya no es una edición del tema sino otra cosa con el mismo nombre
+# (un loop de una hora, un mix entero, un set).
+EXTENDED_MAX_RATIO = 3.0
+# "Original Mix" es, en la música de club, el nombre de la edición larga; la
+# etiqueta se lee de la versión TAL COMO ESTÁ ESCRITA (`version_text`): "Album Version" o
+# "Remastered" también son "original" para la identidad, pero no dicen "soy la larga".
+_EXTENDED_LABEL = re.compile(r"\bextended\b|\boriginal mix\b")
+# Versiones de la Station cuyo Extended es el del original: el tema mismo y su Radio Edit.
+_EXTENDED_DEL_ORIGINAL = {"original", "radio"}
+
+
+def es_extended_de(wanted: Identity, cand: Identity) -> bool:
+    """¿`cand` DICE ser el Extended del tema `wanted`? Solo el texto (la duración la mira
+    `dura_como_extended`): mismo título, artista en común por nombre (no por alias: acá se acepta
+    OTRA etiqueta de versión y la evidencia tiene que ser fuerte) con el primer artista del
+    tema, y la etiqueta de edición larga. Un remix no es el original: si la Station es «X (Omnya
+    Remix)», solo «X (Omnya Remix Extended)» es su Extended, no «X (Extended Mix)»; si la
+    Station es el original (o su Radio Edit), el Extended de un remix no cuenta."""
+    if not same_title(wanted, cand) or _artist_relation(wanted, cand) != "directo":
+        return False
+    if not _names_first_artist(wanted, cand) or not _EXTENDED_LABEL.search(normalize(cand.version_text)):
+        return False
+    if wanted.version in _EXTENDED_DEL_ORIGINAL:
+        return cand.version in ("extended", "original")
+    return cand.version == wanted.version + "+extended"
+
+
+def dura_como_extended(wanted_s, cand_s) -> bool | None:
+    """¿La duración confirma una edición LARGA? None si alguna no se sabe (no se puede
+    confirmar). True si el candidato dura más que el tema más allá de la tolerancia de "misma
+    edición" (`duraciones_cuadran`) y como mucho `EXTENDED_MAX_RATIO` veces. False si no: más
+    corto, igual de largo (entonces no es otra edición) o demasiado largo."""
+    w, c = duration_or_none(wanted_s), duration_or_none(cand_s)
+    if w is None or c is None:
+        return None
+    return c > w and not duraciones_cuadran(w, c) and c <= EXTENDED_MAX_RATIO * w
 
 
 def search_limit(entry: Identity) -> int:

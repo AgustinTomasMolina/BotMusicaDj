@@ -6,6 +6,9 @@ import logging
 import json
 import re
 from typing import List, Dict, Optional
+
+from fuente_errores import FuenteCaida, FuenteError, FuenteNoConfigurada
+
 try:
     import spotipy
     from spotipy.oauth2 import SpotifyClientCredentials
@@ -91,12 +94,13 @@ class SearchAgent:
             return None
 
     def buscar_en_spotify(self, query: str, tipo: str = 'track', limit: int = 10) -> List[Dict]:
-        """Buscar canciones en Spotify"""
+        """Buscar canciones en Spotify. Sin cliente (sin credenciales o sin spotipy) lanza
+        `FuenteNoConfigurada`; si Spotify falla, `FuenteCaida` (f40: antes las dos eran [], lo
+        mismo que "Spotify no lo tiene")."""
+        if not self.spotify_client:
+            logger.debug("ℹ️ Cliente de Spotify no disponible (sin configurar)")
+            raise FuenteNoConfigurada("Spotify sin credenciales")
         try:
-            if not self.spotify_client:
-                logger.warning("⚠️ Cliente de Spotify no disponible")
-                return []
-
             resultados = self.spotify_client.search(q=query, type=tipo, limit=limit)
             
             canciones = []
@@ -124,15 +128,15 @@ class SearchAgent:
         
         except Exception as e:
             logger.error(f"❌ Error al buscar en Spotify: {e}")
-            return []
+            raise FuenteCaida(f"Spotify: {type(e).__name__}") from e
 
     def buscar_en_youtube(self, query: str, limit: int = 10) -> List[Dict]:
-        """Buscar canciones en YouTube (usando yt-dlp)"""
+        """Buscar canciones en YouTube (usando yt-dlp). Sin yt-dlp lanza `FuenteNoConfigurada`;
+        si la búsqueda falla, `FuenteCaida` (f40: antes devolvía [] como si no hubiera nada)."""
+        if not YTDLP_AVAILABLE:
+            logger.warning("⚠️ yt-dlp no está instalado")
+            raise FuenteNoConfigurada("yt-dlp no está instalado")
         try:
-            if not YTDLP_AVAILABLE:
-                logger.warning("⚠️ yt-dlp no está instalado")
-                return []
-            
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
@@ -150,6 +154,10 @@ class SearchAgent:
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 resultados = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            # Con `ignoreerrors` una búsqueda que falla entera (sin red, YouTube que no
+            # contesta) no lanza: devuelve None. Una búsqueda sin resultados es un dict vacío.
+            if resultados is None:
+                raise FuenteCaida("YouTube no devolvió la página de resultados")
 
             canciones = []
             for video in (resultados or {}).get('entries') or []:
@@ -173,20 +181,22 @@ class SearchAgent:
             logger.info(f"✅ Encontradas {len(canciones)} canciones en YouTube")
             return canciones
         
+        except FuenteError:
+            logger.error("❌ YouTube no devolvió la página de resultados")
+            raise
         except Exception as e:
             logger.error(f"❌ Error al buscar en YouTube: {e}")
-            return []
+            raise FuenteCaida(f"YouTube: {type(e).__name__}") from e
 
     def buscar_en_soundcloud(self, query: str, limit: int = 10) -> List[Dict]:
         """
         Buscar canciones en SoundCloud usando yt-dlp
         No requiere Artist Pro account - yt-dlp maneja SoundCloud automáticamente
         """
+        if not YTDLP_AVAILABLE:
+            logger.warning("⚠️ yt-dlp no está instalado, saltando SoundCloud")
+            raise FuenteNoConfigurada("yt-dlp no está instalado")
         try:
-            if not YTDLP_AVAILABLE:
-                logger.warning("⚠️ yt-dlp no está instalado, saltando SoundCloud")
-                return []
-            
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
@@ -195,16 +205,12 @@ class SearchAgent:
             
             # yt-dlp puede buscar directamente en SoundCloud
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                try:
-                    # Buscar en SoundCloud usando URL de búsqueda
-                    search_url = f"scsearch{limit}:{query}"
-                    resultados = ydl.extract_info(search_url, download=False)
-                except:
-                    logger.debug(f"ℹ️ yt-dlp search no disponible, intentando API...")
-                    return []
-            
+                # Buscar en SoundCloud usando URL de búsqueda (una falla sube: es una caída)
+                search_url = f"scsearch{limit}:{query}"
+                resultados = ydl.extract_info(search_url, download=False)
+
             canciones = []
-            if 'entries' in resultados:
+            if 'entries' in (resultados or {}):
                 for video in resultados['entries'][:limit]:
                     if video and 'title' in video:
                         cancion = {
@@ -224,8 +230,8 @@ class SearchAgent:
             return canciones
         
         except Exception as e:
-            logger.debug(f"ℹ️ SoundCloud search con yt-dlp no disponible: {e}")
-            return []
+            logger.warning(f"⚠️ SoundCloud search con yt-dlp falló: {type(e).__name__}")
+            raise FuenteCaida(f"SoundCloud: {type(e).__name__}") from e
 
     def _scrape_soundcloud_web(self, query: str, limit: int = 10) -> List[Dict]:
         """Web scraping alternativo de SoundCloud (deprecado - ahora usamos yt-dlp)"""
@@ -237,22 +243,28 @@ class SearchAgent:
         logger.info(f"🔄 Iniciando búsqueda en 3 fuentes: {query}")
         
         todas_canciones = []
-        
+
+        def _o_vacio(buscar, **kw):
+            # Fallback "lo que haya": una fuente que no pudo buscar cuenta como vacía y se
+            # pasa a la siguiente (el que necesita distinguirlo llama a buscar_en_* directo).
+            try:
+                return buscar(query, **kw)
+            except FuenteError as e:
+                logger.info(f"ℹ️ {e}: sigo con la próxima fuente")
+                return []
+
         # Intento 1: Spotify
-        canciones_spotify = self.buscar_en_spotify(query, limit=limit)
-        todas_canciones.extend(canciones_spotify)
-        
+        todas_canciones.extend(_o_vacio(self.buscar_en_spotify, limit=limit))
+
         # Intento 2: SoundCloud (sin necesidad de Pro account)
         if len(todas_canciones) < limit:
-            logger.info(f"⚠️ Insuficientes en Spotify, intentando SoundCloud...")
-            canciones_sc = self.buscar_en_soundcloud(query, limit=limit - len(todas_canciones))
-            todas_canciones.extend(canciones_sc)
-        
+            logger.info("⚠️ Insuficientes en Spotify, intentando SoundCloud...")
+            todas_canciones.extend(_o_vacio(self.buscar_en_soundcloud, limit=limit - len(todas_canciones)))
+
         # Intento 3: YouTube
         if len(todas_canciones) < limit:
-            logger.info(f"⚠️ Insuficientes, intentando YouTube...")
-            canciones_youtube = self.buscar_en_youtube(query, limit=limit - len(todas_canciones))
-            todas_canciones.extend(canciones_youtube)
+            logger.info("⚠️ Insuficientes, intentando YouTube...")
+            todas_canciones.extend(_o_vacio(self.buscar_en_youtube, limit=limit - len(todas_canciones)))
         
         logger.info(f"✅ Búsqueda completada: {len(todas_canciones)} canciones encontradas")
         return todas_canciones[:limit]

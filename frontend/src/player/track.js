@@ -35,7 +35,7 @@ export function fromLibrary(t) {
   }
 }
 
-// Resultados de búsqueda / modo lista / parecidas. `meta` = el metaMap de la app (BPM y
+// Resultados de búsqueda / modo lista / Station de SoundCloud. `meta` = el metaMap de la app (BPM y
 // género que se buscan aparte, los mismos que muestra la fila). `version` = {n, de}: qué
 // opción de la fila es (la barra dice "opción 2 de 3"); null si no viene de una fila.
 export function fromResult(c, metaMap, version = null) {
@@ -167,5 +167,5 @@ export function fmtBpm(t) {
 
 export const NOMBRE_FUENTE = {
   biblioteca: 'Biblioteca', radio: 'Radio', youtube: 'YouTube', soundcloud: 'SoundCloud',
-  spotify: 'Spotify', deezer: 'Deezer', ligaudio: 'MP3 directo', hitplayer: 'MP3 directo',
+  spotify: 'Spotify', deezer: 'Deezer', ligaudio: 'MP3', hitplayer: 'MP3',  // f38: sin el nombre del sitio
 }

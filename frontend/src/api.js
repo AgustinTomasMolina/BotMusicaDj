@@ -20,15 +20,22 @@ export async function buscarLista(lista, formato) {
   return json(r)
 }
 
-// `fuente` + `fuenteId` (el id del resultado): con SoundCloud el backend pide el ISRC y
-// resuelve la semilla en Deezer. `duracion` solo desempata entre lanzamientos del mismo tema.
-export async function parecidasLista(titulo, artista, formato, genero, fuente, fuenteId, duracion) {
-  const q = `titulo=${encodeURIComponent(titulo)}&artista=${encodeURIComponent(artista || '')}` +
-            `&formato=${encodeURIComponent(formato)}&genero=${encodeURIComponent(genero || '')}` +
-            `&fuente=${encodeURIComponent(fuente || '')}&fuente_id=${encodeURIComponent(fuenteId || '')}` +
-            (duracion > 0 ? `&duracion=${encodeURIComponent(duracion)}` : '')
-  const r = await fetch(`/api/parecidas_lista?${q}`)
-  return json(r)
+// (f36) "Temas parecidos" (Deezer, /api/parecidas_lista) ya no se ofrece desde el front: la
+// Station de SoundCloud la reemplaza. El endpoint sigue en el backend, sin uso desde acá.
+
+// Versiones de UN tema de la Station en las otras plataformas (f36, /api/versiones): el tema
+// de SoundCloud + la mejor de cada plataforma que sea el mismo tema, cada una con su nota.
+// `signal` corta el pedido (timeout de la fila o salir de la pantalla). Un 400/500 o un cuerpo
+// que no es JSON vuelve como {exito:false, mensaje} con el código.
+export async function versiones(tema, formato, signal) {
+  const r = await fetch('/api/versiones', {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tema, formato }),
+  })
+  const d = await cuerpoRadio(r)
+  if (d && typeof d.exito === 'boolean') return d
+  return { exito: false, mensaje: `El servidor no pudo buscar las versiones (HTTP ${r.status}).` }
 }
 
 // Station de SoundCloud del tema (f34, /api/station). De SoundCloud va su id numérico (la

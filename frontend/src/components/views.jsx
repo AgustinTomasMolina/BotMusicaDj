@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { getBiblioteca } from '../api'
 import { fmtDur, FUENTE_CORTO, songKey, metaKey } from '../utils'
-import { DlButton, PreviewLayer, QualityBadge } from './common'
+import { DlButton, PreviewLayer, QualityBadge, gradeClass } from './common'
 import { AddToPlaylist } from './AddToPlaylist'
 import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
-import { IconDownload, IconActivity, IconCompare, IconSparkles, IconRadioTower } from './icons'
+import { IconDownload, IconActivity, IconCompare, IconRadioTower } from './icons'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -133,8 +133,15 @@ const ROW_STATUS = {
 const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || 'fuente desconocida'
 
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onParecidas, onStation }) {
+// VERSIONES son pastillas en línea en todas las vistas (búsqueda, modo lista, playlists
+// guardadas y Station). La Station tuvo un diseño plegado (f38, "+N versiones" con sub-lista)
+// que el dueño cambió por estas mismas pastillas (f40).
+function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onStation }) {
   const c = g.opciones[sel]
+  // Station (f40): la fila ES el tema de la Station. Título, artista y duración son los suyos
+  // aunque se elija la versión de otra plataforma: el título de un video ("… (Official Video)")
+  // o su duración con intro hacían parecer que la fila era otra edición.
+  const ficha = g.base || c
   // "Sonando" (barritas animadas, aro) SOLO cuando suena de verdad. Mientras carga —2 a 5 s
   // en frío en YouTube/SoundCloud— decirlo sería mentir (§6); la pastilla dice "cargando"
   // con las barritas quietas, igual que la fila ("Cargando: opción…").
@@ -142,7 +149,11 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
   const thumbKey = `t${i}`
   const rowPrev = preview.current && (preview.current.key === thumbKey || preview.current.key.startsWith(`o${i}:`))
     ? preview.current.song : null
-  const m = metaMap[metaKey(c)] || {}
+  // Station (f36): si se eligió la versión de otra plataforma, BPM/género siguen siendo los del
+  // tema de la Station (`g.base`), que es el mismo tema.
+  const m = metaMap[metaKey(c)] || (g.base ? metaMap[metaKey(g.base)] : null) || {}
+  // El tema de la Station es Go+ (30 s) pero se eligió una versión completa de otra plataforma.
+  const goPlusResuelto = !c.solo_preview && g.opciones.some((o) => o.estacion && o.solo_preview)
   const bpm = c.bpm || m.bpm
   const genero = c.genero || m.genero
   const key = c.camelot
@@ -164,7 +175,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
         {rowPrev && <PreviewLayer key={songKey(rowPrev)} song={rowPrev} />}
       </div>
       <div className="trk-id">
-        <div className="trk-title" title={c.titulo}>{c.titulo}</div>
+        <div className="trk-title" title={ficha.titulo}>{ficha.titulo}</div>
         {/* Qué versión de esta fila está en la barra, en texto: el color y las barritas solas
             no alcanzan (pedido del dueño 2026-09-28: "no se ve en qué reproducción estás parado"). */}
         {loadedIdx >= 0 && (
@@ -173,7 +184,11 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
             <span>{ROW_STATUS[playerStatus] || 'En la barra'}: opción {loadedIdx + 1} · {sourceName(g.opciones[loadedIdx])}</span>
           </div>
         )}
-        <div className="trk-artist"><span className="truncate">{c.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(c.duracion)}</span></div>
+        <div className="trk-artist"><span className="truncate">{ficha.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(ficha.duracion)}</span></div>
+        {/* Station (f36): por qué faltan versiones (una plataforma que no contestó, SoundCloud
+            que frenó) y, si el tema es Go+, de dónde sale el tema completo. */}
+        {goPlusResuelto && <div className="trk-note">SoundCloud solo da 30 s (Go+): se baja completo de {sourceName(c)}.</div>}
+        {g.motivo && <div className="trk-note is-warn" title={g.motivo}>{g.motivo}</div>}
       </div>
       <div className="trk-meta">
         {bpm && <span className="mb"><span className="mb-label">BPM</span><b>{bpm}</b></span>}
@@ -194,42 +209,56 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           // Nombre accesible completo: aria-pressed dice "elegida"; lo que suena va en el texto
           // (y en aria-current), porque un lector no ve las barritas.
           const stateText = [chosen ? 'elegida' : null, sounding ? (isLive ? 'sonando ahora' : playerStatus === 'loading' ? 'cargando' : 'cargada en la barra') : null].filter(Boolean).join(', ')
+          // Nota de cada versión (f36: la Station la trae calculada por /api/calidad). Un preview
+          // de 30 s no tiene nota: no es el tema. Spotify tampoco: se baja buscando en YouTube.
+          const grade = o.calidad ? (o.calidad.ok ? o.calidad.grade : '?') : null
+          const gradeText = o.solo_preview ? 'solo 30 s (Go+)' : grade ? `nota ${grade}` : null
+          // f40-r2: el Extended es OTRA edición que la que sonó en la Station (más larga): la
+          // pastilla lo dice con su duración. Una versión con la duración sin verificar se
+          // ofrece atenuada y lo dice (no viene elegida nunca, ver bestOption).
+          const sinVerificar = o.duracion_verificada === false
+          const ext = o.edicion === 'extended' ? (sinVerificar ? 'Extended' : `Extended · ${fmtDur(o.duracion)}`) : null
+          const extras = [ext, sinVerificar ? 'duración sin verificar' : null].filter(Boolean).join(', ')
           return (
-            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
+            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sinVerificar ? ' is-sin-verificar' : ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
               aria-pressed={chosen} aria-current={sounding ? 'true' : undefined}
-              aria-label={`Opción ${k + 1}: ${sourceName(o)}${stateText ? ` (${stateText})` : ''}`}
+              aria-label={`Opción ${k + 1}: ${sourceName(o)}${gradeText ? `, ${gradeText}` : ''}${extras ? `, ${extras}` : ''}${stateText ? ` (${stateText})` : ''}`}
               onMouseEnter={() => preview.schedule(okey, o)}
               onClick={() => onSelect(i, k)}
-              title={`Opción ${k + 1} · ${o.fuente} — ${o.titulo}${stateText ? ` · ${stateText}` : ''}`}>
+              title={`Opción ${k + 1} · ${sourceName(o)} — ${o.titulo}${gradeText ? ` · ${gradeText}` : ''}${o.calidad?.calidad ? ` (${o.calidad.calidad})` : ''}${ext ? (sinVerificar ? ' · Extended según su título: otra edición que la de la Station' : ` · ${ext}: otra edición, más larga que la de la Station`) : ''}${sinVerificar ? ' · duración sin verificar: no se elige sola' : ''}${f === 'spotify' ? ' · se baja buscándolo en YouTube' : ''}${stateText ? ` · ${stateText}` : ''}`}>
               {chosen ? <IconChosen /> : <span className="n">{k + 1}</span>}
               {sounding ? <Eq on={isLive} /> : <span className="dot" />}
               {FUENTE_CORTO[f] || o.fuente || '?'}
+              {ext && <span className="vchip-ed" aria-hidden="true">{sinVerificar ? 'Extended' : `Extended ${fmtDur(o.duracion)}`}</span>}
+              {o.solo_preview
+                ? <span className="vchip-grade is-preview" aria-hidden="true">30 s</span>
+                : grade && <span className={`vchip-grade ${gradeClass(grade)}`} aria-hidden="true">{grade}</span>}
             </button>
           )
         })}
       </div>
-      <div className="trk-acts">
+      {/* Acciones (f36): separadas de las versiones por una línea, todas del mismo tamaño
+          (32 px, íconos de 16) y con nombre y tooltip. */}
+      <div className="trk-acts" role="group" aria-label={`Acciones de ${c.titulo}`}>
         <button type="button" className="btn btn-icon-sm" onClick={() => onSpek(c)} title="Espectrograma (Spek)" aria-label={`Espectrograma de ${c.titulo}`}><IconActivity size={16} /></button>
         {g.opciones.length > 1 &&
           <button type="button" className="btn btn-icon-sm" onClick={() => onCompare(g.opciones, g.consulta || c.titulo)} title="Comparar versiones" aria-label={`Comparar versiones de ${c.titulo}`}><IconCompare size={16} /></button>}
-        {onParecidas &&
-          <button type="button" className="btn btn-icon-sm" onClick={() => onParecidas(c)} title="Temas parecidos" aria-label={`Temas parecidos a ${c.titulo}`}><IconSparkles size={16} /></button>}
         {/* "Station", no "Radio": la Radio de la barra de arriba es la del motor local. */}
         {onStation &&
           <button type="button" className="btn btn-icon-sm" onClick={() => onStation(c)} title="Station de SoundCloud: temas del mismo estilo según SoundCloud" aria-label={`Station de SoundCloud de ${c.titulo}`}><IconRadioTower size={16} /></button>}
         <AddToPlaylist track={{ ...c, bpm, genero, camelot: key }} />
         {c.solo_preview
           ? <button type="button" className="btn btn-secondary btn-dl" disabled title="SoundCloud solo da 30 s de este tema: no se descarga como si fuera el tema"
-            aria-label={`Descargar ${c.titulo} (no disponible: SoundCloud solo da un fragmento de 30 s)`}><IconDownload size={15} /></button>
-          : <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={15} /></DlButton>}
+            aria-label={`Descargar ${c.titulo} (no disponible: SoundCloud solo da un fragmento de 30 s)`}><IconDownload size={16} /></button>
+          : <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={16} /></DlButton>}
       </div>
     </div>
   )
 }
 
-/* ---------- Vista de resultados (búsqueda unificada / modo lista / parecidas) ---------- */
-export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onParecidas, onStation }) {
-  const { groups, sel, seed, encontradas, total, no_encontradas, origen, query, station } = data
+/* ---------- Vista de resultados (búsqueda unificada / modo lista / Station) ---------- */
+export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onStation }) {
+  const { groups, sel, encontradas, total, no_encontradas, origen, query, station, cargando, items } = data
   const esBusqueda = origen === 'busqueda'
   const esStation = origen === 'station'
   const player = usePlayer()
@@ -237,20 +266,35 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
   const [allLabel, setAllLabel] = useState(null)
   const [allBusy, setAllBusy] = useState(false)
+  // Station cargando (f36): "Descargar todas" pregunta si bajar las filas listas o esperar.
+  const [askAll, setAskAll] = useState(false)
+  const [waitAll, setWaitAll] = useState(false)
+  const faltan = esStation && cargando ? total - groups.length : 0
 
   const descargarTodas = async () => {
+    setAskAll(false)
     setAllBusy(true)
     let ok = 0
-    for (let i = 0; i < groups.length; i++) {
-      const c = groups[i].opciones[sel[i]]
-      if (c.solo_preview) continue           // 30 s de SoundCloud no son el tema
-      setAllLabel(`Bajando ${i + 1}/${groups.length}…`)
-      const good = await onDownload(c)
+    // Una foto de las filas de ahora: las que lleguen mientras baja no entran en esta tanda.
+    const filas = groups.map((g, i) => g.opciones[sel[i]])
+    const bajables = filas.filter((c) => !c.solo_preview)   // 30 s de SoundCloud no son el tema
+    for (let i = 0; i < bajables.length; i++) {
+      setAllLabel(`Bajando ${i + 1}/${bajables.length}…`)
+      const good = await onDownload(bajables[i])
       if (good) ok++
     }
     setAllBusy(false)
-    setAllLabel(`✓ ${ok}/${groups.length} descargadas`)
+    const sinTema = filas.length - bajables.length
+    setAllLabel(`✓ ${ok}/${bajables.length} descargadas${sinTema ? ` · ${sinTema} sin versión completa` : ''}`)
   }
+  const pedirTodas = () => (faltan > 0 ? setAskAll(true) : descargarTodas())
+  // "Esperar y bajar todas": arranca sola cuando la última fila llega.
+  useEffect(() => {
+    if (waitAll && esStation && !cargando) { setWaitAll(false); descargarTodas() }
+  }, [waitAll, esStation, cargando]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Cuántas filas terminaron con versiones de otras plataformas (resumen al terminar).
+  const conOtras = esStation ? groups.filter((g) => g.opciones.some((o) => !o.estacion)).length : 0
+  const siguiente = esStation && cargando && items ? items[groups.length] : null
 
   return (
     <>
@@ -267,32 +311,48 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
             </div>
           </div>
         )
-        : <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : seed ? `Parecidas a ${seed.titulo}` : 'Resultados de la lista'}</h1>}
-      {seed && (
-        <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
-          <div style={{ minWidth: 0 }}>
-            <div className="eyebrow">Parecidas a</div>
-            <h4 className="truncate">{seed.titulo} — {seed.artista}</h4>
-            <div className="cluster" style={{ gap: 5, marginTop: 6 }}>
-              {seed.bpm && <span className="mb"><span className="mb-label">BPM</span><b>{seed.bpm}</b></span>}
-              {seed.camelot && <span className="mb mb-key"><span className="mb-label">KEY</span><b>{seed.camelot}</b></span>}
-              {seed.tono && <span className="mb"><span className="mb-label">Tono</span><b>{seed.tono}</b></span>}
-            </div>
-          </div>
-        </div>
-      )}
+        : <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : 'Resultados de la lista'}</h1>}
 
       <div className="cluster" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
-        <span className="eyebrow">{esBusqueda ? `Resultados${query ? ` · ${query}` : ''}` : esStation ? `${total} temas` : `${encontradas}/${total} encontradas`}</span>
+        {esStation
+          // Avance de la búsqueda de versiones: las filas aparecen abajo, en el orden de la Station.
+          ? <span className="eyebrow station-progress">
+            {cargando
+              ? <><span className="spinner" aria-hidden="true" /> {groups.length} de {total} temas con versiones…</>
+              : `${total} temas · ${conOtras} con versiones en otras plataformas`}
+          </span>
+          : <span className="eyebrow">{esBusqueda ? `Resultados${query ? ` · ${query}` : ''}` : `${encontradas}/${total} encontradas`}</span>}
         <span className="push cluster" style={{ gap: 'var(--space-2)' }}>
           {!esBusqueda && !esStation && <button type="button" className="btn btn-ghost" onClick={onEditar}>Editar lista</button>}
-          <button type="button" className="btn btn-primary" onClick={descargarTodas} disabled={allBusy}>
-            {allBusy ? <><span className="spinner" aria-hidden="true" /> {allLabel}</> : (allLabel || `Descargar todas (${formato.toUpperCase()})`)}
+          <button type="button" className="btn btn-primary" onClick={pedirTodas} disabled={allBusy || waitAll || !groups.length} aria-expanded={faltan > 0 ? askAll : undefined}>
+            {allBusy ? <><span className="spinner" aria-hidden="true" /> {allLabel}</>
+              : waitAll ? `Esperando ${faltan} temas…`
+              : (allLabel || `Descargar todas (${formato.toUpperCase()})`)}
           </button>
         </span>
         {/* El resumen final de "Descargar todas" se anuncia (el progreso ya sale en los avisos). */}
         <span className="sr-only" role="status">{!allBusy && allLabel ? allLabel.replace('✓ ', '') : ''}</span>
       </div>
+      {/* Station todavía cargando: no se baja "todas" sin avisar que faltan. */}
+      {askAll && faltan > 0 && (
+        <div className="alert alert-warn station-ask" role="group" aria-label="Descargar todas" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
+          <div>
+            <div className="alert-title">Todavía faltan {faltan} de {total} temas</div>
+            <p>Podés bajar ahora los {groups.length} que ya tienen versiones (la mejor de cada uno) o esperar a que estén todos.</p>
+            <div className="cluster">
+              <button type="button" className="btn btn-primary" onClick={descargarTodas}>Bajar los {groups.length} listos</button>
+              <button type="button" className="btn btn-secondary" onClick={() => { setAskAll(false); setWaitAll(true) }}>Esperar y bajar los {total}</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setAskAll(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {waitAll && (
+        <p className="muted station-wait" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
+          Se bajan todos cuando terminen de cargar (faltan {faltan}).{' '}
+          <button type="button" className="btn btn-ghost" onClick={() => setWaitAll(false)}>No esperar</button>
+        </p>
+      )}
 
       {no_encontradas && no_encontradas.length > 0 && (
         <div className="alert alert-warn" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
@@ -301,7 +361,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
         </div>
       )}
 
-      <div className="results">
+      <div className={`results${esStation ? ' results-station' : ''}`}>
         <div className="results-head">
           <div style={{ textAlign: 'right' }}>#</div>
           <div>Art</div>
@@ -318,8 +378,15 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
             loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}
             playerStatus={player.status}
             playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
-            onSelect={onSelect} onCompare={onCompare} onParecidas={onParecidas} onStation={onStation} />
+            onSelect={onSelect} onCompare={onCompare} onStation={onStation} />
         ))}
+        {/* La próxima fila de la Station, mientras busca sus versiones. */}
+        {siguiente && (
+          <div className="trk-pending" aria-hidden="true">
+            <span className="spinner" />
+            <span className="truncate">{String(groups.length + 1).padStart(2, '0')} · {siguiente.titulo} — buscando versiones en YouTube, MP3 y Spotify…</span>
+          </div>
+        )}
       </div>
     </>
   )

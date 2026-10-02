@@ -8,6 +8,7 @@ Sitios soportados que devuelven MP3 directos:
 Cada función devuelve una lista de dicts con el mismo formato que el resto
 del bot:
   {titulo, artista, duracion(seg), url, stream_url, fuente, thumbnail}
+Si el sitio no contesta, lanza `fuente_errores.FuenteCaida` (no [], que es "no lo tiene").
 
 Nota: estos sitios entregan URLs firmadas/temporales. Como el navegador del
 usuario y este servidor comparten la misma IP pública (corre local), las URLs
@@ -20,6 +21,7 @@ import re
 import urllib.parse
 
 import requests
+from fuente_errores import FuenteCaida
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +42,15 @@ def _get(url: str) -> str:
 
 
 def _abs(u: str) -> str:
-    """Completa URLs que empiezan con // o son relativas."""
+    """Completa URLs que empiezan con //. Lo que no queda http(s) se descarta ("") (f40-r2):
+    estas URLs terminan en ffprobe/ffmpeg y en el navegador, y con `file:`, `concat:` o
+    `javascript:` una página scrapeada podría hacer leer un archivo local o inyectar un link."""
     if not u:
         return u
+    u = u.strip()
     if u.startswith("//"):
-        return "https:" + u
-    return u
+        u = "https:" + u
+    return u if re.match(r"(?i)https?://[^\s]+$", u) else ""
 
 
 def _dur_a_seg(txt: str) -> int:
@@ -72,8 +77,9 @@ def buscar_ligaudio(query: str, limit: int = 10) -> list:
     try:
         doc = _get(url)
     except Exception as e:
+        # f40: una caída se SEÑALA (antes era [], lo mismo que "no lo tiene").
         logger.warning(f"⚠️ ligaudio no respondió: {e}")
-        return []
+        raise FuenteCaida(f"ligaudio: {type(e).__name__}") from e
 
     bloques = doc.split('<div class="item"')[1:]
     out = []
@@ -89,7 +95,9 @@ def buscar_ligaudio(query: str, limit: int = 10) -> list:
             continue
 
         stream = _abs(play_m.group(1)) if play_m else ""
-        descarga = _abs(down_m.group(1)) if down_m else stream
+        descarga = (_abs(down_m.group(1)) if down_m else "") or stream
+        if not descarga:                 # ni un link http(s): no hay audio que ofrecer
+            continue
         out.append({
             "titulo": _limpiar(title_m.group(1)),
             "artista": _limpiar(artist_m.group(1)) if artist_m else "ligaudio",
@@ -97,7 +105,7 @@ def buscar_ligaudio(query: str, limit: int = 10) -> list:
             "url": descarga,
             "stream_url": stream or descarga,
             "fuente": "ligaudio",
-            "thumbnail": _abs(img_m.group(1)) if img_m else None,
+            "thumbnail": (_abs(img_m.group(1)) or None) if img_m else None,
         })
         if len(out) >= limit:
             break
@@ -123,15 +131,17 @@ def buscar_hitplayer(query: str, limit: int = 10) -> list:
         doc = _get(url)
     except Exception as e:
         logger.warning(f"⚠️ hitplayer no respondió: {e}")
-        return []
+        raise FuenteCaida(f"hitplayer: {type(e).__name__}") from e
 
     out = []
     for m in _HIT_RE.finditer(doc):
         descarga = _abs(m.group(1))
+        if not descarga:                 # f40-r2: solo http(s)
+            continue
         out.append({
             "titulo": _limpiar(m.group(2)),
             "artista": _limpiar(m.group(3)) or "hitplayer",
-            "duracion": 0,
+            "duracion": 0,       # HitPlayer no publica la duración: 0 = "no se sabe" (versiones la mide)
             "url": descarga,
             "stream_url": descarga,  # el mp3 directo sirve para reproducir
             "fuente": "hitplayer",

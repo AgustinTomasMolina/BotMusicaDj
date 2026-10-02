@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
-import { buscar, buscarLista, parecidasLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
+import { cargarVersiones } from './stationVersions'
+import { buscar, buscarLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
 import { useToast } from './toast.jsx'
@@ -122,59 +123,56 @@ export default function App() {
     catch { setView({ kind: 'error', emoji: '⚠️', message: 'Error al conectar con el servidor.', hint: HINT_CONEXION }) }
   }
 
-  const doParecidas = async (c) => {
-    setModal(null)
-    setView({ kind: 'loading', message: 'Buscando temas parecidos y sus opciones por plataforma… puede tardar unos segundos.' })
-    try {
-      // Prioridad: el filtro de género elegido > el género conocido del tema
-      const gen = genero || c.genero || (metaMap[metaKey(c)] || {}).genero || ''
-      const d = await parecidasLista(c.titulo, c.artista, formato, gen, c.fuente, c.video_id, c.duracion)
-      if (d.exito && d.grupos && d.grupos.length) applyLista(d)
-      // Semilla sí, parecidas no: el backend dice cuál de los dos vacíos es (sin candidatos en
-      // Deezer, o candidatos que no están en ninguna plataforma). Antes caía en `applyLista` y
-      // mostraba el cartel del modo lista ("un tema por línea"), que no es lo que pasó.
-      else if (d.exito) setView({ kind: 'error', emoji: '🔍', message: d.mensaje || 'No encontré temas parecidos.',
-        hint: d.detalle || 'Probá con otro tema.' })
-      // Sin semilla verificada el backend no arma nada (nunca "Parecidas a <otro tema>"): se
-      // dice que no hay similitud para ESTE track y por qué (no está en Deezer / no contestó).
-      else if (d.motivo) setView({ kind: 'error', emoji: '🚫', message: d.mensaje || 'Similitud no disponible para este track',
-        hint: `«${c.titulo}» — ${c.artista || 'artista desconocido'}. ${d.detalle || ''}`.trim() })
-      else setView({ kind: 'error', emoji: '😕', message: d.mensaje || 'No se pudo armar la playlist de parecidas.', hint: 'Probá con otro tema.' })
-    } catch {
-      setView({ kind: 'error', emoji: '⚠️', message: 'Error al armar la playlist de parecidas.', hint: HINT_CONEXION })
-    }
-  }
-
   // Station de SoundCloud (f34): el recomendador de SoundCloud para ESTE tema, en su orden.
-  // Sin el tema en SoundCloud (o sin respuesta) se dice por qué y se OFRECE parecidas de
-  // Deezer como botón: no se salta solo a otra lista.
+  // Sin el tema en SoundCloud (o sin respuesta) se dice por qué. (f36: ya no se ofrece
+  // "Temas parecidos" de Deezer como plan B: la Station es la única recomendación del front.)
+  //
+  // f36: cada tema se busca además en las otras plataformas (stationVersions.js). La lista
+  // arranca vacía y las filas se agregan abajo, en el orden de la Station, a medida que cada
+  // una tiene sus versiones; `runId` ata la carga a ESTA vista (salir de la pantalla la corta).
+  const stationLoad = useRef(null)          // {runId, cancelar}
+  useEffect(() => {
+    const cur = stationLoad.current
+    if (cur && !(view.kind === 'lista' && view.data?.runId === cur.runId)) { cur.cancelar(); stationLoad.current = null }
+  }, [view])
+
   const doStation = async (c) => {
     setModal(null)
     setView({ kind: 'loading', message: `Pidiendo a SoundCloud la Station de «${c.titulo}»…` })
     try {
       const d = await station(c)
       if (d.exito && Array.isArray(d.items) && d.items.length) {
-        const grupos = d.items.map((it) => ({ opciones: [it] }))
-        setView({ kind: 'lista', data: { groups: grupos, sel: grupos.map(() => 0), origen: 'station', station: d.semilla,
-          total: grupos.length, encontradas: grupos.length } })
-        enrich(d.items)
+        const runId = Date.now() + Math.random()
+        const items = d.items
+        setView({ kind: 'lista', data: { groups: [], sel: [], origen: 'station', station: d.semilla, runId,
+          items, cargando: true, total: items.length, encontradas: items.length } })
+        enrich(items)
+        const enEsta = (fn) => setView((v) => (v.kind === 'lista' && v.data.runId === runId ? { ...v, data: fn(v.data) } : v))
+        const cancelar = cargarVersiones(items, formato, {
+          onFila: (i, g) => enEsta((dt) => ({ ...dt, groups: [...dt.groups, g], sel: [...dt.sel, g.sel] })),
+          onFin: () => enEsta((dt) => ({ ...dt, cargando: false })),
+        })
+        stationLoad.current = { runId, cancelar }
         return
       }
       setView({ kind: 'error', emoji: '📻', message: d.mensaje || 'No pude traer la Station de SoundCloud.',
-        hint: `«${c.titulo}» — ${c.artista || 'artista desconocido'}.`,
-        action: { label: 'Probar parecidas (Deezer)', onClick: () => doParecidas(c) } })
+        hint: `«${c.titulo}» — ${c.artista || 'artista desconocido'}.` })
     } catch {
       setView({ kind: 'error', emoji: '⚠️', message: 'Error al pedir la Station de SoundCloud.', hint: HINT_CONEXION,
         action: { label: 'Reintentar', onClick: () => doStation(c) } })
     }
   }
 
+  // Funcional: en la Station llegan filas mientras tanto y `view` puede estar un render atrás.
   const onSelect = (i, k) => {
     if (view.kind !== 'lista') return
-    const sel = [...view.data.sel]
-    if (sel[i] === k) return
-    sel[i] = k
-    setView({ ...view, data: { ...view.data, sel } })
+    if (view.data.sel[i] === k) return
+    setView((v) => {
+      if (v.kind !== 'lista' || !v.data.groups[i]) return v
+      const sel = [...v.data.sel]
+      sel[i] = k
+      return { ...v, data: { ...v.data, sel } }
+    })
     preview.cancel(); preview.stop()
     enrich([view.data.groups[i].opciones[k]])
   }
@@ -279,13 +277,13 @@ export default function App() {
   }
 
   /* ---------- Render ---------- */
-  const shared = { formato, metaMap, preview, dl, onPlay: play, onSpek: openSpek, onDownload, onCompare: openCompare, onParecidas: doParecidas, onStation: doStation }
+  const shared = { formato, metaMap, preview, dl, onPlay: play, onSpek: openSpek, onDownload, onCompare: openCompare, onStation: doStation }
   let body
   if (view.kind === 'home') body = <Home onPlay={play} />
   else if (view.kind === 'loading') body = <div className="empty"><span className="spinner" aria-hidden="true" /><p>{view.message}</p></div>
   else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p>{view.hint && <p>{view.hint}</p>}{view.action && <button type="button" className="btn btn-secondary" onClick={view.action.onClick}>{view.action.label}</button>}</div>
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
-  else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
+  else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
   else if (view.kind === 'radio') body = <Radio />
   else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} />
@@ -296,7 +294,9 @@ export default function App() {
     : view.kind === 'error' ? `${view.message} ${view.hint || ''}`.trim()
     : view.kind === 'lista'
       ? (view.data.origen === 'station'
-        ? `Station de SoundCloud: ${view.data.groups.length} temas.`
+        // Con el total y no con las filas que van llegando: si no, la región viva anunciaría
+        // cada fila nueva (49 anuncios). Cambia dos veces: al abrir y al terminar.
+        ? `Station de SoundCloud: ${view.data.total} temas. ${view.data.cargando ? 'Buscando sus versiones en otras plataformas…' : 'Versiones listas.'}`
         : view.data.origen === 'busqueda'
         ? `${view.data.groups.length} temas encontrados.`
         : `${view.data.encontradas ?? view.data.groups.length} de ${view.data.total ?? view.data.groups.length} temas encontrados.`)

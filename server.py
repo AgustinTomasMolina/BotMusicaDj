@@ -42,6 +42,7 @@ from fastapi.staticfiles import StaticFiles
 import db
 import jobs
 import track_identity
+from fuente_errores import FuenteError, FuenteNoConfigurada
 from search_agent import SearchAgent
 from recommendation_agent import RecommendationAgent
 from scrapers import FUENTES_SCRAPER
@@ -221,22 +222,41 @@ _MIX_LOCK = threading.Lock()
 
 def _buscar_mix(q: str, limite: int) -> list:
     """Consulta todas las fuentes EN PARALELO y las intercala (round-robin)."""
-    clave = (q, limite)
+    return _buscar_mix_detalle(q, limite)[0]
+
+
+def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None) -> tuple:
+    """(mezcla, fuentes que no contestaron). `fuentes` (f36) limita a qué plataformas se
+    pregunta: las versiones de la Station no le vuelven a preguntar a SoundCloud por cada tema.
+    Cacheado como `_buscar_mix` (solo si contestaron todas). f40-r2: sale el parámetro
+    `con_sin_configurar` (y su lugar en la caché): desde 47f4754 ninguna fila dice "Sin
+    configurar", nadie lo pedía."""
+    clave = (q, limite) if fuentes is None else (q, limite, tuple(sorted(fuentes)))
     with _MIX_LOCK:
         hit = _MIX_CACHE.get(clave)
         if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
-            return [dict(c) for c in hit[1]]
-    mezcla, completa = _buscar_mix_fuentes(q, limite)
-    if completa:
+            return [dict(c) for c in hit[1]], []
+    mezcla, fallidas, _ = _mix_fuentes(q, limite, fuentes)
+    if not fallidas:
+        # "Sin configurar" no es una caída: no cambia hasta reiniciar con otra config, se cachea.
         with _MIX_LOCK:
             if len(_MIX_CACHE) >= _MIX_MAX:
                 _MIX_CACHE.clear()
             _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
-    return mezcla
+    return mezcla, fallidas
 
 
 def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
-    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo."""
+    """(mezcla, completa): completa = contestaron todas las fuentes a tiempo (una sin
+    configurar no la deja incompleta: no hay nada que esperar de ella)."""
+    mezcla, fallidas, _ = _mix_fuentes(q, limite)
+    return mezcla, not fallidas
+
+
+def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list, list]:
+    """(mezcla, nombres de las fuentes que fallaron o no contestaron a tiempo, nombres de las
+    que no están configuradas). Una fuente caída SEÑALA el error (`fuente_errores.FuenteCaida`
+    o cualquier excepción) en vez de devolver []: si no, "no lo encontré" mentía (f40)."""
     from concurrent.futures import ThreadPoolExecutor, wait
 
     por_fuente = max(4, limite // 4)
@@ -249,10 +269,12 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
         ("spotify", lambda: search_agent.buscar_en_spotify(q, limit=por_fuente)),
         ("soundcloud", lambda: search_agent.buscar_en_soundcloud(q, limit=por_fuente)),
     ]
+    if fuentes is not None:
+        tareas = [(n, fn) for n, fn in tareas if n in fuentes]
 
     resultados = {}
-    completa = True
-    ex = ThreadPoolExecutor(max_workers=len(tareas))
+    fallidas, sin_config = [], []
+    ex = ThreadPoolExecutor(max_workers=max(1, len(tareas)))
     try:
         futuros = {ex.submit(fn): nombre for nombre, fn in tareas}
         wait(futuros, timeout=_SOURCE_DEADLINE_S)
@@ -260,14 +282,17 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
             if not fut.done():
                 logger.warning(f"⚠️ Fuente '{nombre}' no contestó en {_SOURCE_DEADLINE_S:.0f} s: queda afuera.")
                 resultados[nombre] = []
-                completa = False
+                fallidas.append(nombre)
                 continue
             try:
                 resultados[nombre] = fut.result() or []
+            except FuenteNoConfigurada:
+                resultados[nombre] = []
+                sin_config.append(nombre)
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
-                completa = False
+                fallidas.append(nombre)
     finally:
         # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
         ex.shutdown(wait=False, cancel_futures=True)
@@ -282,7 +307,7 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
             if i < len(g):
                 mezcla.append(g[i])
         i += 1
-    return mezcla[:limite], completa
+    return mezcla[:limite], fallidas, sin_config
 
 
 def _rank_calidad(fuente: str, formato: str) -> int:
@@ -582,7 +607,7 @@ async def parecidas_lista(titulo: str, artista: str = "", total: int = 12,
     if (fuente or "").lower() == "soundcloud" and fuente_id:
         isrc = await asyncio.to_thread(track_identity.fetch_soundcloud_isrc, fuente_id)
     res = await asyncio.to_thread(similares.construir_playlist, titulo, artista, total, True,
-                                  genero or None, isrc, track_identity.duration_or_none(duracion),
+                                  genero or None, isrc, track_identity.duration_or_none(duracion, fuente or None),
                                   fuente=(fuente or "").lower() or None)
     if not res.get("exito"):
         logger.warning(f"❌ {res.get('mensaje', 'No se pudo armar la playlist parecida.')}"
@@ -676,10 +701,437 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
     logger.info(f"📻 Station de SoundCloud de: '{titulo or fuente_id}' — {artista} [{fuente}]")
     try:
         return await asyncio.to_thread(sc.build_station, fuente, fuente_id, titulo, artista,
-                                       track_identity.duration_or_none(duracion))
+                                       track_identity.duration_or_none(duracion, fuente))
     except Exception as e:           # build_station no debería lanzar; si lo hace, no es un 500
         logger.warning(f"⚠️ Station: error inesperado {type(e).__name__}")
         return sc.failure(sc.UNEXPECTED_RESPONSE)
+
+
+# ---------------------------------------------------------------- versiones de la Station (f36)
+# Cada tema de la Station se busca en las otras plataformas para bajarlo de donde mejor suene.
+# El front pide UN tema por vez (con una cola de 3) y va mostrando las filas en el orden de la
+# Station a medida que están: un pedido chico por fila es más simple y robusto que un stream
+# (se cancela con un abort, reintenta solo esa fila y no depende de proxies que bufferean).
+#
+# Una versión de otra plataforma se ofrece SOLO si `track_identity` dice que es la misma
+# grabación que el tema de la Station (artista, título, versión y duración): nunca otro tema,
+# un vivo ni un remix. La excepción (f40-r2, decisión del dueño) es el Extended del MISMO tema,
+# que se ofrece marcado como otra edición. Ver `_version_aceptada`.
+
+# Plataformas a las que se les pregunta por cada tema. SoundCloud no: el tema YA es de
+# SoundCloud, y 49 búsquedas seguidas es justo lo que la auditoría de f34 marcó como riesgo de
+# 429. Solo se le pregunta cuando el tema de la Station es Go+ (30 s) o no tiene audio abrible,
+# por si otro upload lo tiene completo (y eso por la API v2, que dice si es un preview).
+_VERSION_SOURCES = ("youtube", "ligaudio", "hitplayer", "spotify")
+_VERSION_SEARCH_LIMIT = 12
+_VERSION_MAX = 5                       # opciones por fila (una por plataforma + otro upload de SC)
+_VERSION_CAL_DEADLINE_S = 15.0         # tope para las notas de una fila; lo que falte, el front lo pide lazy
+_VERSION_MAX_TEXT = 300
+# SoundCloud (búsqueda API v2 + nota por yt-dlp): como mucho 2 pedidos a la vez desde versiones
+# y, si contesta 429, una pausa: las filas lo dicen y siguen con las otras plataformas.
+_SC_GATE = threading.BoundedSemaphore(2)
+_SC_GATE_WAIT_S = 10.0
+_SC_PAUSE_S = 60.0
+_sc_pause_until = 0.0
+_SC_URL = re.compile(r"https://(?:soundcloud\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|api\.soundcloud\.com/tracks/[0-9]{1,20})")
+_SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3", "hitplayer": "MP3",
+                 "spotify": "Spotify", "soundcloud": "SoundCloud"}
+
+
+def _url_http(u) -> bool:
+    """¿`u` es una URL http(s)? Lo que llega de los scrapers (y del cliente, en /api/calidad,
+    /api/spectro y /api/descargar) termina en ffprobe/ffmpeg/requests: con otro esquema
+    (`file:`, `concat:`, `subfile:`…) ffmpeg lee archivos locales. f40-r2."""
+    return isinstance(u, str) and re.fullmatch(r"https?://[^\s\x00-\x1f]+", u, re.I) is not None
+
+
+def _sc_paused() -> bool:
+    return time.monotonic() < _sc_pause_until
+
+
+def _sc_gated(fn):
+    """Corre `fn` con el cupo de SoundCloud. None si SoundCloud está en pausa o no hubo cupo."""
+    if _sc_paused() or not _SC_GATE.acquire(timeout=_SC_GATE_WAIT_S):
+        return None
+    try:
+        return fn()
+    finally:
+        _SC_GATE.release()
+
+
+def _version_identity(c: dict):
+    """Identidad de un candidato: Spotify trae artista y título separados; el resto es un
+    upload ("Artista - Tema" en el título, el canal como artista)."""
+    if (c.get("fuente") or "").lower() in ("spotify", "deezer"):
+        return track_identity.parse_fields(c.get("artista") or "", c.get("titulo") or "")
+    return track_identity.parse_entry(c.get("titulo") or "", c.get("artista") or "")
+
+
+def _version_valida(wanted, wanted_s, c: dict) -> str | None:
+    """Grado de evidencia de que `c` es el tema de la Station, o None. Ver `_version_aceptada`
+    (esto es su grado, para quien solo necesita saber si pasa)."""
+    a = _version_aceptada(wanted, wanted_s, c)
+    return a["evidencia"] if a else None
+
+
+def _version_aceptada(wanted, wanted_s, c: dict) -> dict | None:
+    """¿Se ofrece `c` como versión del tema de la Station? None si no; si sí, los campos que
+    se le agregan a la opción: `evidencia` (grado), `duracion_verificada` y, si es la edición
+    larga, `edicion: "extended"`.
+
+    1) La misma grabación (`audio_exacto`: el tema de la Station ES el audio, no un video con
+    intro). f40 (decisión del dueño, opción "a"): si las dos duraciones se conocen y NO cuadran
+    (±max(10 s, 10 %), `track_identity.duraciones_cuadran`), no es esta edición, sea más corta
+    o más larga: un video con intro larga tampoco se ofrece. La duración de cada candidato se
+    lee según su fuente (`duration_or_none`): 30 s es "no se sabe" solo en SoundCloud.
+
+    2) f40-r2 (decisión del dueño, "el extended es ORO"): el Extended del MISMO tema
+    (`track_identity.es_extended_de`: Extended / Original Mix, o "Remix Extended" del mismo
+    remix; "Club Mix" no desde f40-r3) se ofrece aunque no cuadre, si dura MÁS que el tema (hasta 3×): «Hera (Original
+    Mix)» de 6:04 contra la «Hera» de 3:26 de la Station. Va marcado (`edicion`) porque es otra
+    edición que la que sonó. Lo más corto nunca; lo más largo sin esa etiqueta, tampoco (1).
+
+    `duracion_verificada` (f40-r2, decisión del dueño): False si la duración del candidato o la
+    del tema no se conoce. Se ofrece igual, pero el front nunca la elige por defecto: «Argy -
+    Aria» de HitPlayer (sin duración) resultó ser una edición de 252 s de un tema de 315 s."""
+    cs = track_identity.duration_or_none(c.get("duracion"), c.get("fuente"))
+    ident = _version_identity(c)
+    verificada = bool(wanted_s and cs)
+    if track_identity.es_extended_de(wanted, ident):
+        largo = track_identity.dura_como_extended(wanted_s, cs)
+        if largo is not False:          # True: confirmado; None: no se sabe (se ofrece sin elegir)
+            return {"evidencia": "texto", "edicion": "extended", "duracion_verificada": bool(largo)}
+        # False: más corto, igual de largo o demasiado largo; sigue la regla de la misma grabación.
+    if wanted_s and cs and not track_identity.duraciones_cuadran(wanted_s, cs):
+        return None
+    grado = track_identity.evidencia_misma_grabacion(wanted, ident, wanted_s, cs, audio_exacto=True)
+    return {"evidencia": grado, "duracion_verificada": verificada} if grado else None
+
+
+# MP3 directos sin duración publicada (HitPlayer no la trae: `duracion` 0). Hasta f40 se medía
+# con ffprobe sobre la URL y NUNCA servía: hotplayer sirve el MP3 por chunked (sin
+# Content-Length) y ffprobe no estima la duración de un stream sin largo — imprime "N/A"
+# (medido en f40-r2: 0 de 88 en producción, y 6 de 6 URLs reales probadas a mano; ~2 s y hasta
+# 8 s por fila tirados). Lo que SÍ trae cada MP3 de HitPlayer es la cabecera "Info" de LAME
+# (la de Xing para CBR) en el primer frame: el número EXACTO de frames. Con eso la duración es
+# frames × muestras por frame / sample rate, leyendo los primeros KB y cortando la conexión.
+# Verificado contra el archivo entero bajado: «Argy - Aria» 10519 frames a 48 kHz = 252,46 s
+# (ffprobe del archivo: 252,44 s; paquetes contados: 10519) y «Space Motion - Hera» 8468
+# frames a 44,1 kHz = 221,20 s (ffprobe: 221,20 s). Sin esa cabecera (o si no contesta a
+# tiempo) la duración queda desconocida: se ofrece por texto, sin elegirla (ver arriba).
+_VERSION_DUR_SOURCES = ("ligaudio", "hitplayer")
+_VERSION_DUR_WORKERS = 4
+_VERSION_DUR_DEADLINE_S = 5.0
+_MP3_CABECERA_MAX = 256 * 1024          # ID3 con carátula grande: más que esto, no se sigue leyendo
+
+
+def _duracion_mp3_cabecera(url: str, ua: str, timeout: float = _VERSION_DUR_DEADLINE_S) -> float:
+    """Duración (s) de un MP3 remoto según su cabecera Xing/Info, o 0 si no se puede saber.
+    Lee como mucho `_MP3_CABECERA_MAX` bytes (no baja el tema). Solo http(s)."""
+    import requests
+
+    if not _url_http(url):
+        return 0.0
+    buf = b""
+    try:
+        # Sin seguir redirecciones: `_url_http` valida solo la URL inicial, y un 302 del sitio
+        # scrapeado llevaría el pedido a un host interno (SSRF ciego, auditoría final de f40).
+        # Verificado el 02/10: los MP3 de hotplayer y lightaudio contestan 200 directo.
+        with requests.get(url, headers={"User-Agent": ua} if ua else None, stream=True,
+                          timeout=(min(timeout, 4.0), timeout), allow_redirects=False) as r:
+            if r.status_code != 200:
+                return 0.0
+            limite = time.monotonic() + timeout
+            for chunk in r.iter_content(16384):
+                buf += chunk
+                d = _duracion_xing(buf)          # None = todavía no alcanza para decidir
+                if d is not None or time.monotonic() > limite:
+                    return d or 0.0
+    except Exception as e:
+        logger.info(f"ℹ️ No pude leer la cabecera de un MP3: {type(e).__name__}")
+    return _duracion_xing(buf) or 0.0
+
+
+# MPEG audio: sample rate por versión (bits 19-20) e índice (bits 10-11). Versión 1 = MPEG-1.
+_MP3_SR = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+
+
+def _duracion_xing(buf: bytes) -> float | None:
+    """Duración según la cabecera Xing/Info del primer frame MPEG de `buf`, None si todavía no
+    hay bytes suficientes para decidir, 0.0 si no la tiene (o no es un MP3 de capa 3, o con
+    `_MP3_CABECERA_MAX` bytes todavía no se llegó al primer frame: un ID3 enorme). Con
+    Info (CBR) y el campo de bytes, se verifica contra el bitrate: si no coinciden a ±2 %, la
+    cabecera miente y la duración es desconocida."""
+    import struct
+
+    off = 0
+    if buf[:3] == b"ID3":
+        if len(buf) < 10:
+            return None
+        s = buf[6:10]
+        off = 10 + ((s[0] & 0x7F) << 21 | (s[1] & 0x7F) << 14 | (s[2] & 0x7F) << 7 | (s[3] & 0x7F))
+        if buf[5] & 0x10:                                  # pie de ID3v2.4
+            off += 10
+    if len(buf) < off + 4096:
+        return None if len(buf) < _MP3_CABECERA_MAX else 0.0
+    i = off
+    while i < off + 4096 - 4 and not (buf[i] == 0xFF and (buf[i + 1] & 0xE0) == 0xE0):
+        i += 1
+    h = buf[i:i + 4]
+    if len(h) < 4 or h[0] != 0xFF or (h[1] & 0xE0) != 0xE0:
+        return 0.0
+    version, capa = (h[1] >> 3) & 3, (h[1] >> 1) & 3
+    sr_idx, br_idx = (h[2] >> 2) & 3, h[2] >> 4
+    if version == 1 or capa != 1 or sr_idx == 3 or br_idx in (0, 15):   # solo capa 3, cabecera válida
+        return 0.0
+    sr = _MP3_SR[version][sr_idx]
+    spf = 1152 if version == 3 else 576
+    mono = (h[3] >> 6) == 3
+    # El tag va después de la info lateral, cuyo largo depende de la versión y los canales.
+    lateral = (17 if mono else 32) if version == 3 else (9 if mono else 17)
+    p = i + 4 + lateral
+    tag = buf[p:p + 4]
+    if tag not in (b"Xing", b"Info"):
+        return 0.0
+    flags = struct.unpack(">I", buf[p + 4:p + 8])[0]
+    if not flags & 1:                                       # sin cantidad de frames
+        return 0.0
+    frames = struct.unpack(">I", buf[p + 8:p + 12])[0]
+    dur = frames * spf / sr
+    if tag == b"Info" and flags & 2:                        # CBR: los bytes tienen que dar lo mismo
+        bitrates = ((0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320) if version == 3
+                    else (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160))
+        nbytes = struct.unpack(">I", buf[p + 12:p + 16])[0]
+        por_bytes = nbytes * 8 / (bitrates[br_idx] * 1000)
+        if not dur or abs(por_bytes - dur) > 0.02 * dur:
+            return 0.0
+    return dur if dur > 0 else 0.0
+
+
+def _medir_duraciones_mp3(wanted, wanted_s, candidatos: list) -> None:
+    """Completa en el lugar la `duracion` de los MP3 directos que la traen desconocida y que
+    por texto SÍ se ofrecerían (los demás no se miden: se descartan igual). Sin duración de la
+    Station no hay con qué comparar: no se mide nada."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    from scrapers import HEADERS
+
+    if not wanted_s:
+        return
+    medir = [c for c in candidatos
+             if (c.get("fuente") or "").lower() in _VERSION_DUR_SOURCES and _url_http(c.get("url"))
+             and track_identity.duration_or_none(c.get("duracion"), c.get("fuente")) is None
+             and _version_aceptada(wanted, wanted_s, c)]
+    if not medir:
+        return
+    ua = HEADERS.get("User-Agent", "")
+    ex = ThreadPoolExecutor(max_workers=min(_VERSION_DUR_WORKERS, len(medir)))
+    try:
+        futs = {ex.submit(_duracion_mp3_cabecera, c["url"], ua, _VERSION_DUR_DEADLINE_S): c for c in medir}
+        wait(futs, timeout=_VERSION_DUR_DEADLINE_S)
+        for fut, c in futs.items():
+            try:
+                d = fut.result() if fut.done() else 0.0
+            except Exception:
+                d = 0.0
+            d = track_identity.duration_or_none(d, c.get("fuente"))
+            if d:
+                c["duracion"] = round(d, 1)
+            else:
+                logger.info(f"ℹ️ Versiones: no pude medir la duración de un MP3 ({c.get('fuente')}): se ofrece sin elegirla.")
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)   # cada lectura tiene su propio tope
+
+
+def _sc_otros_uploads(q: str, tema_id: str) -> tuple[list, str | None]:
+    """Otros uploads COMPLETOS del tema en SoundCloud (para un tema Go+). (lista, motivo)."""
+    global _sc_pause_until
+    import soundcloud_station as sc
+
+    def buscar():
+        return sc.default_api().search_tracks(q, limit=10)
+
+    try:
+        crudos = _sc_gated(buscar)
+    except sc.SoundCloudError as e:
+        if "429" in (e.detail or ""):
+            _sc_pause_until = time.monotonic() + _SC_PAUSE_S
+            logger.warning("⚠️ SoundCloud contestó 429: pausa de versiones en SoundCloud.")
+            return [], "SoundCloud frenó los pedidos (demasiados seguidos): no busqué otro upload completo"
+        return [], "SoundCloud no contestó la búsqueda de otro upload completo"
+    if crudos is None:
+        return [], ("SoundCloud está en pausa por demasiados pedidos: no busqué otro upload completo"
+                    if _sc_paused() else "SoundCloud estaba ocupado: no busqué otro upload completo")
+    out = []
+    for raw in crudos:
+        m = sc.map_track(raw)
+        # Solo sirve si se puede bajar entero: otro preview de 30 s no suma nada.
+        if m and m["video_id"] != tema_id and not m["solo_preview"]:
+            out.append(m)
+    return out, None
+
+
+def presupuesto_fila_s() -> float:
+    """Peor caso (s) de UNA fila de versiones en el server, con las fases en serie: búsqueda en
+    las plataformas (con el otro upload de SoundCloud en paralelo, mismo plazo) + medición de
+    los MP3 sin duración + notas de calidad (el cupo de SoundCloud se espera DENTRO del plazo
+    de las notas). Tiene que quedar por debajo de `TIMEOUT_FILA_MS` del front
+    (frontend/src/stationVersions.js) con margen; si no, una fila que el server sí contesta se
+    mostraría como "Tardó más de 45 s…". Lo fija un test (f40-r2: antes eran 43-53 s)."""
+    return _SOURCE_DEADLINE_S + _VERSION_DUR_DEADLINE_S + _VERSION_CAL_DEADLINE_S
+
+
+def _versiones_de(tema: dict, formato: str) -> dict:
+    """Las versiones de UN tema de la Station: el tema mismo (SoundCloud) + la mejor de cada
+    otra plataforma que pase la regla de identidad, cada una con su nota de /api/calidad.
+    {exito: true, opciones, motivo, fallidas}. `motivo` (o None) dice por qué falta algo."""
+    from concurrent.futures import ThreadPoolExecutor, wait
+
+    t0 = time.perf_counter()
+    base = dict(tema, estacion=True)
+    wanted = track_identity.parse_entry(tema["titulo"], tema["artista"])
+    wanted_s = track_identity.duration_or_none(tema.get("duracion"), "soundcloud")
+    motivos, fallidas = [], []
+    candidatos = []
+    if not wanted.query_title or not wanted.artists:
+        motivos.append("No pude leer artista y título de este tema para buscarlo en otras plataformas")
+    else:
+        q = " ".join(p for p in (wanted.artist_text, wanted.query_title, wanted.version_text) if p)
+        # Otro upload completo en SoundCloud (tema Go+ o sin audio): EN PARALELO con las otras
+        # plataformas y con el mismo plazo (f40-r2). En serie sumaba la espera del cupo (10 s)
+        # y la búsqueda (hasta 15 s) a los 20 s de las plataformas: la fila podía pasar el tope
+        # de 45 s del front (ver `presupuesto_fila_s`).
+        sc_ex = fut_sc = None
+        if tema.get("solo_preview") or tema.get("reproducible") is False:
+            sc_ex = ThreadPoolExecutor(max_workers=1)
+            fut_sc = sc_ex.submit(_sc_otros_uploads, q, tema.get("video_id") or "")
+        t_busqueda = time.monotonic()
+        try:
+            mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
+            candidatos = list(mezcla)
+            if fut_sc is not None:
+                wait([fut_sc], timeout=max(0.0, _SOURCE_DEADLINE_S - (time.monotonic() - t_busqueda)))
+                otros, motivo_sc = [], "SoundCloud no contestó a tiempo la búsqueda de otro upload completo"
+                if fut_sc.done():
+                    try:
+                        otros, motivo_sc = fut_sc.result()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Versiones: otro upload de SoundCloud falló: {type(e).__name__}")
+                        motivo_sc = "SoundCloud no contestó la búsqueda de otro upload completo"
+                candidatos += otros
+                if motivo_sc:
+                    motivos.append(motivo_sc)
+        finally:
+            if sc_ex is not None:
+                sc_ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola
+        _medir_duraciones_mp3(wanted, wanted_s, candidatos)
+
+    # La mejor de cada plataforma que ES el tema (en el orden de prioridad de fuente). Dentro de
+    # una plataforma (f40-r2): primero un Extended con la duración verificada (el que el DJ
+    # quiere), después una de la duración del tema, y al final las de duración desconocida (se
+    # ofrecen pero el front no las elige). A igualdad, la primera de la búsqueda (sort estable).
+    aceptadas = []
+    for c in candidatos:
+        extra = _version_aceptada(wanted, wanted_s, c)
+        if extra:
+            aceptadas.append(dict(c, **extra))
+    aceptadas.sort(key=lambda c: (_rank_calidad(c.get("fuente", ""), formato),
+                                  0 if c["duracion_verificada"] and c.get("edicion") == "extended"
+                                  else 1 if c["duracion_verificada"] else 2))
+    elegidas, vistas = [], set()
+    for c in aceptadas:
+        f = (c.get("fuente") or "").lower()
+        if f not in vistas:
+            vistas.add(f)
+            elegidas.append(c)
+    # El tema de la Station primero entre las de SoundCloud; el orden final es el de fuente.
+    opciones = sorted([base] + elegidas, key=lambda c: _rank_calidad(c.get("fuente", ""), formato))[:_VERSION_MAX]
+
+    # Notas de calidad en paralelo (las de SoundCloud con cupo). Sin nota: un preview de 30 s
+    # (no es el tema) y Spotify (se baja buscando en YouTube: la nota sería de otro audio).
+    def nota(c):
+        args = (c["titulo"], c.get("artista") or "", c.get("fuente") or "", c.get("url") or "")
+        # Con Redis la nota espera al worker: como mucho el tope de la fila, no los 90 s de
+        # /api/calidad (el hilo quedaba vivo mucho después de que la fila se entregó).
+        espera = _VERSION_CAL_DEADLINE_S
+        if (c.get("fuente") or "").lower() == "soundcloud":
+            return _sc_gated(lambda: _calidad_cacheada(*args, espera=espera))
+        return _calidad_cacheada(*args, espera=espera)
+
+    medir = [i for i, c in enumerate(opciones)
+             if not c.get("solo_preview") and (c.get("fuente") or "").lower() not in ("spotify", "deezer")]
+    ex = ThreadPoolExecutor(max_workers=max(1, len(medir)))
+    try:
+        futs = {ex.submit(nota, opciones[i]): i for i in medir}
+        wait(futs, timeout=_VERSION_CAL_DEADLINE_S)
+        for fut, i in futs.items():
+            try:
+                opciones[i]["calidad"] = fut.result() if fut.done() else None
+            except Exception as e:
+                logger.warning(f"⚠️ Versiones: la nota de {opciones[i].get('fuente')} falló: {type(e).__name__}")
+                opciones[i]["calidad"] = None
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola y queda en caché
+
+    if fallidas:
+        # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
+        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in fallidas))
+        motivos.append(f"No contestó a tiempo: {nombres}")
+    # Con la versión de SoundCloud sola NO se agrega ningún motivo (decisión del dueño, f40): la
+    # pastilla de SoundCloud ya dice que es la única, y "No lo encontré en otras plataformas" era
+    # ruido. Tampoco "Sin configurar: Spotify" (no buscar ahí no es algo que el DJ tenga que leer
+    # en cada fila). Lo que SÍ se dice es una caída ("No contestó a tiempo"): sin eso, una
+    # plataforma rota se vería igual que un tema que no está.
+    logger.info(f"🎚️ Versiones de «{tema['titulo']}»: {len(opciones)} en {time.perf_counter() - t0:.1f} s"
+                + (f" ({'; '.join(motivos)})" if motivos else ""))
+    return {"exito": True, "opciones": opciones, "motivo": ". ".join(motivos) or None, "fallidas": fallidas}
+
+
+@app.post("/api/versiones")
+async def versiones(payload: dict):
+    """Versiones de un tema de la Station de SoundCloud (f36). Cuerpo:
+    {tema: {titulo, artista, duracion, video_id, url, permalink, thumbnail, reproducible,
+    solo_preview}, formato}. Respuesta: {exito, opciones, motivo, fallidas}; 400 si el pedido
+    es inválido. Nunca 500: si algo falla, la fila queda con la versión de SoundCloud."""
+    import soundcloud_station as sc
+
+    tema = payload.get("tema") if isinstance(payload, dict) else None
+    formato = str((payload or {}).get("formato") or "wav").lower()[:8]
+    malo = None
+    if not isinstance(tema, dict):
+        malo = "Falta el tema."
+    else:
+        texto = {k: tema.get(k) for k in ("titulo", "artista")}
+        if not all(isinstance(v, str) for v in texto.values()) or not texto["titulo"].strip():
+            malo = "Falta el título."
+        elif any(len(v) > _VERSION_MAX_TEXT for v in texto.values()):
+            malo = "Título o artista demasiado largos."
+        elif not sc.SC_ID.fullmatch(str(tema.get("video_id") or "")):
+            malo = "Identificador de SoundCloud inválido."
+        elif not isinstance(tema.get("url"), str) or not _SC_URL.fullmatch(tema["url"]):
+            malo = "URL de SoundCloud inválida."
+    if malo:
+        return JSONResponse({"exito": False, "motivo": "pedido_invalido", "mensaje": malo}, status_code=400)
+
+    # Solo los campos conocidos vuelven en la respuesta (nada de lo que mande el cliente de más).
+    permalink = tema.get("permalink") if isinstance(tema.get("permalink"), str) and _SC_URL.fullmatch(tema["permalink"]) else None
+    # La carátula vuelve al front y se pinta: solo una imagen del CDN de SoundCloud, con la misma
+    # regla que `map_track` usa al leer la Station (f40; antes cualquier texto < 500 caracteres).
+    thumb = tema.get("thumbnail") if (isinstance(tema.get("thumbnail"), str) and len(tema["thumbnail"]) < 500
+                                      and sc._IMAGE.fullmatch(tema["thumbnail"])) else None
+    limpio = {
+        "titulo": tema["titulo"].strip(), "artista": tema["artista"].strip(),
+        "duracion": track_identity.duration_or_none(tema.get("duracion"), "soundcloud") or None,
+        "url": tema["url"], "fuente": "soundcloud", "video_id": str(tema["video_id"]),
+        "thumbnail": thumb, "permalink": permalink,
+        "reproducible": tema.get("reproducible") is not False, "solo_preview": tema.get("solo_preview") is True,
+    }
+    try:
+        return await asyncio.to_thread(_versiones_de, limpio, formato)
+    except Exception as e:          # un bug acá no es un 500: la fila queda con SoundCloud
+        logger.warning(f"⚠️ Versiones de «{limpio['titulo']}»: error inesperado {type(e).__name__}: {e}")
+        return {"exito": True, "opciones": [dict(limpio, estacion=True)], "fallidas": [],
+                "motivo": "No pude buscar versiones de este tema (error del servidor)"}
 
 
 def _safe_name(name: str) -> str:
@@ -936,6 +1388,9 @@ def procesar_descarga(payload: dict) -> dict:
 
     # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg)
     if fuente in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: requests/ffmpeg solo con http(s)
+            logger.error("❌ Descarga directa: la URL no es http(s).")
+            return {"exito": False, "mensaje": "La URL del MP3 no es válida."}
         try:
             res = _descargar_directo(url, f"{titulo} - {artista}")
         except Exception as e:
@@ -957,7 +1412,11 @@ def procesar_descarga(payload: dict) -> dict:
     if fuente in ("spotify", "deezer") or not url:
         consulta = f"{titulo} {artista}".strip()
         logger.info(f"🔁 Fuente sin audio descargable, buscando en YouTube: '{consulta}'")
-        yt = search_agent.buscar_en_youtube(consulta, 1)
+        try:
+            yt = search_agent.buscar_en_youtube(consulta, 1)
+        except FuenteError as e:
+            logger.error(f"❌ YouTube no pudo buscar el equivalente: {e}")
+            return {"exito": False, "mensaje": "YouTube no contestó: no pude buscar audio descargable."}
         if not yt:
             logger.error("❌ No encontré una versión descargable.")
             return {"exito": False, "mensaje": "No se pudo encontrar audio descargable."}
@@ -1012,6 +1471,8 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
 
     f = (fuente or "").lower()
     if f in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: a ffmpeg solo le llega http(s)
+            return None, None
         from scrapers import HEADERS
         return url, HEADERS.get("User-Agent", "")
 
@@ -1021,7 +1482,11 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
     if url and f not in ("spotify", "deezer"):
         targets = [url]
     else:
-        targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+        try:
+            targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+        except FuenteError as e:
+            logger.warning(f"⚠️ Spek: YouTube no pudo buscar el audio: {e}")
+            return None, None
     if not targets:
         return None, None
 
@@ -1040,17 +1505,27 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
     return None, None
 
 
-def _duracion_audio(audio: str, ua: str) -> float:
-    """Duración (segundos) del stream, o 0 si no se puede medir."""
+def _duracion_audio(audio: str, ua: str, timeout: float = 20, scraper: bool = False) -> float:
+    """Duración (segundos) del stream, o 0 si no se puede medir. `timeout` (s) corta ffprobe.
+    `scraper` (f40-r2): la URL viene de un sitio de MP3 (o del cliente); ffprobe solo con
+    http(s) y con el whitelist de protocolos (`analizar_calidad.opciones_entrada`).
+
+    Ojo (medido en f40-r2): con un MP3 servido por chunked (sin Content-Length), como los de
+    HitPlayer, ffprobe NO da la duración ("N/A") aunque el MP3 traiga la cabecera Info: acá
+    devuelve 0. Para eso está `_duracion_mp3_cabecera`."""
     import subprocess
-    from analizar_calidad import FFPROBE
+    from analizar_calidad import FFPROBE, opciones_entrada
 
     cmd = [FFPROBE, "-v", "error"]
     if ua:
         cmd += ["-user_agent", ua]
-    cmd += ["-show_entries", "format=duration", "-of", "csv=p=0", audio]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=20)
+        if scraper:
+            if not _url_http(audio):
+                return 0.0
+            cmd += opciones_entrada(audio)
+        cmd += ["-show_entries", "format=duration", "-of", "csv=p=0", audio]
+        out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=timeout)
         return float(out.stdout.strip().splitlines()[0])
     except Exception:
         return 0.0
@@ -1070,16 +1545,20 @@ def _spectrograma(titulo: str, artista: str, fuente: str, url: str):
     # el segundo 45, ffmpeg no leería nada y no generaría imagen. Ajustamos el
     # arranque a lo que realmente dura el audio.
     ini, ventana = 45.0, 30.0
-    dur = _duracion_audio(audio, ua)
+    scraper = (fuente or "").lower() in ("ligaudio", "hitplayer")
+    dur = _duracion_audio(audio, ua, scraper=scraper)
     if dur and dur < ini + ventana:
         ventana = min(ventana, max(10.0, dur - 1))
         ini = max(0.0, dur - ventana - 1)
 
+    from analizar_calidad import opciones_entrada
     cmd = [FFMPEG, "-hide_banner", "-nostats"]
     if ua:
         cmd += ["-user_agent", ua]
     cmd += [
-        "-ss", str(ini), "-t", str(ventana), "-i", audio,
+        "-ss", str(ini), "-t", str(ventana),
+        *(opciones_entrada(audio) if scraper else []),     # f40-r2: URL de un scraper, solo http(s)
+        "-i", audio,
         # Espectrograma con eje de frecuencia LINEAL (como Spek) y leyenda visible
         "-lavfi", "showspectrumpic=s=760x340:legend=1:fscale=lin:color=intensity:gain=3:saturation=1",
         "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "-",
@@ -1122,9 +1601,11 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
     f = (fuente or "").lower()
 
     if f in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: a ffprobe/ffmpeg solo les llega http(s)
+            return None
         from scrapers import HEADERS
         ua = HEADERS.get("User-Agent", "")
-        dur = _duracion_audio(url, ua)
+        dur = _duracion_audio(url, ua, scraper=True)
         ss, ventana = 45.0, 30.0
         if dur and dur < ss + ventana:
             ventana = min(ventana, max(10.0, dur - 1))
@@ -1143,7 +1624,11 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
         if url and f not in ("spotify", "deezer"):
             targets = [url]
         else:
-            targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+            try:
+                targets = [c["url"] for c in search_agent.buscar_en_youtube(f"{titulo} {artista}".strip(), 3)]
+            except FuenteError as e:
+                logger.warning(f"⚠️ Calidad: YouTube no pudo buscar el audio: {e}")
+                return None
         if not targets:
             return None
         opts = {"quiet": True, "no_warnings": True, "format": "bestaudio/best",
@@ -1164,23 +1649,30 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
     return cal
 
 
-@app.get("/api/calidad")
-async def calidad(titulo: str, artista: str = "", fuente: str = "", url: str = ""):
-    """Nota de calidad (A/B/C/D/F) del audio real, ANTES de descargar. Cacheada."""
+def _calidad_cacheada(titulo: str, artista: str, fuente: str, url: str, espera: float = 90) -> dict:
+    """La respuesta de /api/calidad (bloqueante): misma caché, misma cola. La usan el
+    endpoint y las versiones de la Station (f36), así una nota no se calcula dos veces.
+    `espera` (s): cuánto se espera al worker cuando hay Redis (versiones pasa su tope)."""
     clave = f"{fuente}|{url}|{titulo}|{artista}"
     cal = _CALIDAD_CACHE.get(clave)
     if cal is None:
         if jobs.queue_disponible():
             import tasks
             job = jobs.encolar(tasks.calidad_job, titulo, artista, fuente, url, timeout=120)
-            cal = await asyncio.to_thread(jobs.esperar_resultado, job, 90)
+            cal = jobs.esperar_resultado(job, espera)
         else:
-            cal = await asyncio.to_thread(_calidad_preview, titulo, artista, fuente, url)
+            cal = _calidad_preview(titulo, artista, fuente, url)
         if cal:
             _CALIDAD_CACHE[clave] = cal
     if not cal:
         return {"ok": False, "grade": "?", "color": _GRADO_COLOR["?"], "calidad": "no analizable"}
     return {"ok": True, **cal}
+
+
+@app.get("/api/calidad")
+async def calidad(titulo: str, artista: str = "", fuente: str = "", url: str = ""):
+    """Nota de calidad (A/B/C/D/F) del audio real, ANTES de descargar. Cacheada."""
+    return await asyncio.to_thread(_calidad_cacheada, titulo, artista, fuente, url)
 
 
 @app.get("/api/descargas")
