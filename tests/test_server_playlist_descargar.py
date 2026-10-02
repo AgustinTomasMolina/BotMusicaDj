@@ -351,7 +351,7 @@ def test_ssrf_links_internos_y_de_otro_sitio_no_se_bajan(server, client, dobles,
         # La pantalla no resuelve DNS por cada item: esto lo ve recién el POST.
         "nombre que resuelve adentro": None,
     }
-    por_titulo = dict(zip(temas, ids))
+    por_titulo = dict(zip(temas, ids, strict=True))
     for t in ("loopback", "metadata", "ligaudio ajeno", "nombre que resuelve adentro"):
         r = _bajar(client, pid, por_titulo[t])
         assert (t, r.status_code, r.json()["mensaje"]) == (t, 400, motivos[t] or server.LINK_INTERNO)
@@ -409,13 +409,16 @@ def test_duracion_archivo_mide_con_ffprobe_un_wav_sintetico(server, tmp_path):
     import shutil
     import struct
     import wave
+
     from analizar_calidad import FFPROBE
     if not (Path(FFPROBE).is_file() or shutil.which(FFPROBE)):
         pytest.skip("sin ffprobe")
     ruta = tmp_path / "seno.wav"
     sr, seg = 44100, 2.5
     with wave.open(str(ruta), "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
         w.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / sr)))
                                for i in range(int(sr * seg))))
     assert server._duracion_archivo(ruta) == pytest.approx(2.5, abs=0.01)
