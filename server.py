@@ -600,20 +600,25 @@ _STATION_MAX_TEXT = 300
 
 @app.get("/api/station")
 async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artista: str = "",
-                  duracion: str = ""):
+                  duracion: str = "", sc_ref: str = "", sc_ref_origen: str = ""):
     """Station de SoundCloud del tema (f34): ~50 temas del mismo estilo, en el orden de
     SoundCloud, sin la semilla. Es el recomendador de SoundCloud, no una medición nuestra.
     Con `fuente=soundcloud`, `fuente_id` (id numérico) ES la semilla. Con otra fuente se busca
     el tema en SoundCloud y se acepta solo si pasa la regla de identidad (nunca otra canción).
+    f43: `sc_ref` (id numérico de la opción de SoundCloud de la fila) con `sc_ref_origen`
+    "busqueda" (candidata: se valida por identidad + duración antes de usarla) o "station"
+    (la fila es un tema de la Station: va directo, como fuente=soundcloud).
     `duracion` (s) solo desempata; nan, inf, ≤ 0 o basura cuentan como "no se sabe".
     Respuesta: {exito, origen: "soundcloud_station", semilla, items, total} o
-    {exito: false, motivo, mensaje}; 400 si el pedido es inválido. Nunca 500."""
+    {exito: false, motivo, codigo, mensaje}; 400 si el pedido es inválido. Nunca 500."""
     import soundcloud_station as sc
 
     fuente = (fuente or "").strip().lower()
     fuente_id = (fuente_id or "").strip()
     titulo = (titulo or "").strip()
     artista = (artista or "").strip()
+    sc_ref = (sc_ref or "").strip()
+    sc_ref_origen = (sc_ref_origen or "").strip().lower()
     malo = None
     if fuente not in _STATION_SOURCES:
         malo = "Fuente no soportada."
@@ -623,16 +628,19 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
         malo = "Identificador de SoundCloud inválido."
     elif fuente != "soundcloud" and not titulo:
         malo = "Falta el título."
+    elif (sc_ref or sc_ref_origen) and not (sc.SC_ID.fullmatch(sc_ref) and sc_ref_origen in sc.REF_ORIGINS):
+        malo = "Referencia de SoundCloud inválida."
     if malo:
         return JSONResponse(sc.failure(sc.INVALID_REQUEST, malo), status_code=400)
 
     logger.info(f"📻 Station de SoundCloud de: '{titulo or fuente_id}' — {artista} [{fuente}]")
     try:
         return await asyncio.to_thread(sc.build_station, fuente, fuente_id, titulo, artista,
-                                       track_identity.duration_or_none(duracion, fuente))
+                                       track_identity.duration_or_none(duracion, fuente),
+                                       sc_ref=sc_ref, sc_ref_origen=sc_ref_origen)
     except Exception as e:           # build_station no debería lanzar; si lo hace, no es un 500
         logger.warning(f"⚠️ Station: error inesperado {type(e).__name__}")
-        return sc.failure(sc.UNEXPECTED_RESPONSE)
+        return sc.failure(sc.UNEXPECTED_RESPONSE, code=sc.SOUNDCLOUD_ERROR)
 
 
 # ---------------------------------------------------------------- versiones de la Station (f36)

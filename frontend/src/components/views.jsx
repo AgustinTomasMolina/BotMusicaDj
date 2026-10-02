@@ -245,7 +245,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           <button type="button" className="btn btn-icon-sm" onClick={() => onCompare(g.opciones, g.consulta || c.titulo)} title="Comparar versiones" aria-label={`Comparar versiones de ${c.titulo}`}><IconCompare size={16} /></button>}
         {/* "Station", no "Radio": la Radio de la barra de arriba es la del motor local. */}
         {onStation &&
-          <button type="button" className="btn btn-icon-sm" onClick={() => onStation(c)} title="Station de SoundCloud: temas del mismo estilo según SoundCloud" aria-label={`Station de SoundCloud de ${c.titulo}`}><IconRadioTower size={16} /></button>}
+          <button type="button" className="btn btn-icon-sm" onClick={() => onStation(c, g)} title="Station de SoundCloud: temas del mismo estilo según SoundCloud" aria-label={`Station de SoundCloud de ${c.titulo}`}><IconRadioTower size={16} /></button>}
         <AddToPlaylist track={{ ...c, bpm, genero, camelot: key }} />
         {c.solo_preview
           ? <button type="button" className="btn btn-secondary btn-dl" disabled title="SoundCloud solo da 30 s de este tema: no se descarga como si fuera el tema"

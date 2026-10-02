@@ -134,11 +134,12 @@ export default function App() {
     if (cur && !(view.kind === 'lista' && view.data?.runId === cur.runId)) { cur.cancelar(); stationLoad.current = null }
   }, [view])
 
-  const doStation = async (c) => {
+  // f43: `g` es la fila entera; de ahí sale la referencia de SoundCloud (api.js `stationRef`).
+  const doStation = async (c, g) => {
     setModal(null)
     setView({ kind: 'loading', message: `Pidiendo a SoundCloud la Station de «${c.titulo}»…` })
     try {
-      const d = await station(c)
+      const d = await station(c, g)
       if (d.exito && Array.isArray(d.items) && d.items.length) {
         const runId = Date.now() + Math.random()
         const items = d.items
@@ -157,7 +158,7 @@ export default function App() {
         hint: `«${c.titulo}» — ${c.artista || 'artista desconocido'}.` })
     } catch {
       setView({ kind: 'error', emoji: '⚠️', message: 'Error al pedir la Station de SoundCloud.', hint: HINT_CONEXION,
-        action: { label: 'Reintentar', onClick: () => doStation(c) } })
+        action: { label: 'Reintentar', onClick: () => doStation(c, g) } })
     }
   }
 

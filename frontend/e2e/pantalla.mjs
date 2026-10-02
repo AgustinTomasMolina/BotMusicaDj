@@ -1360,6 +1360,41 @@ const CASOS = [
     afirmar(h.texto <= h.caja, `a 400 px el título de la Station queda cortado: ${json(h)}`)
   }],
 
+  ['station (f43): con YouTube elegido, la antena manda la referencia de SoundCloud de la fila y llega la Station de 49 en el orden de SoundCloud', async (page, ctx) => {
+    // El caso real (Kashpitzky): /api/buscar devuelve la fila con YouTube primero (elegida) y la
+    // opción de SoundCloud 2041950136 (los datos que devolvió el buscador). /api/station contesta
+    // station_respuesta_kashpitzky.json, que tests/test_soundcloud_station.py compara contra lo
+    // que el endpoint REAL devuelve para este pedido (YouTube + sc_ref, sin /search).
+    const yt = { titulo: 'Kashpitzky — For The Vision [BAO095]', artista: 'HATE', duracion: 334, fuente: 'youtube', thumbnail: null,
+      url: 'https://www.youtube.com/watch?v=5HuHGbZno1Y', video_id: '5HuHGbZno1Y' }
+    const sc = { titulo: 'GTG Premiere | Kashpitzky - For The Vision  [BAOX095]', artista: 'Grab The Groove', duracion: 333.249,
+      fuente: 'soundcloud', thumbnail: null, url: 'https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2041950136', video_id: '2041950136' }
+    const s = await montarStation(page, ctx, { archivo: 'station_respuesta_kashpitzky.json', grupos: [{ opciones: [yt, sc] }] })
+    const { respuesta, items } = s
+    igual([items.length, respuesta.semilla.video_id], [49, '2041950136'], 'el archivo de la Station de Kashpitzky cambió')
+
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.type('input[aria-label="Buscar una canción, artista o género"]', 'Kashpitzky For The Vision')
+    await page.keyboard.press('Enter')
+    const boton = `button[aria-label="Station de SoundCloud de ${yt.titulo}"]`
+    await page.waitForSelector(boton, { timeout: ESPERA_MS })
+    afirmar(/^Opción 1: YouTube/.test(await elegidaDe(page, 0) || ''), `la elegida de la fila no es YouTube: ${await elegidaDe(page, 0)}`)
+    await page.click(boton)
+    await page.waitForSelector('h1.station-title', { timeout: ESPERA_MS })
+
+    igual(s.pedidosStation.length, 1, 'tenía que salir un solo pedido a /api/station')
+    igual(Object.fromEntries(new URL(s.pedidosStation[0]).searchParams), {
+      fuente: 'youtube', fuente_id: '5HuHGbZno1Y', titulo: yt.titulo, artista: 'HATE', duracion: '334',
+      sc_ref: '2041950136', sc_ref_origen: 'busqueda',
+    }, 'el pedido no lleva la opción elegida y la referencia de SoundCloud de la fila')
+
+    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && !/ de /.test(v.progreso || ''),
+      'no llegaron las 49 filas de la Station')
+    igual(fin.filas, items.map((t) => t.titulo), 'las filas no son los temas de la Station, en el orden de SoundCloud')
+    const titulo = await page.evaluate(() => document.querySelector('h1.station-title')?.textContent ?? null)
+    igual(titulo, `Radio de «${respuesta.semilla.titulo}» — según la Station de SoundCloud`, 'el encabezado no es el de la semilla de SoundCloud')
+  }],
+
   ['station: un Go+ se baja completo de otra versión y otro Go+ sin otra versión queda sin descarga', async (page, ctx) => {
     // Los dos Go+ son temas reales de la API v2 grabada (Daft Punk «One More Time» y FblManny
     // «From The Top»); sus versiones, las que devuelve el endpoint (tests/test_station_versiones.py).
@@ -2131,8 +2166,12 @@ const leerVersiones = () => leerJson('versiones_respuestas.json')
 // respuesta de /api/versiones de algún tema ({video_id: respuesta}); `extra(u, responder)`
 // contesta otras rutas (devuelve true si contestó). Los MP3 de las versiones (example.invalid)
 // suenan con el WAV de la base de juguete y el espectrograma contesta 404 (el modal lo dice).
-async function montarStation(page, ctx, { retener = false, primeros = [], stationFalla = false, respuestas = {}, extra = null } = {}) {
-  const respuesta = leerJson('station_respuesta.json')
+// f43: `archivo` es la respuesta de /api/station a usar y `grupos`, lo que contesta /api/buscar
+// (por defecto, una fila con el tema de SoundCloud); cada pedido a /api/station queda en
+// `s.pedidosStation` (la URL entera).
+async function montarStation(page, ctx, { retener = false, primeros = [], stationFalla = false, respuestas = {}, extra = null,
+  archivo = 'station_respuesta.json', grupos = null } = {}) {
+  const respuesta = leerJson(archivo)
   const vx = leerVersiones()
   const items = [...primeros, ...respuesta.items.slice(primeros.length)]
   const station = { ...respuesta, items, total: items.length }
@@ -2147,7 +2186,7 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     respuesta: station, items, vx, tema, retener, stationFalla,
     falla: { exito: false, motivo: 'station_vacia', mensaje: 'SoundCloud no tiene una Station para este tema.' },
     boton: `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`,
-    versiones: [], descargas: [], calidades: [], mp3: [], parecidas: 0, pendientes: new Map(),
+    versiones: [], descargas: [], calidades: [], mp3: [], parecidas: 0, pendientes: new Map(), pedidosStation: [],
     soltar(id) { const r = s.pendientes.get(id); afirmar(r, `no hay un pedido de versiones de ${id} para soltar`); s.pendientes.delete(id); r() },
     soltarTodas() { s.retener = false; for (const id of [...s.pendientes.keys()]) s.soltar(id) },
   }
@@ -2156,10 +2195,10 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     const u = new URL(req.url())
     // Un pedido retenido que la página ya cortó (salir de la pantalla) no se puede contestar.
     const responder = (body, status = 200) => req.respond({ status, contentType: 'application/json', body: JSON.stringify(body) }).catch(() => {})
-    if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: [{ opciones: [tema] }] })
+    if (u.pathname === '/api/buscar') return responder({ exito: true, grupos: grupos || [{ opciones: [tema] }] })
     if (u.pathname === '/api/calidad') { s.calidades.push(u.searchParams.get('url')); return responder({ ok: false, grade: '?' }) }
     if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
-    if (u.pathname === '/api/station') return responder(s.stationFalla ? s.falla : station)
+    if (u.pathname === '/api/station') { s.pedidosStation.push(u.href); return responder(s.stationFalla ? s.falla : station) }
     if (u.pathname === '/api/parecidas_lista') { s.parecidas++; return responder({ exito: false }) }
     if (u.pathname === '/api/versiones') {
       const b = JSON.parse(req.postData())

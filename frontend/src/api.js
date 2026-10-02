@@ -43,11 +43,16 @@ export async function versiones(tema, formato, signal) {
 // SoundCloud con la regla de identidad. Siempre devuelve un objeto con `exito`: un 400/500 o
 // un cuerpo que no es JSON se traduce a {exito:false, mensaje} con el código, no a "no pude
 // conectar" (el servidor sí contestó).
-export async function station(c) {
+//
+// f43: además va la referencia de SoundCloud de la FILA (`g`), no solo de la opción elegida:
+// en una búsqueda la elegida suele ser YouTube y la opción de SoundCloud del grupo se perdía.
+export async function station(c, g) {
   const fuente = (c.fuente || '').toLowerCase()
   const ref = fuente === 'soundcloud' ? sourceAudioRefId(c) : null
   const q = new URLSearchParams({ fuente, fuente_id: ref || c.video_id || '', titulo: c.titulo || '', artista: c.artista || '' })
   if (c.duracion > 0) q.set('duracion', String(c.duracion))
+  const sc = stationRef(g)
+  if (sc) { q.set('sc_ref', sc.sc_ref); q.set('sc_ref_origen', sc.sc_ref_origen) }
   const r = await fetch(`/api/station?${q.toString()}`)
   const d = await cuerpoRadio(r)
   if (d && typeof d.exito === 'boolean') return d
@@ -59,6 +64,26 @@ function sourceAudioRefId(c) {
   if (/^\d+$/.test(String(c.video_id || ''))) return String(c.video_id)
   const m = /\/tracks\/(?:soundcloud%3Atracks%3A|soundcloud:tracks:)?(\d+)/.exec(c.url || '')
   return m ? m[1] : null
+}
+
+// Referencia de SoundCloud de una fila para la Station (f43), o null:
+// - fila de la Station: `g.base` ES el tema de SoundCloud de la Station → origen "station";
+// - otra fila (búsqueda, lista): la primera opción de SoundCloud del grupo → origen "busqueda".
+//   Es CANDIDATA (el agrupador junta por palabras): el backend la valida antes de usarla.
+// Un id que el backend rechazaría (su SC_ID: sin cero adelante, hasta 20 dígitos) no se manda:
+// convertiría todo el pedido en un 400 en vez de ir a la búsqueda.
+export function stationRef(g) {
+  if (!g) return null
+  const valido = (id) => (id && /^[1-9]\d{0,19}$/.test(id) ? id : null)
+  if (g.base) {
+    const id = valido(sourceAudioRefId(g.base))
+    return id ? { sc_ref: id, sc_ref_origen: 'station' } : null
+  }
+  for (const o of g.opciones || []) {
+    const id = (o?.fuente || '').toLowerCase() === 'soundcloud' ? valido(sourceAudioRefId(o)) : null
+    if (id) return { sc_ref: id, sc_ref_origen: 'busqueda' }
+  }
+  return null
 }
 
 export async function fetchMeta(titulo, artista) {

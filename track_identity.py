@@ -375,6 +375,14 @@ def parse_entry(title: str, uploader: str) -> Identity:
     t = re.split(r"\s+//\s+", t)[0]
     forced = None
     parts = re.split(r"\s+\|{1,2}\s+", t)
+    if (len(parts) == 2 and _NOISE.search(parts[0]) and not _ARTIST_TITLE_SEP.search(parts[0])
+            and _ARTIST_TITLE_SEP.search(parts[1]) and not _EVENT.search(parts[1])):
+        # f43 (OK del dueño): "GTG Premiere | Kashpitzky - For The Vision". A la izquierda solo
+        # hay ruido del upload (`_NOISE`, sin separador propio) y la derecha trae su propio
+        # "Artista - Tema" sin evento: el prefijo se descarta y se lee la derecha. Sin palabras
+        # nuevas en las listas congeladas; "Adele | Hello" y "| Glastonbury 2024" no entran acá.
+        t = parts[1]
+        parts = [t]
     if len(parts) >= 2:
         rest = " ".join(parts[1:])
         if _same_artist_text(parts[0], uploader) and normalize(parts[1]) and not _EVENT.search(rest):
