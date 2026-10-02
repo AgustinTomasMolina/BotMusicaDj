@@ -28,8 +28,13 @@ export const TIMEOUT_FILA_MS = 45000
 // - El Extended del tema (`edicion: "extended"`, con la duración verificada) le gana a las del
 //   mismo largo, sea cual sea la nota: "el extended dura más, y para los DJ eso es ORO". Entre
 //   varios Extended, la nota.
+//
+// f40-r3 (decisión del dueño): un Extended con nota D o F NO viene elegido ("un tema largo que
+// suena mal no sirve para pasar"): gana la mejor del mismo largo y el Extended queda como
+// pastilla para elegirlo a mano. Con A/B/C o sin nota (y la duración verificada) sigue ganando.
 export const SIN_NOTA_RANK = (GRADE_RANK.F + GRADE_RANK.D) / 2
 const EXTENDED_RANK = 100     // por encima de cualquier nota (GRADE_RANK va de 1 a 6)
+const EXTENDED_NO_ELEGIBLE = new Set(['D', 'F'])
 export function bestOption(opciones) {
   let best = -1, bestRank = -1
   opciones.forEach((o, i) => {
@@ -37,6 +42,7 @@ export function bestOption(opciones) {
     if (o.solo_preview || f === 'spotify' || f === 'deezer') return
     if (o.duracion_verificada === false) return
     const g = o.calidad?.ok ? o.calidad.grade : null
+    if (o.edicion === 'extended' && EXTENDED_NO_ELEGIBLE.has(g)) return
     const r = (g && g !== '?' && g in GRADE_RANK ? GRADE_RANK[g] : SIN_NOTA_RANK)
       + (o.edicion === 'extended' ? EXTENDED_RANK : 0)
     if (r > bestRank) { bestRank = r; best = i }

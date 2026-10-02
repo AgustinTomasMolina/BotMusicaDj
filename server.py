@@ -786,8 +786,8 @@ def _version_aceptada(wanted, wanted_s, c: dict) -> dict | None:
     lee según su fuente (`duration_or_none`): 30 s es "no se sabe" solo en SoundCloud.
 
     2) f40-r2 (decisión del dueño, "el extended es ORO"): el Extended del MISMO tema
-    (`track_identity.es_extended_de`: Extended / Original Mix / Club Mix, o "Remix Extended" del
-    mismo remix) se ofrece aunque no cuadre, si dura MÁS que el tema (hasta 3×): «Hera (Original
+    (`track_identity.es_extended_de`: Extended / Original Mix, o "Remix Extended" del mismo
+    remix; "Club Mix" no desde f40-r3) se ofrece aunque no cuadre, si dura MÁS que el tema (hasta 3×): «Hera (Original
     Mix)» de 6:04 contra la «Hera» de 3:26 de la Station. Va marcado (`edicion`) porque es otra
     edición que la que sonó. Lo más corto nunca; lo más largo sin esa etiqueta, tampoco (1).
 

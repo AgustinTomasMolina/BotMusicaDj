@@ -100,9 +100,11 @@ test('bestOption: una versión con la duración sin verificar nunca viene elegid
   assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), op('ligaudio', 'A')]), 1)
 })
 
-test('bestOption: el Extended verificado le gana a la del mismo largo, sea cual sea la nota (f40-r2)', () => {
+test('bestOption: el Extended verificado con A/B/C o sin nota le gana a la del mismo largo (f40-r2)', () => {
   const ext = (fuente, grade, extra = {}) => op(fuente, grade, { edicion: 'extended', duracion_verificada: true, ...extra })
-  assert.equal(bestOption([op('soundcloud', 'A', { estacion: true }), ext('youtube', 'F')]), 1)
+  assert.equal(bestOption([op('soundcloud', 'A', { estacion: true }), ext('youtube', 'C')]), 1)
+  assert.equal(bestOption([op('soundcloud', 'A', { estacion: true }), ext('youtube')]), 1)
+  assert.equal(bestOption([op('soundcloud', 'A', { estacion: true }), ext('youtube', '?')]), 1)
   assert.equal(bestOption([ext('youtube', 'C'), op('soundcloud', 'B', { estacion: true }), op('ligaudio', 'A')]), 0)
   // Entre dos Extended, la nota.
   assert.equal(bestOption([ext('youtube', 'C'), ext('ligaudio', 'B')]), 1)
@@ -110,6 +112,27 @@ test('bestOption: el Extended verificado le gana a la del mismo largo, sea cual 
   assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), ext('hitplayer', 'A', { duracion_verificada: false })]), 0)
   // Ni un Extended en Spotify (se baja buscando en YouTube: no sería ese audio).
   assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), ext('spotify', 'A')]), 0)
+})
+
+test('bestOption: un Extended con D o F no viene elegido; gana la mejor del mismo largo (f40-r3)', () => {
+  const ext = (fuente, grade) => op(fuente, grade, { edicion: 'extended', duracion_verificada: true })
+  // Decisión del dueño: un tema largo que suena mal no sirve para pasar.
+  assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), ext('youtube', 'D'), op('ligaudio', 'B')]), 2)
+  assert.equal(bestOption([ext('youtube', 'F'), op('soundcloud', 'A', { estacion: true })]), 1)
+  // Aunque la del mismo largo tenga peor nota que el Extended: el Extended D no viene elegido.
+  assert.equal(bestOption([op('soundcloud', 'F', { estacion: true }), ext('youtube', 'D')]), 0)
+  // Con otro Extended aceptable, ese gana (el D/F no cuenta, el resto de la regla sigue igual).
+  assert.equal(bestOption([ext('youtube', 'D'), op('soundcloud', 'A', { estacion: true }), ext('ligaudio', 'C')]), 2)
+  // Un Go+ con el Extended D como única otra: queda la de la Station (el preview).
+  assert.equal(bestOption([op('soundcloud', null, { estacion: true, solo_preview: true }), ext('youtube', 'F')]), 0)
+})
+
+test('bestOption: Station Go+ (preview de 30 s) y todas las demás sin verificar → queda el preview (f40-r3)', () => {
+  // Decisión del dueño, literal: no se elige una sin verificar aunque la elegida sea solo 30 s.
+  const preview = op('soundcloud', null, { estacion: true, solo_preview: true })
+  const o = [op('youtube', 'A', { duracion_verificada: false }), op('ligaudio', 'B', { duracion_verificada: false }),
+    preview, op('hitplayer', 'A', { duracion_verificada: false, edicion: 'extended' })]
+  assert.equal(bestOption(o), 2)
 })
 
 /* ---------- cargarVersiones ---------- */

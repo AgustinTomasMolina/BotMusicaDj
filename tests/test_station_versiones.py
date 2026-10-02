@@ -329,6 +329,21 @@ def test_en_una_plataforma_el_extended_le_gana_a_la_del_mismo_largo(env):
     assert opciones(r) == [("youtube", ext["url"]), ("soundcloud", HERA["url"])]
 
 
+HERA_RADIO = dict(HERA, titulo="Hera (Radio Edit)")
+
+
+@pytest.mark.parametrize("titulo, vid", [("Space Motion - Hera (Extended Mix)", "hera0000009"),
+                                         ("Space Motion - Hera (Original Mix)", "hera0000010")])
+def test_el_extended_de_una_radio_edit_es_el_del_original(env, titulo, vid):
+    # f40-r3 (decisión del dueño, confirmada): la Station es la Radio Edit; el "Extended Mix" o
+    # el "Original Mix" del tema es su Extended, se ofrece marcado.
+    ext = yt(titulo, "Space Motion", 364, vid)
+    env.resultados(youtube=[ext])          # la misma lista para cualquier consulta
+    r = env.versiones(HERA_RADIO)
+    assert opciones(r) == [("youtube", ext["url"]), ("soundcloud", HERA_RADIO["url"])]
+    assert (r["opciones"][0].get("edicion"), r["opciones"][0]["duracion_verificada"]) == ("extended", True)
+
+
 def test_el_extended_del_mismo_remix_se_ofrece(env):
     ext = yt("Giolì & Assia - The Point Of Living (Omnya Remix Extended)", "Giolì & Assia", 282, "pol00000001")
     env.resultados(youtube={Q_POL: [ext]})
@@ -350,6 +365,9 @@ def test_el_extended_del_mismo_remix_se_ofrece(env):
      "un vivo no es una edición del tema"),
     (HERA, Q_HERA, yt("NARCX - Hera (Extended Mix)", "NARCX", 364, "hera0000007"),
      "mismo título, otro artista"),
+    (HERA, Q_HERA, yt("Space Motion - Hera (Club Mix)", "Space Motion", 364, "hera0000008"),
+     "f40-r3 (decisión del dueño): un Club Mix no es el Extended (a veces es otra mezcla); "
+     "más largo y sin la etiqueta, no se ofrece"),
 ])
 def test_lo_que_no_es_el_extended_del_tema_no_se_ofrece(env, tema, q, cand, por_que):
     env.resultados(youtube={q: [cand]})

@@ -291,14 +291,19 @@ P = ti.parse_entry("Giolì & Assia - The Point Of Living (Omnya Remix)", "x")
 
 @pytest.mark.parametrize("wanted, cand, es", [
     (H, "Space Motion - Hera (Original Mix)", True), (H, "Space Motion - Hera (Extended Mix)", True),
-    (H, "Space Motion - Hera (Club Mix)", True), (H, "Space Motion - Hera - Extended Version", True),
+    (H, "Space Motion - Hera - Extended Version", True),
+    (H, "Space Motion - Hera (Club Mix)", False),            # f40-r3: a veces es otra mezcla
+    (H, "Space Motion - Hera (Club Edit)", False),
     (H, "Space Motion - Hera", False),                       # sin etiqueta: no dice ser la larga
     (H, "Space Motion - Hera (Album Version)", False),       # "original" para la identidad, no la larga
     (H, "Space Motion - Hera (Omnya Remix Extended)", False),  # el extended de un remix no es del original
     (H, "Space Motion - Hera (KHROME Extended Mix)", False),   # de otro (KHROME): otra obra
     (H, "Space Motion - Hera (Live Extended)", False), (H, "NARCX - Hera (Extended Mix)", False),
     (H, "Space Motion - Hero (Extended Mix)", False),
+    # La Radio Edit del original: su Extended Mix / Original Mix es el Extended (confirmado, f40-r3).
     (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Extended Mix)", True),
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Original Mix)", True),
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Club Mix)", False),
     (P, "Giolì - The Point Of Living (Omnya Remix Extended)", True),
     (P, "Giolì & Assia - The Point Of Living (Omnya Extended Remix)", True),
     (P, "Giolì & Assia - The Point Of Living (Extended Mix)", False),     # un remix no es el original

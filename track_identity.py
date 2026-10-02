@@ -604,10 +604,13 @@ def duraciones_cuadran(w: float, c: float) -> bool:
 
 # ---------------------------------------------------------------- el Extended del tema (f40-r2)
 # Decisión del dueño (f40-r2): "el extended dura más, y para los DJ eso es ORO". Una versión
-# del MISMO tema que dice ser la edición larga (Extended / Extended Mix / Original Mix / Club
-# Mix, o "Remix Extended" del MISMO remix) y dura MÁS que el tema de la Station se ofrece como
-# otra edición, marcada. Nunca algo más corto (radio edits, fragmentos) ni algo más largo sin
-# esa etiqueta (un video con intro, un vivo).
+# del MISMO tema que dice ser la edición larga (Extended / Extended Mix / Original Mix, o
+# "Remix Extended" del MISMO remix) y dura MÁS que el tema de la Station se ofrece como otra
+# edición, marcada. Nunca algo más corto (radio edits, fragmentos) ni algo más largo sin esa
+# etiqueta (un video con intro, un vivo).
+#
+# f40-r3 (decisión del dueño): "Club Mix" NO es el Extended: a veces es otra mezcla. Un Club
+# Mix más largo que el tema cae en la regla de "más largo sin la etiqueta": no se ofrece.
 #
 # Cota superior: 3× la duración del tema. Los casos reales miden 1,22× («The Point Of Living
 # (Omnya Remix Extended)» 282 s contra 232 s), 1,33× («Aria» Extended 314,8 s contra 236 s) y
@@ -615,10 +618,10 @@ def duraciones_cuadran(w: float, c: float) -> bool:
 # minutos da 2,8×. Más de 3× ya no es una edición del tema sino otra cosa con el mismo nombre
 # (un loop de una hora, un mix entero, un set).
 EXTENDED_MAX_RATIO = 3.0
-# "Original Mix" y "Club Mix" son, en la música de club, el nombre de la edición larga; la
+# "Original Mix" es, en la música de club, el nombre de la edición larga; la
 # etiqueta se lee de la versión TAL COMO ESTÁ ESCRITA (`version_text`): "Album Version" o
 # "Remastered" también son "original" para la identidad, pero no dicen "soy la larga".
-_EXTENDED_LABEL = re.compile(r"\bextended\b|\boriginal mix\b|\bclub mix\b")
+_EXTENDED_LABEL = re.compile(r"\bextended\b|\boriginal mix\b")
 # Versiones de la Station cuyo Extended es el del original: el tema mismo y su Radio Edit.
 _EXTENDED_DEL_ORIGINAL = {"original", "radio"}
 
@@ -635,7 +638,7 @@ def es_extended_de(wanted: Identity, cand: Identity) -> bool:
     if not _names_first_artist(wanted, cand) or not _EXTENDED_LABEL.search(normalize(cand.version_text)):
         return False
     if wanted.version in _EXTENDED_DEL_ORIGINAL:
-        return cand.version in ("extended", "club", "original")
+        return cand.version in ("extended", "original")
     return cand.version == wanted.version + "+extended"
 
 
