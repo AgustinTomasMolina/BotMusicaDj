@@ -11,7 +11,7 @@ services:
       context: .
     image: musiflix:local
     ports:
-      - "8000:8000"          # API REST + WebSocket /ws/console + front
+      - "8000:8000"          # API REST + front
     env_file:
       - path: .env
         required: false

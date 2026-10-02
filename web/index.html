@@ -296,21 +296,6 @@
   .spek-help b{color:var(--text)}
   .spek-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:6px;padding:0 2px}
 
-  /* ---------- Consola drawer ---------- */
-  .console-drawer{position:fixed;top:0;right:0;z-index:30;height:100vh;width:min(430px,90vw);
-    background:#08080c;border-left:1px solid var(--border);display:flex;flex-direction:column;
-    transform:translateX(100%);transition:transform .28s cubic-bezier(.2,.7,.3,1);box-shadow:-20px 0 50px rgba(0,0,0,.5)}
-  .console-drawer.open{transform:translateX(0)}
-  .console-head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px;
-    font-weight:700;font-size:14px}
-  .console-head .drawer-close{margin-left:auto;background:transparent;border:none;color:var(--muted);font-size:17px;cursor:pointer}
-  .console-head .drawer-close:hover{color:#fff}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--red)}
-  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
-  #console{flex:1;overflow-y:auto;padding:12px 14px;font-family:"Consolas",monospace;font-size:12.5px;line-height:1.55}
-  #console .line{white-space:pre-wrap;word-break:break-word;padding:1px 0}
-  .lvl-INFO{color:#cdd3e0}.lvl-WARNING{color:var(--yellow)}.lvl-ERROR{color:var(--red)}.lvl-SYS{color:var(--teal)}
-
   /* ---------- Animaciones / utilidades ---------- */
   .fade-up{animation:fade-up .45s ease both}
   @keyframes fade-up{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
@@ -361,25 +346,15 @@
       </div>
       <button type="button" class="btn ghost active" id="btnPreview" title="Reproducir al pasar el mouse (estilo Netflix)">👆 Preview</button>
       <button type="button" class="btn ghost" id="btnModoLista" title="Pegar una lista de canciones (modo DJ)">📋 Lista</button>
-      <button type="button" class="btn ghost" id="btnConsola" title="Ver la consola del bot">🖥️ Consola</button>
     </div>
   </header>
 
   <main class="content" id="playlist">
     <div class="hero">
       <div class="big">🎶 Musi<span>Flix</span></div>
-      Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.<br>
-      Mirá cómo trabaja el bot con el botón <b>🖥️ Consola</b>.
+      Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.
     </div>
   </main>
-
-  <aside class="console-drawer" id="consoleDrawer">
-    <div class="console-head">
-      <span class="dot" id="wsDot"></span> Consola del bot
-      <button class="drawer-close" onclick="toggleConsola(false)" title="Cerrar">✕</button>
-    </div>
-    <div id="console"></div>
-  </aside>
 
   <div class="modal" id="modal" onclick="if(event.target===this)closeModal()">
     <div class="modal-box">
@@ -395,39 +370,10 @@ const esc = t => (t||"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&
 const fmtActual = () => (document.getElementById("formato").value||"wav").toUpperCase();
 const playlist = document.getElementById("playlist");
 
-/* ---------- Consola en vivo (WebSocket) ---------- */
-const consoleEl = document.getElementById("console");
-const wsDot = document.getElementById("wsDot");
-function logLine(msg, level="SYS"){
-  const div = document.createElement("div");
-  div.className = "line lvl-" + (level||"INFO");
-  div.textContent = msg;
-  consoleEl.appendChild(div);
-  consoleEl.scrollTop = consoleEl.scrollHeight;
-  while(consoleEl.children.length > 500) consoleEl.removeChild(consoleEl.firstChild);
-}
-function connectWS(){
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ws/console`);
-  ws.onopen = () => wsDot.classList.add("on");
-  ws.onclose = () => { wsDot.classList.remove("on"); logLine("🔴 Consola desconectada, reintentando…","WARNING"); setTimeout(connectWS, 1500); };
-  ws.onmessage = e => { const d = JSON.parse(e.data); logLine(d.msg, d.level); };
-}
-connectWS();
-
-function toggleConsola(force){
-  const d = document.getElementById("consoleDrawer");
-  const open = (typeof force === "boolean") ? force : !d.classList.contains("open");
-  d.classList.toggle("open", open);
-  document.getElementById("btnConsola").classList.toggle("active", open);
-}
-document.getElementById("btnConsola").addEventListener("click", () => toggleConsola());
-
 function irInicio(){
   closeModal();
   playlist.innerHTML = `<div class="hero"><div class="big">🎶 Musi<span>Flix</span></div>
-    Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.<br>
-    Mirá cómo trabaja el bot con el botón <b>🖥️ Consola</b>.</div>`;
+    Escribí algo arriba y apretá <b>Buscar</b>, o usá <b>📋 Lista</b> para pegar muchos tracks de una.</div>`;
 }
 
 /* ---------- Búsqueda ---------- */

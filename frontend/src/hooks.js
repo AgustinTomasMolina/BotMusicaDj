@@ -2,46 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { metaKey, previewable } from './utils'
 import { fetchMeta } from './api'
 
-/* ---------- Consola en vivo (WebSocket) ---------- */
-// Mismo origen que la app: en dev Vite proxya /ws → :8000 (ver vite.config.js);
-// en prod FastAPI sirve el build y el WS en el mismo host.
-export function useConsole() {
-  const [connected, setConnected] = useState(false)
-  const [lines, setLines] = useState([])
-  const wsRef = useRef(null)
-  const stopped = useRef(false)
-
-  useEffect(() => {
-    stopped.current = false
-    const addLine = (msg, level) =>
-      setLines((prev) => {
-        const next = [...prev, { msg, level: level || 'INFO' }]
-        return next.length > 500 ? next.slice(next.length - 500) : next
-      })
-
-    function connect() {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${proto}://${location.host}/ws/console`)
-      wsRef.current = ws
-      ws.onopen = () => setConnected(true)
-      ws.onclose = () => {
-        setConnected(false)
-        if (!stopped.current) {
-          addLine('🔴 Consola desconectada, reintentando…', 'WARNING')
-          setTimeout(connect, 1500)
-        }
-      }
-      ws.onmessage = (e) => {
-        try { const d = JSON.parse(e.data); addLine(d.msg, d.level) } catch { /* ignore */ }
-      }
-    }
-    connect()
-    return () => { stopped.current = true; try { wsRef.current && wsRef.current.close() } catch { /* ignore */ } }
-  }, [])
-
-  return { connected, lines }
-}
-
 /* ---------- Diálogos y cajones: foco accesible ----------
    Mientras `open`: mueve el foco adentro (al [data-autofocus] o al primer control), Escape
    llama a onClose y Tab no se escapa al fondo (Escape siempre saca: no es una trampa).
