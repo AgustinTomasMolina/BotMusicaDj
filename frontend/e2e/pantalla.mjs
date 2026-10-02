@@ -1904,6 +1904,176 @@ const CASOS = [
     await page.mouse.click(centro.x, centro.y)
     await hasta(() => pastillasDe(page, 0), (ps) => ps[ytK].elegida === 'true', 'a 400 px tocar la pastilla de YouTube no la eligió')
   }],
+
+  // f41: bajar desde la playlist. La descarga está doblada en el server (e2e/server_doblado.py:
+  // ~0.8 s, archivo de mentira, Opus 160k; una url con "e2e-falla" tira el error de yt-dlp).
+  // Lo esperado sale de la API (el item, su nota, su motivo), no del front.
+  ['playlist: "Bajar" en una fila y "Bajar los N que faltan" con progreso (descarga doblada)', async (page, ctx) => {
+    const nombre = 'E2E bajar desde la playlist'
+    const crear = await apiPedir(ctx, '/api/playlists', 'POST', { nombre })
+    afirmar(crear.status === 200 && crear.data.playlist, `no pude crear la playlist: ${json(crear)}`)
+    const pid = crear.data.playlist.id
+    const temas = [
+      { titulo: 'Bajar Uno', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-uno', bpm: 128.4, camelot: '8A', duracion: 300 },
+      { titulo: 'Bajar Falla', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-falla', duracion: 200 },
+      { titulo: 'Bajar Tres', artista: 'E2E', fuente: 'soundcloud', url: 'https://soundcloud.com/e2e/tres', duracion: 250 },
+      // Como lo agrega la home (un archivo de la biblioteca): sin fuente ni url.
+      { titulo: 'Mi Edit Local', artista: 'E2E', bpm: 140.2, camelot: '5A' },
+    ]
+    try {
+      for (const t of temas) {
+        const r = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: t })
+        afirmar(r.status === 200 && r.data.id, `no pude agregar ${t.titulo}: ${json(r)}`)
+      }
+      const apiItems = async () => Object.fromEntries((await api(ctx, `/api/playlists/${pid}`)).data.items.map((i) => [i.titulo, i]))
+      // El formato que el usuario eligió en el buscador (guardado en el navegador): MP3.
+      await page.evaluateOnNewDocument(() => { try { window.localStorage.setItem('musiflix.formato', 'mp3') } catch { /* sin storage */ } })
+      // Las carátulas de YouTube/SoundCloud no se piden a internet.
+      await interceptar(page, (req) => {
+        if (new URL(req.url()).origin === new URL(ctx.url).origin) return false
+        req.abort().catch(() => {})
+        return true
+      })
+      await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+      await hasta(() => page.evaluate((n) => [...document.querySelectorAll('.pl-item')].some((b) => b.querySelector('.pl-item-name')?.textContent === n), nombre),
+        (v) => v, 'la playlist no aparece en el rail')
+      await page.evaluate((n) => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === n).click(), nombre)
+
+      const leerFilas = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.results-crate .trk')].map((r) => [
+        r.querySelector('.trk-title')?.textContent, {
+          estado: r.querySelector('.trk-status')?.textContent.trim() ?? null,
+          boton: r.querySelector('.trk-status button')?.getAttribute('aria-label') ?? null,
+          motivo: r.querySelector('.trk-motivo')?.textContent ?? null,
+          grade: r.querySelector('.trk-grade .grade')?.textContent ?? null,
+        }])))
+      const leerProgreso = () => page.evaluate(() => {
+        const s = document.querySelector('.crate-dl [role="status"]')
+        const b = document.querySelector('.crate-dl [role="progressbar"]')
+        return { texto: s?.textContent ?? null, now: b?.getAttribute('aria-valuenow') ?? null, max: b?.getAttribute('aria-valuemax') ?? null }
+      })
+      const botonArriba = () => page.evaluate(() => [...document.querySelectorAll('.crate-actions button')].map((b) => b.textContent.trim()).find((t) => t.startsWith('Bajar')) ?? null)
+
+      let filas = await hasta(leerFilas, (f) => f['Bajar Uno']?.boton, 'no apareció el botón Bajar de la fila')
+      let items = await apiItems()
+      igual(filas['Mi Edit Local'], { estado: 'Sin link', boton: null, motivo: items['Mi Edit Local'].motivo_no_bajable, grade: null },
+        'el tema sin link no dice por qué no se puede bajar (o tiene botón)')
+      afirmar(items['Mi Edit Local'].motivo_no_bajable, 'la API no dio motivo para el tema sin link')
+      igual(filas['Bajar Uno'], { estado: 'Bajar', boton: 'Bajar «Bajar Uno»', motivo: null, grade: null }, 'la fila no ofrece "Bajar" con nombre')
+      igual(await botonArriba(), 'Bajar los 3 que faltan', 'el botón de arriba no cuenta los que faltan y se pueden bajar')
+
+      // Una fila, con teclado: el mismo botón queda "Bajando" con el foco y termina en "Descargado".
+      await page.focus('button[aria-label="Bajar «Bajar Uno»"]')
+      await page.keyboard.press('Enter')
+      const foco = await hasta(() => page.evaluate(() => ({ nombre: document.activeElement?.getAttribute('aria-label') ?? null, ocupado: document.activeElement?.getAttribute('aria-disabled') ?? null })),
+        (v) => v.nombre === 'Bajando «Bajar Uno»', 'el botón no pasó a "Bajando" o perdió el foco')
+      igual(foco.ocupado, 'true', 'mientras baja, el botón tiene que estar aria-disabled')
+      filas = await hasta(leerFilas, (f) => f['Bajar Uno'].estado === 'Descargado', 'la fila no pasó a Descargado')
+      items = await apiItems()
+      igual([items['Bajar Uno'].descargado, items['Bajar Uno'].formato], [true, 'mp3'], 'la API no tiene el tema bajado en el formato elegido en el buscador')
+      igual(filas['Bajar Uno'].grade, items['Bajar Uno'].grade, 'la nota de la fila no es la de la API')
+      igual(await hasta(botonArriba, (t) => t === 'Bajar los 2 que faltan'), 'Bajar los 2 que faltan', 'el contador no bajó después de bajar uno')
+
+      // La tanda: de a uno, con progreso; el que falla queda con el motivo del server.
+      // Con teclado (B5): antes el botón se desmontaba al arrancar y el foco caía a <body>.
+      await page.evaluate(() => [...document.querySelectorAll('.crate-actions button')].find((b) => b.textContent.trim() === 'Bajar los 2 que faltan').focus())
+      await page.keyboard.press('Enter')
+      const focoTanda = () => page.evaluate(() => ({ texto: document.activeElement?.textContent.trim() ?? null, ocupado: document.activeElement?.getAttribute('aria-disabled') ?? null }))
+      igual(await hasta(focoTanda, (v) => v.texto === 'Bajando los que faltan…'), { texto: 'Bajando los que faltan…', ocupado: 'true' },
+        'al arrancar la tanda el botón perdió el foco o no quedó aria-disabled')
+      const p1 = await hasta(leerProgreso, (v) => v.texto === 'Bajando 1 de 2 · Bajar Falla…', 'no apareció el progreso del primero')
+      igual([p1.now, p1.max], ['0', '2'], 'la barra no arranca en 0 de 2')
+      filas = await leerFilas()
+      igual([filas['Bajar Falla'].boton, filas['Bajar Tres'].boton], ['Bajando «Bajar Falla»', 'En cola para bajar «Bajar Tres»'], 'las filas no dicen cuál baja y cuál espera')
+      const p2 = await hasta(leerProgreso, (v) => v.texto === 'Bajando 2 de 2 · Bajar Tres…', 'el progreso no pasó al segundo')
+      igual(p2.now, '1', 'la barra no cuenta el que ya terminó')
+      const pf = await hasta(leerProgreso, (v) => v.texto && !v.texto.startsWith('Bajando'), 'la tanda no terminó')
+      igual(pf, { texto: '1 de 2 bajados · 1 con error (el motivo está en cada tema)', now: '2', max: '2' }, 'el resumen no dice cuántos bajaron y cuántos fallaron')
+      filas = await hasta(leerFilas, (f) => f['Bajar Tres'].estado === 'Descargado', 'Bajar Tres no pasó a Descargado')
+      items = await apiItems()
+      igual([items['Bajar Falla'].descargado, items['Bajar Tres'].descargado], [false, true], 'la API no coincide con la tanda')
+      igual(filas['Bajar Falla'], { estado: 'Reintentar', boton: 'Reintentar bajar «Bajar Falla»', motivo: 'No se bajó: ERROR: [youtube] e2e-falla: Video unavailable', grade: null },
+        'el que falló no muestra el motivo real o no se puede reintentar')
+      igual(await botonArriba(), 'Bajar el que falta', 'el que falló tiene que seguir contando como "falta"')
+      igual(await focoTanda(), { texto: 'Bajar el que falta', ocupado: null }, 'al terminar la tanda el foco no quedó en el botón')
+
+      // Lo bajado entra en el .m3u8 (el que no se bajó y el sin link quedan afuera).
+      const exp = await apiPedir(ctx, `/api/playlists/${pid}/export`, 'POST', {})
+      igual([exp.data.incluidos, exp.data.excluidos], [2, 2], 'el .m3u8 no incluye lo bajado desde la playlist')
+
+      // 400 px: botones y motivos entran sin cortarse.
+      await page.setViewport({ width: 400, height: 860 })
+      await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+      const d = await desbordeDe(page)
+      afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `playlist a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+    } finally {
+      await apiPedir(ctx, `/api/playlists/${pid}`, 'DELETE')
+    }
+  }],
+
+  // f41 ronda 2: la descarga de la barra sobre un tema de la playlist va AL ITEM (C7: antes iba
+  // por /api/descargar y lo sumaba a la playlist activa, otra), y cuando la tanda termina y el
+  // botón "Bajar el que falta" desaparece, el foco pasa al resumen y no cae a <body> (B5).
+  ['playlist: la barra baja al item (no a la activa) y el foco sobrevive al final de la tanda', async (page, ctx) => {
+    const previa = (await api(ctx, '/api/playlists/activa')).activa
+    const crear = async (nombre) => {
+      const r = await apiPedir(ctx, '/api/playlists', 'POST', { nombre })
+      afirmar(r.status === 200 && r.data.playlist, `no pude crear ${nombre}: ${json(r)}`)
+      return r.data.playlist.id
+    }
+    const nombre = 'E2E barra y foco'
+    const pid = await crear(nombre)
+    const activa = await crear('E2E otra activa')
+    try {
+      for (const t of [
+        { titulo: 'Barra Uno', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-barra', duracion: 210 },
+        { titulo: 'Foco Dos', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-foco', duracion: 220 },
+      ]) {
+        const r = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: t })
+        afirmar(r.status === 200 && r.data.id, `no pude agregar ${t.titulo}: ${json(r)}`)
+      }
+      const act = await apiPedir(ctx, `/api/playlists/${activa}`, 'PATCH', { activar: true })
+      afirmar(act.status === 200, `no pude activar la otra playlist: ${json(act)}`)
+      // Nada sale a internet: carátulas afuera, y el audio de la fuente (yt-dlp) contesta 503.
+      await interceptar(page, (req) => {
+        const u = new URL(req.url())
+        if (u.origin !== new URL(ctx.url).origin) { req.abort().catch(() => {}); return true }
+        if (u.pathname.startsWith('/api/fuente/')) { req.respond({ status: 503, contentType: 'application/json', body: '{"exito":false,"mensaje":"E2E: sin red"}' }).catch(() => {}); return true }
+        return false
+      })
+      await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+      await hasta(() => page.evaluate((n) => [...document.querySelectorAll('.pl-item')].some((b) => b.querySelector('.pl-item-name')?.textContent === n), nombre),
+        (v) => v, 'la playlist no aparece en el rail')
+      await page.evaluate((n) => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === n).click(), nombre)
+      await hasta(() => page.$('button[aria-label="Reproducir Barra Uno"]'), (v) => v, 'no apareció el play de Barra Uno')
+      // Click por DOM: el play de la carátula aparece con hover y puppeteer no siempre lo ve clickeable.
+      await page.evaluate(() => document.querySelector('button[aria-label="Reproducir Barra Uno"]').click())
+
+      // La barra: su botón de descarga baja ESE item.
+      await hasta(() => page.$('.deck-acts button[aria-label="Descargar Barra Uno"]'), (v) => v, 'la barra no ofrece bajar el tema de la playlist')
+      await page.evaluate(() => document.querySelector('.deck-acts button[aria-label="Descargar Barra Uno"]').click())
+      const items = async (id) => Object.fromEntries((await api(ctx, `/api/playlists/${id}`)).data.items.map((i) => [i.titulo, i]))
+      const it = await hasta(() => items(pid), (v) => v['Barra Uno'].descargado, 'la descarga de la barra no dejó bajado el item de la playlist')
+      igual([it['Barra Uno'].descargado, it['Foco Dos'].descargado], [true, false], 'la barra bajó otro item')
+      igual(Object.keys(await items(activa)), [], 'la descarga de la barra ensució la playlist activa (camino viejo /api/descargar)')
+      await hasta(() => page.evaluate(() => [...document.querySelectorAll('.results-crate .trk')].find((r) => r.querySelector('.trk-title')?.textContent === 'Barra Uno')?.querySelector('.trk-status')?.textContent.trim()),
+        (v) => v === 'Descargado', 'la fila de la playlist no pasó a Descargado')
+
+      // La última tanda: el botón desaparece al terminar (no falta ninguno) y el foco va al resumen.
+      const boton = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.crate-actions button')].map((b) => b.textContent.trim()).find((t) => t.startsWith('Bajar')) ?? null),
+        (v) => v === 'Bajar el que falta', 'el botón no cuenta el que falta')
+      igual(boton, 'Bajar el que falta', 'el botón no cuenta el que falta')
+      await page.evaluate(() => [...document.querySelectorAll('.crate-actions button')].find((b) => b.textContent.trim() === 'Bajar el que falta').focus())
+      await page.keyboard.press('Enter')
+      const foco = () => page.evaluate(() => ({ tag: document.activeElement?.tagName ?? null, rol: document.activeElement?.getAttribute('role') ?? null, texto: document.activeElement?.textContent.trim() ?? null }))
+      await hasta(foco, (v) => v.texto === 'Bajando los que faltan…', 'al arrancar, el botón perdió el foco')
+      const fin = await hasta(foco, (v) => v.rol === 'status' || v.tag === 'BODY', 'la tanda no terminó')
+      igual(fin, { tag: 'DIV', rol: 'status', texto: 'Listo: 1 de 1 bajado' }, 'al terminar la tanda el foco no pasó al resumen')
+    } finally {
+      await apiPedir(ctx, `/api/playlists/${pid}`, 'DELETE')
+      await apiPedir(ctx, `/api/playlists/${activa}`, 'DELETE')
+      if (previa) await apiPedir(ctx, `/api/playlists/${previa.id}`, 'PATCH', { activar: true })
+    }
+  }],
 ]
 
 // Nombre visible de cada plataforma. Contrato de f38 (pedido del dueño): los MP3 dicen solo

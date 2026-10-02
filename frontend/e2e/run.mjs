@@ -9,7 +9,8 @@
 //   2. buildea el front (`vite build`, el mismo frontend/dist que sirve server.py);
 //   3. arma una base de juguete en un directorio temporal (base_juguete.py, con los catálogos
 //      de tests/sinteticos.py);
-//   4. levanta `uvicorn server:app` en un puerto libre apuntando a esa base, sin Redis;
+//   4. levanta `uvicorn server:app` en un puerto libre apuntando a esa base, sin Redis (vía
+//      server_doblado.py: el mismo server con la descarga doblada, para no bajar de internet);
 //   5. corre los chequeos y, pase lo que pase, apaga el server y borra el temporal.
 //
 // Uso (desde frontend/):  npm run e2e            opciones: --sin-build  --solo=texto
@@ -213,7 +214,8 @@ async function main() {
     const puerto = await puertoLibre()
     const url = `http://127.0.0.1:${puerto}`
     fs.mkdirSync(path.join(tmp, 'datos'), { recursive: true })
-    server = spawn(python, ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', String(puerto), '--log-level', 'warning'], {
+    // server_doblado = server.py con la descarga doblada (nada sale a internet al "bajar").
+    server = spawn(python, ['-m', 'uvicorn', 'server_doblado:app', '--app-dir', AQUI, '--host', '127.0.0.1', '--port', String(puerto), '--log-level', 'warning'], {
       cwd: REPO,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {

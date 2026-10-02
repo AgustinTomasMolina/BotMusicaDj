@@ -39,6 +39,23 @@ def encolar(func, *args, timeout: int = 900):
     return _queue.enqueue(func, *args, job_timeout=timeout, result_ttl=3600)
 
 
+def reservar(clave: str, ttl: int) -> bool:
+    """Marca `clave` como tomada en Redis si nadie la tenía (SET NX, vence en `ttl` s).
+    True = la tomaste vos; False = ya estaba tomada. Lo usa la descarga de un item de
+    playlist (f41) para no encolar dos veces el mismo tema: el registro en memoria del web
+    no ve los jobs del worker. El vencimiento cubre un worker que muere sin liberarla."""
+    return bool(_redis.set(clave, "1", nx=True, ex=ttl))
+
+
+def liberar(clave: str) -> None:
+    """Suelta una reserva de `reservar` (best-effort: si Redis no está, vence sola)."""
+    try:
+        if _redis is not None:
+            _redis.delete(clave)
+    except Exception as e:
+        logger.warning(f"⚠️ No pude liberar la reserva {clave}: {e}")
+
+
 def _valor_resultado(job):
     # RQ nuevo: return_value(); viejo: .result
     getter = getattr(job, "return_value", None)

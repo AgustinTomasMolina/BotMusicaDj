@@ -328,3 +328,14 @@ export const agregarAPlaylist = (id, track) => jpost(`/api/playlists/${id}/items
 export const quitarItemPlaylist = (id, itemId) => fetch(`/api/playlists/${id}/items/${itemId}`, { method: 'DELETE' }).then(json)
 export const reordenarPlaylist = (id, orden) => jpost(`/api/playlists/${id}/orden`, { orden })
 export const exportarPlaylist = (id) => jpost(`/api/playlists/${id}/export`, {})
+
+// Baja un tema guardado en la playlist (f41). Solo viaja el formato: qué se baja (url,
+// fuente, título) lo saca el server del item guardado. Devuelve {ok, status, data} con el
+// cuerpo leído por `cuerpoRadio`: un 400/404/409 trae el motivo en `data.mensaje` y un 500
+// en text/plain no se confunde con "no pude conectar".
+export async function descargarItemPlaylist(pid, itemId, formato) {
+  const r = await fetch(`/api/playlists/${encodeURIComponent(pid)}/items/${encodeURIComponent(itemId)}/descargar`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ formato }),
+  })
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}

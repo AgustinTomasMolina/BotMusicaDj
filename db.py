@@ -123,11 +123,36 @@ class MiPlaylistItem(Base):
     grade: Mapped[str | None] = mapped_column(String(4), nullable=True)
     color: Mapped[str | None] = mapped_column(String(16), nullable=True)
     agregado_en: Mapped[datetime] = mapped_column(DateTime, default=_ahora)
+    # El tema es un Go+ de SoundCloud (`solo_preview` de soundcloud_station): la fuente solo da
+    # 30 s. Se guarda para que la playlist no ofrezca bajarlo como si fuera el tema (f41).
+    # Columna agregada después: en bases viejas la crea `_migrar` (create_all no la agrega).
+    solo_preview: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+
+
+# Columnas agregadas a tablas que ya existían en bases de usuarios. `create_all` crea tablas
+# nuevas pero NO agrega columnas a una tabla existente, así que cada una se agrega acá con un
+# ALTER TABLE chico e idempotente (si ya está, no se toca). Las filas viejas quedan en NULL,
+# que se lee como "no se sabe" (para solo_preview: False, lo que se suponía hasta ahora).
+_COLUMNAS_NUEVAS = (("mi_playlist_items", "solo_preview", "BOOLEAN"),)
+
+
+def _migrar(eng) -> list[str]:
+    """Agrega las columnas de `_COLUMNAS_NUEVAS` que falten. Devuelve las que agregó."""
+    agregadas = []
+    with eng.begin() as con:
+        for tabla, col, tipo in _COLUMNAS_NUEVAS:
+            existentes = {r[1] for r in con.exec_driver_sql(f"PRAGMA table_info({tabla})")}
+            if existentes and col not in existentes:
+                con.exec_driver_sql(f"ALTER TABLE {tabla} ADD COLUMN {col} {tipo}")
+                agregadas.append(f"{tabla}.{col}")
+    return agregadas
 
 
 def init_db() -> None:
     """Crea las tablas si no existen. Se llama una vez en el lifespan del server."""
     Base.metadata.create_all(engine)
+    for c in _migrar(engine):
+        logger.info(f"🗄️  Columna agregada a una base existente: {c}")
     logger.info(f"🗄️  Base de datos lista: {DB_PATH.name}")
 
 
@@ -273,7 +298,14 @@ def _snapshot(track: dict) -> dict:
         "bpm": _bpm_decimal(track.get("bpm")),
         "camelot": track.get("camelot"),
         "genero": track.get("genero"),
+        "solo_preview": bool(track.get("solo_preview")),
     }
+
+
+def _tiene_archivo(it: "MiPlaylistItem") -> bool:
+    """¿El item está bajado DE VERDAD? Tener `ruta` no alcanza: si el archivo se borró o se
+    movió, decir "descargado" miente (el botón no ofrecería bajarlo y el .m3u8 lo pierde)."""
+    return bool(it.ruta) and Path(it.ruta).is_file()
 
 
 def _item_dict(it: "MiPlaylistItem") -> dict:
@@ -281,7 +313,8 @@ def _item_dict(it: "MiPlaylistItem") -> dict:
         "id": it.id, "orden": it.orden, "titulo": it.titulo, "artista": it.artista,
         "fuente": it.fuente, "url": it.url, "thumbnail": it.thumbnail, "duracion": it.duracion,
         "bpm": it.bpm, "camelot": it.camelot, "genero": it.genero, "grade": it.grade,
-        "color": it.color, "formato": it.formato, "descargado": bool(it.ruta),
+        "color": it.color, "formato": it.formato, "descargado": _tiene_archivo(it),
+        "solo_preview": bool(it.solo_preview), "playlist_id": it.playlist_id,
     }
 
 
@@ -297,7 +330,7 @@ def _camelot_num(camelot: str | None) -> int | None:
 
 def _metrics(items: list) -> dict:
     total = len(items)
-    descargados = sum(1 for it in items if it.ruta)
+    descargados = sum(1 for it in items if _tiene_archivo(it))
     dur = sum((it.duracion or 0) for it in items)
     bpms = [it.bpm for it in items if it.bpm]
     bpm_prom = round(sum(bpms) / len(bpms)) if bpms else None
@@ -468,6 +501,47 @@ def marcar_descargado(pid: int, track: dict, archivo, ruta, formato=None, grade=
         logger.warning(f"⚠️ Crates: no pude marcar descargado: {e}")
 
 
+def get_item(pid: int, item_id: int) -> dict | None:
+    """El item `item_id` SOLO si es de la playlist `pid` (None si no existe o es de otra).
+
+    Es lo que usa la descarga desde la playlist (f41): el server baja lo que dice el item
+    guardado, nunca una url que mande el cliente. Trae `ruta` porque el endpoint necesita
+    saber si ya está bajado; `_item_dict` no la expone a la pantalla."""
+    try:
+        with SessionLocal() as s:
+            it = s.get(MiPlaylistItem, item_id)
+            if not it or it.playlist_id != pid:
+                return None
+            return {**_item_dict(it), "ruta": it.ruta}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude leer el item {item_id}: {e}")
+        return None
+
+
+def marcar_item_descargado(pid: int, item_id: int, archivo, ruta, formato=None,
+                           grade=None, color=None, duracion=None) -> bool:
+    """Completa ESE item con el archivo bajado (f41). A diferencia de `marcar_descargado`,
+    no busca por identidad aproximada ni agrega filas: si el item ya no está en la playlist
+    (lo quitaron mientras se bajaba) devuelve False y no toca nada.
+
+    `duracion`: la MEDIDA del archivo bajado (s). Solo completa un item que no tenía duración
+    (hitplayer no la da): sirve para el #EXTINF del .m3u8 y la duración total. Una duración que
+    ya estaba no se pisa: si no cuadraba con el archivo, la descarga ya se rechazó antes."""
+    try:
+        with SessionLocal() as s:
+            it = s.get(MiPlaylistItem, item_id)
+            if not it or it.playlist_id != pid:
+                return False
+            it.archivo, it.ruta, it.formato, it.grade, it.color = archivo, ruta, formato, grade, color
+            if duracion and not it.duracion:
+                it.duracion = int(round(duracion))
+            s.commit()
+            return True
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude marcar el item {item_id}: {e}")
+        return False
+
+
 def armar_m3u8(pid: int) -> dict | None:
     """Escribe un .m3u8 con los items que tienen archivo local. Devuelve el recibo."""
     try:
@@ -479,8 +553,10 @@ def armar_m3u8(pid: int) -> dict | None:
             items = list(s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)
                                    .order_by(MiPlaylistItem.orden, MiPlaylistItem.id)))
             nombre = p.nombre
-        con_archivo = [it for it in items if it.ruta and Path(it.ruta).exists()]
-        sin_bajar = [it for it in items if not it.ruta]
+        con_archivo = [it for it in items if _tiene_archivo(it)]
+        # Excluido = todo lo que no entra, también un item con ruta cuyo archivo ya no está
+        # (antes no contaba ni como incluido ni como excluido: la cuenta no cerraba).
+        sin_bajar = [it for it in items if not _tiene_archivo(it)]
         bajos = [it.titulo for it in con_archivo if it.grade in ("D", "F")]
         nombre_safe = re.sub(r'[\\/:*?"<>|]+', "_", nombre)[:80].strip() or "playlist"
         destino = downloads / f"{nombre_safe}.m3u8"

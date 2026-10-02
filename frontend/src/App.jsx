@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { cargarVersiones } from './stationVersions'
-import { buscar, buscarLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists } from './api'
+import { buscar, buscarLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
 import { useConsole, useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
+import { descargas } from './playlistDescarga'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
 import ConsoleDrawer from './components/ConsoleDrawer'
@@ -195,6 +196,24 @@ export default function App() {
   const onDownload = async (c) => {
     const key = songKey(c)
     setDl((p) => ({ ...p, [key]: { ...(p[key] || {}), state: 'busy' } }))
+    // Un tema de una playlist propia (la barra de abajo lo está tocando): se baja AL ITEM, por
+    // el camino de la playlist (f41). /api/descargar lo sumaba a la playlist activa (otra, a
+    // veces) por identidad aproximada y dejaba el item de la playlist en "falta bajar".
+    if (c.playlist_id != null && c.id != null) {
+      const r = await descargas.bajarUno(c.playlist_id, c, formato)
+      const quien = `${c.titulo}${c.artista ? ` — ${c.artista}` : ''}`
+      if (r.exito) {
+        setDl((p) => ({ ...p, [key]: { state: 'ok', calidad: r.calidad, title: '' } }))
+        const g = r.calidad?.grade ?? r.item?.grade
+        toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''} · ${(r.item?.formato || formato).toUpperCase()}.` })
+        avisarPlaylists()
+        return true
+      }
+      setDl((p) => ({ ...p, [key]: { state: 'err', title: r.mensaje || '' } }))
+      toast.danger({ title: `No se bajó: ${quien}`, body: r.mensaje || 'Falló la descarga.',
+        actions: [{ label: 'Reintentar', onClick: () => onDownload(c) }] })
+      return false
+    }
     try {
       // Mandamos los metadatos que ya tenemos (para taggear el archivo: BPM/key/género/carátula).
       const m = metaMap[metaKey(c)] || {}
@@ -286,7 +305,7 @@ export default function App() {
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
   else if (view.kind === 'radio') body = <Radio />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.
