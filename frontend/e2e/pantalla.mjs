@@ -94,13 +94,11 @@ async function nuevaPagina(ctx) {
   await page.setViewport({ width: 1440, height: 900 })
   const errores = []
   page.on('pageerror', (e) => errores.push(String(e)))
-  // Dos errores de consola no son del front y se ignoran: los 404 de /api/cover (track sin
-  // carátula: el front dibuja el placeholder) y la consola en vivo /ws/console, que depende
-  // de que el Python del server tenga una librería de WebSocket (uvicorn[standard]).
-  // Cualquier otro error cuenta.
+  // Un error de consola no es del front y se ignora: los 404 de /api/cover (track sin
+  // carátula: el front dibuja el placeholder). Cualquier otro error cuenta.
   page.on('console', (m) => {
     const t = m.text()
-    if (m.type() === 'error' && !/Failed to load resource/.test(t) && !/\/ws\/console/.test(t)) errores.push(t)
+    if (m.type() === 'error' && !/Failed to load resource/.test(t)) errores.push(t)
   })
   await page.evaluateOnNewDocument(instrumentar)
   erroresDe.set(page, errores)
@@ -825,6 +823,29 @@ const CASOS = [
       meta: c.querySelector('.lib-meta')?.textContent ?? null,
     }))), (v) => v.length === esperado.length, `la home no dibujó las ${esperado.length} tarjetas`)
     igual(real.sort((a, b) => a.titulo.localeCompare(b.titulo)), esperado, 'las tarjetas de la home no dicen lo mismo que /api/biblioteca')
+  }],
+
+  // La consola en vivo por WebSocket se sacó en f42 (pedido del dueño): el server ya no tiene
+  // /ws/console y sin una librería de WebSocket uvicorn avisaba y el front reintentaba cada
+  // 1,5 s. El WebSocket se mira desde el navegador (CDP), no desde el código del front: si
+  // cualquier parte de la app vuelve a abrir uno, este caso se entera.
+  ['sin consola en vivo: la app no abre ningún WebSocket ni ofrece un botón de consola', async (page, ctx) => {
+    const sockets = []
+    const pedidosWs = []
+    const cdp = await page.target().createCDPSession()
+    await cdp.send('Network.enable')
+    cdp.on('Network.webSocketCreated', (e) => sockets.push(e.url))
+    page.on('request', (r) => { if (/\/ws(\/|$)/.test(new URL(r.url()).pathname)) pedidosWs.push(r.url()) })
+    await abrirHome(page, ctx)
+    // Estado, no espera fija: la red quieta (un reintento cada 1,5 s no la dejaría quieta).
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: ESPERA_MS })
+    igual({ sockets, pedidosWs }, { sockets: [], pedidosWs: [] }, 'la app abrió un WebSocket o pidió /ws/*')
+    await page.click('button[aria-label="Menú"]')
+    await page.waitForSelector('.drawer-left.is-open', { timeout: ESPERA_MS })
+    const consola = await page.evaluate(() => [...document.querySelectorAll('button, a, [role="dialog"]')]
+      .map((e) => `${e.textContent.trim()} | ${e.getAttribute('aria-label') ?? ''} | ${e.getAttribute('title') ?? ''}`)
+      .filter((s) => /consola/i.test(s)))
+    igual(consola, [], 'todavía hay un botón o un cajón de consola')
   }],
 
   ['carátulas: la embebida se ve, sin carátula queda el placeholder, nunca un marco vacío', async (page, ctx) => {

@@ -3,7 +3,6 @@ Servidor Web del Bot de Música
 ================================
 Sirve una página única con:
   - Buscador de canciones
-  - Consola en vivo (WebSocket) con los logs/comandos del bot
   - Playlist de resultados estilo YouTube
   - Descarga de canciones con progreso en tiempo real
 
@@ -27,7 +26,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
-from typing import Set
 from urllib.parse import urlsplit
 
 # Consola de Windows en UTF-8 para que los emojis/logs no rompan el proceso
@@ -38,7 +36,7 @@ except Exception:
     pass
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -59,63 +57,8 @@ DOWNLOADS_DIR = Path(os.getenv("MUSIFLIX_DOWNLOADS", str(BASE_DIR / "downloads")
 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ============================================================
-#  CONSOLA EN VIVO: puente entre el logging de Python y la web
-# ============================================================
-class ConsoleBroker:
-    """Reparte los mensajes de log a todas las consolas web conectadas."""
-
-    def __init__(self):
-        self._subscribers: Set[asyncio.Queue] = set()
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
-        self._loop = loop
-
-    def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        self._subscribers.add(q)
-        return q
-
-    def unsubscribe(self, q: asyncio.Queue):
-        self._subscribers.discard(q)
-
-    def publish(self, message: str, level: str = "INFO"):
-        """Seguro para llamar desde CUALQUIER hilo (lo usa el log handler)."""
-        if self._loop is None:
-            return
-        payload = {"msg": message, "level": level}
-        try:
-            self._loop.call_soon_threadsafe(self._fanout, payload)
-        except RuntimeError:
-            pass  # loop cerrado
-
-    def _fanout(self, payload: dict):
-        for q in list(self._subscribers):
-            try:
-                q.put_nowait(payload)
-            except asyncio.QueueFull:
-                pass
-
-
-broker = ConsoleBroker()
-
-
-class WebSocketLogHandler(logging.Handler):
-    """Handler de logging que envía cada línea a la consola web."""
-
-    def emit(self, record: logging.LogRecord):
-        try:
-            msg = self.format(record)
-            broker.publish(msg, record.levelname)
-        except Exception:
-            pass
-
-
-# Conectar el logging global a la consola web + consola normal
-console_handler = WebSocketLogHandler()
-console_handler.setFormatter(logging.Formatter("%(asctime)s | %(name)s | %(message)s", "%H:%M:%S"))
-logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler(), console_handler])
+# Logging global a la consola normal (stderr). La consola en vivo por WebSocket se sacó en f42.
+logging.basicConfig(level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger("bot_web")
 
 
@@ -135,7 +78,6 @@ recommendation_agent = RecommendationAgent()
 # ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    broker.set_loop(asyncio.get_running_loop())
     await asyncio.to_thread(db.init_db)  # crea las tablas del historial si faltan
     logger.info("🌐 Servidor web iniciado. Buscador listo.")
     threading.Thread(target=_calentar_librosa, name="calentar-librosa", daemon=True).start()
@@ -189,23 +131,6 @@ async def index():
 async def index_legacy():
     """Frontend viejo (vanilla), para comparar durante la migración a React."""
     return FileResponse(WEB_DIR / "index.html")
-
-
-@app.websocket("/ws/console")
-async def ws_console(websocket: WebSocket):
-    await websocket.accept()
-    q = broker.subscribe()
-    await websocket.send_json({"msg": "🟢 Consola conectada. Esperando comandos del bot...", "level": "INFO"})
-    try:
-        while True:
-            payload = await q.get()
-            await websocket.send_json(payload)
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
-    finally:
-        broker.unsubscribe(q)
 
 
 # Tope de espera por fuente en una búsqueda (f32). Antes era `fut.result(timeout=30)` futuro
@@ -536,7 +461,7 @@ async def buscar(q: str = "", limite: int = 24, formato: str = "wav", genero: st
         return JSONResponse({"exito": False, "mensaje": "Escribí algo o elegí un género."}, status_code=400)
 
     logger.info(f"🔍 Nueva búsqueda: '{busqueda}' (hasta {limite} resultados)")
-    # yt-dlp/spotipy son bloqueantes -> correr en hilo aparte para no frenar la consola
+    # yt-dlp/spotipy son bloqueantes -> correr en hilo aparte para no frenar el server
     resultados = await asyncio.to_thread(_buscar_mix, busqueda, limite)
 
     if not resultados:
@@ -3303,7 +3228,7 @@ async def playlists_export(pid: int):
 
 # ============================================================
 #  Frontend React (build de Vite). Se registra AL FINAL para que
-#  el catch-all no tape las rutas /api/* ni el WebSocket /ws/console.
+#  el catch-all no tape las rutas /api/*.
 # ============================================================
 if (DIST_DIR / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
@@ -3312,9 +3237,9 @@ if (DIST_DIR / "assets").is_dir():
 @app.get("/{full_path:path}")
 async def spa_fallback(full_path: str):
     """Sirve archivos sueltos del build (favicon.svg, icons.svg…) y hace fallback a
-    index.html para cualquier ruta desconocida (SPA). No intercepta /api ni /ws:
-    esas rutas se registran antes y tienen prioridad."""
-    if full_path.startswith(("api/", "ws/")):
+    index.html para cualquier ruta desconocida (SPA). No intercepta /api: esas rutas
+    se registran antes y tienen prioridad."""
+    if full_path.startswith("api/"):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     root = DIST_DIR.resolve()
     f = (DIST_DIR / full_path).resolve()

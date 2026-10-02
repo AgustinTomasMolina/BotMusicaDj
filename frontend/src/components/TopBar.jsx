@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { FORMATOS, GENEROS, normalizeText } from '../utils'
 import { useDialog } from '../hooks'
-import { IconHome, IconEar, IconEarOff, IconList, IconHistory, IconTerminal, IconRadio } from './icons'
+import { IconHome, IconEar, IconEarOff, IconList, IconHistory, IconRadio } from './icons'
 
 /* Filtro de género: buscador + lista con scroll + escribir uno propio. Sesga la búsqueda
    hacia ese estilo. El género elegido queda arriba como chip aunque el filtro lo oculte. */
@@ -108,7 +108,7 @@ function PreviewSwitch({ enabled, onToggle }) {
 
 const IconCrate = ({ size = 17 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5z" /><path d="M2 12l10 5 10-5" /><path d="M2 17l10 5 10-5" /></svg>
 
-export default function TopBar({ formato, setFormato, onSearch, previewEnabled, togglePreview, onLista, onConsola, consoleActive, onHistorial, historialActive, onBrand, genero, setGenero, onPlaylists, activePlaylist, onRadio, radioActive }) {
+export default function TopBar({ formato, setFormato, onSearch, previewEnabled, togglePreview, onLista, onHistorial, historialActive, onBrand, genero, setGenero, onPlaylists, activePlaylist, onRadio, radioActive }) {
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -201,7 +201,6 @@ export default function TopBar({ formato, setFormato, onSearch, previewEnabled, 
             {item(IconRadio, 'Radio DJ', () => { onRadio(); cerrar() }, radioActive)}
             {item(IconList, 'Lista', () => { onLista(); cerrar() })}
             {item(IconHistory, 'Historial', () => { onHistorial(); cerrar() }, historialActive)}
-            {item(IconTerminal, 'Consola', () => { onConsola(); cerrar() }, consoleActive)}
           </div>
         </nav>
       </div>

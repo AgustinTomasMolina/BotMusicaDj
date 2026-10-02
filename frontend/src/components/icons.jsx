@@ -15,7 +15,6 @@ export const IconEar = (p) => <S {...p}><path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6
 export const IconEarOff = (p) => <S {...p}><path d="M6 18.5a3.5 3.5 0 1 0 7 0c0-1.57.92-2.52 2.04-3.46" /><path d="M6 8.5c0-.75.13-1.47.36-2.14" /><path d="M8.8 3.15A6.5 6.5 0 0 1 19 8.5c0 1.63-.44 2.81-1.09 3.76" /><path d="M12.5 6A2.5 2.5 0 0 1 15 8.5M10 13a2 2 0 0 0 1.82-1.18" /><path d="m2 2 20 20" /></S>
 export const IconList = (p) => <S {...p}><path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" /></S>
 export const IconHistory = (p) => <S {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" /></S>
-export const IconTerminal = (p) => <S {...p}><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></S>
 export const IconPlay = (p) => <S {...p}><polygon points="6 3 20 12 6 21" /></S>
 export const IconDownload = (p) => <S {...p}><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></S>
 export const IconActivity = (p) => <S {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></S>

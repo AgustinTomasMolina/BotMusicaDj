@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { cargarVersiones } from './stationVersions'
 import { buscar, buscarLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
-import { useConsole, useMeta, usePreview } from './hooks'
+import { useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
 import { descargas } from './playlistDescarga'
 import { useToast } from './toast.jsx'
 import TopBar from './components/TopBar'
-import ConsoleDrawer from './components/ConsoleDrawer'
 import HistorialDrawer from './components/HistorialDrawer'
 import Modal from './components/Modal'
 import Playlists from './components/Playlists'
@@ -26,7 +25,6 @@ export default function App() {
   const [misPlaylists, setMisPlaylists] = useState([])        // para el rail lateral siempre visible
   const [playlistAbierta, setPlaylistAbierta] = useState(null) // la que muestra la vista Playlists
   const [previewEnabled, setPreviewEnabled] = useState(true)
-  const [consoleOpen, setConsoleOpen] = useState(false)
   const [historialOpen, setHistorialOpen] = useState(false)
   const [historialData, setHistorialData] = useState(null)
   const [view, setView] = useState({ kind: 'home' })
@@ -37,7 +35,6 @@ export default function App() {
 
   const toast = useToast()
   const { metaMap, enrich } = useMeta()
-  const { connected, lines } = useConsole()
   const player = usePlayer()
   // Mientras la barra suena, el preview del mouse no arranca: un solo audio en toda la app.
   const preview = usePreview(previewEnabled, !!modal || player.status === 'playing' || player.status === 'loading')
@@ -321,7 +318,6 @@ export default function App() {
         : `${view.data.encontradas ?? view.data.groups.length} de ${view.data.total ?? view.data.groups.length} temas encontrados.`)
       : ''
 
-  const drawerAbierto = consoleOpen || historialOpen
   return (
     <div className="app">
       {/* Con el rail siempre visible, con teclado había que pasar por todas las playlists antes de
@@ -338,7 +334,6 @@ export default function App() {
         onLista={openListaForm}
         onPlaylists={openPlaylists} activePlaylist={activePlaylist}
         onRadio={openRadio} radioActive={view.kind === 'radio'}
-        onConsola={() => setConsoleOpen((o) => !o)} consoleActive={consoleOpen}
         onHistorial={toggleHistorial} historialActive={historialOpen}
         onBrand={goHome}
       />
@@ -352,8 +347,7 @@ export default function App() {
         <main className="app-main" id="contenido" tabIndex={-1}><div className="app-wrap">{body}</div></main>
       </div>
       <div className="sr-only" role="status" aria-live="polite">{anuncio}</div>
-      {drawerAbierto && <div className="scrim" onClick={() => { setConsoleOpen(false); setHistorialOpen(false) }} />}
-      <ConsoleDrawer open={consoleOpen} onClose={() => setConsoleOpen(false)} connected={connected} lines={lines} />
+      {historialOpen && <div className="scrim" onClick={() => setHistorialOpen(false)} />}
       <HistorialDrawer open={historialOpen} onClose={() => setHistorialOpen(false)} data={historialData}
         onRunSearch={onRunSearch} onOpenPlaylist={onOpenPlaylist} onDeletePlaylist={onDeletePlaylist} onLimpiar={onLimpiar} />
       <Modal modal={modal} onClose={() => setModal(null)} onDownload={onDownload} />
