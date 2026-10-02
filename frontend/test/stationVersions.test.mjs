@@ -88,6 +88,30 @@ test('bestOption: si no hay otra, la de la Station aunque sea un preview', () =>
   assert.equal(bestOption([op('soundcloud', null, { estacion: true, solo_preview: true })]), 0)
 })
 
+test('bestOption: una versión con la duración sin verificar nunca viene elegida (f40-r2), aunque tenga A', () => {
+  // El caso real: «Argy - Aria» de HitPlayer sin duración era la elegida y resultó otra edición.
+  const sinVerificar = op('hitplayer', 'A', { duracion_verificada: false })
+  assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), sinVerificar]), 0)
+  assert.equal(bestOption([sinVerificar, op('youtube', 'D', { duracion_verificada: true })]), 1)
+  // Todas las otras sin verificar: queda la de SoundCloud, aunque sea un preview.
+  assert.equal(bestOption([op('youtube', 'A', { duracion_verificada: false }),
+    op('soundcloud', null, { estacion: true, solo_preview: true }), sinVerificar]), 1)
+  // Solo `false` literal: sin el campo (la de la Station, respuestas viejas) cuenta como verificada.
+  assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), op('ligaudio', 'A')]), 1)
+})
+
+test('bestOption: el Extended verificado le gana a la del mismo largo, sea cual sea la nota (f40-r2)', () => {
+  const ext = (fuente, grade, extra = {}) => op(fuente, grade, { edicion: 'extended', duracion_verificada: true, ...extra })
+  assert.equal(bestOption([op('soundcloud', 'A', { estacion: true }), ext('youtube', 'F')]), 1)
+  assert.equal(bestOption([ext('youtube', 'C'), op('soundcloud', 'B', { estacion: true }), op('ligaudio', 'A')]), 0)
+  // Entre dos Extended, la nota.
+  assert.equal(bestOption([ext('youtube', 'C'), ext('ligaudio', 'B')]), 1)
+  // Un Extended SIN verificar no se elige (manda la regla de la duración sin verificar).
+  assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), ext('hitplayer', 'A', { duracion_verificada: false })]), 0)
+  // Ni un Extended en Spotify (se baja buscando en YouTube: no sería ese audio).
+  assert.equal(bestOption([op('soundcloud', 'C', { estacion: true }), ext('spotify', 'A')]), 0)
+})
+
 /* ---------- cargarVersiones ---------- */
 
 // fetch controlado: cada pedido queda pendiente hasta que el test lo contesta.

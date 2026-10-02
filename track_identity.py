@@ -21,7 +21,9 @@ estrategia "B" del diseño de parecidas, §8.3):
    es instrumental.
 4. Un resultado ES el tema solo si comparten algún artista, el título base es igual y la versión
    es la misma. Otra versión del mismo tema (Radio Edit por Original, Extended…) NO se acepta:
-   decisión conservadora hasta que el dueño diga otra cosa (diseño, UNKNOWN 18).
+   decisión conservadora hasta que el dueño diga otra cosa (diseño, UNKNOWN 18). Lo que el
+   dueño dijo (f40-r2), solo para las versiones de la Station: el EXTENDED del tema se ofrece
+   como otra edición, marcada (`es_extended_de`, `dura_como_extended`).
 5. Si quedan aceptados de dos obras distintas (artistas sin nada en común) es ambiguo: nada.
    Entre varios del mismo tema desempata la duración más cercana (nunca veta: el diseño midió
    que como veto cuesta aciertos, los videos oficiales duran más).
@@ -598,6 +600,54 @@ def duraciones_cuadran(w: float, c: float) -> bool:
     cosa: la de la regla de la Radio Edit, que acepta OTRA etiqueta de versión solo por
     duración y por eso pide más precisión."""
     return abs(w - c) <= max(10.0, 0.10 * w)
+
+
+# ---------------------------------------------------------------- el Extended del tema (f40-r2)
+# Decisión del dueño (f40-r2): "el extended dura más, y para los DJ eso es ORO". Una versión
+# del MISMO tema que dice ser la edición larga (Extended / Extended Mix / Original Mix / Club
+# Mix, o "Remix Extended" del MISMO remix) y dura MÁS que el tema de la Station se ofrece como
+# otra edición, marcada. Nunca algo más corto (radio edits, fragmentos) ni algo más largo sin
+# esa etiqueta (un video con intro, un vivo).
+#
+# Cota superior: 3× la duración del tema. Los casos reales miden 1,22× («The Point Of Living
+# (Omnya Remix Extended)» 282 s contra 232 s), 1,33× («Aria» Extended 314,8 s contra 236 s) y
+# 1,77× («Hera (Original Mix)» 6:04 contra 3:26); una radio edit de 2:30 con su extended de 7
+# minutos da 2,8×. Más de 3× ya no es una edición del tema sino otra cosa con el mismo nombre
+# (un loop de una hora, un mix entero, un set).
+EXTENDED_MAX_RATIO = 3.0
+# "Original Mix" y "Club Mix" son, en la música de club, el nombre de la edición larga; la
+# etiqueta se lee de la versión TAL COMO ESTÁ ESCRITA (`version_text`): "Album Version" o
+# "Remastered" también son "original" para la identidad, pero no dicen "soy la larga".
+_EXTENDED_LABEL = re.compile(r"\bextended\b|\boriginal mix\b|\bclub mix\b")
+# Versiones de la Station cuyo Extended es el del original: el tema mismo y su Radio Edit.
+_EXTENDED_DEL_ORIGINAL = {"original", "radio"}
+
+
+def es_extended_de(wanted: Identity, cand: Identity) -> bool:
+    """¿`cand` DICE ser el Extended del tema `wanted`? Solo el texto (la duración la mira
+    `dura_como_extended`): mismo título, artista en común por nombre (no por alias: acá se acepta
+    OTRA etiqueta de versión y la evidencia tiene que ser fuerte) con el primer artista del
+    tema, y la etiqueta de edición larga. Un remix no es el original: si la Station es «X (Omnya
+    Remix)», solo «X (Omnya Remix Extended)» es su Extended, no «X (Extended Mix)»; si la
+    Station es el original (o su Radio Edit), el Extended de un remix no cuenta."""
+    if not same_title(wanted, cand) or _artist_relation(wanted, cand) != "directo":
+        return False
+    if not _names_first_artist(wanted, cand) or not _EXTENDED_LABEL.search(normalize(cand.version_text)):
+        return False
+    if wanted.version in _EXTENDED_DEL_ORIGINAL:
+        return cand.version in ("extended", "club", "original")
+    return cand.version == wanted.version + "+extended"
+
+
+def dura_como_extended(wanted_s, cand_s) -> bool | None:
+    """¿La duración confirma una edición LARGA? None si alguna no se sabe (no se puede
+    confirmar). True si el candidato dura más que el tema más allá de la tolerancia de "misma
+    edición" (`duraciones_cuadran`) y como mucho `EXTENDED_MAX_RATIO` veces. False si no: más
+    corto, igual de largo (entonces no es otra edición) o demasiado largo."""
+    w, c = duration_or_none(wanted_s), duration_or_none(cand_s)
+    if w is None or c is None:
+        return None
+    return c > w and not duraciones_cuadran(w, c) and c <= EXTENDED_MAX_RATIO * w
 
 
 def search_limit(entry: Identity) -> int:

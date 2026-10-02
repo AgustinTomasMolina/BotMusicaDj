@@ -23,6 +23,7 @@
      "video_id": "bwithu00001",
      "thumbnail": "https://i.ytimg.com/vi/bwithu00001/hqdefault.jpg",
      "evidencia": "texto+duracion",
+     "duracion_verificada": true,
      "calidad": {
       "ok": true,
       "badge": "nota B",
@@ -63,7 +64,8 @@
      "preview_url": null,
      "id": "0bwithu0spotify0000000",
      "thumbnail": null,
-     "evidencia": "texto+duracion"
+     "evidencia": "texto+duracion",
+     "duracion_verificada": true
     },
     {
      "titulo": "B WITH U",
@@ -74,6 +76,7 @@
      "fuente": "ligaudio",
      "thumbnail": null,
      "evidencia": "texto+duracion",
+     "duracion_verificada": true,
      "calidad": {
       "ok": true,
       "badge": "nota A",
@@ -92,6 +95,7 @@
      "fuente": "hitplayer",
      "thumbnail": null,
      "evidencia": "texto",
+     "duracion_verificada": false,
      "calidad": {
       "ok": true,
       "badge": "nota B",
@@ -171,6 +175,7 @@
      "video_id": "daftpunk001",
      "thumbnail": "https://i.ytimg.com/vi/daftpunk001/hqdefault.jpg",
      "evidencia": "texto+duracion",
+     "duracion_verificada": true,
      "calidad": {
       "ok": true,
       "badge": "nota B",
@@ -205,6 +210,7 @@
      "reproducible": true,
      "solo_preview": false,
      "evidencia": "texto+duracion",
+     "duracion_verificada": true,
      "calidad": {
       "ok": true,
       "badge": "nota A",
@@ -224,7 +230,8 @@
      "preview_url": null,
      "id": "0daftpunkspotify000000",
      "thumbnail": null,
-     "evidencia": "texto+duracion"
+     "evidencia": "texto+duracion",
+     "duracion_verificada": true
     }
    ],
    "motivo": null,
@@ -258,6 +265,86 @@
      "reproducible": true,
      "solo_preview": true,
      "estacion": true
+    }
+   ],
+   "motivo": null,
+   "fallidas": []
+  }
+ },
+ "2172426774": {
+  "tema": {
+   "titulo": "FTB",
+   "artista": "Burjoe",
+   "duracion": 296.0,
+   "video_id": "2172426774",
+   "url": "https://soundcloud.com/ollie-burgo/burjoe-ftb-original-mix",
+   "permalink": "https://soundcloud.com/ollie-burgo/burjoe-ftb-original-mix",
+   "thumbnail": "https://i1.sndcdn.com/artworks-k3QXj84rlbVAoQa8-dLHg2g-large.jpg",
+   "reproducible": true,
+   "solo_preview": false
+  },
+  "respuesta": {
+   "exito": true,
+   "opciones": [
+    {
+     "titulo": "Burjoe - FTB (Extended Mix)",
+     "artista": "Burjoe",
+     "duracion": 412,
+     "url": "https://www.youtube.com/watch?v=burjoeftb01",
+     "fuente": "youtube",
+     "video_id": "burjoeftb01",
+     "thumbnail": "https://i.ytimg.com/vi/burjoeftb01/hqdefault.jpg",
+     "evidencia": "texto",
+     "edicion": "extended",
+     "duracion_verificada": true,
+     "calidad": {
+      "ok": true,
+      "badge": "nota C",
+      "calidad": "calidad C",
+      "metodo": "simulado",
+      "grade": "C",
+      "color": "#facc15"
+     }
+    },
+    {
+     "titulo": "FTB",
+     "artista": "Burjoe",
+     "duracion": 296.0,
+     "url": "https://soundcloud.com/ollie-burgo/burjoe-ftb-original-mix",
+     "fuente": "soundcloud",
+     "video_id": "2172426774",
+     "thumbnail": "https://i1.sndcdn.com/artworks-k3QXj84rlbVAoQa8-dLHg2g-large.jpg",
+     "permalink": "https://soundcloud.com/ollie-burgo/burjoe-ftb-original-mix",
+     "reproducible": true,
+     "solo_preview": false,
+     "estacion": true,
+     "calidad": {
+      "ok": true,
+      "badge": "nota B",
+      "calidad": "calidad B",
+      "metodo": "simulado",
+      "grade": "B",
+      "color": "#a3e635"
+     }
+    },
+    {
+     "titulo": "FTB",
+     "artista": "Burjoe",
+     "duracion": 0,
+     "url": "https://example.invalid/hitplayer/40.mp3",
+     "stream_url": "https://example.invalid/hitplayer/40.mp3",
+     "fuente": "hitplayer",
+     "thumbnail": null,
+     "evidencia": "texto",
+     "duracion_verificada": false,
+     "calidad": {
+      "ok": true,
+      "badge": "nota A",
+      "calidad": "calidad A",
+      "metodo": "simulado",
+      "grade": "A",
+      "color": "#1ed760"
+     }
     }
    ],
    "motivo": null,

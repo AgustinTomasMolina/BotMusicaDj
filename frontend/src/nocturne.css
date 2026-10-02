@@ -512,6 +512,10 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
    un preview Go+ (no es el tema, no tiene nota). */
 .vchip-grade{display:inline-flex;align-items:center;height:16px;padding:0 4px;margin-left:1px;border-radius:4px;font-family:var(--font-heading);font-size:10px;font-weight:700;color:var(--grade-c,var(--color-neutral-300));background:color-mix(in srgb,var(--grade-c,var(--color-neutral-500)) 18%,var(--color-well))}
 .vchip-grade.is-preview{font-family:var(--font-mono);font-weight:600;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,var(--color-well))}
+/* f40-r2: el Extended del tema (otra edición, más larga) lo dice con su duración; una versión
+   con la duración sin verificar va atenuada (§6: confianza baja → atenuado) y no viene elegida. */
+.vchip-ed{display:inline-flex;align-items:center;height:16px;padding:0 4px;border-radius:4px;font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--color-accent-100);background:color-mix(in srgb,var(--color-accent) 30%,var(--color-well))}
+.vchip.is-sin-verificar:not([aria-pressed=true]){opacity:0.62}
 .pf-yt{--pf:var(--color-pf-yt)}
 .pf-sc{--pf:var(--color-pf-sc)}
 .pf-sp{--pf:var(--color-pf-sp)}

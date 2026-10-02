@@ -1383,6 +1383,52 @@ const CASOS = [
     afirmar(!s.descargas.slice(1).some((b) => b.url === fbl.url), 'se descargó el preview de 30 s')
   }],
 
+  ['station: el Extended viene elegido y lo dice con su duración; un MP3 sin duración verificada se ofrece atenuado y no se elige', async (page, ctx) => {
+    // f40-r2 (decisiones del dueño). «FTB» de Burjoe (fila 4): YouTube trae su Extended (nota
+    // C), la Station es B y un MP3 de HitPlayer sin duración verificada tiene A. Antes ganaba
+    // la A (otra edición posible) y el Extended ni se ofrecía.
+    const s = await montarStation(page, ctx)
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+    const ftb = s.items[3]
+    const ops = s.vx[ftb.video_id].respuesta.opciones
+    igual(ops.map((o) => [o.fuente, o.edicion ?? null, o.duracion_verificada ?? null, o.calidad.grade]),
+      [['youtube', 'extended', true, 'C'], ['soundcloud', null, null, 'B'], ['hitplayer', null, false, 'A']],
+      'el archivo de versiones cambió: FTB tenía que traer el Extended (C), la Station (B) y un MP3 sin verificar (A)')
+    const ps = await pastillasDe(page, 3)
+    igual(ps, esperadasStation(ops, 0), 'las pastillas de FTB: el Extended elegido, el MP3 atenuado')
+    // Que el caso pruebe algo: el Extended dice su duración a la vista y el MP3 está atenuado.
+    igual([ps[0].texto, ps[0].nombre], ['YouTubeExtended 6:52C', 'Opción 1: YouTube, nota C, Extended · 6:52 (elegida)'],
+      'la pastilla del Extended no dice qué es')
+    igual([ps[2].sinVerificar, ps[2].nombre], [true, 'Opción 3: MP3, nota A, duración sin verificar'],
+      'el MP3 sin duración verificada no va atenuado o no lo dice')
+    // La fila sigue siendo el tema de la Station (título y duración suyos, no los del Extended).
+    igual(await fichaDe(page, 3), { titulo: ftb.titulo, artista: ftb.artista, duracion: mmss(ftb.duracion) },
+      'con el Extended elegido la fila dejó de mostrar el tema de la Station')
+    await descargarFila(page, 3)
+    await hasta(() => s.descargas.length, (n) => n === 1, 'la descarga de FTB no salió')
+    igual(s.descargas[0].url, ops[0].url, 'se descargó otra versión y no el Extended elegido')
+  }],
+
+  ['station: sin el Extended, el MP3 sin duración verificada (nota A) tampoco viene elegido: queda la de SoundCloud', async (page, ctx) => {
+    // La misma respuesta de FTB sin la opción de YouTube: quedan la Station (B) y el MP3 sin
+    // verificar (A). Por nota ganaría el MP3; por la decisión del dueño (f40-r2), no se elige.
+    const vx = leerVersiones()
+    const id = '2172426774'
+    const r = vx[id].respuesta
+    const sinExt = { ...r, opciones: r.opciones.filter((o) => o.fuente !== 'youtube') }
+    igual(sinExt.opciones.map((o) => [o.fuente, o.duracion_verificada ?? null, o.calidad.grade]),
+      [['soundcloud', null, 'B'], ['hitplayer', false, 'A']], 'el archivo de versiones cambió: FTB sin YouTube tenía que ser SoundCloud B y MP3 A sin verificar')
+    const s = await montarStation(page, ctx, { respuestas: { [id]: sinExt } })
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+    igual(s.items[3].video_id, id, 'la fila 4 no es FTB')
+    igual(await pastillasDe(page, 3), esperadasStation(sinExt.opciones, 0), 'el MP3 sin verificar quedó elegido o no va atenuado')
+    await descargarFila(page, 3)
+    await hasta(() => s.descargas.length, (n) => n === 1, 'la descarga de FTB no salió')
+    igual(s.descargas[0].url, sinExt.opciones[0].url, 'se descargó el MP3 sin duración verificada')
+  }],
+
   ['station: "Descargar todas" con filas pendientes pregunta (bajar las listas / esperar a todas / cancelar)', async (page, ctx) => {
     const s = await montarStation(page, ctx, { retener: true })
     const { items } = s
@@ -2017,6 +2063,7 @@ const pastillasDe = (page, i) => page.evaluate((k) => {
     elegida: b.getAttribute('aria-pressed'), suena: b.getAttribute('aria-current'),
     tilde: !!b.querySelector('.vchip-ok'),                      // forma, no color
     barras: !!b.querySelector('.eq'), animadas: !!b.querySelector('.eq:not(.is-quieto)'),
+    sinVerificar: b.classList.contains('is-sin-verificar'),
   })) : null
 }, i)
 
@@ -2028,10 +2075,15 @@ function esperadasStation(opciones, elegidaK) {
   return opciones.map((o, k) => {
     const nota = o.calidad ? (o.calidad.ok ? o.calidad.grade : '?') : null
     const notaTexto = o.solo_preview ? 'solo 30 s (Go+)' : nota ? `nota ${nota}` : null
+    // f40-r2: el Extended dice su duración (m:ss con `mmss` de acá, no con el fmtDur del front)
+    // y una versión con la duración sin verificar lo dice y va atenuada.
+    const sinVerificar = o.duracion_verificada === false
+    const ext = o.edicion === 'extended' ? (sinVerificar ? 'Extended' : `Extended · ${mmss(o.duracion)}`) : null
+    const extras = [ext, sinVerificar ? 'duración sin verificar' : null].filter(Boolean).join(', ')
     return {
-      texto: `${k === elegidaK ? '' : k + 1}${NOMBRE[o.fuente]}${o.solo_preview ? '30 s' : nota || ''}`,
-      nombre: `Opción ${k + 1}: ${NOMBRE[o.fuente]}${notaTexto ? `, ${notaTexto}` : ''}${k === elegidaK ? ' (elegida)' : ''}`,
-      elegida: String(k === elegidaK), suena: null, tilde: k === elegidaK, barras: false, animadas: false,
+      texto: `${k === elegidaK ? '' : k + 1}${NOMBRE[o.fuente]}${ext ? ext.replace(' · ', ' ') : ''}${o.solo_preview ? '30 s' : nota || ''}`,
+      nombre: `Opción ${k + 1}: ${NOMBRE[o.fuente]}${notaTexto ? `, ${notaTexto}` : ''}${extras ? `, ${extras}` : ''}${k === elegidaK ? ' (elegida)' : ''}`,
+      elegida: String(k === elegidaK), suena: null, tilde: k === elegidaK, barras: false, animadas: false, sinVerificar,
     }
   })
 }

@@ -716,7 +716,8 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
 #
 # Una versión de otra plataforma se ofrece SOLO si `track_identity` dice que es la misma
 # grabación que el tema de la Station (artista, título, versión y duración): nunca otro tema,
-# un vivo ni un remix. Ver `_version_valida`.
+# un vivo ni un remix. La excepción (f40-r2, decisión del dueño) es el Extended del MISMO tema,
+# que se ofrece marcado como otra edición. Ver `_version_aceptada`.
 
 # Plataformas a las que se les pregunta por cada tema. SoundCloud no: el tema YA es de
 # SoundCloud, y 49 búsquedas seguidas es justo lo que la auditoría de f34 marcó como riesgo de
@@ -736,6 +737,13 @@ _sc_pause_until = 0.0
 _SC_URL = re.compile(r"https://(?:soundcloud\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|api\.soundcloud\.com/tracks/[0-9]{1,20})")
 _SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3", "hitplayer": "MP3",
                  "spotify": "Spotify", "soundcloud": "SoundCloud"}
+
+
+def _url_http(u) -> bool:
+    """¿`u` es una URL http(s)? Lo que llega de los scrapers (y del cliente, en /api/calidad,
+    /api/spectro y /api/descargar) termina en ffprobe/ffmpeg/requests: con otro esquema
+    (`file:`, `concat:`, `subfile:`…) ffmpeg lee archivos locales. f40-r2."""
+    return isinstance(u, str) and re.fullmatch(r"https?://[^\s\x00-\x1f]+", u, re.I) is not None
 
 
 def _sc_paused() -> bool:
@@ -761,38 +769,146 @@ def _version_identity(c: dict):
 
 
 def _version_valida(wanted, wanted_s, c: dict) -> str | None:
-    """Grado de evidencia de que `c` es la misma grabación que el tema de la Station, o None.
-    `audio_exacto`: el tema de la Station ES el audio (no un video con intro), así que una
-    versión más CORTA que no cuadra es otra edición (la Radio Edit de un Extended).
+    """Grado de evidencia de que `c` es el tema de la Station, o None. Ver `_version_aceptada`
+    (esto es su grado, para quien solo necesita saber si pasa)."""
+    a = _version_aceptada(wanted, wanted_s, c)
+    return a["evidencia"] if a else None
 
-    f40 (decisión del dueño, opción "a"): si las dos duraciones se conocen y NO cuadran
-    (±max(10 s, 10 %), `track_identity.duraciones_cuadran`: la misma tolerancia que da
-    "+duracion"), la versión es otra edición y no se ofrece, sea más corta o MÁS LARGA. Antes
-    una más larga pasaba como "texto" y podía quedar elegida: «Hera» de 3:26 en SoundCloud
-    contra «Hera (Original Mix)» de 6:04 en YouTube. El costo, aceptado: un video de YouTube
-    con una intro larga tampoco se ofrece. La duración de cada candidato se lee según su
-    fuente (`duration_or_none`): 30 s es "no se sabe" solo en SoundCloud."""
+
+def _version_aceptada(wanted, wanted_s, c: dict) -> dict | None:
+    """¿Se ofrece `c` como versión del tema de la Station? None si no; si sí, los campos que
+    se le agregan a la opción: `evidencia` (grado), `duracion_verificada` y, si es la edición
+    larga, `edicion: "extended"`.
+
+    1) La misma grabación (`audio_exacto`: el tema de la Station ES el audio, no un video con
+    intro). f40 (decisión del dueño, opción "a"): si las dos duraciones se conocen y NO cuadran
+    (±max(10 s, 10 %), `track_identity.duraciones_cuadran`), no es esta edición, sea más corta
+    o más larga: un video con intro larga tampoco se ofrece. La duración de cada candidato se
+    lee según su fuente (`duration_or_none`): 30 s es "no se sabe" solo en SoundCloud.
+
+    2) f40-r2 (decisión del dueño, "el extended es ORO"): el Extended del MISMO tema
+    (`track_identity.es_extended_de`: Extended / Original Mix / Club Mix, o "Remix Extended" del
+    mismo remix) se ofrece aunque no cuadre, si dura MÁS que el tema (hasta 3×): «Hera (Original
+    Mix)» de 6:04 contra la «Hera» de 3:26 de la Station. Va marcado (`edicion`) porque es otra
+    edición que la que sonó. Lo más corto nunca; lo más largo sin esa etiqueta, tampoco (1).
+
+    `duracion_verificada` (f40-r2, decisión del dueño): False si la duración del candidato o la
+    del tema no se conoce. Se ofrece igual, pero el front nunca la elige por defecto: «Argy -
+    Aria» de HitPlayer (sin duración) resultó ser una edición de 252 s de un tema de 315 s."""
     cs = track_identity.duration_or_none(c.get("duracion"), c.get("fuente"))
+    ident = _version_identity(c)
+    verificada = bool(wanted_s and cs)
+    if track_identity.es_extended_de(wanted, ident):
+        largo = track_identity.dura_como_extended(wanted_s, cs)
+        if largo is not False:          # True: confirmado; None: no se sabe (se ofrece sin elegir)
+            return {"evidencia": "texto", "edicion": "extended", "duracion_verificada": bool(largo)}
+        # False: más corto, igual de largo o demasiado largo; sigue la regla de la misma grabación.
     if wanted_s and cs and not track_identity.duraciones_cuadran(wanted_s, cs):
         return None
-    return track_identity.evidencia_misma_grabacion(
-        wanted, _version_identity(c), wanted_s, cs, audio_exacto=True)
+    grado = track_identity.evidencia_misma_grabacion(wanted, ident, wanted_s, cs, audio_exacto=True)
+    return {"evidencia": grado, "duracion_verificada": verificada} if grado else None
 
 
-# MP3 directos sin duración publicada (HitPlayer no la trae: `duracion` 0; medido en la
-# auditoría f40, 30 de 99 versiones entraban sin chequeo de duración): antes de ofrecerlos se
-# mide la duración REAL con ffprobe (`_duracion_audio`, solo lee la cabecera del stream).
-# Costo: ~0,5-2 s por MP3 en paralelo; acotado a 4 a la vez y a un tope total por fila. Los
-# que no se pueden medir a tiempo siguen la regla de siempre para "duración desconocida": se
-# aceptan solo por texto (grado "texto"), nunca con "+duracion".
+# MP3 directos sin duración publicada (HitPlayer no la trae: `duracion` 0). Hasta f40 se medía
+# con ffprobe sobre la URL y NUNCA servía: hotplayer sirve el MP3 por chunked (sin
+# Content-Length) y ffprobe no estima la duración de un stream sin largo — imprime "N/A"
+# (medido en f40-r2: 0 de 88 en producción, y 6 de 6 URLs reales probadas a mano; ~2 s y hasta
+# 8 s por fila tirados). Lo que SÍ trae cada MP3 de HitPlayer es la cabecera "Info" de LAME
+# (la de Xing para CBR) en el primer frame: el número EXACTO de frames. Con eso la duración es
+# frames × muestras por frame / sample rate, leyendo los primeros KB y cortando la conexión.
+# Verificado contra el archivo entero bajado: «Argy - Aria» 10519 frames a 48 kHz = 252,46 s
+# (ffprobe del archivo: 252,44 s; paquetes contados: 10519) y «Space Motion - Hera» 8468
+# frames a 44,1 kHz = 221,20 s (ffprobe: 221,20 s). Sin esa cabecera (o si no contesta a
+# tiempo) la duración queda desconocida: se ofrece por texto, sin elegirla (ver arriba).
 _VERSION_DUR_SOURCES = ("ligaudio", "hitplayer")
 _VERSION_DUR_WORKERS = 4
-_VERSION_DUR_DEADLINE_S = 8.0
+_VERSION_DUR_DEADLINE_S = 5.0
+_MP3_CABECERA_MAX = 256 * 1024          # ID3 con carátula grande: más que esto, no se sigue leyendo
+
+
+def _duracion_mp3_cabecera(url: str, ua: str, timeout: float = _VERSION_DUR_DEADLINE_S) -> float:
+    """Duración (s) de un MP3 remoto según su cabecera Xing/Info, o 0 si no se puede saber.
+    Lee como mucho `_MP3_CABECERA_MAX` bytes (no baja el tema). Solo http(s)."""
+    import requests
+
+    if not _url_http(url):
+        return 0.0
+    buf = b""
+    try:
+        with requests.get(url, headers={"User-Agent": ua} if ua else None, stream=True,
+                          timeout=(min(timeout, 4.0), timeout)) as r:
+            if r.status_code != 200:
+                return 0.0
+            limite = time.monotonic() + timeout
+            for chunk in r.iter_content(16384):
+                buf += chunk
+                d = _duracion_xing(buf)          # None = todavía no alcanza para decidir
+                if d is not None or time.monotonic() > limite:
+                    return d or 0.0
+    except Exception as e:
+        logger.info(f"ℹ️ No pude leer la cabecera de un MP3: {type(e).__name__}")
+    return _duracion_xing(buf) or 0.0
+
+
+# MPEG audio: sample rate por versión (bits 19-20) e índice (bits 10-11). Versión 1 = MPEG-1.
+_MP3_SR = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+
+
+def _duracion_xing(buf: bytes) -> float | None:
+    """Duración según la cabecera Xing/Info del primer frame MPEG de `buf`, None si todavía no
+    hay bytes suficientes para decidir, 0.0 si no la tiene (o no es un MP3 de capa 3, o con
+    `_MP3_CABECERA_MAX` bytes todavía no se llegó al primer frame: un ID3 enorme). Con
+    Info (CBR) y el campo de bytes, se verifica contra el bitrate: si no coinciden a ±2 %, la
+    cabecera miente y la duración es desconocida."""
+    import struct
+
+    off = 0
+    if buf[:3] == b"ID3":
+        if len(buf) < 10:
+            return None
+        s = buf[6:10]
+        off = 10 + ((s[0] & 0x7F) << 21 | (s[1] & 0x7F) << 14 | (s[2] & 0x7F) << 7 | (s[3] & 0x7F))
+        if buf[5] & 0x10:                                  # pie de ID3v2.4
+            off += 10
+    if len(buf) < off + 4096:
+        return None if len(buf) < _MP3_CABECERA_MAX else 0.0
+    i = off
+    while i < off + 4096 - 4 and not (buf[i] == 0xFF and (buf[i + 1] & 0xE0) == 0xE0):
+        i += 1
+    h = buf[i:i + 4]
+    if len(h) < 4 or h[0] != 0xFF or (h[1] & 0xE0) != 0xE0:
+        return 0.0
+    version, capa = (h[1] >> 3) & 3, (h[1] >> 1) & 3
+    sr_idx, br_idx = (h[2] >> 2) & 3, h[2] >> 4
+    if version == 1 or capa != 1 or sr_idx == 3 or br_idx in (0, 15):   # solo capa 3, cabecera válida
+        return 0.0
+    sr = _MP3_SR[version][sr_idx]
+    spf = 1152 if version == 3 else 576
+    mono = (h[3] >> 6) == 3
+    # El tag va después de la info lateral, cuyo largo depende de la versión y los canales.
+    lateral = (17 if mono else 32) if version == 3 else (9 if mono else 17)
+    p = i + 4 + lateral
+    tag = buf[p:p + 4]
+    if tag not in (b"Xing", b"Info"):
+        return 0.0
+    flags = struct.unpack(">I", buf[p + 4:p + 8])[0]
+    if not flags & 1:                                       # sin cantidad de frames
+        return 0.0
+    frames = struct.unpack(">I", buf[p + 8:p + 12])[0]
+    dur = frames * spf / sr
+    if tag == b"Info" and flags & 2:                        # CBR: los bytes tienen que dar lo mismo
+        bitrates = ((0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320) if version == 3
+                    else (0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160))
+        nbytes = struct.unpack(">I", buf[p + 12:p + 16])[0]
+        por_bytes = nbytes * 8 / (bitrates[br_idx] * 1000)
+        if not dur or abs(por_bytes - dur) > 0.02 * dur:
+            return 0.0
+    return dur if dur > 0 else 0.0
 
 
 def _medir_duraciones_mp3(wanted, wanted_s, candidatos: list) -> None:
     """Completa en el lugar la `duracion` de los MP3 directos que la traen desconocida y que
-    por texto SÍ serían el tema (los demás no se miden: se descartan igual). Sin duración de la
+    por texto SÍ se ofrecerían (los demás no se miden: se descartan igual). Sin duración de la
     Station no hay con qué comparar: no se mide nada."""
     from concurrent.futures import ThreadPoolExecutor, wait
 
@@ -801,15 +917,15 @@ def _medir_duraciones_mp3(wanted, wanted_s, candidatos: list) -> None:
     if not wanted_s:
         return
     medir = [c for c in candidatos
-             if (c.get("fuente") or "").lower() in _VERSION_DUR_SOURCES and c.get("url")
+             if (c.get("fuente") or "").lower() in _VERSION_DUR_SOURCES and _url_http(c.get("url"))
              and track_identity.duration_or_none(c.get("duracion"), c.get("fuente")) is None
-             and _version_valida(wanted, wanted_s, c)]
+             and _version_aceptada(wanted, wanted_s, c)]
     if not medir:
         return
     ua = HEADERS.get("User-Agent", "")
     ex = ThreadPoolExecutor(max_workers=min(_VERSION_DUR_WORKERS, len(medir)))
     try:
-        futs = {ex.submit(_duracion_audio, c["url"], ua, _VERSION_DUR_DEADLINE_S): c for c in medir}
+        futs = {ex.submit(_duracion_mp3_cabecera, c["url"], ua, _VERSION_DUR_DEADLINE_S): c for c in medir}
         wait(futs, timeout=_VERSION_DUR_DEADLINE_S)
         for fut, c in futs.items():
             try:
@@ -820,9 +936,9 @@ def _medir_duraciones_mp3(wanted, wanted_s, candidatos: list) -> None:
             if d:
                 c["duracion"] = round(d, 1)
             else:
-                logger.info(f"ℹ️ Versiones: no pude medir la duración de un MP3 ({c.get('fuente')}): queda por texto.")
+                logger.info(f"ℹ️ Versiones: no pude medir la duración de un MP3 ({c.get('fuente')}): se ofrece sin elegirla.")
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)   # ffprobe tiene su propio timeout
+        ex.shutdown(wait=False, cancel_futures=True)   # cada lectura tiene su propio tope
 
 
 def _sc_otros_uploads(q: str, tema_id: str) -> tuple[list, str | None]:

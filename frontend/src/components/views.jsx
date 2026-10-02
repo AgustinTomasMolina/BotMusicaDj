@@ -213,16 +213,23 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           // de 30 s no tiene nota: no es el tema. Spotify tampoco: se baja buscando en YouTube.
           const grade = o.calidad ? (o.calidad.ok ? o.calidad.grade : '?') : null
           const gradeText = o.solo_preview ? 'solo 30 s (Go+)' : grade ? `nota ${grade}` : null
+          // f40-r2: el Extended es OTRA edición que la que sonó en la Station (más larga): la
+          // pastilla lo dice con su duración. Una versión con la duración sin verificar se
+          // ofrece atenuada y lo dice (no viene elegida nunca, ver bestOption).
+          const sinVerificar = o.duracion_verificada === false
+          const ext = o.edicion === 'extended' ? (sinVerificar ? 'Extended' : `Extended · ${fmtDur(o.duracion)}`) : null
+          const extras = [ext, sinVerificar ? 'duración sin verificar' : null].filter(Boolean).join(', ')
           return (
-            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
+            <button key={k} type="button" className={`vchip ${PF[f] || ''}${sinVerificar ? ' is-sin-verificar' : ''}${sounding ? ' is-playing' : ''}${sounding && isLive ? ' is-on' : ''}`}
               aria-pressed={chosen} aria-current={sounding ? 'true' : undefined}
-              aria-label={`Opción ${k + 1}: ${sourceName(o)}${gradeText ? `, ${gradeText}` : ''}${stateText ? ` (${stateText})` : ''}`}
+              aria-label={`Opción ${k + 1}: ${sourceName(o)}${gradeText ? `, ${gradeText}` : ''}${extras ? `, ${extras}` : ''}${stateText ? ` (${stateText})` : ''}`}
               onMouseEnter={() => preview.schedule(okey, o)}
               onClick={() => onSelect(i, k)}
-              title={`Opción ${k + 1} · ${sourceName(o)} — ${o.titulo}${gradeText ? ` · ${gradeText}` : ''}${o.calidad?.calidad ? ` (${o.calidad.calidad})` : ''}${f === 'spotify' ? ' · se baja buscándolo en YouTube' : ''}${stateText ? ` · ${stateText}` : ''}`}>
+              title={`Opción ${k + 1} · ${sourceName(o)} — ${o.titulo}${gradeText ? ` · ${gradeText}` : ''}${o.calidad?.calidad ? ` (${o.calidad.calidad})` : ''}${ext ? (sinVerificar ? ' · Extended según su título: otra edición que la de la Station' : ` · ${ext}: otra edición, más larga que la de la Station`) : ''}${sinVerificar ? ' · duración sin verificar: no se elige sola' : ''}${f === 'spotify' ? ' · se baja buscándolo en YouTube' : ''}${stateText ? ` · ${stateText}` : ''}`}>
               {chosen ? <IconChosen /> : <span className="n">{k + 1}</span>}
               {sounding ? <Eq on={isLive} /> : <span className="dot" />}
               {FUENTE_CORTO[f] || o.fuente || '?'}
+              {ext && <span className="vchip-ed" aria-hidden="true">{sinVerificar ? 'Extended' : `Extended ${fmtDur(o.duracion)}`}</span>}
               {o.solo_preview
                 ? <span className="vchip-grade is-preview" aria-hidden="true">30 s</span>
                 : grade && <span className={`vchip-grade ${gradeClass(grade)}`} aria-hidden="true">{grade}</span>}

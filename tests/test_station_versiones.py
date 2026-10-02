@@ -200,14 +200,15 @@ class Entorno:
         monkeypatch.setattr(server, "FUENTES_SCRAPER", [("ligaudio", self.fuentes.ligaudio),
                                                         ("hitplayer", self.fuentes.hitplayer)])
         monkeypatch.setattr(server, "_calidad_preview", self.notas)
-        # ffprobe de juguete (f40): la duración medida de cada MP3 por url; sin dato, 0 = "no
-        # pude medir" (lo mismo que devuelve `_duracion_audio` cuando ffprobe falla).
+        # Medición de juguete (f40-r2: la cabecera Xing/Info del MP3, `_duracion_mp3_cabecera`):
+        # la duración de cada MP3 por url; sin dato, 0 = "no pude medir" (lo mismo que devuelve
+        # la real sin cabecera o sin respuesta). La real se prueba aparte, con un servidor local.
         self.duraciones, self.medidas = {}, []
 
         def medir(url, ua, timeout=20):
             self.medidas.append((url, timeout))
             return self.duraciones.get(url, 0.0)
-        monkeypatch.setattr(server, "_duracion_audio", medir)
+        monkeypatch.setattr(server, "_duracion_mp3_cabecera", medir)
         monkeypatch.setattr(server.jobs, "queue_disponible", lambda: False)
         monkeypatch.setattr(server, "_sc_pause_until", 0.0)
         monkeypatch.setattr(sc, "_default_api", None)
@@ -271,10 +272,11 @@ def test_una_edicion_mas_corta_no_pasa_cuando_la_station_es_extended(env):
 
 
 @pytest.mark.parametrize("cand, por_que", [
-    # El caso de la auditoría f40: «Hera» de 3:26 en SoundCloud y «Hera (Original Mix)» de 6:04
-    # en YouTube. "(Original Mix)" es la versión original por texto, pero 432 s contra 244,8 s
-    # es otra edición (la extended de siempre con otro nombre).
-    (yt("SPÆCE - B WITH U (Original Mix)", "SPÆCE", 432, "bwithu00009"), "más larga que no cuadra: otra edición"),
+    # f40-r2: «(Original Mix)» MÁS largo es el Extended y ahora se ofrece (ver los tests del
+    # Extended); pero más de 3× el tema (> 734,4 s) ya no es una edición: un loop, un mix.
+    (yt("SPÆCE - B WITH U (Original Mix)", "SPÆCE", 740, "bwithu00009"), "más de 3× el tema no es su Extended"),
+    # Más larga SIN etiqueta de edición larga: no se sabe qué es (regla "a" de f40).
+    (yt("SPÆCE - B WITH U", "SPÆCE", 432, "bwithu00013"), "más larga sin decir Extended: otra cosa"),
     # f40, decisión del dueño (opción "a"): un video con intro de 46 s tampoco cuadra (±max(10 s,
     # 10 %) = ±24,5 s) y ya no se ofrece; antes pasaba como "texto" y podía quedar elegido.
     (YT_B_INTRO, "un video con intro larga no cuadra en duración: no se ofrece"),
@@ -296,6 +298,93 @@ def test_una_version_mas_larga_que_cuadra_se_ofrece(env):
     r = env.versiones(B_WITH_U)
     assert opciones(r) == [("youtube", largo["url"]), BASE_B]
     assert r["opciones"][0]["evidencia"] == "texto+duracion"
+
+
+# --- el Extended del tema: se ofrece y se elige (f40-r2, decisión del dueño) ---------------------------
+# Las duraciones son las de la auditoría f40-r2 (6 Stations reales): «Space Motion - Hera» 3:26
+# en SoundCloud contra «Hera (Original Mix)» 6:04 en YouTube; «Giolì & Assia - The Point Of
+# Living (Omnya Remix)» 232,4 s contra «(Omnya Remix Extended)» 282 s.
+
+HERA = dict(B_WITH_U, titulo="Hera", artista="Space Motion", duracion=206.0)
+Q_HERA = "space motion hera"
+POL = dict(B_WITH_U, titulo="The Point Of Living (Omnya Remix)", artista="Giolì & Assia", duracion=232.4)
+Q_POL = "giolì & assia the point of living omnya remix"
+
+
+def test_hera_original_mix_de_6_minutos_es_el_extended_y_se_ofrece_marcado(env):
+    ext = yt("Space Motion - Hera (Original Mix)", "Space Motion", 364, "hera0000001")
+    env.resultados(youtube={Q_HERA: [ext]})
+    r = env.versiones(HERA)
+    assert opciones(r) == [("youtube", ext["url"]), ("soundcloud", HERA["url"])]
+    o = r["opciones"][0]
+    assert (o.get("edicion"), o["duracion_verificada"], o["duracion"]) == ("extended", True, 364)
+    assert "edicion" not in r["opciones"][1], "el tema de la Station no es «otra edición»"
+
+
+def test_en_una_plataforma_el_extended_le_gana_a_la_del_mismo_largo(env):
+    mismo = yt("Space Motion - Hera", "Space Motion", 207, "hera0000002")
+    ext = yt("Space Motion - Hera (Extended Mix)", "Space Motion", 364, "hera0000003")
+    env.resultados(youtube={Q_HERA: [mismo, ext]})        # la del mismo largo viene PRIMERO
+    r = env.versiones(HERA)
+    assert opciones(r) == [("youtube", ext["url"]), ("soundcloud", HERA["url"])]
+
+
+def test_el_extended_del_mismo_remix_se_ofrece(env):
+    ext = yt("Giolì & Assia - The Point Of Living (Omnya Remix Extended)", "Giolì & Assia", 282, "pol00000001")
+    env.resultados(youtube={Q_POL: [ext]})
+    r = env.versiones(POL)
+    assert opciones(r) == [("youtube", ext["url"]), ("soundcloud", POL["url"])]
+    assert (r["opciones"][0].get("edicion"), r["opciones"][0]["duracion_verificada"]) == ("extended", True)
+
+
+@pytest.mark.parametrize("tema, q, cand, por_que", [
+    (POL, Q_POL, yt("Giolì & Assia - The Point Of Living (Extended Mix)", "Giolì & Assia", 400, "pol00000002"),
+     "el Extended del ORIGINAL no es el del remix"),
+    (POL, Q_POL, yt("Giolì & Assia - The Point Of Living (KHROME Remix Extended)", "Giolì & Assia", 300, "pol00000003"),
+     "el Extended de OTRO remix tampoco"),
+    (HERA, Q_HERA, yt("Space Motion - Hera (Omnya Remix Extended)", "Space Motion", 300, "hera0000004"),
+     "si la Station es el original, el Extended de un remix no cuenta"),
+    (HERA, Q_HERA, yt("Space Motion - Hera (Extended Mix)", "Space Motion", 150, "hera0000005"),
+     "un «Extended» más CORTO que el tema es otra cosa: nunca"),
+    (HERA, Q_HERA, yt("Space Motion - Hera (Live Extended)", "Space Motion", 360, "hera0000006"),
+     "un vivo no es una edición del tema"),
+    (HERA, Q_HERA, yt("NARCX - Hera (Extended Mix)", "NARCX", 364, "hera0000007"),
+     "mismo título, otro artista"),
+])
+def test_lo_que_no_es_el_extended_del_tema_no_se_ofrece(env, tema, q, cand, por_que):
+    env.resultados(youtube={q: [cand]})
+    assert opciones(env.versiones(tema)) == [("soundcloud", tema["url"])], por_que
+
+
+def test_un_extended_de_hitplayer_sin_duracion_se_ofrece_sin_verificar(env):
+    # HitPlayer no publica la duración y la cabecera no se pudo leer (0): se ofrece, marcado
+    # como Extended por su título, con la duración SIN verificar (el front no lo elige).
+    hp = mp3("hitplayer", "The Point Of Living (Omnya Remix Extended)", "Giolì", 0, 30)
+    env.resultados(hitplayer={Q_POL: [hp]})
+    r = env.versiones(POL)
+    assert opciones(r) == [("soundcloud", POL["url"]), ("hitplayer", hp["url"])]
+    o = r["opciones"][1]
+    assert (o.get("edicion"), o["duracion_verificada"], o["duracion"]) == ("extended", False, 0)
+    assert [u for u, _ in env.medidas] == [hp["url"]], "se intentó medir antes de ofrecerlo sin verificar"
+
+
+def test_un_extended_de_hitplayer_medido_queda_verificado(env):
+    hp = mp3("hitplayer", "The Point Of Living (Omnya Remix Extended)", "Giolì", 0, 31)
+    env.resultados(hitplayer={Q_POL: [hp]})
+    env.duraciones = {hp["url"]: 282.04}
+    o = env.versiones(POL)["opciones"][1]
+    assert (o.get("edicion"), o["duracion_verificada"], o["duracion"]) == ("extended", True, 282.0)
+
+
+def test_argy_aria_de_hitplayer_medida_es_otra_edicion_y_no_se_ofrece(env):
+    # El caso de la auditoría f40-r2: «Argy & Omnya - Aria» de 314,8 s en SoundCloud; HitPlayer
+    # «Argy - Aria» sin duración se elegía por defecto. Medida por su cabecera: 252,46 s (el
+    # valor real del archivo entero bajado). Más corta y no cuadra: no se ofrece.
+    tema = dict(B_WITH_U, titulo="Aria", artista="Argy & Omnya", duracion=314.8)
+    hp = mp3("hitplayer", "Aria", "Argy", 0, 32)
+    env.resultados(hitplayer={"argy & omnya aria": [hp]})
+    env.duraciones = {hp["url"]: 252.46}
+    assert opciones(env.versiones(tema)) == [("soundcloud", tema["url"])]
 
 
 @pytest.mark.parametrize("dur, esperado", [(30.0, "texto"), (30, "texto")])
@@ -338,6 +427,7 @@ def test_un_mp3_sin_duracion_se_mide_y_si_cuadra_se_ofrece_con_la_medida(env):
     assert opciones(r) == [BASE_B, ("hitplayer", HIT_B["url"])]
     hp = r["opciones"][1]
     assert (hp["duracion"], hp["evidencia"]) == (244.3, "texto+duracion"), "la duración medida no se usó"
+    assert hp["duracion_verificada"] is True and "edicion" not in hp
     assert env.medidas == [(HIT_B["url"], env.server._VERSION_DUR_DEADLINE_S)]
 
 
@@ -350,11 +440,13 @@ def test_un_mp3_sin_duracion_que_mide_otra_edicion_no_se_ofrece(env):
 
 
 def test_un_mp3_que_no_se_puede_medir_queda_por_texto(env):
-    # ffprobe no pudo (0): la regla de siempre para "duración desconocida" — solo por texto.
+    # No se pudo medir (0): la regla de siempre para "duración desconocida" — solo por texto, y
+    # (f40-r2, decisión del dueño) marcada sin verificar: se ofrece pero el front no la elige.
     env.resultados(hitplayer={Q_B: [HIT_B]})
     r = env.versiones(B_WITH_U)
     assert opciones(r) == [BASE_B, ("hitplayer", HIT_B["url"])]
     assert (r["opciones"][1]["duracion"], r["opciones"][1]["evidencia"]) == (0, "texto")
+    assert r["opciones"][1]["duracion_verificada"] is False
     assert [u for u, _ in env.medidas] == [HIT_B["url"]]
 
 
@@ -779,6 +871,14 @@ def test_endpoint_booleanos_estrictos(env, client):
 
 # --- las respuestas que usa el E2E -------------------------------------------------------------------
 
+# «FTB» de Burjoe (296 s), el cuarto tema de la Station grabada: su Extended en YouTube (412 s,
+# 1,39×) y un MP3 de HitPlayer sin duración (la cabecera no se pudo leer).
+FTB = STATION["items"][3]
+Q_FTB = "burjoe ftb"
+YT_FTB_EXT = yt("Burjoe - FTB (Extended Mix)", "Burjoe", 412, "burjoeftb01")
+HIT_FTB = mp3("hitplayer", "FTB", "Burjoe", 0, 40)
+
+
 def _escenario_e2e(env):
     env.usar_http(FakeHttp(alias={"fblmanny from the top": "IMMINENT From The Top"}))
     env.resultados(
@@ -786,16 +886,20 @@ def _escenario_e2e(env):
                  "narcx take that": [yt("NARCX - Take Me Higher", "NARCX", 227, "narcx000001")],
                  Q_DAFT: [yt("Daft Punk - One More Time (Official Video)", "Daft Punk", 320, "daftpunk001"),
                           yt("Daft Punk - One More Time (Matroda Remix)", "MATRODA", 184, "daftpunk002")],
-                 "fblmanny from the top": [yt("Crappy Banjos - From The Top", "Crappy Banjos", 147, "banjos00001")]},
-        ligaudio={Q_B: [LIG_B]}, hitplayer={Q_B: [HIT_B]},
+                 "fblmanny from the top": [yt("Crappy Banjos - From The Top", "Crappy Banjos", 147, "banjos00001")],
+                 Q_FTB: [YT_FTB_EXT]},
+        ligaudio={Q_B: [LIG_B]}, hitplayer={Q_B: [HIT_B], Q_FTB: [HIT_FTB]},
         spotify={Q_B: [SP_B], Q_DAFT: [spotify("One More Time", "Daft Punk", 320, "0daftpunkspotify000000")],
                  "narcx take that": [spotify("Patience", "Take That", 202, "0takethatspotify000000")]})
     # Notas distintas por opción: la mejor NO es la primera de la fila (así el E2E ve que la
     # elegida por defecto sale de la nota y no de la posición).
     env.notas.por_url = {YT_B["url"]: "B", B_WITH_U["url"]: "C", LIG_B["url"]: "A", HIT_B["url"]: "B",
                          TAKE_THAT["url"]: "B", "https://www.youtube.com/watch?v=daftpunk001": "B",
-                         sc_track(199428706)["url"]: "A"}
-    temas = [B_WITH_U, TAKE_THAT, DAFT_GO, FBL_GO]
+                         sc_track(199428706)["url"]: "A",
+                         # FTB (f40-r2): el Extended (C) tiene que quedar elegido por encima de la
+                         # Station (B) y del MP3 sin duración verificada, aunque ese tenga A.
+                         YT_FTB_EXT["url"]: "C", FTB["url"]: "B", HIT_FTB["url"]: "A"}
+    temas = [B_WITH_U, TAKE_THAT, DAFT_GO, FBL_GO, FTB]
     return {t["video_id"]: t for t in temas}
 
 
@@ -823,4 +927,7 @@ def test_las_respuestas_que_usa_el_e2e_son_las_del_endpoint(env, client):
         [("youtube", None), ("soundcloud", True), ("soundcloud", False), ("spotify", None)]
     f = esperado[FBL_GO["video_id"]]["respuesta"]
     assert [o.get("solo_preview") for o in f["opciones"]] == [True] and f["motivo"] is None
+    e = esperado[FTB["video_id"]]["respuesta"]
+    assert [(o["fuente"], o.get("edicion"), o.get("duracion_verificada"), o["calidad"]["grade"]) for o in e["opciones"]] == \
+        [("youtube", "extended", True, "C"), ("soundcloud", None, None, "B"), ("hitplayer", None, False, "A")]
     assert CID not in RESPUESTAS_E2E.read_text(encoding="utf-8")

@@ -271,6 +271,57 @@ def test_version_canonica(texto, version):
     assert ti.version_of(texto) == version
 
 
+@pytest.mark.parametrize("titulo, version", [
+    ("Giolì & Assia - The Point Of Living (Omnya Remix Extended)", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) [Extended Mix]", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) - Extended Mix", "remix:omnya+extended"),
+    ("Giolì & Assia - The Point Of Living (Omnya Remix)", "remix:omnya"),
+    ("Giolì & Assia - The Point Of Living (Extended Mix)", "extended"),
+    # Un segundo grupo que NO es "extended" sigue sin cambiar la versión (manda el primero).
+    ("Giolì & Assia - The Point Of Living (Omnya Remix) (Radio Edit)", "remix:omnya"),
+])
+def test_el_extended_de_un_remix_no_es_el_remix(titulo, version):
+    i = ti.parse_entry(titulo, "x")
+    assert (i.base_title, i.version) == ("the point of living", version)
+
+
+H = ti.parse_entry("Space Motion - Hera", "x")
+P = ti.parse_entry("Giolì & Assia - The Point Of Living (Omnya Remix)", "x")
+
+
+@pytest.mark.parametrize("wanted, cand, es", [
+    (H, "Space Motion - Hera (Original Mix)", True), (H, "Space Motion - Hera (Extended Mix)", True),
+    (H, "Space Motion - Hera (Club Mix)", True), (H, "Space Motion - Hera - Extended Version", True),
+    (H, "Space Motion - Hera", False),                       # sin etiqueta: no dice ser la larga
+    (H, "Space Motion - Hera (Album Version)", False),       # "original" para la identidad, no la larga
+    (H, "Space Motion - Hera (Omnya Remix Extended)", False),  # el extended de un remix no es del original
+    (H, "Space Motion - Hera (KHROME Extended Mix)", False),   # de otro (KHROME): otra obra
+    (H, "Space Motion - Hera (Live Extended)", False), (H, "NARCX - Hera (Extended Mix)", False),
+    (H, "Space Motion - Hero (Extended Mix)", False),
+    (ti.parse_entry("Space Motion - Hera (Radio Edit)", "x"), "Space Motion - Hera (Extended Mix)", True),
+    (P, "Giolì - The Point Of Living (Omnya Remix Extended)", True),
+    (P, "Giolì & Assia - The Point Of Living (Omnya Extended Remix)", True),
+    (P, "Giolì & Assia - The Point Of Living (Extended Mix)", False),     # un remix no es el original
+    (P, "Giolì & Assia - The Point Of Living (Original Mix)", False),
+    (P, "Giolì & Assia - The Point Of Living (KHROME Remix Extended)", False),
+    (P, "Giolì & Assia - The Point Of Living (Omnya Remix)", False),      # el mismo remix, sin extended
+])
+def test_es_extended_de(wanted, cand, es):
+    assert ti.es_extended_de(wanted, ti.parse_entry(cand, "x")) is es
+
+
+@pytest.mark.parametrize("w, c, esperado", [
+    (206, 364, True),            # «Hera» 3:26 → «(Original Mix)» 6:04
+    (232.4, 282, True),          # «The Point Of Living (Omnya Remix)» → «(Omnya Remix Extended)»
+    (206, 216, False),           # +10 s: cuadra, es la misma edición (no otra)
+    (206, 150, False),           # más corta: nunca
+    (206, 618, True), (206, 618.1, False),    # cota: 3× el tema
+    (None, 364, None), (206, None, None), (206, 0, None), (206, float("nan"), None),
+])
+def test_dura_como_extended(w, c, esperado):
+    assert ti.dura_como_extended(w, c) is esperado
+
+
 def test_la_version_va_en_la_consulta_y_el_limite_sube():
     e = ti.parse_entry("Adagio For Strings (Radio Edit)", "Tiësto")
     assert ti.deezer_queries(e) == ['artist:"Tiësto" track:"adagio for strings"', "Tiësto adagio for strings",

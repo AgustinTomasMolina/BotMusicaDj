@@ -9,6 +9,8 @@ import { versiones } from './api'
 import { GRADE_RANK, seedCalidad } from './components/common'
 
 export const CONCURRENCIA = 3
+// El peor caso del server por fila (`presupuesto_fila_s` en server.py) tiene que quedar debajo
+// de esto con margen: un test de Python lo lee de acá y lo compara (f40-r2).
 export const TIMEOUT_FILA_MS = 45000
 
 // La versión que viene elegida en una fila: la de mayor nota con el mismo ranking que el
@@ -17,14 +19,26 @@ export const TIMEOUT_FILA_MS = 45000
 // verificar que sea este tema). Si no hay otra, queda la de SoundCloud: marcada y sin descarga.
 // Sin nota (no se pudo medir, "?") va entre la F y la D (f40): una F es un audio MEDIDO como
 // malo y no le puede ganar a uno que no se sabe; uno que no se sabe tampoco le gana a una D medida.
+//
+// f40-r2 (decisiones del dueño):
+// - Una versión cuya duración NO se pudo verificar (`duracion_verificada: false`, p. ej. un MP3
+//   de HitPlayer sin cabecera) se ofrece pero NUNCA viene elegida: «Argy - Aria» de HitPlayer
+//   sin duración resultó ser otra edición (252 s de un tema de 315 s) y era la elegida. Si todas
+//   las demás son así, queda la de SoundCloud.
+// - El Extended del tema (`edicion: "extended"`, con la duración verificada) le gana a las del
+//   mismo largo, sea cual sea la nota: "el extended dura más, y para los DJ eso es ORO". Entre
+//   varios Extended, la nota.
 export const SIN_NOTA_RANK = (GRADE_RANK.F + GRADE_RANK.D) / 2
+const EXTENDED_RANK = 100     // por encima de cualquier nota (GRADE_RANK va de 1 a 6)
 export function bestOption(opciones) {
   let best = -1, bestRank = -1
   opciones.forEach((o, i) => {
     const f = (o.fuente || '').toLowerCase()
     if (o.solo_preview || f === 'spotify' || f === 'deezer') return
+    if (o.duracion_verificada === false) return
     const g = o.calidad?.ok ? o.calidad.grade : null
-    const r = g && g !== '?' && g in GRADE_RANK ? GRADE_RANK[g] : SIN_NOTA_RANK
+    const r = (g && g !== '?' && g in GRADE_RANK ? GRADE_RANK[g] : SIN_NOTA_RANK)
+      + (o.edicion === 'extended' ? EXTENDED_RANK : 0)
     if (r > bestRank) { bestRank = r; best = i }
   })
   if (best >= 0) return best
