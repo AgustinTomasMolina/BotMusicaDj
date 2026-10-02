@@ -7,7 +7,6 @@ import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
 import { IconDownload, IconActivity, IconCompare, IconRadioTower } from './icons'
-import { bestOption } from '../stationVersions'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -132,89 +131,17 @@ const ROW_STATUS = {
   error: 'No se pudo reproducir', embed: 'En el reproductor de Spotify', none: 'Sin audio',
 }
 const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || 'fuente desconocida'
-const IconChevron = ({ up }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={up ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} /></svg>
-const IconPlaySm = () => <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l12-7z" fill="currentColor" /></svg>
-const IconPauseSm = () => <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" /><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" /></svg>
-
-/* ---------- Versiones de la Station, plegadas (f38, opción A del canvas) ----------
-   La fila muestra SOLO la versión que se baja (punto de la plataforma y nombre; la nota está
-   una sola vez, en la columna NOTA) y un botón "+N versiones" que despliega, debajo de la fila
-   y a lo ancho, la sub-lista de todas: ✓ la elegida, plataforma, nota, Escuchar y Elegir.
-   Es solo presentación: la elegida por defecto sigue saliendo de stationVersions.bestOption y
-   Elegir llama al mismo onSelect que las pastillas. */
-function VersionsList({ g, i, sel, titulo, loadedIdx, isLive, playerStatus, preview, onListen, onSelect, onClose, id }) {
-  const listenRefs = useRef([])
-  const best = bestOption(g.opciones)
-  const onKeyDown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
-  return (
-    <div className="trk-versions" id={id} role="group" aria-label={`Versiones de ${titulo}`} onKeyDown={onKeyDown}
-      onMouseLeave={() => { preview.cancel(); preview.stop() }}>
-      <div className="vline vline-head" aria-hidden="true"><span /><span className="vline-src">Plataforma</span><span className="vline-lbl" /><span className="vline-grade">Nota</span></div>
-      <ul className="vlist">
-        {g.opciones.map((o, k) => {
-          const f = (o.fuente || '').toLowerCase()
-          const chosen = k === sel
-          const sounding = k === loadedIdx
-          const live = sounding && isLive
-          const grade = o.calidad ? (o.calidad.ok ? o.calidad.grade : '?') : '?'
-          // Nombre para el lector: plataforma + número de opción (dos MP3 se distinguen así).
-          const nombre = `${sourceName(o)}, opción ${k + 1}`
-          const label = chosen
-            ? (k === best && o.calidad?.ok ? 'Elegida · mejor nota' : 'Elegida')
-            : o.solo_preview ? 'solo 30 s (Go+)'
-            : f === 'spotify' ? 'se baja buscándolo en YouTube'
-            : grade === '?' ? 'nota sin medir' : ''
-          return (
-            <li key={k} className={`vline${chosen ? ' is-chosen' : ''}`} onMouseEnter={() => preview.schedule(`o${i}:${k}`, o)}>
-              <span className="vline-ok">{chosen && <IconChosen />}</span>
-              <span className={`vline-src ${PF[f] || ''}`}>
-                {sounding ? <Eq on={live} /> : <span className="dot" aria-hidden="true" />}
-                <span className="truncate">{sourceName(o)}</span>
-              </span>
-              <span className="vline-lbl">{label}</span>
-              <span className="vline-grade">
-                {o.solo_preview
-                  ? <span className="vchip-grade is-preview">30 s</span>
-                  : <span className={`grade grade-sm ${gradeClass(grade)}`} aria-label={grade === '?' ? 'nota sin medir' : `nota ${grade}`}>{grade}</span>}
-              </span>
-              {/* Escuchar: la versión en la barra (la cola sigue siendo la de la lista); con la
-                  barra sonando esta misma versión, pausa. Las barritas del punto dicen cuál suena. */}
-              <button type="button" className="btn vline-btn" ref={(el) => { listenRefs.current[k] = el }}
-                aria-pressed={live} onClick={() => onListen(k)}
-                aria-label={`${live ? 'Pausar' : 'Escuchar'} la versión ${nombre}`}
-                title={sounding ? `${ROW_STATUS[playerStatus] || 'En la barra'}: opción ${k + 1}` : `Escuchar esta versión (${sourceName(o)}) en la barra`}>
-                {live ? <IconPauseSm /> : <IconPlaySm />}Escuchar
-              </button>
-              {chosen
-                ? <span className="vline-pick" />
-                : <button type="button" className="btn vline-btn vline-pick is-pick"
-                  aria-label={`Elegir la versión ${nombre} para descargar`}
-                  onClick={() => { onSelect(i, k); listenRefs.current[k]?.focus() }}>Elegir</button>}
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
 
 /* ---------- Fila de un tema: 7 columnas Nocturne (.trk) ---------- */
-// `folded` (Station, f38): VERSIONES muestra solo la elegida + "+N versiones" que despliega la
-// sub-lista. Sin `folded` (búsqueda, modo lista, playlists guardadas) siguen las pastillas.
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onPlayVersion, onSpek, onDownload, onSelect, onCompare, onStation, folded }) {
+// VERSIONES son pastillas en línea en todas las vistas (búsqueda, modo lista, playlists
+// guardadas y Station). La Station tuvo un diseño plegado (f38, "+N versiones" con sub-lista)
+// que el dueño cambió por estas mismas pastillas (f40).
+function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onStation }) {
   const c = g.opciones[sel]
-  const [open, setOpen] = useState(false)
-  const moreRef = useRef(null)
-  const otras = g.opciones.length - 1
-  const titulo = g.base?.titulo || c.titulo
   // Station (f40): la fila ES el tema de la Station. Título, artista y duración son los suyos
   // aunque se elija la versión de otra plataforma: el título de un video ("… (Official Video)")
   // o su duración con intro hacían parecer que la fila era otra edición.
   const ficha = g.base || c
-  const subId = `trk-versions-${i}`
-  const cerrar = () => { setOpen(false); moreRef.current?.focus() }
-  // Sin otras versiones el motivo va en la columna VERSIONES (f38), no repetido bajo el artista.
-  const motivoEnVersiones = folded && otras === 0
   // "Sonando" (barritas animadas, aro) SOLO cuando suena de verdad. Mientras carga —2 a 5 s
   // en frío en YouTube/SoundCloud— decirlo sería mentir (§6); la pastilla dice "cargando"
   // con las barritas quietas, igual que la fila ("Cargando: opción…").
@@ -230,9 +157,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
   const bpm = c.bpm || m.bpm
   const genero = c.genero || m.genero
   const key = c.camelot
-  const fc = (c.fuente || '').toLowerCase()
   return (
-    <>
     <div className={`trk${loadedIdx >= 0 ? ' is-sonando' : ''}`} aria-current={loadedIdx >= 0 ? 'true' : undefined}
       onMouseEnter={() => preview.schedule(thumbKey, c)}
       onMouseLeave={() => { preview.cancel(); preview.stop() }}>
@@ -263,7 +188,7 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
         {/* Station (f36): por qué faltan versiones (una plataforma que no contestó, SoundCloud
             que frenó) y, si el tema es Go+, de dónde sale el tema completo. */}
         {goPlusResuelto && <div className="trk-note">SoundCloud solo da 30 s (Go+): se baja completo de {sourceName(c)}.</div>}
-        {g.motivo && !motivoEnVersiones && <div className="trk-note is-warn" title={g.motivo}>{g.motivo}</div>}
+        {g.motivo && <div className="trk-note is-warn" title={g.motivo}>{g.motivo}</div>}
       </div>
       <div className="trk-meta">
         {bpm && <span className="mb"><span className="mb-label">BPM</span><b>{bpm}</b></span>}
@@ -275,26 +200,6 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           <span className="mb mb-warn" title="SoundCloud no ofrece un audio que la barra pueda abrir para este tema"><b>Sin audio acá</b></span>}
       </div>
       <div className="trk-grade"><QualityBadge c={c} formato={formato} /></div>
-      {folded ? (
-        <div className="trk-vers vpick">
-          {/* La versión que se baja. La nota no se repite acá: es la de la columna NOTA. */}
-          <span className={`vbest ${PF[fc] || ''}`} title={`Se baja de ${sourceName(c)}${fc === 'spotify' ? ' (buscándolo en YouTube)' : ''}`}>
-            {loadedIdx === sel ? <Eq on={isLive} /> : <span className="dot" aria-hidden="true" />}
-            <span className="truncate">{sourceName(c)}</span>
-            {c.solo_preview && <span className="vchip-grade is-preview">30 s</span>}
-          </span>
-          {otras > 0
-            // aria-controls solo con la sub-lista montada: plegada no existe y apuntaría a un id
-            // que no está en la página (f40).
-            ? <button type="button" className="vmore" ref={moreRef} aria-expanded={open} aria-controls={open ? subId : undefined}
-              aria-label={`${open ? 'Ocultar' : 'Ver'} ${otras === 1 ? 'la otra versión' : `las otras ${otras} versiones`} de ${titulo}`}
-              onClick={() => setOpen((o) => !o)}
-              onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); cerrar() } }}>
-              +{otras} {otras === 1 ? 'versión' : 'versiones'} <IconChevron up={open} />
-            </button>
-            : <span className="vsolo" title={g.motivo || undefined}>{g.motivo || `solo en ${sourceName(c)}`}</span>}
-        </div>
-      ) : (
       <div className="trk-vers vchips">
         {g.opciones.map((o, k) => {
           const f = (o.fuente || '').toLowerCase()
@@ -325,7 +230,6 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           )
         })}
       </div>
-      )}
       {/* Acciones (f36): separadas de las versiones por una línea, todas del mismo tamaño
           (32 px, íconos de 16) y con nombre y tooltip. */}
       <div className="trk-acts" role="group" aria-label={`Acciones de ${c.titulo}`}>
@@ -342,11 +246,6 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
           : <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={16} /></DlButton>}
       </div>
     </div>
-    {folded && open && otras > 0 && (
-      <VersionsList g={g} i={i} sel={sel} titulo={titulo} loadedIdx={loadedIdx} isLive={isLive} playerStatus={playerStatus}
-        preview={preview} onListen={(k) => onPlayVersion(i, k)} onSelect={onSelect} onClose={cerrar} id={subId} />
-    )}
-    </>
   )
 }
 
@@ -358,11 +257,6 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   const player = usePlayer()
   // Cola de la barra: la versión elegida de cada tema, en el orden de la lista.
   const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
-  // "Escuchar" de la sub-lista de versiones (f38): la misma cola, con la versión `v` en la fila `i`.
-  const reproducirVersion = (i, v) => onPlay(groups.map((g, k) => {
-    const n = k === i ? v : sel[k]
-    return fromResult(g.opciones[n], metaMap, { n: n + 1, de: g.opciones.length })
-  }), i)
   const [allLabel, setAllLabel] = useState(null)
   const [allBusy, setAllBusy] = useState(false)
   // Station cargando (f36): "Descargar todas" pregunta si bajar las filas listas o esperar.
@@ -467,7 +361,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
           <div>Tema / artista</div>
           <div className="col-meta">Metadata</div>
           <div>Nota</div>
-          <div>{esStation ? 'Se baja de' : 'Versiones'}</div>
+          <div>Versiones</div>
           <div style={{ textAlign: 'right' }}>Acciones</div>
         </div>
         {groups.map((g, i) => (
@@ -477,8 +371,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
             loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}
             playerStatus={player.status}
             playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
-            onSelect={onSelect} onCompare={onCompare} onStation={onStation}
-            folded={esStation} onPlayVersion={reproducirVersion} />
+            onSelect={onSelect} onCompare={onCompare} onStation={onStation} />
         ))}
         {/* La próxima fila de la Station, mientras busca sus versiones. */}
         {siguiente && (

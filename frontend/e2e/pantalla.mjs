@@ -1357,10 +1357,13 @@ const CASOS = [
     await hasta(() => s.descargas.length, (n) => n === 1, 'la descarga del Go+ resuelto no salió')
     igual(s.descargas[0].url, completo.url, 'del Go+ se bajó otra cosa y no el upload completo')
 
-    // FblManny: nadie más lo tiene; queda el preview marcado, sin descarga, y el motivo.
+    // FblManny: nadie más lo tiene; queda el preview marcado y sin descarga. Desde 47f4754 el
+    // backend no manda motivo cuando queda solo SoundCloud, y la fila no inventa uno.
     const f1 = await filaTexto(page, 1)
     afirmar(f1.includes('Preview 30 s'), `la fila del Go+ sin versión no dice que es un preview: ${f1}`)
-    afirmar(f1.includes(vx[fbl.video_id].respuesta.motivo), `la fila no dice el motivo del backend: ${f1}`)
+    igual(vx[fbl.video_id].respuesta.motivo, null, 'el archivo de versiones cambió: el Go+ sin otra versión no traía motivo')
+    igual(await page.evaluate(() => [...document.querySelectorAll('.trk')][1].querySelectorAll('.trk-note').length), 0,
+      'la fila del Go+ sin otra versión dice algo bajo el artista sin que el backend mande motivo')
     const dl1 = await page.evaluate(() => {
       const b = [...document.querySelectorAll('.trk')][1].querySelector('button[aria-label^="Descargar"]')
       return b ? { disabled: b.disabled, nombre: b.getAttribute('aria-label') } : null
@@ -1488,257 +1491,214 @@ const CASOS = [
     }
   }],
 
-  /* ---------- f38: la versión elegida y el resto plegado (diseño A) ---------- */
+  /* ---------- f40: la Station con las mismas pastillas en línea que la búsqueda ----------
+     El plegado de f38 ("+N versiones" con una sub-lista) se sacó a pedido del dueño. Estos casos
+     cubren lo que aquellos protegían y sigue valiendo: qué versión viene elegida y qué se baja,
+     que cada versión suene por donde corresponde y la pastilla lo diga, el teclado, el motivo
+     una sola vez, "MP3" sin el sitio y 400 px. */
 
-  ['station (f38): la fila plegada muestra solo la elegida y "+N versiones"; desplegada, una línea por versión con ✓, notas y "Elegida · mejor nota"', async (page, ctx) => {
-    // «+1 versión» (singular): la fila 3 contesta con dos versiones, la de la Station y la de
-    // YouTube de la respuesta real de la fila 1 (con el título de la fila 3). El resto es la
-    // respuesta real del endpoint.
-    const st = leerJson('station_respuesta.json')
-    const t2 = st.items[2]
-    const ytB = leerVersiones()[st.items[0].video_id].respuesta.opciones.find((o) => o.fuente === 'youtube')
-    const dos = { exito: true, motivo: null, fallidas: [], opciones: [{ ...ytB, titulo: t2.titulo, artista: t2.artista }, { ...t2, estacion: true }] }
-    const s = await montarStation(page, ctx, { respuestas: { [t2.video_id]: dos } })
+  ['station (f40): las versiones son pastillas como en la búsqueda: la de mejor nota elegida con ✓, cada una con su nota, y elegir otra cambia lo que se baja', async (page, ctx) => {
+    const s = await montarStation(page, ctx, {})
     const { items } = s
     await abrirStation(page, ctx, s)
     await hasta(() => leerStation(page), (v) => v.filas.length === items.length, 'no llegaron todas las filas')
 
-    // Solo en la Station la columna se llama "Se baja de".
-    igual(await page.evaluate(() => ({ station: !!document.querySelector('.results.results-station'),
-      columna: [...document.querySelectorAll('.results-head > div')].map((d) => d.textContent)[5] ?? null })),
-    { station: true, columna: 'Se baja de' }, 'el encabezado de la Station')
+    // La columna se llama "Versiones" como en la búsqueda, y del plegado no queda nada.
+    igual(await page.evaluate((plegado) => ({ station: !!document.querySelector('.results.results-station'),
+      columna: [...document.querySelectorAll('.results-head > div')].map((d) => d.textContent)[5] ?? null,
+      plegado: document.querySelectorAll(plegado).length }), PLEGADO),
+    { station: true, columna: 'Versiones', plegado: 0 }, 'el encabezado de la Station o restos del plegado')
 
     const r0 = s.vx[items[0].video_id].respuesta
-    const n = r0.opciones.length - 1
     igual(r0.opciones.filter((o) => o.calidad?.grade === 'A').length, 1, 'el archivo de versiones cambió: la fila 1 tenía una sola A')
     const mejorK = r0.opciones.findIndex((o) => o.calidad?.grade === 'A')
     const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
-    const plegada = (i) => page.evaluate((k) => {
-      const r = [...document.querySelectorAll('.trk')][k]
-      const b = r.querySelector('.vmore')
-      return {
-        elegida: r.querySelector('.vbest')?.textContent.trim() ?? null,
-        mas: b ? { texto: b.textContent.trim(), nombre: b.getAttribute('aria-label'), abierta: b.getAttribute('aria-expanded') } : null,
-        pastillas: r.querySelectorAll('.vchip').length,
-      }
-    }, i)
-    igual(await plegada(0), { elegida: NOMBRE[r0.opciones[mejorK].fuente],
-      mas: { texto: `+${n} versiones`, nombre: `Ver las otras ${n} versiones de ${items[0].titulo}`, abierta: 'false' }, pastillas: 0 },
-    'plegada, la fila 1 muestra solo la elegida (la de mejor nota) y cuántas versiones más hay')
-    igual(await plegada(2), { elegida: 'YouTube', mas: { texto: '+1 versión', nombre: `Ver la otra versión de ${t2.titulo}`, abierta: 'false' }, pastillas: 0 },
-      'con una sola versión más, "+1 versión" en singular')
-    igual(await page.evaluate(() => document.querySelectorAll('.trk-versions').length), 0, 'hay sub-listas abiertas sin que nadie las abriera')
+    afirmar(mejorK !== 0, 'el caso no prueba nada: la de mejor nota tiene que no ser la primera')
 
-    // Desplegar: la sub-lista va justo debajo de su fila, con nombre, y el botón lo dice.
-    await page.evaluate(() => document.querySelector('.trk .vmore').click())
-    const g = await hasta(() => page.evaluate(() => {
-      const b = document.querySelector('.trk .vmore')
-      const el = document.getElementById(b.getAttribute('aria-controls'))
-      return el && { id: el.id, expandido: b.getAttribute('aria-expanded'), nombre: b.getAttribute('aria-label'), texto: b.textContent.trim(),
-        rol: el.getAttribute('role'), grupo: el.getAttribute('aria-label'), debajo: el.previousElementSibling === b.closest('.trk') }
-    }), (v) => v, 'la sub-lista de la fila 1 no se desplegó')
-    const { id, ...vista } = g
-    igual(vista, { expandido: 'true', nombre: `Ocultar las otras ${n} versiones de ${items[0].titulo}`, texto: `+${n} versiones`,
-      rol: 'group', grupo: `Versiones de ${items[0].titulo}`, debajo: true }, 'desplegada: aria-expanded, el nombre del botón y el grupo')
+    // Una pastilla por versión, en el orden de la API. ✓ (y aria-pressed) solo en la elegida; las
+    // demás llevan su número. La nota de cada una, al lado; Spotify no tiene (se baja de YouTube).
+    igual(await pastillasDe(page, 0), esperadasStation(r0.opciones, mejorK), 'la fila 1 con la de mejor nota elegida')
 
-    // Una línea por versión, en el orden de la API. ✓ y "Elegida" solo en la elegida;
-    // "· mejor nota" solo si la elegida ES la de mejor nota.
-    const esperadas = (elegidaK) => r0.opciones.map((o, k) => {
-      const nombre = `${NOMBRE[o.fuente]}, opción ${k + 1}`
-      const nota = o.solo_preview ? '30 s' : o.calidad?.ok ? o.calidad.grade : '?'
-      return {
-        plataforma: NOMBRE[o.fuente], elegida: k === elegidaK, tilde: k === elegidaK,
-        texto: k === elegidaK ? (k === mejorK ? 'Elegida · mejor nota' : 'Elegida')
-          : o.solo_preview ? 'solo 30 s (Go+)' : o.fuente === 'spotify' ? 'se baja buscándolo en YouTube' : nota === '?' ? 'nota sin medir' : '',
-        nota, notaLector: o.solo_preview ? null : nota === '?' ? 'nota sin medir' : `nota ${nota}`,
-        escuchar: { nombre: `Escuchar la versión ${nombre}`, pulsado: 'false' },
-        elegir: k === elegidaK ? null : `Elegir la versión ${nombre} para descargar`,
-      }
-    })
-    igual(await lineasDe(page, id), esperadas(mejorK), 'la sub-lista con la de mejor nota elegida')
-
-    // "Elegir" YouTube: cambia la elegida en la sub-lista, en la fila plegada y en lo que se baja.
+    // Elegir YouTube (nota B): cambia la elegida, la descarga baja esa, y la fila sigue siendo
+    // el tema de la Station (f40: no el título ni la duración del video).
     const yt = r0.opciones[ytK]
-    const clickEn = (sel) => page.evaluate((q) => { const b = document.querySelector(q); b?.click(); return !!b }, sel)
-    afirmar(await clickEn(`#${id} button[aria-label="Elegir la versión YouTube, opción ${ytK + 1} para descargar"]`), 'no hay "Elegir" para YouTube')
-    await hasta(() => lineasDe(page, id), (ls) => ls[ytK].elegida, 'Elegir no cambió la elegida')
-    igual(await lineasDe(page, id), esperadas(ytK), 'elegida YouTube (nota B): "Elegida" sin "mejor nota", y la A pasa a tener "Elegir"')
-    igual((await plegada(0)).elegida, 'YouTube', 'la fila plegada no muestra la nueva elegida')
-    // f40: elegida otra plataforma, la fila sigue diciendo el título, el artista y la duración
-    // del tema de la Station (no los del video de YouTube, que dura otra cosa).
+    await elegir(page, 0, 'YouTube')
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[ytK].elegida === 'true', 'tocar la pastilla de YouTube no la eligió')
+    igual(await pastillasDe(page, 0), esperadasStation(r0.opciones, ytK), 'elegida YouTube: el ✓ pasa a YouTube y la de mejor nota muestra su número')
     afirmar(mmss(yt.duracion) !== mmss(items[0].duracion), `el caso no prueba nada: YouTube y la Station duran lo mismo (${mmss(yt.duracion)})`)
     igual(await fichaDe(page, 0), { titulo: items[0].titulo, artista: items[0].artista, duracion: mmss(items[0].duracion) },
       'con YouTube elegida, la fila dejó de mostrar el tema de la Station')
-    igual(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), `Escuchar la versión YouTube, opción ${ytK + 1}`,
-      'después de Elegir el foco tiene que quedar en la misma línea (su "Escuchar"), no perderse')
     await descargarFila(page, 0)
     await hasta(() => s.descargas.length, (x) => x === 1, 'la descarga no salió')
-    igual(s.descargas[0].url, yt.url, 'después de elegir YouTube en la sub-lista se bajó otra versión')
+    igual(s.descargas[0].url, yt.url, 'después de elegir YouTube se bajó otra versión')
 
-    // Volver a la de mejor nota: "Elegida · mejor nota" otra vez, y se baja esa.
-    afirmar(await clickEn(`#${id} button[aria-label="Elegir la versión ${NOMBRE[r0.opciones[mejorK].fuente]}, opción ${mejorK + 1} para descargar"]`), 'no hay "Elegir" para la de mejor nota')
-    await hasta(() => lineasDe(page, id), (ls) => ls[mejorK].elegida, 'no volvió a quedar elegida la de mejor nota')
-    igual(await lineasDe(page, id), esperadas(mejorK), 'de vuelta en la de mejor nota')
+    // De vuelta en la de mejor nota: se baja esa.
+    await elegir(page, 0, null, mejorK)
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[mejorK].elegida === 'true', 'no volvió a quedar elegida la de mejor nota')
+    igual(await pastillasDe(page, 0), esperadasStation(r0.opciones, mejorK), 'de vuelta en la de mejor nota')
     await descargarFila(page, 0)
     await hasta(() => s.descargas.length, (x) => x === 2, 'la segunda descarga no salió')
     igual(s.descargas[1].url, r0.opciones[mejorK].url, 'de vuelta en la de mejor nota se bajó otra versión')
-
-    // Plegar: el grupo se va y el botón vuelve a "Ver".
-    afirmar(await clickEn('.trk .vmore'), 'no está el botón para plegar')
-    await page.waitForSelector(`#${id}`, { hidden: true, timeout: ESPERA_MS })
-    igual((await plegada(0)).mas, { texto: `+${n} versiones`, nombre: `Ver las otras ${n} versiones de ${items[0].titulo}`, abierta: 'false' },
-      'plegada otra vez, el botón no volvió a su estado')
+    igual(await sonando(page), [], 'elegir una pastilla puso algo a sonar')
   }],
 
-  ['station (f38): "Escuchar" suena esa versión en la barra por el proxy sin cambiar la elegida; aria-pressed, y otra vez pausa', async (page, ctx) => {
+  ['station (f40): YouTube y SoundCloud suenan por el proxy de audio, sin video; la pastilla que suena lo dice (aria-current, barritas) y la fila sigue siendo el tema de la Station', async (page, ctx) => {
     const s = await montarStation(page, ctx, {})
     const { items } = s
     await abrirStation(page, ctx, s)
     await hasta(() => leerStation(page), (v) => v.filas.length === items.length, 'no llegaron todas las filas')
     const r0 = s.vx[items[0].video_id].respuesta
     const total = r0.opciones.length
-    const mejorK = r0.opciones.findIndex((o) => o.calidad?.grade === 'A')
     const k = (f, extra = () => true) => r0.opciones.findIndex((o) => o.fuente === f && extra(o))
-    const [ytK, scK, ligK] = [k('youtube'), k('soundcloud', (o) => o.estacion), k('ligaudio')]
-    const est = await abrirVersiones(page, 0)
-    const escuchar = (x) => page.evaluate((sel, j) => document.querySelectorAll(`#${sel} li.vline`)[j].querySelector('button:not(.is-pick)').click(), est.id, x)
+    const [ytK, scK, hitK] = [k('youtube'), k('soundcloud', (o) => o.estacion), k('hitplayer')]
     const medio = () => page.evaluate(() => [...window.__medios].find((m) => !m.paused && !m.ended && !m.error)?.src ?? null)
     const fila = () => page.evaluate(() => ({
+      sonando: document.querySelector('.trk')?.getAttribute('aria-current') ?? null,
       ahora: document.querySelector('.trk .trk-now')?.textContent ?? null,
       fuente: document.querySelector('.deck-src')?.textContent ?? null,
       cola: document.querySelector('.deck-count')?.textContent ?? null,
+      monitor: window.__visible(document.querySelector('.deck-monitor')),
+      iframes: document.querySelectorAll('iframe').length,
     }))
-    const botones = async () => (await lineasDe(page, est.id)).map((l) => l.escuchar)
-    const esperados = (suena) => r0.opciones.map((o, j) => ({
-      nombre: `${j === suena ? 'Pausar' : 'Escuchar'} la versión ${NOMBRE[o.fuente]}, opción ${j + 1}`, pulsado: String(j === suena) }))
+    // Qué pastilla suena: [elegida, aria-current, barritas, barritas animadas] de cada una.
+    const estados = async () => (await pastillasDe(page, 0)).map((p) => [p.elegida, p.suena, p.barras, p.animadas])
+    const esperados = (elegidaK, suenaK, animadas) => r0.opciones.map((_, j) =>
+      [String(j === elegidaK), j === suenaK ? 'true' : null, j === suenaK, j === suenaK && animadas])
+    const ficha = { titulo: items[0].titulo, artista: items[0].artista, duracion: mmss(items[0].duracion) }
 
-    // YouTube (no es la elegida): suena como audio del backend, con su id.
-    await escuchar(ytK)
-    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', '"Escuchar" no dejó la barra sonando')
+    // YouTube: se elige y se le da play a la fila. Suena como audio del backend, con su id.
+    await elegir(page, 0, 'YouTube')
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[ytK].elegida === 'true', 'no quedó elegida la de YouTube')
+    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
+    const barra = await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'la fila 1 no quedó sonando con YouTube')
     igual(barra.titulo, r0.opciones[ytK].titulo, 'la barra no muestra la versión de YouTube')
     const src = new URL(await medio())
     igual(src.pathname + '?' + src.searchParams.toString(), `/api/fuente/audio?fuente=youtube&ref=${r0.opciones[ytK].video_id}`,
       'la versión de YouTube no suena por el proxy de audio con su id')
     igual(await sonando(page), ['/api/fuente/audio'], 'tiene que sonar un solo audio')
-    await hasta(botones, (b) => b[ytK].pulsado === 'true', 'el "Escuchar" de la versión que suena no quedó pulsado')
-    igual(await botones(), esperados(ytK), 'solo el "Escuchar" de YouTube está pulsado y dice "Pausar"')
-    igual(await fila(), { ahora: `Sonando: opción ${ytK + 1} · YouTube`, fuente: `YouTube · ${ytK + 1}/${total}, opción ${ytK + 1} de ${total}, solo audio`,
-      cola: `tema 1/${items.length}` }, 'la fila y la barra dicen qué versión suena; la cola sigue siendo la de la Station')
-    // Escuchar no es elegir: la elegida y lo que se baja siguen siendo la de mejor nota.
-    igual((await lineasDe(page, est.id)).map((l) => l.elegida), r0.opciones.map((_, j) => j === mejorK), 'Escuchar cambió la elegida')
-    igual(await plegadaDe(page, 0), NOMBRE[r0.opciones[mejorK].fuente], 'Escuchar cambió lo que muestra la fila plegada')
+    await hasta(estados, (e) => e[ytK][3], 'la pastilla de YouTube no quedó "sonando"')
+    igual(await estados(), esperados(ytK, ytK, true), 'solo la pastilla de YouTube suena (aria-current y barritas animadas)')
+    igual((await pastillasDe(page, 0))[ytK].nombre, `Opción ${ytK + 1}: YouTube, nota B (elegida, sonando ahora)`, 'el nombre para lector de la que suena')
+    igual(await fila(), { sonando: 'true', ahora: `Sonando: opción ${ytK + 1} · YouTube`, fuente: `YouTube · ${ytK + 1}/${total}, opción ${ytK + 1} de ${total}, solo audio`,
+      cola: `tema 1/${items.length}`, monitor: false, iframes: 0 }, 'la fila y la barra dicen qué versión suena, sin video; la cola sigue siendo la de la Station')
+    igual(await fichaDe(page, 0), ficha, 'con YouTube sonando, la fila dejó de mostrar el tema de la Station')
 
-    // Otra vez el mismo: pausa.
-    await escuchar(ytK)
-    await hasta(() => leerBarra(page), (d) => d.estado === 'paused', 'tocar "Escuchar" de nuevo no pausó')
-    await hasta(botones, (b) => b[ytK].pulsado === 'false', 'en pausa el botón sigue pulsado')
-    igual(await botones(), esperados(-1), 'en pausa ningún "Escuchar" queda pulsado')
-    igual(await sonando(page), [], 'en pausa no puede sonar nada')
-    igual((await fila()).ahora, `En pausa: opción ${ytK + 1} · YouTube`, 'la fila no dice que quedó en pausa')
-
-    // La de la Station (SoundCloud): por el proxy, con el id del tema.
-    await escuchar(scK)
+    // Elegir la de la Station (SoundCloud) mientras suena YouTube: elegida y sonando se distinguen.
+    await elegir(page, 0, null, scK)
+    await hasta(estados, (e) => e[scK][0] === 'true', 'no quedó elegida la de SoundCloud')
+    igual(await estados(), esperados(scK, ytK, true), 'elegida SoundCloud y sonando YouTube tienen que distinguirse')
+    // Play: SoundCloud por el proxy, con el id del tema.
+    await page.click('.trk:nth-child(2) .thumb-play')
     await hasta(medio, (u) => (u || '').includes(`fuente=soundcloud&ref=${items[0].video_id}`), 'la versión de SoundCloud no sonó por el proxy con su id')
-    await hasta(botones, (b) => b[scK].pulsado === 'true', 'el "Escuchar" de SoundCloud no quedó pulsado')
+    await hasta(estados, (e) => e[scK][3], 'la pastilla de SoundCloud no quedó "sonando"')
+    igual(await estados(), esperados(scK, scK, true), 'la pastilla que suena pasó a SoundCloud')
     igual(await sonando(page), ['/api/fuente/audio'], 'con SoundCloud sonando tiene que haber un solo audio')
 
+    // Pausa: la pastilla sigue marcada como la de la barra, con las barritas quietas.
+    await page.click('.deck-play')
+    await hasta(() => leerBarra(page), (d) => d.estado === 'paused', 'la barra no pausó')
+    await hasta(estados, (e) => !e[scK][3], 'en pausa las barritas siguen animadas')
+    igual(await estados(), esperados(scK, scK, false), 'en pausa: aria-current sigue, barritas quietas')
+    igual((await fila()).ahora, `En pausa: opción ${scK + 1} · SoundCloud`, 'la fila no dice que quedó en pausa')
+
     // Un MP3: su archivo, sin pasar por el proxy.
-    await escuchar(ligK)
-    await hasta(medio, (u) => u === r0.opciones[ligK].stream_url, 'el MP3 no sonó desde su archivo')
-    await hasta(botones, (b) => b[ligK].pulsado === 'true', 'el "Escuchar" del MP3 no quedó pulsado')
-    igual(await sonando(page), [new URL(r0.opciones[ligK].stream_url).pathname], 'con el MP3 sonando tiene que haber un solo audio')
-    igual(s.descargas.length, 0, '"Escuchar" descargó algo')
+    await elegir(page, 0, null, hitK)
+    await page.click('.trk:nth-child(2) .thumb-play')
+    await hasta(medio, (u) => u === r0.opciones[hitK].stream_url, 'el MP3 no sonó desde su archivo')
+    await hasta(estados, (e) => e[hitK][3], 'la pastilla del MP3 no quedó "sonando"')
+    igual(await sonando(page), [new URL(r0.opciones[hitK].stream_url).pathname], 'con el MP3 sonando tiene que haber un solo audio')
+    igual(await fichaDe(page, 0), ficha, 'con el MP3 sonando, la fila dejó de mostrar el tema de la Station')
+    igual(s.descargas.length, 0, 'escuchar descargó algo')
   }],
 
-  ['station (f38): con teclado, Enter y Espacio despliegan; Escape cierra y devuelve el foco a "+N versiones"', async (page, ctx) => {
+  ['station (f40): con teclado, Tab llega a las pastillas y Enter o Espacio eligen; el foco se queda en la pastilla y nada suena', async (page, ctx) => {
     const s = await montarStation(page, ctx, {})
     const { items } = s
     await abrirStation(page, ctx, s)
     await hasta(() => leerStation(page), (v) => v.filas.length === items.length, 'no llegaron todas las filas')
     const r0 = s.vx[items[0].video_id].respuesta
-    const n = r0.opciones.length - 1
-    const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
-    const estado = () => page.evaluate(() => {
-      const b = document.querySelector('.trk .vmore')
-      // colgado: aria-controls apunta a un id que no está en la página (f40: plegada no tiene que tenerlo).
-      return { abierta: b.getAttribute('aria-expanded'), grupo: !!document.getElementById(b.getAttribute('aria-controls')),
-        colgado: b.hasAttribute('aria-controls') && !document.getElementById(b.getAttribute('aria-controls')),
-        foco: document.activeElement?.getAttribute('aria-label') ?? null }
+    const foco = () => page.evaluate(() => {
+      const e = document.activeElement
+      return { pastilla: !!e?.classList.contains('vchip'), nombre: e?.getAttribute('aria-label') ?? null, elegida: e?.getAttribute('aria-pressed') ?? null }
     })
-    const ver = `Ver las otras ${n} versiones de ${items[0].titulo}`
-    const ocultar = `Ocultar las otras ${n} versiones de ${items[0].titulo}`
+    // Desde el play de la fila, Tab recorre lo que sigue en orden: la primera parada con foco
+    // en VERSIONES es la pastilla 1.
+    await page.focus('.trk:nth-child(2) .thumb-play')
+    for (let t = 0; t < 6 && !(await foco()).pastilla; t++) await page.keyboard.press('Tab')
+    const p1 = await foco()
+    afirmar(p1.pastilla, `con Tab desde el play de la fila no se llega a las pastillas: ${json(p1)}`)
+    igual(p1.nombre.replace(/ \(.*\)$/, ''), esperadasStation(r0.opciones, -1)[0].nombre, 'Tab no llega primero a la pastilla 1')
 
-    await page.focus('.trk .vmore')
+    // Enter sobre YouTube (la 1): la elige y el foco sigue ahí.
+    const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
+    igual(ytK, 0, 'el archivo de versiones cambió: YouTube era la opción 1')
     await page.keyboard.press('Enter')
-    igual(await hasta(estado, (v) => v.grupo, 'Enter no desplegó'), { abierta: 'true', grupo: true, colgado: false, foco: ocultar }, 'Enter despliega')
-    await page.keyboard.press('Enter')
-    igual(await hasta(estado, (v) => !v.grupo, 'Enter no volvió a plegar'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Enter otra vez pliega')
+    await hasta(foco, (f) => f.elegida === 'true', 'Enter sobre la pastilla no la eligió')
+    igual(await foco(), { pastilla: true, nombre: `${esperadasStation(r0.opciones, ytK)[ytK].nombre}`, elegida: 'true' }, 'después de Enter el foco se perdió o no dice "elegida"')
+    igual(await elegidaDe(page, 0), esperadasStation(r0.opciones, ytK)[ytK].nombre.replace(/ \(.*\)$/, ''), 'Enter no dejó elegida a YouTube')
+
+    // Tab a la 2 (SoundCloud) y Espacio: la elige.
+    await page.keyboard.press('Tab')
+    const p2 = await foco()
+    igual(p2.nombre, esperadasStation(r0.opciones, ytK)[1].nombre, 'Tab no pasó a la pastilla 2')
     await page.keyboard.press('Space')
-    igual(await hasta(estado, (v) => v.grupo, 'Espacio no desplegó'), { abierta: 'true', grupo: true, colgado: false, foco: ocultar }, 'Espacio despliega')
-    // Escape sobre el mismo botón: pliega y el foco se queda ahí.
-    await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape sobre el botón no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Escape sobre "+N versiones"')
+    await hasta(foco, (f) => f.elegida === 'true', 'Espacio sobre la pastilla no la eligió')
+    igual(await pastillasDe(page, 0), esperadasStation(r0.opciones, 1), 'Espacio no dejó elegida a SoundCloud (y solo a ella)')
+    igual((await foco()).nombre, esperadasStation(r0.opciones, 1)[1].nombre, 'después de Espacio el foco no quedó en la pastilla')
 
-    // Escape desde adentro de la sub-lista: pliega y el foco vuelve al botón (no a <body>).
-    await page.keyboard.press('Enter')
-    await hasta(estado, (v) => v.grupo, 'no volvió a desplegar')
-    await page.focus(`.trk-versions button[aria-label="Escuchar la versión YouTube, opción ${ytK + 1}"]`)
-    await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape desde la sub-lista no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver },
-      'Escape desde la sub-lista devuelve el foco a "+N versiones"')
-
-    // Elegir con teclado: el foco queda en la misma línea; después Escape vuelve al botón.
-    await page.keyboard.press('Enter')
-    await hasta(estado, (v) => v.grupo, 'no volvió a desplegar')
-    await page.focus(`.trk-versions button[aria-label="Elegir la versión YouTube, opción ${ytK + 1} para descargar"]`)
-    await page.keyboard.press('Enter')
-    await hasta(() => plegadaDe(page, 0), (t) => t === 'YouTube', 'Enter sobre "Elegir" no eligió YouTube')
-    igual((await estado()).foco, `Escuchar la versión YouTube, opción ${ytK + 1}`, 'después de elegir con teclado el foco se perdió')
-    await page.keyboard.press('Escape')
-    igual(await hasta(estado, (v) => !v.grupo, 'Escape no plegó'), { abierta: 'false', grupo: false, colgado: false, foco: ver }, 'Escape después de elegir')
-    igual(await sonando(page), [], 'desplegar o elegir con teclado puso algo a sonar')
+    // Lo elegido con teclado es lo que se baja; elegir no puso nada a sonar.
+    await descargarFila(page, 0)
+    await hasta(() => s.descargas.length, (x) => x === 1, 'la descarga no salió')
+    igual(s.descargas[0].url, r0.opciones[1].url, 'se bajó otra versión y no la elegida con teclado')
+    igual(await sonando(page), [], 'elegir con teclado puso algo a sonar')
   }],
 
-  ['station (f38): sin otras versiones la fila dice "solo en SoundCloud" o el motivo, una sola vez; con versiones, el motivo queda bajo el artista', async (page, ctx) => {
+  ['station (f40): sin otras versiones queda solo la pastilla de SoundCloud y ningún texto; si una plataforma no contestó, "No contestó a tiempo" una sola vez, bajo el artista', async (page, ctx) => {
     // Fila 1: la respuesta real con los dos MP3 caídos (así la arma el backend: ver
-    // test_motivo_cuando_una_plataforma_no_contesta_a_tiempo). Fila 3: una sola versión y SIN
-    // motivo. El backend hoy siempre pone uno cuando queda una sola, pero el front tiene la
-    // rama "solo en SoundCloud" y es la que se prueba.
+    // test_motivo_cuando_una_plataforma_no_contesta_a_tiempo). Filas 2 y 3: una sola versión y
+    // sin motivo (la 2 con su respuesta grabada; la 3 no está en el archivo y contesta la forma
+    // del "no hay otras" de ese mismo archivo). Desde 47f4754 el backend no manda motivo cuando
+    // queda solo SoundCloud: la fila no tiene nada que decir.
     const st = leerJson('station_respuesta.json')
     const vx = leerVersiones()
-    const [t0, t2] = [st.items[0], st.items[2]]
+    const t0 = st.items[0]
     const r0 = vx[t0.video_id].respuesta
     const sinMp3 = { ...r0, motivo: 'No contestó a tiempo: MP3', fallidas: ['ligaudio', 'hitplayer'],
       opciones: r0.opciones.filter((o) => !['ligaudio', 'hitplayer'].includes(o.fuente)) }
-    const sola = { exito: true, motivo: null, fallidas: [], opciones: [{ ...t2, estacion: true }] }
-    const s = await montarStation(page, ctx, { respuestas: { [t0.video_id]: sinMp3, [t2.video_id]: sola } })
+    const s = await montarStation(page, ctx, { respuestas: { [t0.video_id]: sinMp3 } })
     const { items } = s
     await abrirStation(page, ctx, s)
     await hasta(() => leerStation(page), (v) => v.filas.length === items.length, 'no llegaron todas las filas')
     const leer = (i) => page.evaluate((k) => {
       const r = [...document.querySelectorAll('.trk')][k]
-      return { solo: r.querySelector('.vsolo')?.textContent ?? null, mas: r.querySelector('.vmore')?.textContent.trim() ?? null,
-        bajoArtista: [...r.querySelectorAll('.trk-id .trk-note.is-warn')].map((e) => e.textContent), texto: r.innerText }
+      return { notas: [...r.querySelectorAll('.trk-note')].map((e) => e.textContent),
+        bajoArtista: [...r.querySelectorAll('.trk-id > .trk-artist ~ .trk-note.is-warn')].map((e) => e.textContent),
+        versiones: r.querySelector('.trk-vers').textContent.trim(), texto: r.innerText }
     }, i)
     const veces = (texto, que) => texto.split(que).length - 1
 
-    const f1 = await leer(1)
-    const motivo1 = s.vx[items[1].video_id].respuesta.motivo
-    igual({ solo: f1.solo, mas: f1.mas, bajoArtista: f1.bajoArtista }, { solo: motivo1, mas: null, bajoArtista: [] },
-      'sin otras versiones el motivo va en la columna de versiones y no bajo el artista')
-    igual(veces(f1.texto, motivo1), 1, 'el motivo de la fila 2 aparece más de una vez')
-
-    const f2 = await leer(2)
-    igual({ solo: f2.solo, mas: f2.mas, bajoArtista: f2.bajoArtista }, { solo: 'solo en SoundCloud', mas: null, bajoArtista: [] },
-      'sin otras versiones ni motivo la fila dice "solo en SoundCloud"')
+    for (const i of [1, 2]) {
+      const r = s.vx[items[i].video_id]?.respuesta
+      igual(r ? r.motivo : null, null, `el archivo de versiones cambió: la fila ${i + 1} no tenía motivo`)
+      const opciones = r ? r.opciones : [{ ...items[i], estacion: true }]
+      igual(opciones.map((o) => o.fuente), ['soundcloud'], `el caso no prueba nada: la fila ${i + 1} tiene que traer solo SoundCloud`)
+      igual(await pastillasDe(page, i), esperadasStation(opciones, 0), `la fila ${i + 1}: una sola pastilla, la de SoundCloud, elegida`)
+      const f = await leer(i)
+      igual({ notas: f.notas, versiones: f.versiones }, { notas: [], versiones: (await pastillasDe(page, i))[0].texto },
+        `la fila ${i + 1} sin otras versiones no tiene que decir nada más que su pastilla`)
+    }
+    const pagina = await page.evaluate(() => document.querySelector('.results').innerText)
+    afirmar(!/No lo encontr|solo en SoundCloud/i.test(pagina), `la Station dice "No lo encontré"/"solo en SoundCloud": ${pagina.match(/.{0,40}(No lo encontr|solo en SoundCloud).{0,40}/i)?.[0]}`)
 
     const f0 = await leer(0)
-    igual({ solo: f0.solo, mas: f0.mas, bajoArtista: f0.bajoArtista }, { solo: null, mas: `+${sinMp3.opciones.length - 1} versiones`, bajoArtista: [sinMp3.motivo] },
-      'con otras versiones el motivo sigue bajo el artista')
-    igual(veces(f0.texto, sinMp3.motivo), 1, 'el motivo de la fila 1 aparece más de una vez')
+    igual(f0.bajoArtista, [sinMp3.motivo], 'el motivo de la caída no está bajo el artista')
+    igual(veces(f0.texto, sinMp3.motivo), 1, 'el motivo de la fila 1 aparece más de una vez en la fila')
+    igual(veces(pagina, 'No contestó a tiempo'), 1, '"No contestó a tiempo" aparece más de una vez en la Station')
+    igual(await pastillasDe(page, 0), esperadasStation(sinMp3.opciones, sinMp3.opciones.findIndex((o) => o.calidad?.grade === 'B')),
+      'la fila 1 sin los MP3: sus pastillas, con la de mejor nota elegida')
   }],
 
-  ['solo MP3 (f38): ningún texto de la Station, la barra, el comparador ni el historial nombra el sitio de un MP3; los nombres para lector numeran', async (page, ctx) => {
+  ['solo MP3 (f38/f40): ningún texto de la Station, la barra, el comparador ni el historial nombra el sitio de un MP3; los nombres para lector numeran', async (page, ctx) => {
     // El historial, con la forma de db.listar_historial: dos descargas de MP3 recién hechas.
     const ahora = new Date().toISOString()
     const descargas = ['hitplayer', 'ligaudio'].map((fuente, j) => ({ id: 2 - j, titulo: 'B WITH U', artista: 'SPÆCE', fuente,
@@ -1753,17 +1713,17 @@ const CASOS = [
     const mp3K = r0.opciones.map((o, j) => (['ligaudio', 'hitplayer'].includes(o.fuente) ? j : -1)).filter((j) => j >= 0)
     igual(mp3K.length, 2, 'el archivo de versiones cambió: la fila 1 tenía dos MP3')
 
-    // Station, con la sub-lista abierta: los dos MP3 se ven "MP3" y el lector los distingue.
-    const est = await abrirVersiones(page, 0)
-    const ls = await lineasDe(page, est.id)
-    igual(mp3K.map((j) => ls[j].plataforma), ['MP3', 'MP3'], 'los MP3 no dicen "MP3" en la sub-lista')
-    igual(mp3K.map((j) => ls[j].escuchar.nombre), mp3K.map((j) => `Escuchar la versión MP3, opción ${j + 1}`), 'los nombres de los MP3 no llevan su número de opción')
-    igual(new Set(ls.flatMap((l) => [l.escuchar.nombre, l.elegir]).filter(Boolean)).size, ls.length * 2 - 1, 'hay dos botones de la sub-lista con el mismo nombre')
+    // Station: las dos pastillas MP3 dicen "MP3" y el lector las distingue por su número.
+    const ps = await pastillasDe(page, 0)
+    igual(mp3K.map((j) => ps[j].texto.replace(/^\d+/, '').replace(/[A-F?][-+]?$/, '')), ['MP3', 'MP3'], 'las pastillas de los MP3 no dicen "MP3"')
+    igual(mp3K.map((j) => ps[j].nombre.replace(/,.*$|\s\(.*$/, '')), mp3K.map((j) => `Opción ${j + 1}: MP3`), 'los nombres de los MP3 no llevan su número de opción')
+    igual(new Set(ps.map((p) => p.nombre)).size, ps.length, 'hay dos pastillas con el mismo nombre para lector')
     igual(await rastrosSitio(page), [], 'la Station nombra el sitio de un MP3')
 
     // Barra: el otro MP3 sonando dice "MP3" y su opción.
-    const otro = mp3K.find((j) => !ls[j].elegida)
-    await page.evaluate((sel, j) => document.querySelectorAll(`#${sel} li.vline`)[j].querySelector('button:not(.is-pick)').click(), est.id, otro)
+    const otro = mp3K.find((j) => ps[j].elegida !== 'true')
+    await elegir(page, 0, null, otro)
+    await page.click('.trk:nth-child(2) .thumb-play')     // nth-child(1) es el encabezado
     await hasta(() => leerBarra(page), (d) => d && d.estado === 'playing', 'el MP3 no quedó sonando')
     igual(await page.evaluate(() => ({ fuente: document.querySelector('.deck-src')?.textContent, fila: document.querySelector('.trk .trk-now')?.textContent })),
       { fuente: `MP3 · ${otro + 1}/${r0.opciones.length}, opción ${otro + 1} de ${r0.opciones.length}`, fila: `Sonando: opción ${otro + 1} · MP3` },
@@ -1795,7 +1755,7 @@ const CASOS = [
     igual(await rastrosSitio(page), [], 'el historial nombra el sitio de un MP3')
   }],
 
-  ['búsqueda, modo lista y playlist guardada (f38): siguen con pastillas y "Versiones"; los MP3 dicen "MP3" y numeran', async (page, ctx) => {
+  ['búsqueda, modo lista y playlist guardada (f38/f40): pastillas y "Versiones", sin nada del plegado; los MP3 dicen "MP3" y numeran', async (page, ctx) => {
     const lib = await api(ctx, '/api/biblioteca')
     const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
     afirmar(uno, '/api/biblioteca no trae «Uno»')
@@ -1819,12 +1779,12 @@ const CASOS = [
       if (u.origin !== new URL(ctx.url).origin) return req.abort()
       return req.continue()
     })
-    const pastillas = () => page.evaluate(() => ({
+    const pastillas = () => page.evaluate((plegado) => ({
       station: !!document.querySelector('.results-station'),
       columna: [...document.querySelectorAll('.results-head > div')].map((d) => d.textContent)[5] ?? null,
-      plegado: document.querySelectorAll('.vpick, .vbest, .vmore, .vsolo, .trk-versions').length,
+      plegado: document.querySelectorAll(plegado).length,
       pastillas: [...document.querySelectorAll('.trk .vchip')].map((b) => ({ texto: b.textContent.trim(), nombre: b.getAttribute('aria-label') })),
-    }))
+    }), PLEGADO)
     const esperado = { station: false, columna: 'Versiones', plegado: 0, pastillas: [
       { texto: 'YouTube', nombre: 'Opción 1: YouTube (elegida)' }, { texto: '2MP3', nombre: 'Opción 2: MP3' }, { texto: '3MP3', nombre: 'Opción 3: MP3' }] }
 
@@ -1860,36 +1820,38 @@ const CASOS = [
     igual(await pastillas(), esperado, 'la playlist guardada tiene que seguir con pastillas y "Versiones"')
   }],
 
-  ['station (f38): a 400 px la sub-lista abierta va a todo el ancho de la tarjeta y nada se sale', async (page, ctx) => {
+  ['station (f40): a 400 px las pastillas entran enteras en su tarjeta, nada se sale y se pueden elegir', async (page, ctx) => {
     const s = await montarStation(page, ctx, {})
     const { items } = s
     await abrirStation(page, ctx, s)
     await hasta(() => leerStation(page), (v) => v.filas.length === items.length, 'no llegaron todas las filas')
+    const r0 = s.vx[items[0].video_id].respuesta
+    afirmar(r0.opciones.length >= 5, 'el caso no prueba nada: la fila 1 tiene que traer 5 versiones (las que más ocupan)')
     await page.setViewport({ width: 400, height: 860 })
     await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
-    const est = await abrirVersiones(page, 0)
     const d = await desbordeDe(page)
-    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `Station a 400 px con la sub-lista abierta: hay contenido fuera del ancho: ${json(d)}`)
-    const geo = await page.evaluate((id) => {
-      const g = document.getElementById(id)
-      const fila = g.previousElementSibling.getBoundingClientRect()
-      const rg = g.getBoundingClientRect()
-      const lista = g.querySelector('.vlist').getBoundingClientRect()
-      const elegida = g.querySelector('.vline.is-chosen .vline-lbl')
-      return {
-        // Cuánto le falta a la sub-lista para ocupar el ancho de su fila, de cada lado.
-        izq: Math.round(rg.left - fila.left), der: Math.round(fila.right - rg.right),
-        // Sangría de las líneas dentro de la sub-lista (en escritorio van alineadas con el tema).
-        sangria: Math.round(lista.left - rg.left),
-        // "Elegida · mejor nota" en su renglón, entero y a la vista.
-        etiqueta: { texto: elegida.textContent, visible: window.__visible(elegida), cortada: elegida.scrollWidth > elegida.clientWidth },
-        botones: [...g.querySelectorAll('button')].filter((b) => { const r = b.getBoundingClientRect(); return r.left < rg.left || r.right > rg.right }).length,
-      }
-    }, est.id)
-    afirmar(geo.izq <= 16 && geo.der <= 16, `a 400 px la sub-lista no va a todo el ancho de su fila: ${json(geo)}`)
-    afirmar(geo.sangria <= 16, `a 400 px las líneas de la sub-lista siguen con la sangría de escritorio: ${json(geo)}`)
-    igual(geo.etiqueta, { texto: 'Elegida · mejor nota', visible: true, cortada: false }, 'a 400 px "Elegida · mejor nota" no se ve entera')
-    igual(geo.botones, 0, 'a 400 px hay botones de la sub-lista fuera de ella')
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `Station a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+    // Cada pastilla de las primeras filas: dentro de su fila, a la vista, con el texto entero.
+    const geo = await page.evaluate(() => [...document.querySelectorAll('.trk')].slice(0, 3).flatMap((r, i) => {
+      const rf = r.getBoundingClientRect()
+      return [...r.querySelectorAll('.vchip')].map((b) => {
+        const rb = b.getBoundingClientRect()
+        return { fila: i, nombre: b.getAttribute('aria-label'), dentro: rb.left >= rf.left - 1 && rb.right <= rf.right + 1,
+          visible: window.__visible(b), cortada: b.scrollWidth > b.clientWidth + 1 }
+      })
+    }))
+    igual(geo.filter((p) => p.fila === 0).length, r0.opciones.length, 'a 400 px la fila 1 no muestra una pastilla por versión')
+    igual(geo.filter((p) => !p.dentro || !p.visible || p.cortada), [], 'a 400 px hay pastillas fuera de su fila, ocultas o cortadas')
+    // Tocar una pastilla a 400 px elige (la tarjeta no la tapa con otra cosa).
+    const ytK = r0.opciones.findIndex((o) => o.fuente === 'youtube')
+    const centro = await page.evaluate((j) => {
+      const b = document.querySelectorAll('.trk')[0].querySelectorAll('.vchip')[j]
+      b.scrollIntoView({ block: 'center' })
+      const rc = b.getBoundingClientRect()
+      return { x: rc.left + rc.width / 2, y: rc.top + rc.height / 2 }
+    }, ytK)
+    await page.mouse.click(centro.x, centro.y)
+    await hasta(() => pastillasDe(page, 0), (ps) => ps[ytK].elegida === 'true', 'a 400 px tocar la pastilla de YouTube no la eligió')
   }],
 ]
 
@@ -2034,87 +1996,62 @@ async function descargarFila(page, i) {
   afirmar(ok, `la fila ${i + 1} no tiene un botón de descarga habilitado`)
 }
 
-// La versión elegida de una fila y cómo elegir otra. Son lo ÚNICO de los casos de f36/f37 que
+// La versión elegida de una fila y cómo elegir otra. Son lo ÚNICO de los casos de la Station que
 // depende del markup de la columna VERSIONES; los casos verifican comportamiento (qué se elige,
 // qué se descarga), no la disposición.
 //
-// Diseño A (f38): la fila muestra solo la elegida (.vbest) y "+N versiones" (.vmore) despliega
-// debajo la sub-lista, donde la elegida tiene el ✓ y las demás un botón "Elegir". Estas
-// funciones abren la sub-lista si hace falta y la dejan como estaba: abierta, corre los
-// nth-child de las filas de abajo. `elegidaDe` devuelve el nombre de siempre, "Opción N:
-// plataforma, nota X", armado con lo que SE VE en la sub-lista; si la fila plegada y la
-// sub-lista no coinciden en cuál es la elegida, lo dice en vez de elegir una de las dos.
-async function abrirVersiones(page, i) {
-  const est = await page.evaluate((k) => {
-    const b = [...document.querySelectorAll('.trk')][k]?.querySelector('.vmore')
-    if (!b) return null
-    const abierta = b.getAttribute('aria-expanded') === 'true'
-    if (!abierta) b.click()
-    return { abierta }
-  }, i)
-  if (!est) return est
-  // f40: aria-controls aparece cuando la sub-lista está montada (plegada no apunta a nada).
-  const id = await hasta(() => page.evaluate((k) => [...document.querySelectorAll('.trk')][k]?.querySelector('.vmore')?.getAttribute('aria-controls') ?? null, i),
-    (v) => v, `"+N versiones" de la fila ${i + 1} no apunta a su sub-lista abierta`)
-  await page.waitForSelector(`#${id}`, { timeout: ESPERA_MS })
-  return { ...est, id }
+// f40: la Station usa las mismas pastillas en línea que la búsqueda (el plegado de f38 se sacó).
+// Clases del plegado: no tiene que quedar ninguna en ninguna vista.
+const PLEGADO = '.vpick, .vbest, .vmore, .vsolo, .trk-versions, .vline, .vlist'
+
+// Las pastillas de la fila `i`, como se ven y como las lee un lector de pantalla.
+const pastillasDe = (page, i) => page.evaluate((k) => {
+  const r = [...document.querySelectorAll('.trk')][k]
+  return r ? [...r.querySelectorAll('.trk-vers .vchip')].map((b) => ({
+    texto: b.textContent.trim(), nombre: b.getAttribute('aria-label'),
+    elegida: b.getAttribute('aria-pressed'), suena: b.getAttribute('aria-current'),
+    tilde: !!b.querySelector('.vchip-ok'),                      // forma, no color
+    barras: !!b.querySelector('.eq'), animadas: !!b.querySelector('.eq:not(.is-quieto)'),
+  })) : null
+}, i)
+
+// Lo esperado de las pastillas de una fila de la Station sin nada sonando, a partir de la
+// respuesta de /api/versiones: la elegida con ✓ (sin número), las demás con su número; la
+// plataforma ("MP3" para los dos sitios de MP3); la nota que trajo la respuesta ("?" si no se
+// pudo medir, nada si no hay nota, "30 s" si es un preview Go+).
+function esperadasStation(opciones, elegidaK) {
+  return opciones.map((o, k) => {
+    const nota = o.calidad ? (o.calidad.ok ? o.calidad.grade : '?') : null
+    const notaTexto = o.solo_preview ? 'solo 30 s (Go+)' : nota ? `nota ${nota}` : null
+    return {
+      texto: `${k === elegidaK ? '' : k + 1}${NOMBRE[o.fuente]}${o.solo_preview ? '30 s' : nota || ''}`,
+      nombre: `Opción ${k + 1}: ${NOMBRE[o.fuente]}${notaTexto ? `, ${notaTexto}` : ''}${k === elegidaK ? ' (elegida)' : ''}`,
+      elegida: String(k === elegidaK), suena: null, tilde: k === elegidaK, barras: false, animadas: false,
+    }
+  })
 }
 
-async function cerrarVersiones(page, i, est) {
-  if (!est || est.abierta) return
-  await page.evaluate((k) => [...document.querySelectorAll('.trk')][k]?.querySelector('.vmore[aria-expanded="true"]')?.click(), i)
-  await page.waitForSelector(`#${est.id}`, { hidden: true, timeout: ESPERA_MS })
-}
-
-// Cada línea de la sub-lista `id`, como se ve y como la lee un lector de pantalla.
-const lineasDe = (page, id) => page.evaluate((sel) => [...document.querySelectorAll(`#${sel} li.vline`)].map((li) => {
-  const escuchar = li.querySelector('button:not(.is-pick)')
-  return {
-    plataforma: li.querySelector('.vline-src .truncate')?.textContent ?? null,
-    elegida: li.classList.contains('is-chosen'),
-    tilde: !!li.querySelector('.vline-ok svg'),
-    texto: li.querySelector('.vline-lbl')?.textContent ?? null,
-    nota: li.querySelector('.vline-grade')?.textContent ?? null,
-    notaLector: li.querySelector('.vline-grade [aria-label]')?.getAttribute('aria-label') ?? null,
-    escuchar: escuchar ? { nombre: escuchar.getAttribute('aria-label'), pulsado: escuchar.getAttribute('aria-pressed') } : null,
-    elegir: li.querySelector('button.is-pick')?.getAttribute('aria-label') ?? null,
-  }
-}), id)
-
-const plegadaDe = (page, i) => page.evaluate((k) =>
-  [...document.querySelectorAll('.trk')][k]?.querySelector('.vbest .truncate')?.textContent ?? null, i)
-
+// "Opción N: plataforma, nota X" de la elegida (su nombre para lector sin el estado). Si no hay
+// exactamente una pastilla con aria-pressed y ✓, y es la misma, lo dice en vez de elegir una.
 async function elegidaDe(page, i) {
-  const est = await abrirVersiones(page, i)
-  try {
-    const plegada = await plegadaDe(page, i)
-    if (!est) return plegada == null ? null : `Opción 1: ${plegada}`
-    const ls = await lineasDe(page, est.id)
-    const marcadas = ls.map((l, k) => (l.elegida || l.tilde ? k : -1)).filter((k) => k >= 0)
-    if (marcadas.length !== 1) return `la sub-lista tiene ${marcadas.length} elegidas: ${json(ls)}`
-    const l = ls[marcadas[0]]
-    if (!l.elegida || !l.tilde) return `la elegida de la sub-lista no tiene su marca y su ✓: ${json(l)}`
-    if (l.plataforma !== plegada) return `la fila plegada dice ${plegada} y la sub-lista elige ${l.plataforma}`
-    return `Opción ${marcadas[0] + 1}: ${l.plataforma}, nota ${l.nota}`
-  } finally {
-    await cerrarVersiones(page, i, est)
-  }
+  const ps = await pastillasDe(page, i)
+  if (!ps) return null
+  const pulsadas = ps.filter((p) => p.elegida === 'true')
+  const tildes = ps.filter((p) => p.tilde)
+  if (pulsadas.length !== 1 || tildes.length !== 1 || pulsadas[0] !== tildes[0]) return `la fila ${i + 1} no tiene una sola elegida con su ✓: ${json(ps)}`
+  return pulsadas[0].nombre.replace(/ \(.*\)$/, '')
 }
 
-async function elegir(page, i, plataforma) {
-  const est = await abrirVersiones(page, i)
-  afirmar(est, `la fila ${i + 1} no tiene otras versiones para elegir`)
-  try {
-    const ok = await page.evaluate((id, p) => {
-      const li = [...document.querySelectorAll(`#${id} li.vline`)].find((x) => x.querySelector('.vline-src .truncate')?.textContent === p)
-      const b = li?.querySelector('button.is-pick')
-      if (b) b.click()
-      return !!b
-    }, est.id, plataforma)
-    afirmar(ok, `la fila ${i + 1} no tiene una versión de ${plataforma} para elegir`)
-  } finally {
-    await cerrarVersiones(page, i, est)
-  }
+// Toca la pastilla de `plataforma` (tiene que haber una sola) o, con `k`, la opción k (0-based).
+async function elegir(page, i, plataforma, k = null) {
+  const ok = await page.evaluate((f, p, j) => {
+    const bs = [...([...document.querySelectorAll('.trk')][f]?.querySelectorAll('.trk-vers .vchip') || [])]
+    const cual = j != null ? [bs[j]].filter(Boolean)
+      : bs.filter((b) => new RegExp(`^Opción \\d+: ${p}(,| \\(|$)`).test(b.getAttribute('aria-label')))
+    if (cual.length === 1) cual[0].click()
+    return cual.length
+  }, i, plataforma, k)
+  igual(ok, 1, `la fila ${i + 1} no tiene una (y solo una) pastilla de ${plataforma ?? `la opción ${k + 1}`}`)
 }
 
 // `.app` tiene overflow-x:clip: la página NUNCA scrollea de costado, lo que se pase del

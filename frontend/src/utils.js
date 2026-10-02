@@ -21,7 +21,7 @@ export const FUENTE_CORTO = {
 }
 // Nombre de cada versión de una lista (el comparador): la plataforma, y si dos dicen lo mismo
 // (dos MP3), con su número de opción — "MP3 · opción 4" —, el mismo número que usan la fila,
-// la sub-lista y la barra ("opción 4 · MP3"). Sin eso dos columnas decían "MP3" y "MP3" (f40).
+// las pastillas y la barra ("opción 4 · MP3"). Sin eso dos columnas decían "MP3" y "MP3" (f40).
 export function nombresDeVersiones(opciones) {
   const base = opciones.map((o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fuente || '?')
   const veces = base.reduce((m, n) => m.set(n, (m.get(n) || 0) + 1), new Map())
