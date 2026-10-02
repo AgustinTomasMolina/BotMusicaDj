@@ -834,8 +834,11 @@ def _duracion_mp3_cabecera(url: str, ua: str, timeout: float = _VERSION_DUR_DEAD
         return 0.0
     buf = b""
     try:
+        # Sin seguir redirecciones: `_url_http` valida solo la URL inicial, y un 302 del sitio
+        # scrapeado llevaría el pedido a un host interno (SSRF ciego, auditoría final de f40).
+        # Verificado el 02/10: los MP3 de hotplayer y lightaudio contestan 200 directo.
         with requests.get(url, headers={"User-Agent": ua} if ua else None, stream=True,
-                          timeout=(min(timeout, 4.0), timeout)) as r:
+                          timeout=(min(timeout, 4.0), timeout), allow_redirects=False) as r:
             if r.status_code != 200:
                 return 0.0
             limite = time.monotonic() + timeout

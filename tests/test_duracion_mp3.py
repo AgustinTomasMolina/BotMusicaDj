@@ -57,6 +57,13 @@ def http(mp3s):
 
         def do_GET(self):
             pedidos.append(self.path)
+            if self.path.startswith("/redir/"):
+                # Un sitio scrapeado que redirige: en la vida real el destino sería un host interno.
+                self.send_response(302)
+                self.send_header("Location", "/con/chunked.mp3?via=redir")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.path.startswith("/id3/"):
                 # Cabecera ID3v2.4 que dice medir 1 MB (tamaño "syncsafe": 7 bits por byte),
                 # seguida del MP3 entero (~190 KB): el primer frame nunca llega.
@@ -189,3 +196,12 @@ def test_una_cabecera_info_que_no_cuadra_con_los_bytes_no_se_cree(server, mp3s):
     frames = int.from_bytes(buf[p + 8:p + 12], "big")
     buf[p + 8:p + 12] = (frames * 2).to_bytes(4, "big")          # dice el doble de frames
     assert server._duracion_xing(bytes(buf)) == 0.0
+
+
+def test_no_sigue_redirecciones(server, http):
+    """Auditoría final de f40: `_url_http` valida solo la URL inicial; si se siguiera un 302, un
+    sitio scrapeado podría hacer que el server pida un host interno. Un 302 = duración
+    desconocida, y el destino no se pide."""
+    base, pedidos = http
+    assert server._duracion_mp3_cabecera(f"{base}/redir/chunked.mp3", "", 5) == 0.0
+    assert not any("via=redir" in p for p in pedidos), f"se siguió la redirección: {pedidos}"
