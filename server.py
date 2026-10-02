@@ -13,10 +13,12 @@ Abrir:     http://localhost:8000
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import math
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
@@ -26,6 +28,7 @@ from dataclasses import dataclass
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Set
+from urllib.parse import urlsplit
 
 # Consola de Windows en UTF-8 para que los emojis/logs no rompan el proceso
 try:
@@ -919,7 +922,8 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
     )
     if destino:
         db.marcar_item_descargado(destino["playlist_id"], destino["item_id"], archivo, ruta,
-                                  formato, cal.get("grade"), cal.get("color"))
+                                  formato, cal.get("grade"), cal.get("color"),
+                                  duracion=destino.get("duracion_medida"))
         return
     # Auto-add a la playlist/crate activa (si hay una)
     activa = db.get_playlist_activa()
@@ -932,6 +936,98 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
                              cal.get("grade"), cal.get("color"))
 
 
+# Tolerancia para "es el mismo tema" por duración: ±max(10 s, 10 %). Es la de
+# `track_identity.evidencia_misma_grabacion` ("cuadra"): un video de YouTube del tema trae a
+# veces unos segundos de intro/outro, pero 605,7 s contra 420 s (+44 %) ya es otra cosa (un
+# mix, una versión extendida, otro tema), y 30 s contra 250 s es un preview.
+def _duracion_cuadra(esperada: float, medida: float) -> bool:
+    return abs(esperada - medida) <= max(10.0, 0.10 * esperada)
+
+
+def _equivalente_youtube(resultados: list, titulo: str, artista: str, duracion) -> tuple[dict | None, str]:
+    """El primer resultado de YouTube que ES el tema (mismo título, versión y artista, por
+    `track_identity.is_same_track`) y cuya duración cuadra con la del tema si las dos se saben.
+    Devuelve (resultado, "") o (None, motivo). Antes se bajaba el primero sin mirar: un video de
+    605,7 s para un tema de 420 s quedaba "descargado"."""
+    buscado = track_identity.parse_fields(artista, titulo)
+    dur = track_identity.duration_or_none(duracion)
+    largos = []
+    for c in resultados or []:
+        cand = track_identity.parse_entry(c.get("titulo") or "", c.get("artista") or "")
+        if not track_identity.is_same_track(buscado, cand):
+            continue
+        dc = track_identity.duration_or_none(c.get("duracion"))
+        if dur and dc and not _duracion_cuadra(dur, dc):
+            largos.append(dc)
+            continue
+        return c, ""
+    quien = f"«{titulo}»" + (f" de {artista}" if artista else "")
+    if largos:
+        return None, (f"No encontré en YouTube el mismo tema: {quien} dura {dur:.0f} s y lo más "
+                      f"parecido que apareció dura {largos[0]:.1f} s.")
+    return None, f"No encontré en YouTube el mismo tema ({quien}): ningún resultado tenía ese título y artista."
+
+
+def _duracion_archivo(ruta: Path) -> float | None:
+    """Duración (s) del archivo bajado medida con ffprobe, o None si no se pudo medir."""
+    d = _duracion_audio(str(ruta), "")
+    return d if d and d > 0 else None
+
+
+def _verificar_bajado(archivo: str, payload: dict, destino: dict) -> dict | None:
+    """Después de bajar para un item de playlist: ¿lo bajado es el tema? Compara la duración
+    MEDIDA del archivo con la del item (si se sabe). Si no cuadra, borra el archivo (el nombre es
+    único para esta descarga, `_nombre_libre`: no es de nadie más) y devuelve el fallo. Si
+    cuadra, o el item no tenía duración, deja la medida en `destino` para completar el item.
+    Si ffprobe no puede medir, no se puede verificar y se acepta (como antes de este chequeo)."""
+    ruta = DOWNLOADS_DIR / archivo
+    medida = _duracion_archivo(ruta)
+    esperada = track_identity.duration_or_none(payload.get("duracion"))
+    if medida and esperada and not _duracion_cuadra(esperada, medida):
+        try:
+            ruta.unlink()
+        except OSError as e:
+            logger.warning(f"⚠️ No pude borrar {archivo}: {e}")
+        logger.error(f"❌ Lo bajado no era el tema: {archivo} dura {medida:.1f} s y el tema {esperada:.0f} s")
+        return {"exito": False,
+                "mensaje": f"Lo que se bajó no era el tema ({medida:.1f} s vs {esperada:.0f} s): no lo guardé."}
+    destino["duracion_medida"] = medida
+    return None
+
+
+# Nombres que se están bajando ahora en este proceso: dos items distintos con el mismo título y
+# artista que bajan a la vez no eligen el mismo nombre libre.
+_nombres_reservados: set[str] = set()
+_nombres_lock = threading.Lock()
+
+
+def _nombre_libre(nombre: str) -> str:
+    """Un nombre de archivo (sin extensión) que no pisa nada de downloads/ (C2). Dos items con
+    el mismo título y artista bajaban al MISMO archivo: el segundo pisaba al primero y el .m3u8
+    repetía la ruta. Si ya hay un archivo con ese nombre (cualquier extensión: yt-dlp elige la
+    suya), es de otra descarga (el item que baja no tiene archivo; si lo tuviera sería 409):
+    se usa «nombre (2)», «(3)»… Lo reserva hasta `_soltar_nombre`."""
+    base = _safe_name(nombre)
+    existentes = {p.name.lower() for p in DOWNLOADS_DIR.iterdir()} if DOWNLOADS_DIR.is_dir() else set()
+
+    def ocupado(n: str) -> bool:
+        pref = n.lower() + "."
+        return n.lower() in _nombres_reservados or any(e.startswith(pref) for e in existentes)
+
+    with _nombres_lock:
+        elegido, k = base, 2
+        while ocupado(elegido):
+            # [:54] deja lugar al sufijo dentro de los 60 de `_safe_name` (que se vuelve a aplicar)
+            elegido, k = f"{base[:54].rstrip()} ({k})", k + 1
+        _nombres_reservados.add(elegido.lower())
+    return elegido
+
+
+def _soltar_nombre(nombre: str) -> None:
+    with _nombres_lock:
+        _nombres_reservados.discard(nombre.lower())
+
+
 def procesar_descarga(payload: dict, destino: dict | None = None) -> dict:
     """TODO el flujo de descarga, SÍNCRONO (sin async): bajar → calidad → tags →
     historial/crate. Lo llaman el worker (vía tasks.descargar_job) y el server en
@@ -942,18 +1038,33 @@ def procesar_descarga(payload: dict, destino: dict | None = None) -> dict:
     fuente = payload.get("fuente") or ""
     url = payload.get("url") or ""
     formato = (payload.get("formato") or "wav").lower()
+    # Sin artista, el nombre es solo el título: antes quedaba «Test -.mp3» (C8).
+    nombre = f"{titulo} - {artista}" if artista.strip() else titulo
+    if not destino:
+        return _procesar_descarga(payload, titulo, artista, fuente, url, formato, nombre, None)
+    # Desde una playlist, el archivo no puede pisar el de otra descarga (C2).
+    nombre = _nombre_libre(nombre)
+    try:
+        return _procesar_descarga(payload, titulo, artista, fuente, url, formato, nombre, destino)
+    finally:
+        _soltar_nombre(nombre)
 
+
+def _procesar_descarga(payload: dict, titulo: str, artista: str, fuente: str, url: str,
+                       formato: str, nombre: str, destino: dict | None) -> dict:
     logger.info(f"📥 Descargando: {titulo} — {artista} [{fuente}] como {formato.upper()}")
 
     # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg)
     if fuente in ("ligaudio", "hitplayer") and url:
         try:
-            res = _descargar_directo(url, f"{titulo} - {artista}")
+            res = _descargar_directo(url, nombre)
         except Exception as e:
             logger.error(f"❌ Error en descarga directa: {e}")
             return {"exito": False, "mensaje": str(e)}
         if res["ok"]:
             logger.info(f"✅ Descargado: {res['archivo']}")
+            if destino and (fallo := _verificar_bajado(res["archivo"], payload, destino)):
+                return fallo
             calidad = _calidad_espectral(DOWNLOADS_DIR / res["archivo"])
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
@@ -968,23 +1079,32 @@ def procesar_descarga(payload: dict, destino: dict | None = None) -> dict:
     if fuente in ("spotify", "deezer") or not url:
         consulta = f"{titulo} {artista}".strip()
         logger.info(f"🔁 Fuente sin audio descargable, buscando en YouTube: '{consulta}'")
-        yt = search_agent.buscar_en_youtube(consulta, 1)
+        # Varios resultados y no el primero a ciegas: se baja el primero que ES el tema (B2).
+        yt = search_agent.buscar_en_youtube(consulta, 5)
         if not yt:
             logger.error("❌ No encontré una versión descargable.")
             return {"exito": False, "mensaje": "No se pudo encontrar audio descargable."}
-        url = yt[0]["url"]
+        elegido, motivo = _equivalente_youtube(yt, titulo, artista, payload.get("duracion"))
+        if not elegido:
+            logger.error(f"❌ {motivo}")
+            return {"exito": False, "mensaje": motivo}
+        url = elegido["url"]
 
     try:
-        res = _descargar_sync(url, f"{titulo} - {artista}", formato)
+        res = _descargar_sync(url, nombre, formato)
     except Exception as e:
         logger.error(f"❌ Error en descarga: {e}")
         msg = str(e)
-        if "ffmpeg" in msg.lower() or "ffprobe" in msg.lower():
+        # "Falta ffmpeg" solo si de verdad falta (B6): con ffmpeg instalado, un error que lo
+        # nombra (una conversión que falló, un archivo raro) se muestra tal cual.
+        if ("ffmpeg" in msg.lower() or "ffprobe" in msg.lower()) and not _tiene_ffmpeg():
             msg = "Falta ffmpeg para convertir el audio. Instalá ffmpeg (ver iniciar_web.bat)."
         return {"exito": False, "mensaje": msg}
 
     if res["ok"]:
         logger.info(f"✅ Descargado: {res['archivo']}")
+        if destino and (fallo := _verificar_bajado(res["archivo"], payload, destino)):
+            return fallo
         calidad = res.get("calidad")
         if calidad:
             calidad.update(_grado(calidad))
@@ -2390,20 +2510,130 @@ SIN_LINK = "Sin link para bajar: el tema se guardó sin una fuente de internet (
 # ve; ahí lo evita la pantalla (el botón queda ocupado mientras sigue el job).
 _items_bajando: set[int] = set()
 _items_bajando_lock = threading.Lock()
+# Con Redis: la reserva del item vence sola un poco después del tope del job (jobs.encolar,
+# 900 s), por si el worker muere sin soltarla; un item no queda trabado para siempre.
+RESERVA_ITEM_S = 960
+
+
+def _clave_item(item_id: int) -> str:
+    return f"musiflix:bajando-item:{item_id}"
+
+
+SOLO_PREVIEW = ("Solo hay un fragmento de 30 s: SoundCloud no deja bajar el tema completo (Go+). "
+                "Bajarlo sería guardar un recorte como si fuera el tema.")
+LINK_INTERNO = ("El link guardado apunta a una dirección interna (esta máquina o la red local), "
+                "no a un sitio de música: no lo bajo.")
+
+# Fuentes de MP3 directo: el server baja la url TAL CUAL con `requests` (`_descargar_directo`),
+# así que la url tiene que ser de ese sitio. Los dominios no son los de la búsqueda
+# (web.ligaudio.ru, box.hitplayer.ru): los links de descarga que arma scrapers.py apuntan a
+# otros servidores. Medido (oct-2026) con búsquedas reales y con el historial de descargas:
+# ligaudio → storageN.lightaudio.ru; hitplayer → dN.hotplayer.ru. Se aceptan los dos dominios
+# de cada sitio y sus subdominios. Si un sitio cambia de servidor, el item muestra el motivo
+# (no un error genérico) y esta lista se actualiza.
+DOMINIOS_DIRECTOS = {"ligaudio": ("ligaudio.ru", "lightaudio.ru"),
+                     "hitplayer": ("hitplayer.ru", "hotplayer.ru")}
+
+
+def _ip_literal(host: str):
+    """El host como IP si es una IP escrita a mano (incluye las formas raras que igual resuelven
+    a una IP: "2130706433", "127.1", "0x7f.0.0.1"), o None si es un nombre."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    if re.fullmatch(r"[0-9a-fA-Fx.]+", host) and any(ch.isdigit() for ch in host):
+        try:
+            return ipaddress.ip_address(socket.inet_aton(host))
+        except OSError:
+            return None
+    return None
+
+
+def _ip_interna(ip) -> bool:
+    """Loopback, red privada, link-local, reservada, multicast o sin especificar."""
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast
+
+
+def _host_interno(host: str) -> bool:
+    """Chequeo LITERAL (sin DNS): localhost, *.localhost, *.local, *.internal o una IP interna."""
+    h = host.lower().rstrip(".")
+    if h in ("localhost", "") or h.endswith((".localhost", ".local", ".internal", ".lan", ".home.arpa")):
+        return True
+    ip = _ip_literal(h)
+    return ip is not None and _ip_interna(ip)
+
+
+def _resolver_host(host: str) -> list[str]:
+    """Las IPs a las que resuelve el host (DNS). Aparte para que los tests no salgan a la red."""
+    return [info[4][0] for info in socket.getaddrinfo(host, None)]
+
+
+def _resuelve_a_interna(host: str) -> bool:
+    """¿Algún registro DNS del host es una IP interna? (un nombre público que apunta a 127.0.0.1).
+
+    Límite, documentado: es un chequeo en el momento de pedir la descarga. yt-dlp/requests
+    vuelven a resolver después (un DNS que cambia de respuesta en el medio — rebinding — no se
+    ataja) y una redirección HTTP hacia una IP interna tampoco. Para eso haría falta fijar la IP
+    en la conexión, que ni yt-dlp ni `_descargar_directo` permiten sin reescribirlos. Si el DNS
+    no contesta, no se bloquea: la descarga va a fallar sola, con su motivo."""
+    try:
+        ips = _resolver_host(host)
+    except OSError:
+        return False
+    for txt in ips:
+        try:
+            if _ip_interna(ipaddress.ip_address(txt.split("%")[0])):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _motivo_no_bajable(item: dict) -> str | None:
-    """Por qué el item no se puede bajar, o None si se puede.
+    """Por qué el item no se puede bajar, o None si se puede. Sin DNS (se llama por cada item
+    al mostrar la playlist); la resolución se mira al bajar (`_motivo_al_bajar`).
 
     Mismo criterio que la pantalla usaba para `descargable` (fuente y url): los temas que se
-    agregan desde la home son archivos locales del dueño y se guardan sin fuente ni url. La
-    url además tiene que ser http(s): es lo único que bajan yt-dlp y la descarga directa."""
+    agregan desde la home son archivos locales del dueño y se guardan sin fuente ni url. Un Go+
+    de SoundCloud solo da 30 s. La url tiene que ser http(s) (lo único que bajan yt-dlp y la
+    descarga directa), no puede apuntar a esta máquina ni a la red local (el server la pediría
+    por quien guardó el item: SSRF), y la de una fuente de MP3 directo tiene que ser de ese sitio."""
     url = (item.get("url") or "").strip()
-    if not (item.get("fuente") or "").strip() or not url:
+    fuente = (item.get("fuente") or "").strip().lower()
+    if not fuente or not url:
         return SIN_LINK
+    if item.get("solo_preview"):
+        return SOLO_PREVIEW
     if not re.match(r"https?://", url, re.IGNORECASE):
         return "El link guardado no es una dirección web (http/https): no lo puedo bajar."
+    try:
+        host = (urlsplit(url).hostname or "")
+    except ValueError:
+        host = ""
+    if not host:
+        return "El link guardado no tiene un sitio válido: no lo puedo bajar."
+    if _host_interno(host):
+        return LINK_INTERNO
+    dominios = DOMINIOS_DIRECTOS.get(fuente)
+    if dominios and not any(host == d or host.endswith("." + d) for d in dominios):
+        return (f"El link guardado no es de {fuente} (se esperaba un servidor de "
+                f"{' o '.join(dominios)}, es {host}): no lo bajo.")
     return None
+
+
+def _motivo_al_bajar(item: dict) -> str | None:
+    """`_motivo_no_bajable` más lo que necesita DNS: el host no puede resolver a una IP interna.
+    Spotify/Deezer no bajan su url (se busca el equivalente en YouTube): no se resuelve."""
+    motivo = _motivo_no_bajable(item)
+    if motivo:
+        return motivo
+    if (item.get("fuente") or "").strip().lower() in ("spotify", "deezer"):
+        return None
+    host = urlsplit((item.get("url") or "").strip()).hostname or ""
+    return LINK_INTERNO if _resuelve_a_interna(host) else None
 
 
 def _item_publico(item: dict | None) -> dict | None:
@@ -2424,12 +2654,20 @@ def descargar_item_playlist(pid: int, item_id: int, formato: str) -> dict:
     playlist sigue mostrando como "falta bajar" es un dato que miente."""
     item = db.get_item(pid, item_id)
     if not item:
-        return {"exito": False, "mensaje": "El tema ya no está en esta playlist.", "item": None}
-    motivo = _motivo_no_bajable(item)
+        return {"exito": False, "mensaje": "El tema ya no está en esta playlist.", "item": None,
+                "quitado": True}
+    # El worker corre esto un rato después de que el endpoint chequeó: entre tanto pudo haberse
+    # bajado por otro camino (C1). Bajado = con el archivo en disco (`db._tiene_archivo`).
+    if item.get("descargado"):
+        return {"exito": False, "mensaje": "Este tema ya está descargado.", "item": _item_publico(item)}
+    motivo = _motivo_al_bajar(item)
     if motivo:
         return {"exito": False, "mensaje": motivo, "item": _item_publico(item)}
     payload = {k: item.get(k) for k in ("titulo", "artista", "fuente", "url", "thumbnail",
                                         "duracion", "bpm", "camelot", "genero")}
+    # Un link pegado con espacios alrededor (C3) se baja igual; la fuente se compara exacta.
+    payload["url"] = (payload.get("url") or "").strip()
+    payload["fuente"] = (payload.get("fuente") or "").strip().lower()
     payload["formato"] = formato
     try:
         res = procesar_descarga(payload, destino={"playlist_id": pid, "item_id": item_id})
@@ -2441,20 +2679,76 @@ def descargar_item_playlist(pid: int, item_id: int, formato: str) -> dict:
         res = {**res, "exito": False,
                "mensaje": f"Se bajó {res.get('archivo') or 'el archivo'} pero no quedó anotado en la "
                           "playlist (¿quitaste el tema mientras bajaba?)."}
-    return {**res, "item": _item_publico(despues)}
+    out = {**res, "item": _item_publico(despues)}
+    if despues is None:
+        out["quitado"] = True       # la fila ya no existe: la pantalla no puede mostrar el motivo ahí
+    return out
+
+
+# --- Contra pedidos de otras páginas (CSRF) ----------------------------------------------
+# El server no tiene login ni CORS: cualquier página abierta en el navegador del dueño puede
+# mandarle un POST. Un <form method=POST> o un fetch no-cors con text/plain no disparan
+# preflight, así que el navegador lo envía igual (no puede leer la respuesta, pero el efecto,
+# una descarga real, ya pasó). Para lo que dispara trabajo se exige:
+#  - Content-Type: application/json. Un form o un text/plain no lo pueden poner sin preflight,
+#    y el preflight falla porque no hay CORS (415 si no);
+#  - si el navegador dice de dónde viene: Sec-Fetch-Site no "cross-site", y Origin = este
+#    server (mismo host:puerto que pidió el navegador). Si no vienen (curl, TestClient, un
+#    navegador viejo) no se exige: lo que protege ahí es el Content-Type.
+# El proxy de Vite en desarrollo no cambia Host (changeOrigin false), así que Origin y Host
+# coinciden también ahí.
+
+def _origen_ajeno(request: Request) -> str | None:
+    """Por qué el pedido viene de otra página, o None si es de la propia app (o no se sabe)."""
+    sitio = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if sitio == "cross-site":
+        return "cross-site"
+    origen = request.headers.get("origin")
+    if origen is None:
+        return None
+    host = (request.headers.get("host") or "").strip().lower()
+    try:
+        netloc = urlsplit(origen.strip()).netloc.lower()
+    except ValueError:
+        netloc = ""
+    if not netloc or netloc != host:
+        return f"Origin {origen[:80]}"
+    return None
+
+
+async def _cuerpo_json_propio(request: Request) -> tuple[dict | None, JSONResponse | None]:
+    """El cuerpo JSON de un pedido de la propia app, o la respuesta de rechazo (403/415/400)."""
+    ajeno = _origen_ajeno(request)
+    if ajeno:
+        logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+        return None, JSONResponse({"exito": False, "mensaje": "Pedido rechazado: no viene de MusiFlix."},
+                                  status_code=403)
+    tipo = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if tipo != "application/json":
+        return None, JSONResponse({"exito": False, "mensaje": "El pedido tiene que ser JSON "
+                                   "(Content-Type: application/json)."}, status_code=415)
+    try:
+        cuerpo = await request.json()
+    except Exception:
+        return None, JSONResponse({"exito": False, "mensaje": "El cuerpo no es JSON válido."}, status_code=400)
+    if not isinstance(cuerpo, dict):
+        return None, JSONResponse({"exito": False, "mensaje": "El cuerpo tiene que ser un objeto JSON."},
+                                  status_code=400)
+    return cuerpo, None
 
 
 @app.post("/api/playlists/{pid}/items/{item_id}/descargar")
 async def playlists_descargar_item(pid: int, item_id: int, request: Request):
-    """Baja un tema guardado en la playlist. Cuerpo opcional: {"formato": "wav"|"flac"|"mp3"}.
-    Cualquier otra clave (url, ruta…) se ignora: lo que se baja sale del item guardado.
-    404 playlist o item ajeno · 400 formato inválido o item sin link · 409 ya bajado o bajándose.
-    Con Redis encola (como /api/descargar) y contesta {encolado, job_id}; sin Redis, el resultado."""
-    try:
-        cuerpo = await request.json()
-    except Exception:
-        cuerpo = {}
-    formato = str((cuerpo or {}).get("formato") or "wav").lower() if isinstance(cuerpo, dict) else "wav"
+    """Baja un tema guardado en la playlist. Cuerpo JSON: {"formato": "wav"|"flac"|"mp3"} ({}
+    = wav). Cualquier otra clave (url, ruta…) se ignora: lo que se baja sale del item guardado.
+    403 pedido de otra página · 415 no es JSON · 400 JSON roto, formato inválido o item que no se
+    puede bajar (con el motivo) · 404 playlist o item ajeno · 409 ya bajado (con archivo) o
+    bajándose. Con Redis encola (como /api/descargar) y contesta {encolado, job_id}; sin Redis,
+    el resultado."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    formato = str(cuerpo.get("formato") or "wav").lower()
     if formato not in FORMATOS_DESCARGA:
         return JSONResponse({"exito": False, "mensaje": f"Formato «{formato}» no válido: elegí "
                              + ", ".join(f.upper() for f in FORMATOS_DESCARGA) + "."}, status_code=400)
@@ -2462,20 +2756,26 @@ async def playlists_descargar_item(pid: int, item_id: int, request: Request):
     if not item:
         existe = await asyncio.to_thread(db.get_playlist_mia, pid)
         mensaje = "Ese tema no está en esta playlist." if existe else "Playlist no encontrada."
-        return JSONResponse({"exito": False, "mensaje": mensaje}, status_code=404)
+        return JSONResponse({"exito": False, "mensaje": mensaje, "quitado": bool(existe)}, status_code=404)
     if item.get("descargado"):
         return JSONResponse({"exito": False, "mensaje": "Este tema ya está descargado.",
                              "item": _item_publico(item)}, status_code=409)
-    motivo = _motivo_no_bajable(item)
+    motivo = await asyncio.to_thread(_motivo_al_bajar, item)
     if motivo:
         return JSONResponse({"exito": False, "mensaje": motivo, "item": _item_publico(item)},
                             status_code=400)
     if jobs.queue_disponible():
+        # Con worker, `_items_bajando` (de este proceso) no ve el job: la reserva vive en Redis
+        # (SET NX con vencimiento) y la suelta el job al terminar (tasks.descargar_item_job).
+        clave = _clave_item(item_id)
+        if not jobs.reservar(clave, RESERVA_ITEM_S):
+            return JSONResponse({"exito": False, "mensaje": "Este tema ya se está bajando."}, status_code=409)
         try:
             import tasks
             job = jobs.encolar(tasks.descargar_item_job, pid, item_id, formato)
             return {"encolado": True, "job_id": job.id}
         except Exception as e:
+            jobs.liberar(clave)
             return JSONResponse({"exito": False, "mensaje": f"No pude encolar la descarga: {e}"[:300]},
                                 status_code=503)
     with _items_bajando_lock:

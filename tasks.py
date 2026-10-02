@@ -11,9 +11,14 @@ def descargar_job(payload: dict) -> dict:
 
 
 def descargar_item_job(pid: int, item_id: int, formato: str) -> dict:
-    """Descarga de un tema guardado en una playlist (f41): el item dice qué bajar."""
+    """Descarga de un tema guardado en una playlist (f41): el item dice qué bajar.
+    Suelta la reserva que tomó el endpoint al encolar (server._clave_item), pase lo que pase."""
+    import jobs
     import server
-    return server.descargar_item_playlist(pid, item_id, formato)
+    try:
+        return server.descargar_item_playlist(pid, item_id, formato)
+    finally:
+        jobs.liberar(server._clave_item(item_id))
 
 
 def calidad_job(titulo: str, artista: str, fuente: str, url: str):
