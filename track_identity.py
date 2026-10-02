@@ -171,10 +171,17 @@ def version_of(text: str) -> str | None:
         sin_anio = re.sub(r"\s+", " ", re.sub(r"\b(?:19|20)\d{2}\b", " ", detail)).strip()
         return "live:" + (sin_anio or detail)
     # 2) Remix / bootleg / flip / rework de alguien: otra obra.
+    #    f40-r2 (aprobado por el dueño): "Remix Extended" / "Extended Remix" es la edición LARGA
+    #    de ESE remix, otra edición que el remix a secas: lleva el sufijo "+extended" ("Omnya
+    #    Remix Extended" → "remix:omnya+extended"). Antes el "extended" se perdía (quedaba
+    #    "remix:omnya", igual que "(Omnya Remix)") y una versión de 282 s pasaba por la de 232 s.
+    #    No agrega palabras a las listas congeladas: "extended" ya era una de ellas.
     m = re.search(r"^(.*?)\b(remix|bootleg|flip|rework)\b", t)
     if m:
-        who = m.group(1).strip()
-        return f"{m.group(2)}:{who}" if who else m.group(2)
+        extendido = bool(re.search(r"\bextended\b", t))
+        who = re.sub(r"\s+", " ", re.sub(r"\bextended\b", " ", m.group(1))).strip()
+        canon = f"{m.group(2)}:{who}" if who else m.group(2)
+        return canon + "+extended" if extendido else canon
     # 3) El original con otro nombre: Remastered, Original Mix, Album/Single/Explicit Version…
     if re.search(r"\bremaster", t) or re.fullmatch(
             r"(digital )?(original|album|single|explicit|video original|lp|main)( version| mix)?|original", t):
@@ -283,13 +290,22 @@ def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, s
     t = _WITH.sub(" ", t)
     version, version_text = "original", ""
 
-    def _group(m):
+    def _sumar(v, g):
+        """La primera versión manda; la única excepción es un "(Extended Mix)" aparte que sigue
+        a un remix: "(Omnya Remix) (Extended Mix)" es el Extended de ESE remix, igual que
+        "(Omnya Remix Extended)" (f40-r2). Antes el segundo grupo se tiraba sin mirarlo."""
         nonlocal version, version_text
+        if version == "original":
+            version, version_text = v, g
+        elif v == "extended" and re.match(r"(?:remix|bootleg|flip|rework)\b", version) \
+                and not version.endswith("+extended"):
+            version, version_text = version + "+extended", f"{version_text} {g}"
+
+    def _group(m):
         g = m.group(1)
         v = version_of(g)
         if v is not None:
-            if version == "original":
-                version, version_text = v, g
+            _sumar(v, g)
             return " "
         names = split_artists(g)
         if names and artists and names & artists:      # crédito: "(Sub Focus & Wilkinson)"
@@ -301,13 +317,11 @@ def _title_and_version(t: str, artists: frozenset = frozenset()) -> tuple[str, s
     # "Tema - Radio Edit" (así lo escriben Deezer y los Topic) → versión
     m = re.search(r"\s[-–—]\s*([^-–—]+)$", base)
     if m and version_of(m.group(1)):
-        if version == "original":
-            version, version_text = version_of(m.group(1)), m.group(1)
+        _sumar(version_of(m.group(1)), m.group(1))
         base = base[:m.start()]
     m = _BARE_VERSION.search(base)
     if m:
-        if version == "original":
-            version, version_text = version_of(m.group(1)), m.group(1)
+        _sumar(version_of(m.group(1)), m.group(1))
         base = base[:m.start()]
     # "Matador Remasterizado 2008", "De Música Ligera Remasterizado 2007": el original, sin paréntesis.
     base = re.sub(r"\s(?:remasterizad[oa]|remastered|remaster)(?:\s+(?:19|20)\d{2})?\s*$", " ", base, flags=re.I)

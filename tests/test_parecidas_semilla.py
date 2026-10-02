@@ -262,6 +262,10 @@ def test_normalize_conserva_otros_alfabetos():
     ("Original Mix", "original"), ("Extended Mix", "extended"), ("Acoustic", "acoustic"),
     ("Cazzette's NYC Mode Radio Mix", "radio:cazzettes nyc mode"), ("Live", "live:"),
     ("Live at Wembley", "live:at wembley"), ("Diplo & Jauz Remix", "remix:diplo jauz"),
+    # f40-r2: el Extended de un remix es OTRA edición que el remix (antes "Remix Extended" daba
+    # "remix:omnya", igual que el remix a secas).
+    ("Omnya Remix Extended", "remix:omnya+extended"), ("Omnya Extended Remix", "remix:omnya+extended"),
+    ("Omnya Remix", "remix:omnya"), ("Extended Remix", "remix+extended"),
 ])
 def test_version_canonica(texto, version):
     assert ti.version_of(texto) == version
