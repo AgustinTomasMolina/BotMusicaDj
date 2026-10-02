@@ -696,6 +696,47 @@ def test_la_nota_de_soundcloud_tambien_pasa_por_el_cupo(env, monkeypatch):
     assert [f for f, _ in env.notas.pedidos] == ["youtube"]
 
 
+# --- presupuesto de una fila (f40-r2) ---------------------------------------------------------------
+
+def _timeout_fila_front_s() -> float:
+    """`TIMEOUT_FILA_MS` leído del front (no copiado): si alguien lo baja, este test se entera."""
+    import re
+    js = (Path(__file__).parents[1] / "frontend" / "src" / "stationVersions.js").read_text(encoding="utf-8")
+    return int(re.search(r"export const TIMEOUT_FILA_MS = (\d+)", js).group(1)) / 1000
+
+
+def test_el_peor_caso_del_server_queda_bajo_el_tope_del_front_con_margen(server):
+    # Las fases en serie: búsqueda (20) + medir MP3 (5) + notas (15) = 40 s contra 45 s del
+    # front. Antes: 20 + 8 + 15 (+ 10 del cupo y la búsqueda de SoundCloud en serie) = 43-53 s.
+    total = server._SOURCE_DEADLINE_S + server._VERSION_DUR_DEADLINE_S + server._VERSION_CAL_DEADLINE_S
+    assert server.presupuesto_fila_s() == total
+    assert total <= _timeout_fila_front_s() - 5, f"{total} s del server contra {_timeout_fila_front_s()} s del front"
+
+
+def test_otro_upload_de_soundcloud_va_en_paralelo_con_las_plataformas(env, monkeypatch):
+    # Go+ con YouTube que no contesta y SoundCloud colgado en la búsqueda de otro upload: la
+    # fila espera UN plazo de búsqueda, no dos (antes eran en serie). El cupo no se toca.
+    plazo = 0.6
+    monkeypatch.setattr(env.server, "_SOURCE_DEADLINE_S", plazo)
+    suelta = threading.Event()
+
+    def http_colgado(url, params=None, headers=None, timeout=None):
+        suelta.wait(10)
+        return Resp(500, {})
+    env.usar_http(http_colgado)
+    env.resultados(youtube={Q_DAFT: suelta})
+    try:
+        t0 = time.monotonic()
+        r = env.versiones(DAFT_GO)
+        dt = time.monotonic() - t0
+    finally:
+        suelta.set()
+    assert dt < plazo * 1.6, f"la fila tardó {dt:.2f} s con un plazo de búsqueda de {plazo} s"
+    assert r["motivo"] == ("SoundCloud no contestó a tiempo la búsqueda de otro upload completo. "
+                           "No contestó a tiempo: YouTube")
+    assert [o.get("estacion", False) for o in r["opciones"]] == [True]
+
+
 # --- _buscar_mix_detalle ---------------------------------------------------------------------------
 
 def test_mix_detalle_con_fuentes_no_llama_a_soundcloud(env):

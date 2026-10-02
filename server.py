@@ -969,6 +969,16 @@ def _sc_otros_uploads(q: str, tema_id: str) -> tuple[list, str | None]:
     return out, None
 
 
+def presupuesto_fila_s() -> float:
+    """Peor caso (s) de UNA fila de versiones en el server, con las fases en serie: búsqueda en
+    las plataformas (con el otro upload de SoundCloud en paralelo, mismo plazo) + medición de
+    los MP3 sin duración + notas de calidad (el cupo de SoundCloud se espera DENTRO del plazo
+    de las notas). Tiene que quedar por debajo de `TIMEOUT_FILA_MS` del front
+    (frontend/src/stationVersions.js) con margen; si no, una fila que el server sí contesta se
+    mostraría como "Tardó más de 45 s…". Lo fija un test (f40-r2: antes eran 43-53 s)."""
+    return _SOURCE_DEADLINE_S + _VERSION_DUR_DEADLINE_S + _VERSION_CAL_DEADLINE_S
+
+
 def _versiones_de(tema: dict, formato: str) -> dict:
     """Las versiones de UN tema de la Station: el tema mismo (SoundCloud) + la mejor de cada
     otra plataforma que pase la regla de identidad, cada una con su nota de /api/calidad.
@@ -985,22 +995,47 @@ def _versiones_de(tema: dict, formato: str) -> dict:
         motivos.append("No pude leer artista y título de este tema para buscarlo en otras plataformas")
     else:
         q = " ".join(p for p in (wanted.artist_text, wanted.query_title, wanted.version_text) if p)
-        mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
-        candidatos = list(mezcla)
+        # Otro upload completo en SoundCloud (tema Go+ o sin audio): EN PARALELO con las otras
+        # plataformas y con el mismo plazo (f40-r2). En serie sumaba la espera del cupo (10 s)
+        # y la búsqueda (hasta 15 s) a los 20 s de las plataformas: la fila podía pasar el tope
+        # de 45 s del front (ver `presupuesto_fila_s`).
+        sc_ex = fut_sc = None
         if tema.get("solo_preview") or tema.get("reproducible") is False:
-            otros, motivo_sc = _sc_otros_uploads(q, tema.get("video_id") or "")
-            candidatos += otros
-            if motivo_sc:
-                motivos.append(motivo_sc)
+            sc_ex = ThreadPoolExecutor(max_workers=1)
+            fut_sc = sc_ex.submit(_sc_otros_uploads, q, tema.get("video_id") or "")
+        t_busqueda = time.monotonic()
+        try:
+            mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
+            candidatos = list(mezcla)
+            if fut_sc is not None:
+                wait([fut_sc], timeout=max(0.0, _SOURCE_DEADLINE_S - (time.monotonic() - t_busqueda)))
+                otros, motivo_sc = [], "SoundCloud no contestó a tiempo la búsqueda de otro upload completo"
+                if fut_sc.done():
+                    try:
+                        otros, motivo_sc = fut_sc.result()
+                    except Exception as e:
+                        logger.warning(f"⚠️ Versiones: otro upload de SoundCloud falló: {type(e).__name__}")
+                        motivo_sc = "SoundCloud no contestó la búsqueda de otro upload completo"
+                candidatos += otros
+                if motivo_sc:
+                    motivos.append(motivo_sc)
+        finally:
+            if sc_ex is not None:
+                sc_ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola
         _medir_duraciones_mp3(wanted, wanted_s, candidatos)
 
-    # La mejor de cada plataforma que ES el tema (en el orden de prioridad de fuente).
+    # La mejor de cada plataforma que ES el tema (en el orden de prioridad de fuente). Dentro de
+    # una plataforma (f40-r2): primero un Extended con la duración verificada (el que el DJ
+    # quiere), después una de la duración del tema, y al final las de duración desconocida (se
+    # ofrecen pero el front no las elige). A igualdad, la primera de la búsqueda (sort estable).
     aceptadas = []
     for c in candidatos:
-        grado = _version_valida(wanted, wanted_s, c)
-        if grado:
-            aceptadas.append(dict(c, evidencia=grado))
-    aceptadas.sort(key=lambda c: _rank_calidad(c.get("fuente", ""), formato))
+        extra = _version_aceptada(wanted, wanted_s, c)
+        if extra:
+            aceptadas.append(dict(c, **extra))
+    aceptadas.sort(key=lambda c: (_rank_calidad(c.get("fuente", ""), formato),
+                                  0 if c["duracion_verificada"] and c.get("edicion") == "extended"
+                                  else 1 if c["duracion_verificada"] else 2))
     elegidas, vistas = [], set()
     for c in aceptadas:
         f = (c.get("fuente") or "").lower()
