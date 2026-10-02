@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { fmtDur } from '../utils'
 import { useDialog } from '../hooks'
 import { gradeClass } from './common'
@@ -10,6 +10,7 @@ import { crearPlaylistConPrompt } from '../playlists'
 import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromCrateItem } from '../player/track'
+import { descargas, faltantes, textoLote } from '../playlistDescarga'
 
 /* Iconos inline (Phosphor-ish) */
 const S = (p, sz = 16) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>
@@ -94,7 +95,7 @@ function ExportDialog({ crate, onClose, toast }) {
   )
 }
 
-export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick, onSeleccion }) {
+export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick, onSeleccion, formato = 'wav' }) {
   const [lists, setLists] = useState(null)
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
@@ -133,6 +134,30 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   // La selección también cambia sola (al crear una, o al borrar la abierta).
   useEffect(() => { onSeleccion?.(selId) }, [selId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { await cargarLista(); await cargarCrate(selId) }
+
+  // Bajar desde la playlist (f41). El estado de las descargas vive en un store de módulo
+  // (src/playlistDescarga.js): si el dueño se va a otra pantalla mientras baja, al volver
+  // ve en qué va. Cada descarga que termina bien recarga la playlist abierta (el item ya
+  // tiene archivo, nota y formato) y avisa al rail (cambió "descargados").
+  const dl = useSyncExternalStore(descargas.subscribe, descargas.getSnapshot)
+  const hechosVistos = useRef(dl.hechos)
+  useEffect(() => {
+    if (dl.hechos === hechosVistos.current) return
+    hechosVistos.current = dl.hechos
+    cargarCrate(selId); avisarPlaylists()
+  }, [dl.hechos]) // eslint-disable-line react-hooks/exhaustive-deps
+  const bajarUno = async (it) => {
+    if (!crate) return
+    const r = await descargas.bajarUno(crate.id, it, formato)
+    const quien = `${it.titulo}${it.artista ? ` — ${it.artista}` : ''}`
+    if (r.exito) {
+      const g = r.calidad?.grade ?? r.item?.grade
+      toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''} · ${(r.item?.formato || formato).toUpperCase()}.` })
+    } else {
+      toast.danger({ title: `No se bajó: ${quien}`, body: r.mensaje, actions: [{ label: 'Reintentar', onClick: () => bajarUno(it) }] })
+    }
+  }
+  const bajarTodos = () => { if (crate) descargas.bajarTodos(crate.id, crate.items, formato) }
 
   // Antes estas acciones no tenían catch: sin conexión fallaban en silencio.
   const fallo = (title) => toast.danger({ title, body: 'Revisá que el servidor esté corriendo y probá de nuevo.' })
@@ -179,6 +204,12 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
   const m = crate?.metrics
   const maxKey = m ? Math.max(1, ...m.keys) : 1
+  // Lo que falta y se puede bajar acá; los "sin link" (archivos de la biblioteca) no cuentan.
+  const nFaltan = crate ? faltantes(crate.items).length : 0
+  const lote = dl.lote
+  const loteAca = lote && crate && lote.pid === crate.id
+  const loteEnCurso = lote && !lote.terminado
+  const loteHechos = lote ? lote.ok + lote.fallidos.length : 0
 
   return (
     <div className="crates">
@@ -216,10 +247,32 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 </div>
                 <div className="crate-actions cluster" style={{ gap: 'var(--space-2)' }}>
                   {!crate.activa && <button type="button" className="btn btn-secondary btn-sm" onClick={() => activar(crate.id, crate.nombre)}>Marcar activa</button>}
+                  {/* Una sola tanda a la vez (de a un tema): si hay otra en curso, el botón espera. */}
+                  {nFaltan > 0 && !(loteAca && loteEnCurso) && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={bajarTodos} disabled={!!loteEnCurso}
+                      title={loteEnCurso ? 'Ya se está bajando otra playlist' : `Bajar en ${formato.toUpperCase()}`}>
+                      <IcoDown /> {nFaltan === 1 ? 'Bajar el que falta' : `Bajar los ${nFaltan} que faltan`}
+                    </button>
+                  )}
                   <button type="button" className="btn btn-primary btn-sm" onClick={() => setExportOpen(true)} disabled={!crate.items?.length}><IcoExport /> Exportar .m3u8</button>
                   <button type="button" className="btn btn-icon-sm" aria-label="Borrar playlist" title="Borrar playlist" onClick={borrar}><IcoTrash /></button>
                 </div>
               </div>
+              {/* Progreso de "bajar los que faltan". role=status: el lector anuncia cada cambio
+                  ("Bajando 3 de 8 · …") sin mover el foco. */}
+              {loteAca && (
+                <div className="crate-dl">
+                  <div role="status" className="crate-dl-txt">{textoLote(lote)}</div>
+                  <div className="crate-dl-bar" role="progressbar" aria-label="Temas procesados"
+                    aria-valuemin={0} aria-valuemax={lote.total} aria-valuenow={loteHechos}
+                    aria-valuetext={`${loteHechos} de ${lote.total}`}>
+                    <i style={{ width: `${Math.round((loteHechos / lote.total) * 100)}%` }} />
+                  </div>
+                  {loteEnCurso
+                    ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => descargas.detener()}>Detener después de este</button>
+                    : <button type="button" className="btn btn-icon-sm" aria-label="Cerrar el resumen de la descarga" onClick={() => descargas.cerrarLote()}><IcoX /></button>}
+                </div>
+              )}
               {m && (
                 <div className="metrics">
                   <div className="metric"><b>{m.total}</b><span>Temas</span></div>
@@ -247,6 +300,13 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
               {(crate.items || []).map((it, k) => {
                 const tk = fromCrateItem(it).key
                 const suena = player.isPlaying(tk)
+                const est = it.descargado ? null : dl.items[it.id]
+                // El motivo, en texto y al lado del tema: por qué no se puede bajar (sin link) o
+                // por qué falló el último intento (lo que dijo el server, tal cual).
+                const motivo = it.descargado ? null
+                  : est?.estado === 'error' ? `No se bajó: ${est.mensaje}`
+                    : it.motivo_no_bajable || null
+                const motivoId = motivo ? `motivo-${it.id}` : undefined
                 return (
                 <div className="trk" key={it.id}>
                   {/* Reordenar no está implementado: el ícono es decorativo (antes anunciaba "Reordenar" sin hacer nada). */}
@@ -258,6 +318,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                   <div className="trk-id">
                     <div className="trk-title" title={it.titulo}>{it.titulo}</div>
                     <div className="trk-artist"><span className="truncate">{it.artista}</span><span className="sep">·</span><span className="mono">{fmtDur(it.duracion)}</span></div>
+                    {motivo && <div id={motivoId} className={`trk-motivo${est?.estado === 'error' ? ' is-error' : ''}`}>{motivo}</div>}
                   </div>
                   <div className="trk-meta">
                     {it.bpm && <span className="mb"><span className="mb-label">BPM</span><b>{it.bpm}</b></span>}
@@ -268,7 +329,25 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                   <div className="trk-status">
                     {it.descargado
                       ? <span className="status status-have"><IcoCheck /> Descargado</span>
-                      : <span className="status status-need"><IcoDown /> Falta bajar</span>}
+                      : it.motivo_no_bajable
+                        ? <span className="status status-need" aria-describedby={motivoId}>Sin link</span>
+                        : (() => {
+                          // Mientras baja (o espera en la tanda) es el MISMO botón, con
+                          // aria-disabled y no `disabled`: así no se pierde el foco del teclado.
+                          const ocupado = est?.estado === 'bajando' || est?.estado === 'cola'
+                          const accion = est?.estado === 'bajando' ? 'Bajando' : est?.estado === 'cola' ? 'En cola para bajar'
+                            : est?.estado === 'error' ? 'Reintentar bajar' : 'Bajar'
+                          return (
+                            <button type="button" className={`btn btn-secondary btn-sm trk-bajar${ocupado ? ' is-busy' : ''}`}
+                              aria-label={`${accion} «${it.titulo}»`} aria-disabled={ocupado || undefined}
+                              aria-describedby={motivoId} title={ocupado ? undefined : `Bajar en ${formato.toUpperCase()}`}
+                              onClick={() => { if (!ocupado) bajarUno(it) }}>
+                              {est?.estado === 'bajando' ? <><span className="spinner" aria-hidden="true" /> Bajando…</>
+                                : est?.estado === 'cola' ? 'En cola'
+                                  : <><IcoDown /> {est?.estado === 'error' ? 'Reintentar' : 'Bajar'}</>}
+                            </button>
+                          )
+                        })()}
                   </div>
                   <div className="trk-acts">
                     <button type="button" className="btn btn-icon-sm" aria-label={`Quitar ${it.titulo} de la playlist`} title="Quitar" onClick={() => quitar(it.id)}><IcoX /></button>

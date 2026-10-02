@@ -288,7 +288,7 @@ export default function App() {
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} onParecidas={doParecidas} />
   else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
   else if (view.kind === 'radio') body = <Radio />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.

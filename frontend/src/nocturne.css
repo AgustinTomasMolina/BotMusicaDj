@@ -840,6 +840,16 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .status{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:var(--radius-pill);font-size:11px;white-space:nowrap}
 .status-have{color:var(--color-info);background:color-mix(in srgb,var(--color-info) 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-info) 28%,transparent)}
 .status-need{color:var(--color-neutral-400);background:color-mix(in srgb,var(--color-text) 7%,transparent);box-shadow:inset 0 0 0 1px var(--color-divider)}
+/* Bajar desde la playlist (f41): el botón de la fila, el motivo debajo del tema y el progreso
+   de la tanda. El motivo parte en varias líneas: es texto del server y no se recorta. */
+.trk-bajar{white-space:nowrap}
+.trk-bajar.is-busy{cursor:progress;opacity:0.8}
+.trk-motivo{margin-top:3px;font-size:11.5px;line-height:1.35;color:var(--color-neutral-500);white-space:normal;overflow-wrap:anywhere}
+.trk-motivo.is-error{color:var(--color-danger)}
+.crate-dl{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3)}
+.crate-dl-txt{flex:1 1 220px;min-width:0;font-size:12.5px;overflow-wrap:anywhere}
+.crate-dl-bar{order:3;flex:1 0 100%;height:4px;border-radius:2px;background:var(--color-divider);overflow:hidden}
+.crate-dl-bar>i{display:block;height:100%;background:var(--color-accent);transition:width .2s var(--ease)}
 
 /* — the active crate: everything you download lands here — */
 .activecrate{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 10px;border:0;border-radius:var(--radius-pill);font:inherit;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;color:var(--color-accent-200);background:color-mix(in srgb,var(--color-accent) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-accent) 32%,transparent)}
