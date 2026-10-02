@@ -899,8 +899,14 @@ def _taggear_descarga(archivo_name: str, titulo: str, artista: str, payload: dic
 
 
 def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
-                   formato: str, payload: dict, calidad: dict):
-    """Registra la descarga en el historial y, si hay crate activa, la suma ahí (best-effort)."""
+                   formato: str, payload: dict, calidad: dict, destino: dict | None = None):
+    """Registra la descarga en el historial y, si hay crate activa, la suma ahí (best-effort).
+
+    Con `destino` ({"playlist_id", "item_id"}: la descarga se pidió desde una playlist, f41)
+    el archivo va a ESE item, por id, y la activa NO se toca: si la activa es otra, se
+    ensuciaría con un tema que el usuario no bajó para ella; si es la misma, la búsqueda por
+    identidad aproximada de `marcar_descargado` podía agregar un duplicado. `destino` nunca
+    sale del payload del cliente: lo arma el server desde el item guardado."""
     cal = calidad or {}
     archivo = res.get("archivo", "")
     ruta = str(DOWNLOADS_DIR / archivo)
@@ -911,6 +917,10 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
         bpm=payload.get("bpm"), camelot=payload.get("camelot"),
         genero=payload.get("genero"), thumbnail=payload.get("thumbnail"),
     )
+    if destino:
+        db.marcar_item_descargado(destino["playlist_id"], destino["item_id"], archivo, ruta,
+                                  formato, cal.get("grade"), cal.get("color"))
+        return
     # Auto-add a la playlist/crate activa (si hay una)
     activa = db.get_playlist_activa()
     if activa:
@@ -922,10 +932,11 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
                              cal.get("grade"), cal.get("color"))
 
 
-def procesar_descarga(payload: dict) -> dict:
+def procesar_descarga(payload: dict, destino: dict | None = None) -> dict:
     """TODO el flujo de descarga, SÍNCRONO (sin async): bajar → calidad → tags →
     historial/crate. Lo llaman el worker (vía tasks.descargar_job) y el server en
-    modo local. Si es de Spotify/Deezer, busca el equivalente en YouTube."""
+    modo local. Si es de Spotify/Deezer, busca el equivalente en YouTube.
+    `destino`: el item de playlist que recibe el archivo (ver `_hist_descarga`)."""
     titulo = payload.get("titulo") or "cancion"
     artista = payload.get("artista") or ""
     fuente = payload.get("fuente") or ""
@@ -947,7 +958,7 @@ def procesar_descarga(payload: dict) -> dict:
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
             _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
-            _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad)
+            _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad, destino)
             return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                     "archivo": res["archivo"], "calidad": calidad}
         logger.error("❌ La descarga directa no generó archivo.")
@@ -979,7 +990,7 @@ def procesar_descarga(payload: dict) -> dict:
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
         _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
-        _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad)
+        _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad, destino)
         return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                 "archivo": res["archivo"], "calidad": calidad}
     logger.error("❌ La descarga no generó archivo.")
@@ -2328,6 +2339,9 @@ async def playlists_get(pid: int):
     data = await asyncio.to_thread(db.get_playlist_mia, pid)
     if not data:
         return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
+    # Cada item dice si se puede bajar desde acá y por qué no (f41): la pantalla muestra el
+    # motivo que decide el server en vez de repetir el criterio.
+    data["items"] = [_item_publico(it) for it in data.get("items") or []]
     return {"exito": True, "data": data}
 
 
@@ -2356,6 +2370,123 @@ async def playlists_agregar_item(pid: int, payload: dict):
 @app.delete("/api/playlists/{pid}/items/{item_id}")
 async def playlists_quitar_item(pid: int, item_id: int):
     return {"exito": await asyncio.to_thread(db.quitar_item, item_id)}
+
+
+# --- Bajar desde la playlist (f41) ------------------------------------------------------
+# El dueño guarda temas en una playlist y quiere bajarlos ahí mismo, sin volver a buscarlos.
+# Mismo flujo que el buscador (`procesar_descarga`), con dos diferencias a propósito:
+#  - qué se baja lo dice el ITEM guardado (url, fuente, título…), nunca el cliente: si el
+#    endpoint aceptara una url, cualquier página abierta en el navegador podría hacerle bajar
+#    cualquier cosa al server. Del cuerpo solo se lee el formato, y contra una lista cerrada;
+#  - el archivo queda en ESE item (por id) y la playlist activa no se toca (`_hist_descarga`).
+
+# Los del selector del buscador (frontend/src/utils.js, FORMATOS). AIFF no: yt-dlp no lo
+# acepta como salida (ver el comentario de FORMATOS).
+FORMATOS_DESCARGA = ("wav", "flac", "mp3")
+SIN_LINK = "Sin link para bajar: el tema se guardó sin una fuente de internet (por ejemplo, desde tu biblioteca)."
+
+# Items que se están bajando EN ESTE PROCESO (modo local): dos clicks seguidos no lanzan dos
+# descargas del mismo archivo. Con Redis el trabajo corre en el worker y este registro no lo
+# ve; ahí lo evita la pantalla (el botón queda ocupado mientras sigue el job).
+_items_bajando: set[int] = set()
+_items_bajando_lock = threading.Lock()
+
+
+def _motivo_no_bajable(item: dict) -> str | None:
+    """Por qué el item no se puede bajar, o None si se puede.
+
+    Mismo criterio que la pantalla usaba para `descargable` (fuente y url): los temas que se
+    agregan desde la home son archivos locales del dueño y se guardan sin fuente ni url. La
+    url además tiene que ser http(s): es lo único que bajan yt-dlp y la descarga directa."""
+    url = (item.get("url") or "").strip()
+    if not (item.get("fuente") or "").strip() or not url:
+        return SIN_LINK
+    if not re.match(r"https?://", url, re.IGNORECASE):
+        return "El link guardado no es una dirección web (http/https): no lo puedo bajar."
+    return None
+
+
+def _item_publico(item: dict | None) -> dict | None:
+    """El item como lo ve la pantalla: sin la ruta en disco y con el motivo si no se puede bajar."""
+    if not item:
+        return None
+    out = {k: v for k, v in item.items() if k != "ruta"}
+    out["motivo_no_bajable"] = None if item.get("descargado") else _motivo_no_bajable(item)
+    return out
+
+
+def descargar_item_playlist(pid: int, item_id: int, formato: str) -> dict:
+    """Baja el item `item_id` de la playlist `pid` con el flujo del buscador. SÍNCRONO: lo
+    llaman el worker (tasks.descargar_item_job) y el endpoint en modo local.
+
+    Devuelve lo mismo que `procesar_descarga` más `item` (cómo quedó en la base). Un `exito`
+    que no quedó anotado en la playlist se informa como fallo: decir "listo" de un tema que la
+    playlist sigue mostrando como "falta bajar" es un dato que miente."""
+    item = db.get_item(pid, item_id)
+    if not item:
+        return {"exito": False, "mensaje": "El tema ya no está en esta playlist.", "item": None}
+    motivo = _motivo_no_bajable(item)
+    if motivo:
+        return {"exito": False, "mensaje": motivo, "item": _item_publico(item)}
+    payload = {k: item.get(k) for k in ("titulo", "artista", "fuente", "url", "thumbnail",
+                                        "duracion", "bpm", "camelot", "genero")}
+    payload["formato"] = formato
+    try:
+        res = procesar_descarga(payload, destino={"playlist_id": pid, "item_id": item_id})
+    except Exception as e:   # procesar_descarga atrapa lo de la red; esto es lo que se le escapa
+        logger.error(f"❌ Error inesperado bajando «{item.get('titulo')}»: {type(e).__name__}: {e}")
+        res = {"exito": False, "mensaje": f"Error inesperado al bajar ({type(e).__name__}): {e}"[:300]}
+    despues = db.get_item(pid, item_id)
+    if res.get("exito") and not (despues and despues.get("descargado")):
+        res = {**res, "exito": False,
+               "mensaje": f"Se bajó {res.get('archivo') or 'el archivo'} pero no quedó anotado en la "
+                          "playlist (¿quitaste el tema mientras bajaba?)."}
+    return {**res, "item": _item_publico(despues)}
+
+
+@app.post("/api/playlists/{pid}/items/{item_id}/descargar")
+async def playlists_descargar_item(pid: int, item_id: int, request: Request):
+    """Baja un tema guardado en la playlist. Cuerpo opcional: {"formato": "wav"|"flac"|"mp3"}.
+    Cualquier otra clave (url, ruta…) se ignora: lo que se baja sale del item guardado.
+    404 playlist o item ajeno · 400 formato inválido o item sin link · 409 ya bajado o bajándose.
+    Con Redis encola (como /api/descargar) y contesta {encolado, job_id}; sin Redis, el resultado."""
+    try:
+        cuerpo = await request.json()
+    except Exception:
+        cuerpo = {}
+    formato = str((cuerpo or {}).get("formato") or "wav").lower() if isinstance(cuerpo, dict) else "wav"
+    if formato not in FORMATOS_DESCARGA:
+        return JSONResponse({"exito": False, "mensaje": f"Formato «{formato}» no válido: elegí "
+                             + ", ".join(f.upper() for f in FORMATOS_DESCARGA) + "."}, status_code=400)
+    item = await asyncio.to_thread(db.get_item, pid, item_id)
+    if not item:
+        existe = await asyncio.to_thread(db.get_playlist_mia, pid)
+        mensaje = "Ese tema no está en esta playlist." if existe else "Playlist no encontrada."
+        return JSONResponse({"exito": False, "mensaje": mensaje}, status_code=404)
+    if item.get("descargado"):
+        return JSONResponse({"exito": False, "mensaje": "Este tema ya está descargado.",
+                             "item": _item_publico(item)}, status_code=409)
+    motivo = _motivo_no_bajable(item)
+    if motivo:
+        return JSONResponse({"exito": False, "mensaje": motivo, "item": _item_publico(item)},
+                            status_code=400)
+    if jobs.queue_disponible():
+        try:
+            import tasks
+            job = jobs.encolar(tasks.descargar_item_job, pid, item_id, formato)
+            return {"encolado": True, "job_id": job.id}
+        except Exception as e:
+            return JSONResponse({"exito": False, "mensaje": f"No pude encolar la descarga: {e}"[:300]},
+                                status_code=503)
+    with _items_bajando_lock:
+        if item_id in _items_bajando:
+            return JSONResponse({"exito": False, "mensaje": "Este tema ya se está bajando."}, status_code=409)
+        _items_bajando.add(item_id)
+    try:
+        return await asyncio.to_thread(descargar_item_playlist, pid, item_id, formato)
+    finally:
+        with _items_bajando_lock:
+            _items_bajando.discard(item_id)
 
 
 @app.post("/api/playlists/{pid}/orden")

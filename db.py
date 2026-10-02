@@ -468,6 +468,39 @@ def marcar_descargado(pid: int, track: dict, archivo, ruta, formato=None, grade=
         logger.warning(f"⚠️ Crates: no pude marcar descargado: {e}")
 
 
+def get_item(pid: int, item_id: int) -> dict | None:
+    """El item `item_id` SOLO si es de la playlist `pid` (None si no existe o es de otra).
+
+    Es lo que usa la descarga desde la playlist (f41): el server baja lo que dice el item
+    guardado, nunca una url que mande el cliente. Trae `ruta` porque el endpoint necesita
+    saber si ya está bajado; `_item_dict` no la expone a la pantalla."""
+    try:
+        with SessionLocal() as s:
+            it = s.get(MiPlaylistItem, item_id)
+            if not it or it.playlist_id != pid:
+                return None
+            return {**_item_dict(it), "ruta": it.ruta}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude leer el item {item_id}: {e}"); return None
+
+
+def marcar_item_descargado(pid: int, item_id: int, archivo, ruta, formato=None,
+                           grade=None, color=None) -> bool:
+    """Completa ESE item con el archivo bajado (f41). A diferencia de `marcar_descargado`,
+    no busca por identidad aproximada ni agrega filas: si el item ya no está en la playlist
+    (lo quitaron mientras se bajaba) devuelve False y no toca nada."""
+    try:
+        with SessionLocal() as s:
+            it = s.get(MiPlaylistItem, item_id)
+            if not it or it.playlist_id != pid:
+                return False
+            it.archivo, it.ruta, it.formato, it.grade, it.color = archivo, ruta, formato, grade, color
+            s.commit()
+            return True
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude marcar el item {item_id}: {e}"); return False
+
+
 def armar_m3u8(pid: int) -> dict | None:
     """Escribe un .m3u8 con los items que tienen archivo local. Devuelve el recibo."""
     try:
