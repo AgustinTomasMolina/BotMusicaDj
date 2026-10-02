@@ -319,6 +319,9 @@ def test_csrf_solo_acepta_json_de_la_propia_app(server, client, dobles):
     assert dobles["bajar"].llamadas == [(TEMA_A["url"], "Tema A - Artista A", "mp3")]
 
 
+RARO = "El link guardado tiene un sitio con caracteres raros: no lo bajo."
+
+
 def test_ssrf_links_internos_y_de_otro_sitio_no_se_bajan(server, client, dobles, monkeypatch):
     """La url sale del item guardado, pero el item lo pudo guardar cualquiera (POST /items no
     valida): el server no puede pedir por él la red local ni un servidor que no es el del sitio."""
@@ -335,6 +338,9 @@ def test_ssrf_links_internos_y_de_otro_sitio_no_se_bajan(server, client, dobles,
         "ligaudio real": {"fuente": "ligaudio", "url": "https://storage6.lightaudio.ru/abc/x.mp3"},
         "hitplayer real": {"fuente": "hitplayer", "url": "https://d7.hotplayer.ru/x.mp3"},
         "nombre que resuelve adentro": {"fuente": "youtube", "url": "https://interno.example/x"},
+        # Auditoría f41-r2: urlsplit no decodifica "%xx", requests/yt-dlp sí → 127.0.0.1.
+        "percent": {"fuente": "youtube", "url": "http://%31%32%37.0.0.1:8000/admin/x.mp3"},
+        "unicode": {"fuente": "youtube", "url": "http://ⓛocalhost/x"},
     }
     pid, ids = _playlist(client, "SSRF", *({"titulo": k, "artista": "X", **v} for k, v in temas.items()))
     monkeypatch.setattr(server, "_resolver_host",
@@ -350,6 +356,7 @@ def test_ssrf_links_internos_y_de_otro_sitio_no_se_bajan(server, client, dobles,
         "ligaudio real": None, "hitplayer real": None,
         # La pantalla no resuelve DNS por cada item: esto lo ve recién el POST.
         "nombre que resuelve adentro": None,
+        "percent": RARO, "unicode": RARO,
     }
     por_titulo = dict(zip(temas, ids, strict=True))
     for t in ("loopback", "metadata", "ligaudio ajeno", "nombre que resuelve adentro"):

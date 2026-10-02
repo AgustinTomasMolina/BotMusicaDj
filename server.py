@@ -2615,6 +2615,12 @@ def _motivo_no_bajable(item: dict) -> str | None:
         host = ""
     if not host:
         return "El link guardado no tiene un sitio válido: no lo puedo bajar."
+    # Solo los caracteres de un nombre de sitio o de una IP. `urlsplit` no decodifica "%xx" pero
+    # requests/urllib (yt-dlp, la descarga directa) sí: "%31%32%37.0.0.1" pasaba los chequeos
+    # literal y de DNS (que no resolvía) y terminaba conectando a 127.0.0.1 (auditoría f41-r2).
+    # Tampoco Unicode: un sitio de verdad llega acá en ASCII.
+    if not re.fullmatch(r"[A-Za-z0-9.\-]+|[0-9A-Fa-f:.]+", host):
+        return "El link guardado tiene un sitio con caracteres raros: no lo bajo."
     if _host_interno(host):
         return LINK_INTERNO
     dominios = DOMINIOS_DIRECTOS.get(fuente)
