@@ -137,6 +137,39 @@ def test_scraper_con_pagina_sin_resultados_es_vacio(monkeypatch, buscar):
     assert buscar("x") == []
 
 
+def _pagina(monkeypatch, html):
+    class Resp:
+        text = html
+
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr(scrapers.requests, "get", lambda *a, **k: Resp())
+
+
+def test_hitplayer_solo_ofrece_links_http(monkeypatch):
+    # f40-r2: el link del MP3 termina en ffprobe/ffmpeg y en el navegador; uno `file:` o
+    # `concat:` haría leer un archivo local. Forma de la página real (`_HIT_RE`).
+    item = ('<a class="dwnld x" href="{}">d</a><span class="tt">Hera</span> '
+            '<span class="a"><a href="/a">Space Motion</a></span>')
+    links = ["file:///etc/passwd.mp3", "concat:/a.mp3|/b.mp3", "//d6.hotplayer.ru/ok.mp3", "https://d7.hotplayer.ru/ok2.mp3"]
+    _pagina(monkeypatch, "".join(item.format(u) for u in links))
+    assert [c["url"] for c in scrapers.buscar_hitplayer("hera")] == \
+        ["https://d6.hotplayer.ru/ok.mp3", "https://d7.hotplayer.ru/ok2.mp3"]
+
+
+def test_ligaudio_solo_ofrece_links_http(monkeypatch):
+    item = ('<div class="item"><span itemprop="name">Hera</span>'
+            '<span itemprop="byArtist"><a href="/a">Space Motion</a></span><span class="d">3:26</span>'
+            '<i data-audio="{}"></i><a class="down" href="{}">d</a><img src="{}"></div>')
+    _pagina(monkeypatch, "".join([
+        item.format("file:///a.mp3", "concat:/a|/b", "javascript:alert(1)"),       # nada http: afuera
+        item.format("https://web.ligaudio.ru/p.mp3", "file:///b.mp3", "//img.ligaudio.ru/c.jpg"),
+    ]))
+    out = scrapers.buscar_ligaudio("hera")
+    assert [(c["url"], c["stream_url"], c["thumbnail"]) for c in out] == \
+        [("https://web.ligaudio.ru/p.mp3", "https://web.ligaudio.ru/p.mp3", "https://img.ligaudio.ru/c.jpg")]
+
+
 def test_las_dos_son_fuente_error():
     # El que solo necesita "no pudo buscar" (descargar, Spek) atrapa FuenteError y cubre las dos.
     assert issubclass(FuenteCaida, FuenteError) and issubclass(FuenteNoConfigurada, FuenteError)

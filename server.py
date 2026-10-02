@@ -225,26 +225,25 @@ def _buscar_mix(q: str, limite: int) -> list:
     return _buscar_mix_detalle(q, limite)[0]
 
 
-def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None, *,
-                        con_sin_configurar: bool = False) -> tuple:
+def _buscar_mix_detalle(q: str, limite: int, fuentes: tuple | None = None) -> tuple:
     """(mezcla, fuentes que no contestaron). `fuentes` (f36) limita a qué plataformas se
     pregunta: las versiones de la Station no le vuelven a preguntar a SoundCloud por cada tema.
-    Cacheado como `_buscar_mix` (solo si contestaron todas). `con_sin_configurar` (f40) agrega
-    un tercer elemento: las fuentes que no se buscaron porque no están configuradas."""
+    Cacheado como `_buscar_mix` (solo si contestaron todas). f40-r2: sale el parámetro
+    `con_sin_configurar` (y su lugar en la caché): desde 47f4754 ninguna fila dice "Sin
+    configurar", nadie lo pedía."""
     clave = (q, limite) if fuentes is None else (q, limite, tuple(sorted(fuentes)))
     with _MIX_LOCK:
         hit = _MIX_CACHE.get(clave)
         if hit and time.monotonic() - hit[0] < _MIX_TTL_S:
-            mezcla, fallidas, sin_config = [dict(c) for c in hit[1]], [], list(hit[2])
-            return (mezcla, fallidas, sin_config) if con_sin_configurar else (mezcla, fallidas)
-    mezcla, fallidas, sin_config = _mix_fuentes(q, limite, fuentes)
+            return [dict(c) for c in hit[1]], []
+    mezcla, fallidas, _ = _mix_fuentes(q, limite, fuentes)
     if not fallidas:
         # "Sin configurar" no es una caída: no cambia hasta reiniciar con otra config, se cachea.
         with _MIX_LOCK:
             if len(_MIX_CACHE) >= _MIX_MAX:
                 _MIX_CACHE.clear()
-            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla], list(sin_config))
-    return (mezcla, fallidas, sin_config) if con_sin_configurar else (mezcla, fallidas)
+            _MIX_CACHE[clave] = (time.monotonic(), [dict(c) for c in mezcla])
+    return mezcla, fallidas
 
 
 def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
@@ -1386,6 +1385,9 @@ def procesar_descarga(payload: dict) -> dict:
 
     # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg)
     if fuente in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: requests/ffmpeg solo con http(s)
+            logger.error("❌ Descarga directa: la URL no es http(s).")
+            return {"exito": False, "mensaje": "La URL del MP3 no es válida."}
         try:
             res = _descargar_directo(url, f"{titulo} - {artista}")
         except Exception as e:
@@ -1466,6 +1468,8 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
 
     f = (fuente or "").lower()
     if f in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: a ffmpeg solo le llega http(s)
+            return None, None
         from scrapers import HEADERS
         return url, HEADERS.get("User-Agent", "")
 
@@ -1498,16 +1502,26 @@ def _audio_para_spek(titulo: str, artista: str, fuente: str, url: str):
     return None, None
 
 
-def _duracion_audio(audio: str, ua: str, timeout: float = 20) -> float:
-    """Duración (segundos) del stream, o 0 si no se puede medir. `timeout` (s) corta ffprobe."""
+def _duracion_audio(audio: str, ua: str, timeout: float = 20, scraper: bool = False) -> float:
+    """Duración (segundos) del stream, o 0 si no se puede medir. `timeout` (s) corta ffprobe.
+    `scraper` (f40-r2): la URL viene de un sitio de MP3 (o del cliente); ffprobe solo con
+    http(s) y con el whitelist de protocolos (`analizar_calidad.opciones_entrada`).
+
+    Ojo (medido en f40-r2): con un MP3 servido por chunked (sin Content-Length), como los de
+    HitPlayer, ffprobe NO da la duración ("N/A") aunque el MP3 traiga la cabecera Info: acá
+    devuelve 0. Para eso está `_duracion_mp3_cabecera`."""
     import subprocess
-    from analizar_calidad import FFPROBE
+    from analizar_calidad import FFPROBE, opciones_entrada
 
     cmd = [FFPROBE, "-v", "error"]
     if ua:
         cmd += ["-user_agent", ua]
-    cmd += ["-show_entries", "format=duration", "-of", "csv=p=0", audio]
     try:
+        if scraper:
+            if not _url_http(audio):
+                return 0.0
+            cmd += opciones_entrada(audio)
+        cmd += ["-show_entries", "format=duration", "-of", "csv=p=0", audio]
         out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=timeout)
         return float(out.stdout.strip().splitlines()[0])
     except Exception:
@@ -1528,16 +1542,20 @@ def _spectrograma(titulo: str, artista: str, fuente: str, url: str):
     # el segundo 45, ffmpeg no leería nada y no generaría imagen. Ajustamos el
     # arranque a lo que realmente dura el audio.
     ini, ventana = 45.0, 30.0
-    dur = _duracion_audio(audio, ua)
+    scraper = (fuente or "").lower() in ("ligaudio", "hitplayer")
+    dur = _duracion_audio(audio, ua, scraper=scraper)
     if dur and dur < ini + ventana:
         ventana = min(ventana, max(10.0, dur - 1))
         ini = max(0.0, dur - ventana - 1)
 
+    from analizar_calidad import opciones_entrada
     cmd = [FFMPEG, "-hide_banner", "-nostats"]
     if ua:
         cmd += ["-user_agent", ua]
     cmd += [
-        "-ss", str(ini), "-t", str(ventana), "-i", audio,
+        "-ss", str(ini), "-t", str(ventana),
+        *(opciones_entrada(audio) if scraper else []),     # f40-r2: URL de un scraper, solo http(s)
+        "-i", audio,
         # Espectrograma con eje de frecuencia LINEAL (como Spek) y leyenda visible
         "-lavfi", "showspectrumpic=s=760x340:legend=1:fscale=lin:color=intensity:gain=3:saturation=1",
         "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "-",
@@ -1580,9 +1598,11 @@ def _calidad_preview(titulo: str, artista: str, fuente: str, url: str):
     f = (fuente or "").lower()
 
     if f in ("ligaudio", "hitplayer") and url:
+        if not _url_http(url):           # f40-r2: a ffprobe/ffmpeg solo les llega http(s)
+            return None
         from scrapers import HEADERS
         ua = HEADERS.get("User-Agent", "")
-        dur = _duracion_audio(url, ua)
+        dur = _duracion_audio(url, ua, scraper=True)
         ss, ventana = 45.0, 30.0
         if dur and dur < ss + ventana:
             ventana = min(ventana, max(10.0, dur - 1))

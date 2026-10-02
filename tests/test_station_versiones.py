@@ -737,6 +737,58 @@ def test_otro_upload_de_soundcloud_va_en_paralelo_con_las_plataformas(env, monke
     assert [o.get("estacion", False) for o in r["opciones"]] == [True]
 
 
+# --- URLs de los scrapers: solo http(s) (f40-r2) ------------------------------------------------------
+
+@pytest.mark.parametrize("url, es", [
+    ("https://d6.hotplayer.ru/downloadm/a/b.mp3", True), ("http://web.ligaudio.ru/x.mp3", True),
+    ("HTTPS://X.RU/A.MP3", True), ("file:///etc/passwd", False), ("concat:a.mp3|b.mp3", False),
+    ("subfile,,start,0,end,0,,:x.mp3", False), ("//d6.hotplayer.ru/a.mp3", False), ("javascript:alert(1)", False),
+    ("https://x.ru/a b.mp3", False), ("https://x.ru/a\nb", False), ("", False), (None, False), (5, False),
+])
+def test_url_http(server, url, es):
+    assert server._url_http(url) is es
+
+
+@pytest.mark.parametrize("fuente", ["hitplayer", "ligaudio"])
+def test_calidad_y_spek_de_un_scraper_con_url_que_no_es_http_no_llegan_a_ffmpeg(server, monkeypatch, fuente):
+    # Sin `env`: acá se usa el `_calidad_preview` REAL (env lo reemplaza por las notas de juguete).
+    import subprocess as sp
+
+    import analizar_calidad
+    llamadas = []
+    monkeypatch.setattr(sp, "run", lambda *a, **k: llamadas.append(a[0]) or None)
+    monkeypatch.setattr(analizar_calidad, "analizar", lambda *a, **k: llamadas.append(a) or {})
+    for url in ("file:///etc/passwd", "concat:/etc/passwd|x"):
+        assert server._calidad_preview("T", "A", fuente, url) is None
+        assert server._spectrograma("T", "A", fuente, url) is None
+    assert llamadas == []
+
+
+@pytest.mark.parametrize("entrada, esperado", [
+    ("https://d6.hotplayer.ru/a.mp3", ["-protocol_whitelist", "http,https,tcp,tls,crypto"]),
+    ("http://x.ru/a.mp3", ["-protocol_whitelist", "http,https,tcp,tls,crypto"]),
+    ("C:\\musica\\tema.mp3", []), ("downloads/tema.mp3", []), ("/tmp/tema.mp3", []),
+    ("file:///etc/passwd", ValueError), ("concat:a|b", ValueError), ("subfile,,start,0,,:x", ValueError),
+    ("pipe:0", ValueError), ("Tema, Parte 1.mp3", []),
+])
+def test_opciones_de_entrada_de_ffmpeg(entrada, esperado):
+    import analizar_calidad
+    if esperado is ValueError:
+        with pytest.raises(ValueError):
+            analizar_calidad.opciones_entrada(entrada)
+    else:
+        assert analizar_calidad.opciones_entrada(entrada) == esperado
+
+
+def test_descarga_directa_con_url_que_no_es_http_no_sale_a_la_red(env, monkeypatch):
+    import requests
+    llamadas = []
+    monkeypatch.setattr(requests, "get", lambda *a, **k: llamadas.append(a) or None)
+    r = env.server.procesar_descarga({"titulo": "T", "artista": "A", "fuente": "hitplayer", "url": "file:///etc/passwd"})
+    assert (r["exito"], r["mensaje"]) == (False, "La URL del MP3 no es válida.")
+    assert llamadas == []
+
+
 # --- _buscar_mix_detalle ---------------------------------------------------------------------------
 
 def test_mix_detalle_con_fuentes_no_llama_a_soundcloud(env):

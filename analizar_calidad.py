@@ -46,6 +46,24 @@ def _resolver_bin(nombre: str, env_bin: str, env_dir: str) -> str:
 FFMPEG = _resolver_bin("ffmpeg", "FFMPEG_BIN", "FFMPEG_DIR")
 FFPROBE = _resolver_bin("ffprobe", "FFPROBE_BIN", "FFMPEG_DIR")
 
+# f40-r2: una URL que llega de un scraper (o del cliente) va a ffmpeg/ffprobe. Con un esquema
+# que no es http(s) (`file:`, `concat:`, `subfile:`…) ffmpeg lee archivos locales, y una URL
+# http que devuelve una lista (m3u8) puede apuntar a `file:` adentro: el whitelist corta las
+# dos cosas. Un archivo local (ruta, también "C:\…") pasa sin cambios.
+PROTOCOLOS_REMOTOS = "http,https,tcp,tls,crypto"
+
+
+def opciones_entrada(entrada: str) -> list[str]:
+    """Opciones de ffmpeg/ffprobe que van ANTES de `entrada`: el whitelist de protocolos si es
+    una URL http(s). Cualquier otro esquema es un error (ValueError), no se le pasa a ffmpeg."""
+    if re.match(r"(?i)https?://", entrada or ""):
+        return ["-protocol_whitelist", PROTOCOLOS_REMOTOS]
+    # La misma regla con la que ffmpeg decide que algo es un protocolo (url_find_protocol): letras,
+    # dígitos y "+-." antes de ":" — "C:\…" (una letra) es una ruta de Windows — o "subfile,".
+    if re.match(r"[A-Za-z0-9+.-]{2,}:|subfile,", entrada or ""):
+        raise ValueError("esquema no permitido para ffmpeg")
+    return []
+
 # Ventana de análisis del tema (segundos)
 SS, DUR = 45, 30
 # FFT
@@ -68,7 +86,7 @@ def _sample_rate(archivo: str, ua: str = None) -> int:
         if ua:
             cmd += ["-user_agent", ua]
         cmd += ["-select_streams", "a:0", "-show_entries", "stream=sample_rate",
-                "-of", "csv=p=0", archivo]
+                "-of", "csv=p=0", *opciones_entrada(archivo), archivo]
         out = subprocess.run(cmd, capture_output=True, text=True, errors="ignore")
         return int(out.stdout.strip().splitlines()[0])
     except Exception:
@@ -83,7 +101,7 @@ def _decodificar(archivo: str, sr: int, ss: float = SS, dur: float = DUR, ua: st
     if ua:
         cmd += ["-user_agent", ua]
     cmd += [
-        "-ss", str(ss), "-t", str(dur), "-i", archivo,
+        "-ss", str(ss), "-t", str(dur), *opciones_entrada(archivo), "-i", archivo,
         "-ac", "1", "-ar", str(sr), "-f", "f32le", "-acodec", "pcm_f32le", "-",
     ]
     out = subprocess.run(cmd, capture_output=True)
