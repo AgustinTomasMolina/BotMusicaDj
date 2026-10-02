@@ -863,13 +863,13 @@ def _versiones_de(tema: dict, formato: str) -> dict:
     base = dict(tema, estacion=True)
     wanted = track_identity.parse_entry(tema["titulo"], tema["artista"])
     wanted_s = track_identity.duration_or_none(tema.get("duracion"), "soundcloud")
-    motivos, fallidas, sin_configurar = [], [], []
+    motivos, fallidas = [], []
     candidatos = []
     if not wanted.query_title or not wanted.artists:
         motivos.append("No pude leer artista y título de este tema para buscarlo en otras plataformas")
     else:
         q = " ".join(p for p in (wanted.artist_text, wanted.query_title, wanted.version_text) if p)
-        mezcla, fallidas, sin_configurar = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES, con_sin_configurar=True)
+        mezcla, fallidas = _buscar_mix_detalle(q, _VERSION_SEARCH_LIMIT, _VERSION_SOURCES)
         candidatos = list(mezcla)
         if tema.get("solo_preview") or tema.get("reproducible") is False:
             otros, motivo_sc = _sc_otros_uploads(q, tema.get("video_id") or "")
@@ -924,13 +924,11 @@ def _versiones_de(tema: dict, formato: str) -> dict:
         # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
         nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in fallidas))
         motivos.append(f"No contestó a tiempo: {nombres}")
-    if len(opciones) == 1 and not motivos:
-        # Una plataforma sin configurar (Spotify sin credenciales) no se buscó: "no lo encontré
-        # en otras plataformas" sería decir que se buscó ahí y no estaba (f40).
-        motivos.append("No lo encontré en otras plataformas (o lo que apareció no era este tema)" if not sin_configurar
-                       else "No lo encontré en las otras plataformas que busqué (o lo que apareció no era este tema)")
-    if len(opciones) == 1 and sin_configurar:
-        motivos.append("Sin configurar: " + ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in sin_configurar)))
+    # Con la versión de SoundCloud sola NO se agrega ningún motivo (decisión del dueño, f40): la
+    # pastilla de SoundCloud ya dice que es la única, y "No lo encontré en otras plataformas" era
+    # ruido. Tampoco "Sin configurar: Spotify" (no buscar ahí no es algo que el DJ tenga que leer
+    # en cada fila). Lo que SÍ se dice es una caída ("No contestó a tiempo"): sin eso, una
+    # plataforma rota se vería igual que un tema que no está.
     logger.info(f"🎚️ Versiones de «{tema['titulo']}»: {len(opciones)} en {time.perf_counter() - t0:.1f} s"
                 + (f" ({'; '.join(motivos)})" if motivos else ""))
     return {"exito": True, "opciones": opciones, "motivo": ". ".join(motivos) or None, "fallidas": fallidas}

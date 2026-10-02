@@ -267,7 +267,7 @@ def test_una_edicion_mas_corta_no_pasa_cuando_la_station_es_extended(env):
     env.resultados(youtube={"spæce b with u extended mix": [corta]})
     r = env.versiones(tema)
     assert opciones(r) == [("soundcloud", tema["url"])]
-    assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
+    assert r["motivo"] is None, "con SoundCloud solo no va ningún motivo (decisión del dueño, f40)"
 
 
 @pytest.mark.parametrize("cand, por_que", [
@@ -286,7 +286,7 @@ def test_una_version_cuya_duracion_no_cuadra_no_se_ofrece(env, cand, por_que):
     env.resultados(youtube={Q_B: [cand]})
     r = env.versiones(B_WITH_U)
     assert opciones(r) == [BASE_B], por_que
-    assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
+    assert r["motivo"] is None, "con SoundCloud solo no va ningún motivo (decisión del dueño, f40)"
 
 
 def test_una_version_mas_larga_que_cuadra_se_ofrece(env):
@@ -440,12 +440,14 @@ def test_motivo_nombra_cada_plataforma_caida_una_vez(env, caidas, esperado):
     assert r["motivo"] == esperado
 
 
-def test_motivo_no_lo_encontre(env):
+def test_solo_soundcloud_no_trae_motivo(env):
+    """Lo que apareció en otras plataformas no era el tema: queda SoundCloud solo y la fila no
+    dice nada (la pastilla ya lo dice; "No lo encontré en otras plataformas" era ruido)."""
     env.resultados(youtube={"narcx take that": [yt("NARCX - Take Me Higher", "NARCX", 227, "narcx000001")]},
                    spotify={"narcx take that": [spotify("Patience", "Take That", 202, "0takethatspotify000000")]})
     r = env.versiones(TAKE_THAT)
     assert opciones(r) == [("soundcloud", TAKE_THAT["url"])]
-    assert r["motivo"] == "No lo encontré en otras plataformas (o lo que apareció no era este tema)"
+    assert r["motivo"] is None, "con SoundCloud solo no va ningún motivo (decisión del dueño, f40)"
 
 
 # f40: "no está" ≠ "no contestó" ≠ "no se buscó". Una fuente sin configurar (Spotify sin
@@ -455,9 +457,7 @@ def test_motivo_con_spotify_sin_configurar_y_sin_otras_versiones(env):
     from fuente_errores import FuenteNoConfigurada
     env.resultados(spotify=FuenteNoConfigurada("Spotify sin credenciales"))
     r = env.versiones(B_WITH_U)
-    assert r["fallidas"] == []
-    assert r["motivo"] == ("No lo encontré en las otras plataformas que busqué (o lo que apareció no era este tema). "
-                           "Sin configurar: Spotify")
+    assert (r["fallidas"], r["motivo"]) == ([], None), "sin configurar no es una caída ni se anuncia"
 
 
 def test_spotify_sin_configurar_no_ensucia_una_fila_con_versiones(env):
@@ -475,7 +475,7 @@ def test_sin_configurar_se_cachea_y_vuelve_desde_la_cache(env):
     env.fuentes.pedidos.clear()
     r = env.versiones(B_WITH_U)
     assert env.fuentes.pedidos == [], "sin configurar no es una caída: la búsqueda se cachea"
-    assert r["motivo"].endswith("Sin configurar: Spotify"), "desde la caché se perdió el 'sin configurar'"
+    assert (r["fallidas"], r["motivo"]) == ([], None), "desde la caché tampoco es una caída"
 
 
 def test_un_scraper_caido_de_verdad_llega_como_no_contesto(env, monkeypatch):
@@ -817,10 +817,10 @@ def test_las_respuestas_que_usa_el_e2e_son_las_del_endpoint(env, client):
     assert [o["fuente"] for o in b["opciones"]] == ["youtube", "soundcloud", "spotify", "ligaudio", "hitplayer"]
     assert [o["calidad"]["grade"] for o in b["opciones"] if o["fuente"] != "spotify"] == ["B", "C", "A", "B"]
     t = esperado[TAKE_THAT["video_id"]]["respuesta"]
-    assert len(t["opciones"]) == 1 and t["motivo"].startswith("No lo encontré")
+    assert len(t["opciones"]) == 1 and t["motivo"] is None
     d = esperado[DAFT_GO["video_id"]]["respuesta"]
     assert [(o["fuente"], o.get("solo_preview")) for o in d["opciones"]] == \
         [("youtube", None), ("soundcloud", True), ("soundcloud", False), ("spotify", None)]
     f = esperado[FBL_GO["video_id"]]["respuesta"]
-    assert [o.get("solo_preview") for o in f["opciones"]] == [True] and f["motivo"].startswith("No lo encontré")
+    assert [o.get("solo_preview") for o in f["opciones"]] == [True] and f["motivo"] is None
     assert CID not in RESPUESTAS_E2E.read_text(encoding="utf-8")
