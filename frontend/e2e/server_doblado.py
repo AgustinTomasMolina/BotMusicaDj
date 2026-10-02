@@ -14,9 +14,8 @@ el mismo módulo, sin tocar:
 """
 import time
 
-import similares
-
 import server
+import similares
 from server import app  # noqa: F401  (lo que levanta uvicorn)
 
 ESPERA_S = 0.8

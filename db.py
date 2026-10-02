@@ -481,7 +481,8 @@ def get_item(pid: int, item_id: int) -> dict | None:
                 return None
             return {**_item_dict(it), "ruta": it.ruta}
     except Exception as e:
-        logger.warning(f"⚠️ Crates: no pude leer el item {item_id}: {e}"); return None
+        logger.warning(f"⚠️ Crates: no pude leer el item {item_id}: {e}")
+        return None
 
 
 def marcar_item_descargado(pid: int, item_id: int, archivo, ruta, formato=None,
@@ -498,7 +499,8 @@ def marcar_item_descargado(pid: int, item_id: int, archivo, ruta, formato=None,
             s.commit()
             return True
     except Exception as e:
-        logger.warning(f"⚠️ Crates: no pude marcar el item {item_id}: {e}"); return False
+        logger.warning(f"⚠️ Crates: no pude marcar el item {item_id}: {e}")
+        return False
 
 
 def armar_m3u8(pid: int) -> dict | None:
