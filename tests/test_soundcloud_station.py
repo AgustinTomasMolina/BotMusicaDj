@@ -538,6 +538,20 @@ def test_parse_entry_ruido_pipe_artista_tema_descarta_el_prefijo():
     # Ruido a la izquierda, pero la derecha es un evento: no entra en la regla nueva.
     ("GTG Premiere | Kashpitzky - For The Vision Live 2024", "Grab The Groove", {"grab the groove"}, "gtg premiere",
      "desconocida:kashpitzky for the vision live 2024"),
+    # Auditoría f43 (H2): la izquierda SIN ruido de `_NOISE` no entra en la regla nueva aunque la
+    # derecha traiga "Artista - Tema" (un evento o un canal, no un prefijo de upload).
+    ("Boiler Room | Kashpitzky - For The Vision", "Grab The Groove", {"boiler room"}, "kashpitzky for the vision",
+     "original"),
+    ("HÖR | Kashpitzky - For The Vision", "HÖR BERLIN", {"hor"}, "kashpitzky for the vision", "original"),
+    # Auditoría f43 (H1): la izquierda ES el uploader (el artista) aunque tenga una palabra de
+    # `_NOISE` (audio, video, from, official, lyrics, premiere): "Artista | Tema - Versión".
+    ("Audio Bullys | We Don't Care - Radio Edit", "Audio Bullys", {"audio bullys"}, "we dont care", "radio"),
+    ("Kashpitzky Official | For The Vision - Original Mix", "Kashpitzky", {"kashpitzky"}, "for the vision", "original"),
+    ("Video Age | Pop Therapy - Radio Edit", "Video Age", {"video age"}, "pop therapy", "radio"),
+    ("From First To Last | Note To Self - Acoustic", "From First To Last", {"from first to last"}, "note to self",
+     "acoustic"),
+    ("Lyrics Born | Callin' Out - Instrumental", "Lyrics Born", {"lyrics born"}, "callin out", "instrumental"),
+    ("Premiere Class | Song - Edit", "Premiere Class", {"premiere class"}, "song", "edit"),
 ])
 def test_parse_entry_pipe_sin_cambios(titulo, uploader, artistas, base, version):
     # Valores de main (2516929) antes del cambio, medidos con el código viejo.
@@ -611,10 +625,53 @@ def test_sc_ref_invalido_y_la_busqueda_tampoco_encuentra_dice_invalid_match():
     http = FakeHttp(tracks={ref: finivoid})
     r = sc.build_station("youtube", "aaaaaaaaaaa", "IMMINENT - Ascend", "IMMINENT", 190.0, api(http),
                          sc_ref=ref, sc_ref_origen="busqueda")
+    # El mensaje no afirma "no es la misma": dice lo que se sabe (auditoría H3).
     assert r == {"exito": False, "motivo": "no_esta_en_soundcloud", "codigo": "INVALID_MATCH",
-                 "mensaje": "La versión de SoundCloud de esta fila no es la misma grabación, y no encontré la "
-                            "correcta en SoundCloud."}
+                 "mensaje": "No pude confirmar que la versión de SoundCloud de esta fila sea la misma grabación, "
+                            "y la búsqueda tampoco lo encontró."}
     assert http.rutas() == [f"/tracks/{ref}", "/search/tracks"], "ninguna Station: ni la de la referencia ni otra"
+
+
+# Auditoría f43 H3: cada mensaje dice solo lo que se sabe. «IMMINENT - Ascend» no está en la
+# búsqueda grabada; la entrada sin artista ni canal no deja armar la búsqueda (`query: null`).
+ASCEND = ("youtube", "aaaaaaaaaaa", "IMMINENT - Ascend", "IMMINENT", 190.0)
+
+
+@pytest.mark.parametrize("guion, ref, rutas_ref, mensaje", [
+    ([], "123456789", ["/tracks/123456789"],
+     "La versión de SoundCloud de esta fila ya no existe en SoundCloud, y la búsqueda tampoco lo encontró."),
+    ([Resp(403, {}), Resp(403, {})], KASH, [f"/tracks/{KASH}"] * 2,
+     "SoundCloud no me dejó ver la versión de SoundCloud de esta fila, y la búsqueda tampoco lo encontró."),
+])
+def test_invalid_match_dice_que_paso_con_la_referencia(guion, ref, rutas_ref, mensaje, caplog):
+    caplog.set_level("INFO")
+    http = FakeHttp(guion)
+    r = sc.build_station(*ASCEND, api(http), sc_ref=ref, sc_ref_origen="busqueda")
+    assert r == {"exito": False, "motivo": "no_esta_en_soundcloud", "codigo": "INVALID_MATCH", "mensaje": mensaje}
+    assert http.rutas() == rutas_ref + ["/search/tracks"]
+    assert _eventos(caplog)[0]["query"] == "IMMINENT ascend"
+
+
+def test_sin_artista_ni_canal_no_dice_no_encontre_dice_que_no_hay_con_que_buscar(caplog):
+    caplog.set_level("INFO")
+    http = FakeHttp()
+    r = sc.build_station("youtube", "5HuHGbZno1Y", "For The Vision", "", 334.0, api(http))
+    assert r == {"exito": False, "motivo": "no_esta_en_soundcloud", "codigo": "NOT_FOUND",
+                 "mensaje": "No tengo datos suficientes para buscar este tema en SoundCloud (falta el artista o el "
+                            "título)."}
+    assert http.rutas() == [], "no se buscó"
+    assert [(e["metodo"], e["query"]) for e in _eventos(caplog)] == [("SEARCH", None)]
+
+
+def test_referencia_que_no_valida_y_sin_con_que_buscar():
+    # La referencia ES el tema, pero la entrada no tiene artista: no se puede confirmar y no se busca.
+    http = FakeHttp()
+    r = sc.build_station("youtube", "5HuHGbZno1Y", "For The Vision", "", 334.0, api(http),
+                         sc_ref=KASH, sc_ref_origen="busqueda")
+    assert r == {"exito": False, "motivo": "no_esta_en_soundcloud", "codigo": "INVALID_MATCH",
+                 "mensaje": "No pude confirmar que la versión de SoundCloud de esta fila sea la misma grabación, "
+                            "y no tengo datos suficientes para buscarlo (falta el artista o el título)."}
+    assert http.rutas() == [f"/tracks/{KASH}"]
 
 
 def test_sc_ref_sin_duracion_no_alcanza_y_se_busca():
@@ -644,12 +701,66 @@ def test_sc_ref_que_no_existe_se_busca():
     (__import__("requests").exceptions.ReadTimeout("read timeout"), "SOUNDCLOUD_TIMEOUT"),
     (Resp(503, {}), "SOUNDCLOUD_ERROR"),
 ])
-def test_si_el_tracks_de_la_referencia_falla_no_se_busca(falla, codigo):
+def test_si_el_tracks_de_la_referencia_falla_no_se_busca(falla, codigo, caplog):
     # Buscar después de un 429 o un timeout chocaría con lo mismo: se dice qué pasó.
+    caplog.set_level("INFO")
     http = FakeHttp([falla])
     r = sc.build_station(*YT, api(http), sc_ref=KASH, sc_ref_origen="busqueda")
     assert (r["exito"], r["codigo"], r["mensaje"]) == (False, codigo, sc.CODE_MESSAGES[codigo])
     assert http.rutas() == [f"/tracks/{KASH}"]
+    # Auditoría H4: el evento dice qué se estaba intentando (antes salía `metodo: null`).
+    assert [(e["metodo"], e["codigo"]) for e in _eventos(caplog)] == [("VALIDATED_REFERENCE", codigo)]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_tracks_sin_acceso_renueva_una_vez_y_despues_busca(status, caplog):
+    # Auditoría H4: un 401/403 que sigue después de renovar el client_id (track privado o
+    # bloqueado) no corta: es una referencia que no se pudo confirmar, y se busca como con un 404.
+    caplog.set_level("INFO")
+    prov = Proveedor("CID_A", "CID_B")
+    http = FakeHttp([Resp(status, {}), Resp(status, {})])
+    r = sc.build_station(*YT, api(http, prov), sc_ref=KASH, sc_ref_origen="busqueda")
+    assert http.rutas() == [f"/tracks/{KASH}", f"/tracks/{KASH}", "/search/tracks",
+                            f"/stations/soundcloud:track-stations:{KASH}/tracks"]
+    assert prov.llamadas == [False, True], "una sola renovación del client_id"
+    assert [p[1]["client_id"] for p in http.pedidos] == ["CID_A", "CID_B", "CID_B", "CID_B"]
+    assert (r["exito"], r["semilla"]["video_id"], r["semilla"]["evidencia"]) == (True, KASH, "texto+duracion")
+    evt = _eventos(caplog)
+    assert len(evt) == 1 and evt[0]["metodo"] == "SEARCH"
+    assert evt[0]["ref"] == {"origen": "busqueda", "sc_id": KASH, "resultado": "INVALID_MATCH", "rechazo": "sin_acceso"}
+
+
+def test_tracks_que_devuelve_otro_id_no_se_usa():
+    # Auditoría H5: /tracks/{ref} contesta un cuerpo de OTRO id (el de Kashpitzky, que sí pasaría
+    # la identidad y la duración). No es la referencia pedida: se rechaza por forma y se busca.
+    ref = "999000111"
+    http = FakeHttp(tracks={ref: FX["tracks"][KASH]})
+    r = sc.build_station(*YT, api(http), sc_ref=ref, sc_ref_origen="busqueda")
+    assert http.rutas() == [f"/tracks/{ref}", "/search/tracks", f"/stations/soundcloud:track-stations:{KASH}/tracks"]
+    assert r["semilla"]["evidencia"] == "texto+duracion", "la semilla vino de la búsqueda, no de la referencia"
+    trace: dict = {}
+    assert sc.validate_reference(api(FakeHttp(tracks={ref: FX["tracks"][KASH]})), ref, *YT[2:], trace) is None
+    assert trace["rechazo"] == "forma"
+
+
+@pytest.mark.parametrize("busqueda, codigo", [
+    ("ambigua", "AMBIGUOUS"),
+    ("503", "SOUNDCLOUD_ERROR"),
+])
+def test_referencia_invalida_no_tapa_otro_codigo_de_la_busqueda(busqueda, codigo):
+    # Auditoría H5: INVALID_MATCH reemplaza SOLO a NOT_FOUND. Si la búsqueda dice ambiguo o
+    # falla, ese es el código (la referencia inválida no explica por qué no hay Station).
+    for_her = str(FOR_HER)
+    if busqueda == "ambigua":
+        otro = dict(FX["tracks"][KASH], id=999000222, title="Shlomi Aber - For The Vision [BAOX095]")
+        http = FakeHttp(tracks={for_her: _kash(FOR_HER)}, pool=[FX["tracks"][KASH], otro])
+        entrada = ("youtube", "5HuHGbZno1Y", "Shlomi Aber & Kashpitzky - For The Vision", "HATE", 334.0)
+    else:
+        http = FakeHttp([Resp(200, _kash(FOR_HER)), Resp(503, {})])
+        entrada = YT
+    r = sc.build_station(*entrada, api(http), sc_ref=for_her, sc_ref_origen="busqueda")
+    assert (r["exito"], r["codigo"], r["mensaje"]) == (False, codigo, sc.CODE_MESSAGES[codigo])
+    assert http.rutas() == [f"/tracks/{for_her}", "/search/tracks"]
 
 
 def test_origen_station_va_directo_sin_buscar_ni_validar():

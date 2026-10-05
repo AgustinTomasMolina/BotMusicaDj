@@ -59,6 +59,15 @@ test('fila de la Station: la referencia es `g.base` (el tema de la Station), con
   assert.deepEqual(stationRef(g), { sc_ref: '2356665509', sc_ref_origen: 'station' })
 })
 
+test('fila de la Station con un id que el backend rechazaría: no se manda (sería un 400)', () => {
+  // Auditoría f43 H5: `g.base` también pasa por la validación del id, no solo las opciones.
+  const base = { titulo: 'Redefined', artista: 'allure.', fuente: 'soundcloud', url: '', estacion: true }
+  for (const video_id of ['0', '0123', '1'.repeat(21)]) {
+    const b = { ...base, video_id }
+    assert.equal(stationRef({ opciones: [YT, b], base: b, sel: 0 }), null, video_id)
+  }
+})
+
 test('station(c, g): con YouTube elegido el pedido lleva la opción elegida Y sc_ref del grupo', async (t) => {
   const pedidos = []
   t.mock.method(globalThis, 'fetch', async (url) => {

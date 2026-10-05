@@ -63,7 +63,7 @@ MESSAGES = {
 # para no romper el contrato). Cada código tiene su propio `mensaje`, el que ve la pantalla.
 NOT_FOUND = "NOT_FOUND"                       # se buscó y nada pasa la identidad
 AMBIGUOUS = "AMBIGUOUS"                       # aceptados de obras distintas: no se elige
-INVALID_MATCH = "INVALID_MATCH"               # la referencia de la fila no es el tema y la búsqueda tampoco lo encontró
+INVALID_MATCH = "INVALID_MATCH"               # la referencia de la fila no se pudo confirmar y la búsqueda tampoco lo encontró
 SOUNDCLOUD_TIMEOUT = "SOUNDCLOUD_TIMEOUT"     # no contestó a tiempo
 RATE_LIMITED = "RATE_LIMITED"                 # HTTP 429
 SOUNDCLOUD_ERROR = "SOUNDCLOUD_ERROR"         # otro HTTP, sin client_id, sin conexión, respuesta rara
@@ -72,8 +72,8 @@ STATION_UNAVAILABLE = "STATION_UNAVAILABLE"   # la semilla está, la Station vie
 CODE_MESSAGES = {
     NOT_FOUND: "No encontré este tema en SoundCloud.",
     AMBIGUOUS: "En SoundCloud hay más de un tema que podría ser este; no elijo uno a ciegas.",
-    INVALID_MATCH: ("La versión de SoundCloud de esta fila no es la misma grabación, y no encontré "
-                    "la correcta en SoundCloud."),
+    INVALID_MATCH: ("No pude confirmar que la versión de SoundCloud de esta fila sea la misma grabación, "
+                    "y la búsqueda tampoco lo encontró."),
     SOUNDCLOUD_TIMEOUT: "SoundCloud no contestó a tiempo. Probá de nuevo en un rato.",
     RATE_LIMITED: "SoundCloud está frenando los pedidos (demasiados seguidos). Esperá unos minutos y probá de nuevo.",
     SOUNDCLOUD_ERROR: ("Algo falló al hablar con SoundCloud (sin conexión, un error suyo o una respuesta "
@@ -89,6 +89,24 @@ _CODE_OF_REASON = {
     EMPTY_STATION: STATION_UNAVAILABLE,
 }
 
+# Mensajes que dicen solo lo que se sabe (f43, auditoría H3). "No validó" no es "no es la misma":
+# puede faltar la duración o no cuadrar la lectura. Y si `find_seed` no llegó a buscar (sin
+# artista ni canal), no es "no encontré": no había con qué buscar.
+NO_DATA_TO_SEARCH = "No tengo datos suficientes para buscar este tema en SoundCloud (falta el artista o el título)."
+_REF_FAILURE = {
+    "no_existe": "La versión de SoundCloud de esta fila ya no existe en SoundCloud",
+    "sin_acceso": "SoundCloud no me dejó ver la versión de SoundCloud de esta fila",
+}
+_REF_UNCONFIRMED = "No pude confirmar que la versión de SoundCloud de esta fila sea la misma grabación"
+
+
+def _invalid_match_message(rechazo: str | None, searched: bool) -> str:
+    """Mensaje de INVALID_MATCH: qué pasó con la referencia + qué pasó con la búsqueda."""
+    ref = _REF_FAILURE.get(rechazo or "", _REF_UNCONFIRMED)
+    tail = ("la búsqueda tampoco lo encontró" if searched
+            else "no tengo datos suficientes para buscarlo (falta el artista o el título)")
+    return f"{ref}, y {tail}."
+
 # Cómo se resolvió la semilla (va al evento de log).
 DIRECT_REFERENCE = "DIRECT_REFERENCE"         # el id ES la semilla (fuente soundcloud o fila de la Station)
 VALIDATED_REFERENCE = "VALIDATED_REFERENCE"   # la referencia del buscador, validada con /tracks + identidad
@@ -100,14 +118,17 @@ REF_ORIGINS = ("busqueda", "station")
 
 class SoundCloudError(Exception):
     """Falla de SoundCloud ya traducida a un motivo. `detail` va al log (nunca el client_id).
-    `code` es el código fino (f43; por defecto, el del motivo) y `status`, el HTTP si hubo."""
+    `code` es el código fino (f43; por defecto, el del motivo) y `status`, el HTTP si hubo.
+    `message` (opcional) reemplaza al mensaje genérico del código cuando se sabe algo más."""
 
-    def __init__(self, reason: str, detail: str = "", code: str | None = None, status: int | None = None):
+    def __init__(self, reason: str, detail: str = "", code: str | None = None, status: int | None = None,
+                 message: str | None = None):
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
         self.code = code or _CODE_OF_REASON.get(reason)
         self.status = status
+        self.message = message
 
 
 def failure(reason: str, message: str | None = None, code: str | None = None) -> dict:
@@ -310,8 +331,10 @@ def validate_reference(api: SoundCloudApi, sc_ref: str, titulo: str, artista: st
     si `evidencia_misma_grabacion` confirma identidad Y duración ("+duracion"), con las mismas
     lecturas que `find_seed`. (tema mapeado, grado) o None si no valida (→ se busca).
 
-    Un 404 (el id no existe) es "no valida". Timeout, 429 y demás fallas de SoundCloud se
-    propagan: buscar después chocaría con lo mismo."""
+    Un 404 (el id no existe) es "no valida". Un 401/403 que sigue después de la ÚNICA renovación
+    del client_id que hace `get_json` (un track privado o bloqueado) también: no se puede
+    confirmar, y se busca. Timeout, 429 y demás fallas de SoundCloud se propagan: buscar
+    después chocaría con lo mismo."""
     trace = trace if trace is not None else {}
     if not SC_ID.fullmatch(sc_ref or ""):
         trace["rechazo"] = "id_invalido"
@@ -322,6 +345,9 @@ def validate_reference(api: SoundCloudApi, sc_ref: str, titulo: str, artista: st
         if e.status == 404:
             trace["rechazo"] = "no_existe"
             return None
+        if e.status in (401, 403):
+            trace["rechazo"] = "sin_acceso"
+            return None
         raise
     m = map_track(raw)
     if not m or m["video_id"] != sc_ref:
@@ -330,7 +356,9 @@ def validate_reference(api: SoundCloudApi, sc_ref: str, titulo: str, artista: st
     trace["candidato"] = sc_ref
     cand = track_identity.parse_entry(m["titulo"], m["artista"])
     for lectura in _lecturas(titulo, artista):
-        grado = track_identity.evidencia_misma_grabacion(lectura, cand, duracion, m["duracion"], audio_exacto=True)
+        # Sin `audio_exacto`: solo cambia qué pasa cuando la duración NO cuadra, y acá eso ya es
+        # rechazo (se exige "+duracion", que solo sale si cuadra).
+        grado = track_identity.evidencia_misma_grabacion(lectura, cand, duracion, m["duracion"])
         if grado and grado.endswith("+duracion"):
             return m, grado
     trace["rechazo"] = "identidad_o_duracion"
@@ -425,8 +453,11 @@ def build_station(fuente: str, fuente_id: str, titulo: str, artista: str,
             track_id, evidencia, evt["metodo"] = sc_ref, "id", DIRECT_REFERENCE
         else:
             validated, ref_invalid = None, False
+            ref_trace: dict = {}
             if sc_ref and sc_ref_origen == "busqueda":
-                ref_trace: dict = {}
+                # El método va antes de pedir /tracks: si /tracks falla (429, timeout), el evento
+                # dice qué se estaba intentando en vez de `metodo: null`.
+                evt["metodo"] = VALIDATED_REFERENCE
                 validated = validate_reference(api, sc_ref, titulo, artista, duracion, ref_trace)
                 if validated is None:
                     ref_invalid = True
@@ -441,8 +472,16 @@ def build_station(fuente: str, fuente_id: str, titulo: str, artista: str,
                 try:
                     seed_from_search, evidencia = find_seed(api, titulo, artista, duracion, trace)
                 except SoundCloudError as e:
-                    if ref_invalid and e.code == NOT_FOUND:
-                        raise SoundCloudError(e.reason, e.detail, code=INVALID_MATCH) from None
+                    if e.code == NOT_FOUND:
+                        # El mensaje dice lo que se sabe: si la referencia no existe, si no se pudo
+                        # confirmar, y si se buscó o no había con qué buscar (`query` sin armar).
+                        searched = trace.get("query") is not None
+                        if ref_invalid:
+                            raise SoundCloudError(e.reason, e.detail, code=INVALID_MATCH,
+                                                  message=_invalid_match_message(ref_trace.get("rechazo"), searched)
+                                                  ) from None
+                        if not searched:
+                            raise SoundCloudError(e.reason, e.detail, code=NOT_FOUND, message=NO_DATA_TO_SEARCH) from None
                     raise
                 finally:
                     evt["query"] = trace.get("query")
@@ -452,7 +491,7 @@ def build_station(fuente: str, fuente_id: str, titulo: str, artista: str,
     except SoundCloudError as e:
         evt["codigo"] = e.code
         _log_resolution(evt)
-        return failure(e.reason, code=e.code)
+        return failure(e.reason, e.message, code=e.code)
     except Exception as e:              # un bug acá no puede ser un 500
         logger.warning(f"⚠️ Station de «{titulo}»: error inesperado {type(e).__name__}")
         evt["codigo"] = SOUNDCLOUD_ERROR
