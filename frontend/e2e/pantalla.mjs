@@ -1278,7 +1278,7 @@ const CASOS = [
       'ya sonando, la pastilla tiene que decirlo')
   }],
 
-  ['station: el botón abre la Station; las filas llegan en orden con "N de 49", la mejor nota elegida y suenan por el proxy', async (page, ctx) => {
+  ['station: el botón abre la Station; las filas llegan en orden con "N / 49", la mejor nota elegida y suenan por el proxy', async (page, ctx) => {
     // Sin red. /api/station y /api/versiones contestan con los archivos que los tests de Python
     // comparan contra lo que los endpoints REALMENTE devuelven (tests/test_soundcloud_station.py
     // y tests/test_station_versiones.py): acá hacen de API. Lo esperado sale de esos archivos.
@@ -1289,8 +1289,8 @@ const CASOS = [
     // Arranca vacía, con el avance en 0, y pide de a 3 (los demás esperan en la cola).
     const inicio = await hasta(() => leerStation(page), (v) => v.progreso && s.versiones.length === 3,
       'la Station no arrancó a pedir versiones')
-    igual({ progreso: inicio.progreso, filas: inicio.filas.length }, { progreso: `0 de ${items.length}`, filas: 0 },
-      'antes de la primera fila: 0 de 49 y ninguna fila')
+    igual({ progreso: inicio.progreso, filas: inicio.filas.length }, { progreso: `0 / ${items.length}`, filas: 0 },
+      'antes de la primera fila: 0 / 49 y ninguna fila')
     igual(s.versiones.map((b) => b.tema.video_id), items.slice(0, 3).map((t) => t.video_id),
       'los primeros pedidos no son los primeros temas de la Station, en su orden')
     igual(s.versiones[0].tema, items[0], 'el pedido no lleva el tema de la Station tal cual')
@@ -1299,7 +1299,7 @@ const CASOS = [
     s.soltar(items[1].video_id)
     s.soltar(items[0].video_id)
     const dos = await hasta(() => leerStation(page), (v) => v.filas.length === 2, 'no aparecieron las dos primeras filas')
-    igual(dos.progreso, `2 de ${items.length}`, 'el avance no dice cuántas filas hay')
+    igual(dos.progreso, `2 / ${items.length}`, 'el avance no dice cuántas filas hay')
     igual(dos.filas, [items[0].titulo, items[1].titulo], 'las filas no están en el orden de la Station')
     afirmar(s.versiones.length <= 5, `con 2 filas listas no puede haber más de 5 pedidos (cola de 3): ${s.versiones.length}`)
 
@@ -1325,10 +1325,10 @@ const CASOS = [
 
     // El resto: al terminar, el avance dice cuántas tienen versiones de otras plataformas.
     s.soltarTodas()
-    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && !/ de /.test(v.progreso || ''),
+    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && v.listo,
       'no llegaron todas las filas')
     const conOtras = items.filter((t) => (s.vx[t.video_id]?.respuesta.opciones || []).some((o) => !o.estacion)).length
-    igual(fin.progreso, `${items.length} temas · ${conOtras} con versiones en otras plataformas`, 'el resumen final')
+    igual(fin.progreso, `${conOtras} de ${items.length} con versiones`, 'el resumen final')
     // f40: cada fila muestra el título del tema de la Station, también la 1 con la versión de
     // YouTube elegida (antes mostraba el del video: parecía otra edición).
     igual(fin.filas, items.map((t) => t.titulo), 'las filas no muestran los temas de la Station, en su orden, al terminar')
@@ -1336,9 +1336,9 @@ const CASOS = [
 
     const v = await page.evaluate(() => ({
       titulo: document.querySelector('h1.station-title')?.textContent ?? null,
-      datosSemilla: document.querySelectorAll('.seedbar .mb').length,
+      datosSemilla: document.querySelectorAll('.station-head .mb, .st-estado .mb').length,
     }))
-    igual(v.titulo, `Radio de «${respuesta.semilla.titulo}» — según la Station de SoundCloud`, 'el encabezado no dice de quién es la recomendación')
+    igual(v.titulo, `Station de «${respuesta.semilla.titulo}»`, 'el encabezado no dice de qué tema es la Station')
     igual(v.datosSemilla, 0, 'la Station es de SoundCloud: no puede mostrar BPM/tonalidad de la semilla medidos por nosotros')
 
     // Play en la fila 2 (solo la de SoundCloud): suena por el proxy de audio con su id.
@@ -1354,8 +1354,8 @@ const CASOS = [
     await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
     const d = await desbordeDe(page)
     afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `Station a 400 px: hay contenido fuera del ancho: ${json(d)}`)
-    // `desbordeDe` mira cajas, no texto: un título sin partir se sale de su propia caja y la
-    // .seedbar (overflow hidden) lo recorta sin que ninguna caja se pase. Se mide el texto.
+    // `desbordeDe` mira cajas, no texto: un título sin partir se sale de su propia caja sin que
+    // ninguna caja se pase. Se mide el texto.
     const h = await page.evaluate(() => { const e = document.querySelector('h1.station-title'); return { texto: e.scrollWidth, caja: e.clientWidth } })
     afirmar(h.texto <= h.caja, `a 400 px el título de la Station queda cortado: ${json(h)}`)
   }],
@@ -1388,11 +1388,11 @@ const CASOS = [
       sc_ref: '2041950136', sc_ref_origen: 'busqueda',
     }, 'el pedido no lleva la opción elegida y la referencia de SoundCloud de la fila')
 
-    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && !/ de /.test(v.progreso || ''),
+    const fin = await hasta(() => leerStation(page), (v) => v.filas.length === items.length && v.listo,
       'no llegaron las 49 filas de la Station')
     igual(fin.filas, items.map((t) => t.titulo), 'las filas no son los temas de la Station, en el orden de SoundCloud')
     const titulo = await page.evaluate(() => document.querySelector('h1.station-title')?.textContent ?? null)
-    igual(titulo, `Radio de «${respuesta.semilla.titulo}» — según la Station de SoundCloud`, 'el encabezado no es el de la semilla de SoundCloud')
+    igual(titulo, `Station de «${respuesta.semilla.titulo}»`, 'el encabezado no es el de la semilla de SoundCloud')
   }],
 
   ['station: un Go+ se baja completo de otra versión y otro Go+ sin otra versión queda sin descarga', async (page, ctx) => {
@@ -1583,6 +1583,11 @@ const CASOS = [
     const mezclar = '.station-orden button:nth-of-type(2)'
     await hasta(() => page.evaluate((q) => !document.querySelector(q)?.disabled, mezclar), (x) => x, '"Para mezclar" no se habilitó al terminar el análisis')
     igual((await leerStation(page)).filas, titulos, 'el orden por defecto no es el de SoundCloud')
+    // f46: el resumen del orden pasó a la aclaración bajo el selector (antes, al lado).
+    const listo = await leerOrden(page)
+    igual([listo.pressed, listo.candado, listo.aclaracion], [['true', 'false'], false,
+      `Listo: podés ordenar para mezclar · ${s.orden.en_set} en el set · 1 fuera de rango de BPM · 1 sin analizar`],
+    'con el orden listo, "Para mezclar" sin candado y la aclaración con el resumen')
     const medido = () => page.evaluate(() => [...document.querySelectorAll('.trk')].slice(0, 2).map((r) =>
       [...r.querySelectorAll('.mb-medido b')].map((b) => b.textContent)))
     igual(await medido(), [['150.0', '8A?'], ['?', '?']], 'BPM/key medidos de las dos primeras filas (un decimal, "?" si no se pudo o es dudosa)')
@@ -1593,10 +1598,211 @@ const CASOS = [
     igual(notas[0], '+0.5% BPM | 8A → 8A (mismo)', 'el por qué de la primera fila')
     afirmar(notas.at(-2).startsWith('Al final: Fuera de rango de BPM'), `la fila fuera de rango no dice por qué: ${notas.at(-2)}`)
     afirmar(notas.at(-1).startsWith('Al final: SoundCloud no ofrece'), `la fila sin análisis no dice por qué: ${notas.at(-1)}`)
+    // f46: el encabezado dice que el orden es del motor, y "SoundCloud" sigue una sola vez.
+    const mezclado = await leerOrden(page)
+    igual([mezclado.pressed, mezclado.sub, mezclado.soundcloud, mezclado.aclaracion], [['false', 'true'],
+      `${s.respuesta.semilla.artista} · ${titulos.length} temas recomendados por SoundCloud · ordenados para mezclar por el motor`, 1,
+      `Ordenado para mezclar · ${s.orden.en_set} en el set · 1 fuera de rango de BPM · 1 sin analizar`],
+    'en "Para mezclar" el encabezado y la aclaración no dicen que el orden es del motor')
     await page.click('.station-orden button:nth-of-type(1)')
     igual((await leerStation(page)).filas, titulos, 'volver a "SoundCloud" no restituyó su orden')
     igual(await page.evaluate(() => document.querySelectorAll('.trk-razon').length), 0, 'en orden SoundCloud quedó el por qué del motor')
     igual(new Set(s.pedidosAnalisis).size, s.pedidosAnalisis.length, 'se pidió dos veces el análisis de un tema')
+  }],
+
+  /* ---------- f46: encabezado y panel de estado (opción A del dueño) ---------- */
+
+  ['station (f46): el encabezado dice "Station de «tema»" y "artista · N temas recomendados por SoundCloud", con "SoundCloud" una vez y sin eyebrow ni borde de acento', async (page, ctx) => {
+    const s = await montarStation(page, ctx)
+    const { respuesta, items } = s
+    const leer = () => page.evaluate(() => {
+      const h = document.querySelector('.station-head')
+      return { titulo: h?.querySelector('h1')?.textContent ?? null, sub: h?.querySelector('.station-sub')?.textContent ?? null,
+        soundcloud: (h?.textContent.match(/SoundCloud/g) || []).length,
+        eyebrow: document.querySelectorAll('#contenido .seedbar, .station-head .eyebrow').length,
+        borde: h ? getComputedStyle(h).borderLeftWidth : null, acento: h ? getComputedStyle(h, '::before').content : null,
+        viejo: /recomendado por soundcloud, en su orden|según la Station de SoundCloud|temas con versiones|Analizando \d/i.test(document.querySelector('#contenido')?.innerText || '') }
+    })
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === items.length && v.listo, 'no llegaron todas las filas')
+    igual(await leer(), { titulo: `Station de «${respuesta.semilla.titulo}»`,
+      sub: `${respuesta.semilla.artista} · ${items.length} temas recomendados por SoundCloud`,
+      soundcloud: 1, eyebrow: 0, borde: '0px', acento: 'none', viejo: false }, 'el encabezado de la Station')
+    // Con un solo tema, en singular.
+    s.respuesta.items = items.slice(0, 1)
+    s.respuesta.total = 1
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === 1 && v.listo, 'no llegó la única fila')
+    igual((await leer()).sub, `${respuesta.semilla.artista} · 1 tema recomendado por SoundCloud`, 'con un tema la línea no va en singular')
+  }],
+
+  ['station (f46): dos barras de progreso (versiones y medición) con sus valores mientras carga y su estado final al terminar', async (page, ctx) => {
+    const s = await montarStation(page, ctx, { retener: true })
+    const { respuesta, items } = s
+    const ids = items.map((it) => String(it.video_id))
+    const semilla = String(respuesta.semilla.video_id)
+    // Se mide la semilla además de los temas: en este archivo no está entre ellos y todos tienen id.
+    afirmar(!ids.includes(semilla) && ids.every((id) => /^[1-9]\d*$/.test(id)), 'el archivo de la Station cambió: la semilla está entre los temas o hay temas sin id')
+    const N = items.length, M = N + 1
+    s.retenerAnalisis = true
+    const ok = { ok: true, bpm: 128, key: '8A', key_dudosa: false, preview: false, tramo_s: 140 }
+    s.analisis = Object.fromEntries([semilla, ...ids].map((id) => [id, ok]))
+    for (const id of [ids[3], ids[7]]) s.analisis[id] = { ok: false, motivo: 'SoundCloud no ofrece un audio que se pueda reproducir acá.' }
+    await abrirStation(page, ctx, s)
+    const inicio = await hasta(() => leerAvances(page), (a) => a.versiones && a.medicion && s.versiones.length === 3 && s.pendAnalisis.size === 2,
+      'no arrancaron a pedir versiones y análisis')
+    igual(inicio, {
+      versiones: { estado: 'cargando', rotulo: 'Buscando versiones en otras plataformas', valor: `0 / ${N}`, min: 0, now: 0, max: N, texto: `0 de ${N}` },
+      medicion: { estado: 'cargando', rotulo: 'Midiendo BPM y key (incluye el tema original)', valor: `0 / ${M}`, min: 0, now: 0, max: M, texto: `0 de ${M}` },
+    }, 'las dos barras al arrancar')
+    // Cada una avanza por su lado.
+    s.soltar(ids[0]); s.soltar(ids[1])
+    for (const ref of [...s.pendAnalisis.keys()]) s.soltarAnalisis(ref)
+    const medio = await hasta(() => leerAvances(page), (a) => a.versiones.now === 2 && a.medicion.now === 2, 'las barras no avanzaron')
+    igual([medio.versiones.valor, medio.versiones.texto, medio.medicion.valor, medio.medicion.texto, medio.versiones.estado, medio.medicion.estado],
+      [`2 / ${N}`, `2 de ${N}`, `2 / ${M}`, `2 de ${M}`, 'cargando', 'cargando'], 'las barras a mitad de camino')
+    s.soltarTodas()
+    s.soltarAnalisisTodos()
+    const fin = await hasta(() => leerAvances(page), (a) => a.versiones.estado === 'listo' && a.medicion.estado === 'listo', 'las barras no terminaron')
+    const conOtras = items.filter((t) => (s.vx[t.video_id]?.respuesta.opciones || []).some((o) => !o.estacion)).length
+    igual(fin, {
+      versiones: { estado: 'listo', rotulo: 'Versiones en otras plataformas', valor: `${conOtras} de ${N} con versiones`, min: 0, now: N, max: N, texto: `${conOtras} de ${N} con versiones` },
+      medicion: { estado: 'listo', rotulo: 'BPM y key (incluye el tema original)', valor: `${M - 2} medidos, 2 sin poder medir`, min: 0, now: M, max: M, texto: `${M - 2} medidos, 2 sin poder medir` },
+    }, 'las dos barras al terminar')
+    // El total de la medición es lo que se mandó a medir: cada tema y la semilla, una vez.
+    igual([s.pedidosAnalisis.length, new Set(s.pedidosAnalisis).size, s.pedidosAnalisis.includes(semilla)], [M, M, true],
+      'la barra de medición no cuenta lo que se mide')
+  }],
+
+  ['station (f46): "Para mezclar" deshabilitado con candado y su aclaración mientras mide; habilitado al terminar, con teclado; y sin medición, el motivo', async (page, ctx) => {
+    const s = await montarStation(page, ctx)
+    const { respuesta, items } = s
+    const ids = items.map((it) => String(it.video_id))
+    const titulos = items.map((it) => it.titulo)
+    const N = items.length, M = N + 1
+    s.retenerAnalisis = true
+    s.analisis = Object.fromEntries([String(respuesta.semilla.video_id), ...ids].map((id) => [id, { ok: true, bpm: 128, key: '8A', key_dudosa: false, preview: false, tramo_s: 140 }]))
+    s.orden = { exito: true, en_set: N, fuera: 0, sin_analisis: 0, aviso: null,
+      orden: [...ids].reverse().map((id) => ({ video_id: id, grupo: 'set', razon: '+0.0% BPM | 8A → 8A (mismo)' })) }
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === N, 'no llegaron todas las filas')
+    const antes = await leerOrden(page)
+    igual(antes, { rotulo: 'Orden', botones: ['SoundCloud', 'Para mezclar'], pressed: ['true', 'false'], disabled: [false, true], candado: true,
+      describedby: 'station-orden-hint', aclaracion: '«Para mezclar» se activa cuando termine de medir BPM y key.', mismoAncho: true,
+      anuncio: `Midiendo BPM y key de ${M} temas.`, sub: `${respuesta.semilla.artista} · ${N} temas recomendados por SoundCloud`, soundcloud: 1 },
+    'mientras mide: "Para mezclar" deshabilitado, con candado y la aclaración enlazada')
+    const sc = '.st-estado .station-orden [role="group"] button:nth-of-type(1)'
+    await page.focus(sc)
+    await page.keyboard.press('Tab')
+    afirmar(await page.evaluate(() => document.activeElement?.textContent.trim()) !== 'Para mezclar', 'el foco se detuvo en "Para mezclar" deshabilitado')
+    // Medio camino: la región viva no anuncia cada tema.
+    for (const ref of [...s.pendAnalisis.keys()]) s.soltarAnalisis(ref)
+    await hasta(() => leerAvances(page), (a) => a.medicion?.now === 2, 'la medición no avanzó')
+    igual((await leerOrden(page)).anuncio, `Midiendo BPM y key de ${M} temas.`, 'la región viva cambió con un tema medido (tiene que anunciar al empezar y al terminar)')
+    s.soltarAnalisisTodos()
+    const despues = await hasta(() => leerOrden(page), (o) => !o.disabled[1], '"Para mezclar" no se habilitó al terminar de medir')
+    igual([despues.disabled, despues.candado, despues.aclaracion, despues.anuncio],
+      [[false, false], false, `Listo: podés ordenar para mezclar · ${N} en el set`, `Medición terminada: ${M} medidos. «Para mezclar» disponible.`],
+      'al terminar: sin candado, la aclaración y el anuncio cambian')
+    // Teclado: Tab desde "SoundCloud" llega a "Para mezclar" con el foco visible; Espacio ordena.
+    await page.focus(sc)
+    await page.keyboard.press('Tab')
+    const foco = await page.evaluate(() => {
+      const a = document.activeElement
+      const cs = getComputedStyle(a)
+      return { texto: a.textContent.trim(), visible: a.matches(':focus-visible'), anillo: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2 }
+    })
+    igual(foco, { texto: 'Para mezclar', visible: true, anillo: true }, 'el foco con teclado en "Para mezclar"')
+    await page.keyboard.press('Space')
+    await hasta(() => leerOrden(page), (o) => o.pressed[1] === 'true', 'Espacio no eligió "Para mezclar"')
+    igual((await leerStation(page)).filas, [...titulos].reverse(), 'con teclado, "Para mezclar" no siguió el orden del motor')
+    await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift')
+    await page.keyboard.press('Enter')
+    await hasta(() => leerOrden(page), (o) => o.pressed[0] === 'true', 'Shift+Tab y Enter no volvieron a "SoundCloud"')
+    igual((await leerStation(page)).filas, titulos, 'volver a "SoundCloud" con teclado no restituyó su orden')
+
+    // Sin nada medido: el backend dice por qué no hay orden, y la aclaración lo repite.
+    const motivo = 'No se pudo analizar ningún tema: no hay orden para mezclar.'
+    s.analisis = {}
+    s.orden = { exito: false, mensaje: motivo }
+    await abrirStation(page, ctx, s)
+    const sin = await hasta(() => leerOrden(page), (o) => o.aclaracion === motivo, 'sin medición la aclaración no dice por qué')
+    igual([sin.disabled, sin.candado, sin.anuncio], [[false, true], true, `Medición terminada: 0 medidos, ${M} sin poder medir. ${motivo}`],
+      'sin medición: "Para mezclar" deshabilitado, con candado, y el anuncio con el motivo')
+    igual((await leerAvances(page)).medicion.valor, `0 medidos, ${M} sin poder medir`, 'la barra de medición sin nada medido')
+  }],
+
+  ['station (f46): las filas que cargan tienen la forma de la final: mismas columnas alineadas, "Buscando versiones…" o "En cola", acciones deshabilitadas y contraste AA', async (page, ctx) => {
+    const s = await montarStation(page, ctx, { retener: true })
+    const { items } = s
+    s.retenerAnalisis = true
+    await abrirStation(page, ctx, s)
+    await hasta(() => s.versiones.length, (n) => n === 3, 'no arrancó a pedir versiones')
+    s.soltar(items[0].video_id)
+    await hasta(() => leerStation(page), (v) => v.filas.length === 1, 'no apareció la primera fila')
+    await hasta(() => s.versiones.length, (n) => n === 4, 'no salió el cuarto pedido')
+    const leer = () => page.evaluate(() => {
+      const celdas = (r) => [...r.children].map((c) => {
+        const b = c.getBoundingClientRect()
+        return { clase: c.className.split(' ')[0], x: Math.round(b.left), w: Math.round(b.width) }
+      })
+      const pend = [...document.querySelectorAll('.results .trk-pending')]
+      return { head: celdas(document.querySelector('.results-head')).map((c) => c.x), final: celdas(document.querySelector('.trk')),
+        pend: pend.map((r) => ({ celdas: celdas(r), idx: r.querySelector('.trk-idx')?.textContent, titulo: r.querySelector('.trk-title')?.textContent,
+          estado: r.dataset.estado, vers: r.querySelector('.trk-vers')?.textContent.trim(), spinner: !!r.querySelector('.trk-vers .spinner'),
+          grises: [r.querySelectorAll('.trk-meta .sk').length, r.querySelectorAll('.trk-grade .sk').length],
+          acciones: [...r.querySelectorAll('.trk-acts button')].map((b) => b.disabled), oculta: r.getAttribute('aria-hidden') })),
+        viejo: /buscando versiones en YouTube/i.test(document.querySelector('#contenido').innerText) }
+    })
+    const d = await leer()
+    igual(d.pend.length, items.length - 1, 'no hay una fila pendiente por cada tema que falta')
+    igual(d.final.length, 7, 'la fila final no tiene 7 celdas')
+    igual(d.pend.map((p) => p.celdas.map((c) => c.clase)), d.pend.map(() => d.final.map((c) => c.clase)),
+      'las filas pendientes no tienen las mismas celdas que la final')
+    // Alineadas: cada celda empieza y mide lo mismo que la de la fila final, y que el encabezado.
+    igual(d.final.map((c) => c.x), d.head, 'la fila final no está alineada con el encabezado (el caso no prueba nada)')
+    for (const p of d.pend) igual([p.celdas.map((c) => c.x), p.celdas.map((c) => c.w)], [d.final.map((c) => c.x), d.final.map((c) => c.w)], `la fila pendiente ${p.idx} no está alineada con las columnas`)
+    igual(d.pend.map((p) => [p.idx, p.titulo, p.estado, p.vers, p.spinner, p.grises, p.acciones, p.oculta]),
+      items.slice(1).map((t, k) => [String(k + 2).padStart(2, '0'), t.titulo, k < 3 ? 'buscando' : 'cola', k < 3 ? 'Buscando versiones…' : 'En cola', k < 3, [2, 1], [true, true], 'true']),
+      'lo que dice cada fila pendiente (las 3 pedidas buscan, el resto en cola)')
+    afirmar(!d.viejo, 'quedó la fila pendiente vieja ("buscando versiones en YouTube, MP3 y Spotify…")')
+    // Contraste AA (4.5:1) del texto chico del panel y de las filas pendientes, sobre su fondo.
+    const malos = (await contrasteDe(page, ['.st-estado .st-rotulo', '.st-estado .st-hint', '.st-avance-head > span:first-child', '.st-avance-det', '.st-avance-val',
+      '.st-seg button[aria-pressed="true"]', '.station-sub', '.trk-pending .trk-idx', '.trk-pending .trk-artist',
+      '.trk-pending[data-estado="buscando"] .st-pend-vers', '.trk-pending[data-estado="cola"] .st-pend-vers'])).filter((c) => !(c.ratio >= 4.5))
+    igual(malos, [], 'texto con contraste menor a 4.5:1')
+  }],
+
+  ['station (f46): a 1280 px el panel va en dos columnas y a 400 px se apila (orden arriba, avances abajo) sin que nada se salga, cargando y al terminar', async (page, ctx) => {
+    const s = await montarStation(page, ctx, { retener: true })
+    const { items } = s
+    const geo = () => page.evaluate(() => {
+      const r = (q) => document.querySelector(q).getBoundingClientRect()
+      const p = r('.st-estado'), o = r('.st-estado .station-orden'), a = r('.st-estado .st-avances')
+      return { apilado: a.top >= o.bottom - 1, lado: a.left >= o.right - 1 && Math.abs(a.top - o.top) < 2,
+        dentro: [o, a].every((x) => x.left >= p.left - 1 && x.right <= p.right + 1), avancesAncho: Math.round(a.width), panelAncho: Math.round(p.width),
+        cortado: [...document.querySelectorAll('.st-estado *:not(.sr-only), .station-head *')].filter((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflowX !== 'visible').map((e) => e.className) }
+    })
+    await page.setViewport({ width: 1280, height: 860 })
+    await abrirStation(page, ctx, s)
+    await hasta(() => s.versiones.length, (n) => n === 3, 'no arrancó a pedir versiones')
+    const ancho = await geo()
+    afirmar(ancho.lado && !ancho.apilado && ancho.dentro, `a 1280 px el panel no tiene el orden a la izquierda y los avances a la derecha: ${json(ancho)}`)
+    await page.setViewport({ width: 400, height: 860 })
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    s.soltar(items[0].video_id)
+    await hasta(() => leerStation(page), (v) => v.filas.length === 1, 'no apareció la primera fila')
+    for (const momento of ['cargando', 'al terminar']) {
+      if (momento === 'al terminar') {
+        s.soltarTodas()
+        await hasta(() => leerStation(page), (v) => v.listo && v.filas.length === items.length, 'no terminó')
+      }
+      const g = await geo()
+      afirmar(g.apilado && g.dentro && g.avancesAncho >= g.panelAncho - 2 * 16 - 4 && g.cortado.length === 0,
+        `a 400 px (${momento}) el panel no está apilado, se sale o corta texto: ${json(g)}`)
+      const d = await desbordeDe(page)
+      afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `Station a 400 px (${momento}): hay contenido fuera del ancho: ${json(d)}`)
+    }
   }],
 
   ['station: salir de la pantalla corta la carga de versiones (no sigue pidiendo)', async (page, ctx) => {
@@ -2225,7 +2431,10 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     falla: { exito: false, motivo: 'station_vacia', mensaje: 'SoundCloud no tiene una Station para este tema.' },
     boton: `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`,
     versiones: [], descargas: [], calidades: [], mp3: [], parecidas: 0, pendientes: new Map(), pedidosStation: [],
-    analisis: {}, orden: null, pedidosAnalisis: [],
+    analisis: {}, orden: null, pedidosAnalisis: [], retenerAnalisis: false, pendAnalisis: new Map(),
+    // f46: con `s.retenerAnalisis = true` cada /api/station/analisis espera a que el test lo suelte.
+    soltarAnalisis(ref) { const r = s.pendAnalisis.get(ref); afirmar(r, `no hay un análisis de ${ref} para soltar`); s.pendAnalisis.delete(ref); r() },
+    soltarAnalisisTodos() { s.retenerAnalisis = false; for (const ref of [...s.pendAnalisis.keys()]) s.soltarAnalisis(ref) },
     soltar(id) { const r = s.pendientes.get(id); afirmar(r, `no hay un pedido de versiones de ${id} para soltar`); s.pendientes.delete(id); r() },
     soltarTodas() { s.retener = false; for (const id of [...s.pendientes.keys()]) s.soltar(id) },
   }
@@ -2244,7 +2453,9 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     if (u.pathname === '/api/station/analisis') {
       const ref = u.searchParams.get('ref')
       s.pedidosAnalisis.push(ref)
-      return responder(s.analisis[ref] || { ok: false, motivo: 'Sin análisis en el E2E.' })
+      const contestar = () => responder(s.analisis[ref] || { ok: false, motivo: 'Sin análisis en el E2E.' })
+      if (s.retenerAnalisis) { s.pendAnalisis.set(ref, contestar); return }
+      return contestar()
     }
     if (u.pathname === '/api/station/orden') return responder(s.orden || { exito: false, mensaje: 'Sin orden en el E2E.' })
     if (u.pathname === '/api/versiones') {
@@ -2282,12 +2493,62 @@ async function abrirStation(page, ctx, s) {
   await page.waitForSelector('h1.station-title', { timeout: ESPERA_MS })
 }
 
-// Avance ("N de 49" mientras carga, el resumen al terminar) y el título de cada fila.
-const leerStation = (page) => page.evaluate(() => {
-  const t = document.querySelector('.station-progress')?.textContent.replace(/\s+/g, ' ').trim() || null
-  const m = t && t.match(/^(\d+ de \d+) temas con versiones/)
-  return { progreso: m ? m[1] : t, filas: [...document.querySelectorAll('.trk')].map((r) => r.querySelector('.trk-title')?.textContent ?? null) }
+// f46: una de las dos barras del panel de estado ('versiones' o 'medicion'): lo que se ve
+// (rótulo y valor) y lo que dice la progressbar (aria-value*). null si no está.
+function leerAvance(id) {
+  const a = document.querySelector(`.st-estado .st-avance[data-avance="${id}"]`)
+  if (!a) return null
+  const b = a.querySelector('[role="progressbar"]')
+  const n = (k) => (b?.hasAttribute(k) ? Number(b.getAttribute(k)) : null)
+  const rot = b && document.getElementById(b.getAttribute('aria-labelledby') || '')
+  return { estado: a.dataset.estado, rotulo: rot?.textContent.replace(/\s+/g, ' ').trim() ?? null,
+    valor: a.querySelector('.st-avance-val')?.textContent.trim() ?? null,
+    min: n('aria-valuemin'), now: n('aria-valuenow'), max: n('aria-valuemax'), texto: b?.getAttribute('aria-valuetext') ?? null }
+}
+
+// Avance de las versiones ("N / 49" mientras carga, "X de 49 con versiones" al terminar; f46:
+// la barra del panel) y el título de cada fila. `listo` = la barra de versiones terminó.
+const leerStation = (page) => page.evaluate(`(() => {
+  const v = (${leerAvance})('versiones')
+  return { progreso: v?.valor ?? null, listo: v?.estado === 'listo',
+    filas: [...document.querySelectorAll('.trk')].map((r) => r.querySelector('.trk-title')?.textContent ?? null) }
+})()`)
+const leerAvances = (page) => page.evaluate(`(() => { const f = ${leerAvance}; return { versiones: f('versiones'), medicion: f('medicion') } })()`)
+
+// f46: el selector de orden del panel, su aclaración (por aria-describedby), la región viva y
+// el encabezado (título, línea de abajo y cuántas veces dice "SoundCloud").
+const leerOrden = (page) => page.evaluate(() => {
+  const g = document.querySelector('.st-estado .station-orden [role="group"]')
+  const bs = g ? [...g.querySelectorAll('button')] : []
+  const desc = bs[1]?.getAttribute('aria-describedby') || null
+  const anchos = bs.map((b) => b.getBoundingClientRect().width)
+  const h = document.querySelector('.station-head')
+  return { rotulo: g ? document.getElementById(g.getAttribute('aria-labelledby') || '')?.textContent ?? null : null,
+    botones: bs.map((b) => b.textContent.trim()), pressed: bs.map((b) => b.getAttribute('aria-pressed')), disabled: bs.map((b) => b.disabled),
+    candado: !!bs[1]?.querySelector('svg'), describedby: desc, aclaracion: desc ? document.getElementById(desc)?.textContent ?? null : null,
+    mismoAncho: anchos.length === 2 && Math.abs(anchos[0] - anchos[1]) < 0.5,
+    anuncio: document.querySelector('.st-estado [role="status"]')?.textContent ?? null,
+    sub: h?.querySelector('.station-sub')?.textContent ?? null, soundcloud: (h?.textContent.match(/SoundCloud/g) || []).length }
 })
+
+// Contraste (WCAG) del color de texto de cada selector contra el primer fondo opaco hacia arriba.
+const contrasteDe = (page, sels) => page.evaluate((qs) => {
+  const rgb = (s) => (s.match(/[\d.]+/g) || []).map(Number)
+  const lum = ([r, g, b]) => {
+    const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 }
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+  }
+  const fondo = (e) => {
+    for (let a = e; a; a = a.parentElement) { const v = rgb(getComputedStyle(a).backgroundColor); if (v.length === 3 || (v.length === 4 && v[3] > 0)) return v }
+    return [0, 0, 0]
+  }
+  return qs.map((q) => {
+    const e = document.querySelector(q)
+    if (!e) return { q, ratio: null }
+    const [a, b] = [lum(rgb(getComputedStyle(e).color)), lum(fondo(e))].sort((x, y) => y - x)
+    return { q, ratio: Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100 }
+  })
+}, sels)
 
 // Título, artista y duración que muestra una fila (f40: los del tema de la Station).
 const fichaDe = (page, i) => page.evaluate((k) => {

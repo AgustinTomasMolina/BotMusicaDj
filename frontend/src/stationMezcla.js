@@ -9,6 +9,41 @@ import { stationAnalisis } from './api'
 export const CONCURRENCIA_ANALISIS = 2
 export const TIMEOUT_ANALISIS_MS = 90000
 
+// Los ids de SoundCloud que se analizan: la semilla y los temas, sin repetir y solo los que
+// tienen forma de id (lo que acepta /api/station/analisis). App.jsx los manda a medir y la
+// barra de "Midiendo BPM y key" cuenta ESTOS (f46): así su total es el de lo que se mide.
+const ES_REF = /^[1-9]\d{0,19}$/
+export function refsAnalisis(semilla, items) {
+  return [...new Set([String(semilla ?? ''), ...(items || []).map((it) => String(it?.video_id ?? ''))].filter((r) => ES_REF.test(r)))]
+}
+
+// Estado de la medición para el panel de la Station (f46). `total` sale de refsAnalisis;
+// `hechos` son los que ya contestaron (bien o mal). `incluyeSemilla`: el tema original se mide
+// además de los recomendados (si no está entre ellos), y la etiqueta lo dice.
+export function estadoMedicion(analisis, semilla, items) {
+  const refs = refsAnalisis(semilla, items)
+  const res = refs.map((r) => analisis?.[r]).filter(Boolean)
+  const medidos = res.filter((a) => a.ok).length
+  const sem = String(semilla ?? '')
+  const incluyeSemilla = refs.includes(sem) && !(items || []).some((it) => String(it?.video_id ?? '') === sem)
+  return { total: refs.length, hechos: res.length, medidos, sinMedir: res.length - medidos, incluyeSemilla }
+}
+
+// La aclaración bajo "Para mezclar" (f46), según el estado que ya existe (f45): midiendo,
+// armando el orden, orden listo (con su resumen) o sin orden (con el motivo del backend).
+// `bloqueado` = el botón está deshabilitado (lleva el candado).
+export function aclaracionOrden({ analizando, mezcla, modo, hechos, total }) {
+  if (analizando) {
+    return { bloqueado: true, texto: total > 0 && hechos >= total
+      ? 'Medición terminada: armando el orden «Para mezclar»…'
+      : '«Para mezclar» se activa cuando termine de medir BPM y key.' }
+  }
+  if (!mezcla?.exito) return { bloqueado: true, texto: mezcla?.mensaje || 'No se pudo armar el orden «Para mezclar».' }
+  const resumen = [`${mezcla.en_set} en el set`, mezcla.fuera ? `${mezcla.fuera} fuera de rango de BPM` : null,
+    mezcla.sin_analisis ? `${mezcla.sin_analisis} sin analizar` : null].filter(Boolean).join(' · ')
+  return { bloqueado: false, texto: `${modo === 'mezcla' ? 'Ordenado para mezclar' : 'Listo: podés ordenar para mezclar'} · ${resumen}` }
+}
+
 // Analiza `refs` (ids de SoundCloud). `onUno(ref, resultado)` por cada uno, en el orden en que
 // terminan; `onFin()` al terminar todos. Devuelve `cancelar()`.
 export function cargarAnalisis(refs, { onUno, onFin, concurrencia = CONCURRENCIA_ANALISIS, timeoutMs = TIMEOUT_ANALISIS_MS } = {}) {

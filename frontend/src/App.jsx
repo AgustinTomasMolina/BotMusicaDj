@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { cargarVersiones } from './stationVersions'
-import { cargarAnalisis } from './stationMezcla'
+import { cargarAnalisis, refsAnalisis } from './stationMezcla'
 import { buscar, buscarLista, station, stationOrden,descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
 import { useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
@@ -145,17 +145,19 @@ export default function App() {
         const runId = Date.now() + Math.random()
         const items = d.items
         setView({ kind: 'lista', data: { groups: [], sel: [], origen: 'station', station: d.semilla, runId,
-          items, cargando: true, total: items.length, encontradas: items.length,
+          items, cargando: true, total: items.length, encontradas: items.length, pedidos: 0,
           analisis: {}, analizando: true, mezcla: null } })
         enrich(items)
         const enEsta = (fn) => setView((v) => (v.kind === 'lista' && v.data.runId === runId ? { ...v, data: fn(v.data) } : v))
         const cancelarVersiones = cargarVersiones(items, formato, {
           onFila: (i, g) => enEsta((dt) => ({ ...dt, groups: [...dt.groups, g], sel: [...dt.sel, g.sel] })),
+          // f46: cuántos temas ya se pidieron (los pendientes de abajo dicen "Buscando" o "En cola").
+          onPedido: (i) => enEsta((dt) => ({ ...dt, pedidos: Math.max(dt.pedidos || 0, i + 1) })),
           onFin: () => enEsta((dt) => ({ ...dt, cargando: false })),
         })
         // f45: análisis de audio (semilla + temas) en paralelo; el orden "Para mezclar" se pide al final.
         const semillaRef = String(d.semilla?.video_id || '')
-        const refs = [...new Set([semillaRef, ...items.map((it) => String(it.video_id || ''))].filter((r) => /^[1-9]\d{0,19}$/.test(r)))]
+        const refs = refsAnalisis(semillaRef, items)
         const cancelarAnalisis = cargarAnalisis(refs, {
           onUno: (ref, r) => enEsta((dt) => ({ ...dt, analisis: { ...dt.analisis, [ref]: r } })),
           onFin: async () => {
