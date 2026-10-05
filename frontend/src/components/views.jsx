@@ -7,6 +7,7 @@ import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
 import { IconDownload, IconActivity, IconCompare, IconRadioTower } from './icons'
+import { ordenVisible, filaMezcla, medidoTexto } from '../stationMezcla'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -136,8 +137,12 @@ const sourceName = (o) => FUENTE_CORTO[(o?.fuente || '').toLowerCase()] || o?.fu
 // VERSIONES son pastillas en línea en todas las vistas (búsqueda, modo lista, playlists
 // guardadas y Station). La Station tuvo un diseño plegado (f38, "+N versiones" con sub-lista)
 // que el dueño cambió por estas mismas pastillas (f40).
-function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onStation }) {
+function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, current, loadedIdx, playerStatus, onPlay, onSpek, onDownload, onSelect, onCompare, onStation, medido, mezclaFila }) {
   const c = g.opciones[sel]
+  // f45: `medido` = análisis de audio de la fila de la Station (undefined fuera de la Station;
+  // null mientras se analiza). `pos` = lugar en pantalla (cambia con el orden "Para mezclar").
+  const esMedida = medido !== undefined
+  const med = esMedida && medido ? medidoTexto(medido) : null
   // Station (f40): la fila ES el tema de la Station. Título, artista y duración son los suyos
   // aunque se elija la versión de otra plataforma: el título de un video ("… (Official Video)")
   // o su duración con intro hacían parecer que la fila era otra edición.
@@ -161,12 +166,12 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
     <div className={`trk${loadedIdx >= 0 ? ' is-sonando' : ''}`} aria-current={loadedIdx >= 0 ? 'true' : undefined}
       onMouseEnter={() => preview.schedule(thumbKey, c)}
       onMouseLeave={() => { preview.cancel(); preview.stop() }}>
-      <div className="trk-idx">{String(i + 1).padStart(2, '0')}</div>
-      <div className={`thumb${current ? ' is-current' : ''}`} onClick={() => onPlay(i)}>
+      <div className="trk-idx">{String(pos + 1).padStart(2, '0')}</div>
+      <div className={`thumb${current ? ' is-current' : ''}`} onClick={() => onPlay(pos)}>
         {/* Carátula decorativa: el título está al lado. Si la imagen no carga, prueba la
             siguiente fuente y después el placeholder (ver src/cover.js). */}
         <Cover track={c} />
-        <button type="button" className="thumb-play" aria-label={`${playing ? 'Pausar' : 'Reproducir'} ${c.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay(i) }}>
+        <button type="button" className="thumb-play" aria-label={`${playing ? 'Pausar' : 'Reproducir'} ${c.titulo}`} onClick={(e) => { e.stopPropagation(); onPlay(pos) }}>
           {playing
             ? <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /><rect x="13.5" y="5.5" width="4" height="13" rx="1" fill="currentColor" /></svg>
             : <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" /></svg>}
@@ -189,10 +194,24 @@ function TrackRow({ g, i, sel, formato, metaMap, preview, dl, playing, current, 
             que frenó) y, si el tema es Go+, de dónde sale el tema completo. */}
         {goPlusResuelto && <div className="trk-note">SoundCloud solo da 30 s (Go+): se baja completo de {sourceName(c)}.</div>}
         {g.motivo && <div className="trk-note is-warn" title={g.motivo}>{g.motivo}</div>}
+        {/* f45: el "por qué" del motor (`+1.8% BPM | 8A → 9A (vecino)`) o por qué quedó al final. */}
+        {mezclaFila?.razon && <div className="trk-note mono trk-razon" title="Por qué va en este lugar">{mezclaFila.razon}</div>}
+        {mezclaFila?.motivo && <div className="trk-note is-warn trk-razon" title={mezclaFila.motivo}>Al final: {mezclaFila.motivo}</div>}
       </div>
       <div className="trk-meta">
-        {bpm && <span className="mb"><span className="mb-label">BPM</span><b>{bpm}</b></span>}
-        {key && <span className="mb mb-key"><span className="mb-label">KEY</span><b>{key}{c.compat ? ' ' + c.compat : ''}</b></span>}
+        {/* f45: en la Station, BPM y key MEDIDOS sobre el audio (un decimal, "?" si no se pudo o
+            si la key es dudosa). El BPM de metadata se rotula como tal: no es una medición (§6). */}
+        {esMedida && (med
+          ? <>
+            <span className="mb mb-medido" title={medido.ok ? `Medido sobre ${medido.preview ? 'el preview de 30 s (no se sabe si vale para el tema entero)' : `${Math.round(medido.tramo_s || 0)} s del audio`}` : (medido.motivo || 'No se pudo analizar')}>
+              <span className="mb-label">BPM medido</span><b>{med.bpm}</b></span>
+            <span className="mb mb-key mb-medido" title={medido.ok && medido.key_dudosa ? 'Key dudosa: los tramos del tema no votaron todos lo mismo' : undefined}>
+              <span className="mb-label">KEY medida</span><b>{med.key}</b></span>
+            {medido.ok && medido.preview && <span className="mb mb-warn" title="El BPM y la key salen del preview de 30 s"><b>Medido en preview</b></span>}
+          </>
+          : <span className="mb mb-medido"><span className="mb-label">BPM medido</span><b>…</b></span>)}
+        {bpm && <span className="mb"><span className="mb-label">{esMedida ? 'BPM meta' : 'BPM'}</span><b>{bpm}</b></span>}
+        {key && <span className="mb mb-key"><span className="mb-label">{esMedida ? 'KEY meta' : 'KEY'}</span><b>{key}{c.compat ? ' ' + c.compat : ''}</b></span>}
         {genero && <span className="mb"><b>{genero}</b></span>}
         {/* Station de SoundCloud: un tema Go+ solo suena 30 s acá; decirlo, no mostrarlo como completo. */}
         {c.solo_preview && <span className="mb mb-warn" title="SoundCloud solo deja escuchar 30 s de este tema (Go+)"><b>Preview 30 s</b></span>}
@@ -262,8 +281,15 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   const esBusqueda = origen === 'busqueda'
   const esStation = origen === 'station'
   const player = usePlayer()
-  // Cola de la barra: la versión elegida de cada tema, en el orden de la lista.
-  const reproducir = (i) => onPlay(groups.map((g, k) => fromResult(g.opciones[sel[k]], metaMap, { n: sel[k] + 1, de: g.opciones.length })), i)
+  // f45: "Orden: SoundCloud | Para mezclar". El default es SoundCloud; `vista` son los índices
+  // de `groups` en el orden en pantalla (con SoundCloud, la identidad).
+  const [modo, setModo] = useState('soundcloud')
+  const { analisis, analizando, mezcla } = data
+  const vista = esStation ? ordenVisible(groups, modo, mezcla) : groups.map((_, k) => k)
+  const nAnalizados = analisis ? Object.keys(analisis).length : 0
+  const nAnalizar = esStation ? new Set([station?.video_id, ...(items || []).map((it) => it.video_id)].filter(Boolean).map(String)).size : 0
+  // Cola de la barra: la versión elegida de cada tema, en el orden de la lista EN PANTALLA.
+  const reproducir = (p) => onPlay(vista.map((k) => fromResult(groups[k].opciones[sel[k]], metaMap, { n: sel[k] + 1, de: groups[k].opciones.length })), p)
   const [allLabel, setAllLabel] = useState(null)
   const [allBusy, setAllBusy] = useState(false)
   // Station cargando (f36): "Descargar todas" pregunta si bajar las filas listas o esperar.
@@ -305,7 +331,7 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
           // medición nuestra; por eso no hay BPM ni tonalidad de la semilla acá.
           <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
             <div style={{ minWidth: 0 }}>
-              <div className="eyebrow">Recomendado por SoundCloud, en su orden</div>
+              <div className="eyebrow">{modo === 'mezcla' ? 'Recomendado por SoundCloud · ordenado para mezclar por el motor' : 'Recomendado por SoundCloud, en su orden'}</div>
               <h1 className="station-title">Radio de «{station?.titulo}» — según la Station de SoundCloud</h1>
               {station?.artista && <p className="muted station-sub">{station.artista}</p>}
             </div>
@@ -354,6 +380,31 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
         </p>
       )}
 
+      {esStation && analisis && (
+        <div className="cluster station-orden" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
+          <span className="eyebrow" id="station-orden-label">Orden:</span>
+          <span className="cluster" role="group" aria-labelledby="station-orden-label" style={{ gap: 'var(--space-1)' }}>
+            <button type="button" className={`btn ${modo === 'soundcloud' ? 'btn-secondary' : 'btn-ghost'}`} aria-pressed={modo === 'soundcloud'}
+              onClick={() => setModo('soundcloud')}>SoundCloud</button>
+            <button type="button" className={`btn ${modo === 'mezcla' ? 'btn-secondary' : 'btn-ghost'}`} aria-pressed={modo === 'mezcla'}
+              disabled={!mezcla?.exito}
+              title={analizando ? 'Se habilita cuando termine el análisis de audio' : (mezcla && !mezcla.exito ? mezcla.mensaje : undefined)}
+              onClick={() => setModo('mezcla')}>Para mezclar</button>
+          </span>
+          <span className="muted station-analisis" role="status">
+            {analizando
+              ? <><span className="spinner" aria-hidden="true" /> Analizando {nAnalizados} de {nAnalizar}…</>
+              : mezcla?.exito
+                ? `${mezcla.en_set} en el set${mezcla.fuera ? ` · ${mezcla.fuera} fuera de rango de BPM` : ''}${mezcla.sin_analisis ? ` · ${mezcla.sin_analisis} sin analizar` : ''}`
+                : (mezcla?.mensaje || '')}
+          </span>
+          {modo === 'mezcla' && mezcla?.aviso && <span className="note-warn">{mezcla.aviso}</span>}
+          {modo === 'mezcla' && (
+            <span className="muted">Un orden armado por la compuerta de BPM (±8 %) y la key: no dice si el set suena bien, eso lo decide tu oído.</span>
+          )}
+        </div>
+      )}
+
       {no_encontradas && no_encontradas.length > 0 && (
         <div className="alert alert-warn" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
@@ -371,8 +422,10 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
           <div>Versiones</div>
           <div style={{ textAlign: 'right' }}>Acciones</div>
         </div>
-        {groups.map((g, i) => (
-          <TrackRow key={i} g={g} i={i} sel={sel[i]} formato={formato} metaMap={metaMap} preview={preview}
+        {vista.map((i, p) => [groups[i], i, p]).map(([g, i, p]) => (
+          <TrackRow key={i} g={g} i={i} pos={p} sel={sel[i]} formato={formato} metaMap={metaMap} preview={preview}
+            medido={esStation && analisis ? (analisis[String(g.base?.video_id ?? '')] ?? null) : undefined}
+            mezclaFila={esStation ? filaMezcla(g, modo, mezcla) : null}
             dl={dl[songKey(g.opciones[sel[i]])]} onPlay={reproducir} onSpek={onSpek} onDownload={onDownload}
             current={player.current?.key === songKey(g.opciones[sel[i]])}
             loadedIdx={player.current ? g.opciones.findIndex((o) => songKey(o) === player.current.key) : -1}

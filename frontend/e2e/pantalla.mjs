@@ -1561,6 +1561,44 @@ const CASOS = [
     igual(s.parecidas, 0, 'se pidió /api/parecidas_lista')
   }],
 
+  ['station (f45): el orden por defecto es el de SoundCloud; "Para mezclar" reordena con el por qué del motor y vuelve', async (page, ctx) => {
+    // API doblada: el análisis y el orden los contesta el test (el cálculo real lo prueban los
+    // tests de Python con audio sintético). Acá se prueba la pantalla: default, cambio y vuelta.
+    const s = await montarStation(page, ctx)
+    const ids = s.items.map((it) => String(it.video_id))
+    s.analisis = Object.fromEntries(ids.map((id, k) => [id, k === 1
+      ? { ok: false, motivo: 'SoundCloud no ofrece un audio que se pueda reproducir acá.' }
+      : { ok: true, bpm: 150 + (k % 7) * 0.1, key: '8A', key_dudosa: k % 2 === 0, preview: false, tramo_s: 140 }]))
+    const set = [ids[3], ids[0], ids[2]]
+    const resto = ids.filter((id) => !set.includes(id) && id !== ids[1])
+    s.orden = { exito: true, en_set: set.length + resto.length - 1, fuera: 1, sin_analisis: 1, aviso: null, orden: [
+      ...set.map((id, k) => ({ video_id: id, grupo: 'set', razon: `+${k}.5% BPM | 8A → 8A (mismo)` })),
+      ...resto.slice(0, -1).map((id) => ({ video_id: id, grupo: 'set', razon: '+0.0% BPM | 8A → 8A (mismo)' })),
+      { video_id: resto.at(-1), grupo: 'fuera', motivo: 'Fuera de rango de BPM: 99.0 BPM no está a ±8% de ningún tema del set (con medio/doble tiempo).' },
+      { video_id: ids[1], grupo: 'sin_analisis', motivo: 'SoundCloud no ofrece un audio que se pueda reproducir acá.' },
+    ] }
+    const titulos = s.items.map((it) => it.titulo)
+    await abrirStation(page, ctx, s)
+    await hasta(() => leerStation(page), (v) => v.filas.length === s.items.length, 'no llegaron todas las filas')
+    const mezclar = '.station-orden button:nth-of-type(2)'
+    await hasta(() => page.evaluate((q) => !document.querySelector(q)?.disabled, mezclar), (x) => x, '"Para mezclar" no se habilitó al terminar el análisis')
+    igual((await leerStation(page)).filas, titulos, 'el orden por defecto no es el de SoundCloud')
+    const medido = () => page.evaluate(() => [...document.querySelectorAll('.trk')].slice(0, 2).map((r) =>
+      [...r.querySelectorAll('.mb-medido b')].map((b) => b.textContent)))
+    igual(await medido(), [['150.0', '8A?'], ['?', '?']], 'BPM/key medidos de las dos primeras filas (un decimal, "?" si no se pudo o es dudosa)')
+    await page.click(mezclar)
+    const esperado = s.orden.orden.map((f) => titulos[ids.indexOf(f.video_id)])
+    igual((await leerStation(page)).filas, esperado, '"Para mezclar" no siguió el orden del motor')
+    const notas = await page.evaluate(() => [...document.querySelectorAll('.trk')].map((r) => r.querySelector('.trk-razon')?.textContent ?? null))
+    igual(notas[0], '+0.5% BPM | 8A → 8A (mismo)', 'el por qué de la primera fila')
+    afirmar(notas.at(-2).startsWith('Al final: Fuera de rango de BPM'), `la fila fuera de rango no dice por qué: ${notas.at(-2)}`)
+    afirmar(notas.at(-1).startsWith('Al final: SoundCloud no ofrece'), `la fila sin análisis no dice por qué: ${notas.at(-1)}`)
+    await page.click('.station-orden button:nth-of-type(1)')
+    igual((await leerStation(page)).filas, titulos, 'volver a "SoundCloud" no restituyó su orden')
+    igual(await page.evaluate(() => document.querySelectorAll('.trk-razon').length), 0, 'en orden SoundCloud quedó el por qué del motor')
+    igual(new Set(s.pedidosAnalisis).size, s.pedidosAnalisis.length, 'se pidió dos veces el análisis de un tema')
+  }],
+
   ['station: salir de la pantalla corta la carga de versiones (no sigue pidiendo)', async (page, ctx) => {
     const s = await montarStation(page, ctx, { retener: true })
     const cortados = []
@@ -2187,6 +2225,7 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     falla: { exito: false, motivo: 'station_vacia', mensaje: 'SoundCloud no tiene una Station para este tema.' },
     boton: `button[aria-label="Station de SoundCloud de ${tema.titulo}"]`,
     versiones: [], descargas: [], calidades: [], mp3: [], parecidas: 0, pendientes: new Map(), pedidosStation: [],
+    analisis: {}, orden: null, pedidosAnalisis: [],
     soltar(id) { const r = s.pendientes.get(id); afirmar(r, `no hay un pedido de versiones de ${id} para soltar`); s.pendientes.delete(id); r() },
     soltarTodas() { s.retener = false; for (const id of [...s.pendientes.keys()]) s.soltar(id) },
   }
@@ -2200,6 +2239,14 @@ async function montarStation(page, ctx, { retener = false, primeros = [], statio
     if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
     if (u.pathname === '/api/station') { s.pedidosStation.push(u.href); return responder(s.stationFalla ? s.falla : station) }
     if (u.pathname === '/api/parecidas_lista') { s.parecidas++; return responder({ exito: false }) }
+    // f45: análisis de audio y orden "Para mezclar". Sin red: lo que el test ponga en
+    // `s.analisis` / `s.orden`; si no, "no analizado" (nunca un BPM inventado).
+    if (u.pathname === '/api/station/analisis') {
+      const ref = u.searchParams.get('ref')
+      s.pedidosAnalisis.push(ref)
+      return responder(s.analisis[ref] || { ok: false, motivo: 'Sin análisis en el E2E.' })
+    }
+    if (u.pathname === '/api/station/orden') return responder(s.orden || { exito: false, mensaje: 'Sin orden en el E2E.' })
     if (u.pathname === '/api/versiones') {
       const b = JSON.parse(req.postData())
       s.versiones.push(b)
