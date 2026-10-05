@@ -643,6 +643,57 @@ async def station(fuente: str = "", fuente_id: str = "", titulo: str = "", artis
         return sc.failure(sc.UNEXPECTED_RESPONSE, code=sc.SOUNDCLOUD_ERROR)
 
 
+# ---------------------------------------------------------------- orden "Para mezclar" (f45)
+# Opt-in: el orden de SoundCloud sigue siendo el default. El front pide el análisis de cada tema
+# (uno por pedido, cola chica) y, cuando están todos, el orden. Detalle en station_mezcla.py.
+
+@app.get("/api/station/analisis")
+async def station_analisis(ref: str = ""):
+    """BPM (1 decimal), key con su acuerdo y si es dudosa, de UN tema de SoundCloud (id
+    numérico), medidos sobre un tramo de su audio. {ok, bpm, key, key_dudosa, preview, ...} o
+    {ok: false, motivo}. 400 si el id es inválido. Nunca 500."""
+    import soundcloud_station as sc
+    import station_mezcla as sm
+
+    ref = (ref or "").strip()
+    if not sc.SC_ID.fullmatch(ref):
+        return JSONResponse({"ok": False, "motivo": "Identificador de SoundCloud inválido."}, status_code=400)
+    return sm.publico(await asyncio.to_thread(sm.analizar, ref))
+
+
+@app.post("/api/station/orden")
+async def station_orden(request: Request):
+    """Orden "Para mezclar": {semilla: id, items: [{video_id, titulo, artista, duracion, url}]}
+    en el orden de SoundCloud → {exito, orden: [{video_id, grupo, razon | motivo}], ...}. Usa
+    solo los análisis ya hechos (no dispara nuevos)."""
+    import soundcloud_station as sc
+    import station_mezcla as sm
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    items = body.get("items") if isinstance(body, dict) else None
+    semilla = str(body.get("semilla") or "") if isinstance(body, dict) else ""
+    if not isinstance(items, list) or not items or len(items) > sm.MAX_ITEMS or not sc.SC_ID.fullmatch(semilla):
+        return JSONResponse({"exito": False, "mensaje": "Pedido inválido."}, status_code=400)
+    limpios = []
+    for it in items:
+        if not isinstance(it, dict) or not sc.SC_ID.fullmatch(str(it.get("video_id") or "")):
+            return JSONResponse({"exito": False, "mensaje": "Pedido inválido."}, status_code=400)
+        dur = it.get("duracion")
+        limpios.append({"video_id": str(it["video_id"]),
+                        "titulo": str(it.get("titulo") or "")[:_STATION_MAX_TEXT],
+                        "artista": str(it.get("artista") or "")[:_STATION_MAX_TEXT],
+                        "duracion": float(dur) if isinstance(dur, (int, float)) and math.isfinite(dur) and dur > 0 else None,
+                        "url": str(it.get("url") or "")[:500]})
+    try:
+        return await asyncio.to_thread(sm.ordenar, semilla, limpios)
+    except Exception as e:
+        logger.warning(f"⚠️ Orden para mezclar: error inesperado {type(e).__name__}: {e}")
+        return {"exito": False, "mensaje": "No pude armar el orden para mezclar."}
+
+
 # ---------------------------------------------------------------- versiones de la Station (f36)
 # Cada tema de la Station se busca en las otras plataformas para bajarlo de donde mejor suene.
 # El front pide UN tema por vez (con una cola de 3) y va mostrando las filas en el orden de la

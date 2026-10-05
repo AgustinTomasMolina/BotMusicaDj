@@ -60,6 +60,25 @@ export async function station(c, g) {
 }
 
 // Id numérico de SoundCloud del resultado (video_id o el de su URL de la API), o null.
+// Orden "Para mezclar" de la Station (f45). El análisis es de UN tema (id de SoundCloud); el
+// orden se pide cuando están todos y usa solo los análisis ya hechos en el backend.
+export async function stationAnalisis(ref, signal) {
+  const r = await fetch(`/api/station/analisis?ref=${encodeURIComponent(ref)}`, { signal })
+  const d = await cuerpoRadio(r)
+  if (d && typeof d.ok === 'boolean') return d
+  return { ok: false, motivo: `El servidor no pudo analizar este tema (HTTP ${r.status}).` }
+}
+
+export async function stationOrden(semilla, items) {
+  const r = await fetch('/api/station/orden', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ semilla: String(semilla), items: items.map(({ video_id, titulo, artista, duracion, url }) => ({ video_id, titulo, artista, duracion, url })) }),
+  })
+  const d = await cuerpoRadio(r)
+  if (d && typeof d.exito === 'boolean') return d
+  return { exito: false, mensaje: `El servidor no pudo armar el orden (HTTP ${r.status}).` }
+}
+
 function sourceAudioRefId(c) {
   if (/^\d+$/.test(String(c.video_id || ''))) return String(c.video_id)
   const m = /\/tracks\/(?:soundcloud%3Atracks%3A|soundcloud:tracks:)?(\d+)/.exec(c.url || '')

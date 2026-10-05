@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { songKey, metaKey, loadFormat, saveFormat } from './utils'
 import { cargarVersiones } from './stationVersions'
-import { buscar, buscarLista, station, descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
+import { cargarAnalisis } from './stationMezcla'
+import { buscar, buscarLista, station, stationOrden,descargar, esperarJob, historial, getPlaylistGuardada, borrarPlaylist, limpiarHistorial, playlistActiva, listarPlaylists, avisarPlaylists } from './api'
 import { useMeta, usePreview } from './hooks'
 import { crearPlaylistConPrompt } from './playlists'
 import { descargas } from './playlistDescarga'
@@ -144,14 +145,27 @@ export default function App() {
         const runId = Date.now() + Math.random()
         const items = d.items
         setView({ kind: 'lista', data: { groups: [], sel: [], origen: 'station', station: d.semilla, runId,
-          items, cargando: true, total: items.length, encontradas: items.length } })
+          items, cargando: true, total: items.length, encontradas: items.length,
+          analisis: {}, analizando: true, mezcla: null } })
         enrich(items)
         const enEsta = (fn) => setView((v) => (v.kind === 'lista' && v.data.runId === runId ? { ...v, data: fn(v.data) } : v))
-        const cancelar = cargarVersiones(items, formato, {
+        const cancelarVersiones = cargarVersiones(items, formato, {
           onFila: (i, g) => enEsta((dt) => ({ ...dt, groups: [...dt.groups, g], sel: [...dt.sel, g.sel] })),
           onFin: () => enEsta((dt) => ({ ...dt, cargando: false })),
         })
-        stationLoad.current = { runId, cancelar }
+        // f45: análisis de audio (semilla + temas) en paralelo; el orden "Para mezclar" se pide al final.
+        const semillaRef = String(d.semilla?.video_id || '')
+        const refs = [...new Set([semillaRef, ...items.map((it) => String(it.video_id || ''))].filter((r) => /^[1-9]\d{0,19}$/.test(r)))]
+        const cancelarAnalisis = cargarAnalisis(refs, {
+          onUno: (ref, r) => enEsta((dt) => ({ ...dt, analisis: { ...dt.analisis, [ref]: r } })),
+          onFin: async () => {
+            let mezcla
+            try { mezcla = /^[1-9]\d{0,19}$/.test(semillaRef) ? await stationOrden(semillaRef, items) : { exito: false, mensaje: 'La semilla no tiene id de SoundCloud.' } }
+            catch { mezcla = { exito: false, mensaje: 'No pude conectar con el servidor para armar el orden.' } }
+            enEsta((dt) => ({ ...dt, analizando: false, mezcla }))
+          },
+        })
+        stationLoad.current = { runId, cancelar: () => { cancelarVersiones(); cancelarAnalisis() } }
         return
       }
       setView({ kind: 'error', emoji: '📻', message: d.mensaje || 'No pude traer la Station de SoundCloud.',
@@ -301,7 +315,7 @@ export default function App() {
   else if (view.kind === 'error') body = <div className="empty"><p>{view.emoji || '⚠️'} {view.message}</p>{view.hint && <p>{view.hint}</p>}{view.action && <button type="button" className="btn btn-secondary" onClick={view.action.onClick}>{view.action.label}</button>}</div>
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
-  else if (view.kind === 'lista') body = <ListResults data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
+  else if (view.kind === 'lista') body = <ListResults key={view.data.runId ?? 'lista'} data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
   else if (view.kind === 'radio') body = <Radio />
   else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} />
 
