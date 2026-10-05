@@ -6,8 +6,8 @@ import { AddToPlaylist } from './AddToPlaylist'
 import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
-import { IconDownload, IconActivity, IconCompare, IconRadioTower } from './icons'
-import { ordenVisible, filaMezcla, medidoTexto } from '../stationMezcla'
+import { IconDownload, IconActivity, IconCompare, IconRadioTower, IconLock, IconPlus } from './icons'
+import { ordenVisible, filaMezcla, medidoTexto, estadoMedicion, aclaracionOrden } from '../stationMezcla'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -275,6 +275,94 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
   )
 }
 
+/* ---------- Station: encabezado, panel de estado y filas pendientes (f46) ---------- */
+// Diseño elegido por el dueño ("A — una barra de estado con dos progresos"): el título y una
+// línea que dice de quién es la recomendación; abajo, un panel con el selector de orden a la
+// izquierda y los dos avances (versiones y medición) a la derecha.
+
+const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`
+const textoMedidos = (med) => `${plural(med.medidos, 'medido', 'medidos')}${med.sinMedir ? `, ${med.sinMedir} sin poder medir` : ''}`
+
+// Una barra de avance con su rótulo. Mientras carga, "hechos / total"; al terminar, el estado final.
+function Avance({ id, rotulo, detalle, now, max, listo, final, tono }) {
+  const pct = max > 0 ? Math.min(100, Math.round((now / max) * 100)) : 0
+  return (
+    <div className="st-avance" data-avance={id} data-estado={listo ? 'listo' : 'cargando'}>
+      <div className="st-avance-head">
+        <span id={`st-avance-${id}`}>{rotulo}{detalle && <span className="st-avance-det"> {detalle}</span>}</span>
+        <span className="st-avance-val">{listo ? final : `${now} / ${max}`}</span>
+      </div>
+      <div className={`st-bar is-${tono}`} role="progressbar" aria-labelledby={`st-avance-${id}`}
+        aria-valuemin={0} aria-valuemax={max} aria-valuenow={now} aria-valuetext={listo ? final : `${now} de ${max}`}>
+        <i style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function StationEstado({ modo, setModo, hechos, total, cargando, conOtras, med, analizando, mezcla }) {
+  const acl = aclaracionOrden({ analizando, mezcla, modo, hechos: med.hechos, total: med.total })
+  // Una sola región viva para la medición, con dos textos: al empezar y al terminar (no uno por
+  // tema: antes "Analizando N de M…" era role=status y se anunciaba cada tema). El avance de las
+  // versiones ya lo anuncia la región de App.jsx (al abrir y al terminar).
+  const anuncio = analizando
+    ? `Midiendo BPM y key de ${plural(med.total, 'tema', 'temas')}.`
+    : `Medición terminada: ${textoMedidos(med)}. ${acl.bloqueado ? acl.texto : '«Para mezclar» disponible.'}`
+  return (
+    <section className="st-estado" aria-label="Estado de la Station">
+      <div className="station-orden">
+        <span className="st-rotulo" id="station-orden-label">Orden</span>
+        <div className="st-seg" role="group" aria-labelledby="station-orden-label">
+          <button type="button" aria-pressed={modo === 'soundcloud'} onClick={() => setModo('soundcloud')}>SoundCloud</button>
+          <button type="button" aria-pressed={modo === 'mezcla'} disabled={acl.bloqueado} aria-describedby="station-orden-hint"
+            onClick={() => setModo('mezcla')}>
+            {acl.bloqueado && <IconLock size={14} />}Para mezclar
+          </button>
+        </div>
+        <p className="st-hint" id="station-orden-hint" data-bloqueado={acl.bloqueado ? 'true' : 'false'}>{acl.texto}</p>
+      </div>
+      <div className="st-avances">
+        <Avance id="versiones" tono="accent" now={hechos} max={total} listo={!cargando}
+          rotulo={cargando ? 'Buscando versiones en otras plataformas' : 'Versiones en otras plataformas'}
+          final={`${conOtras} de ${total} con versiones`} />
+        {med.total > 0
+          ? <Avance id="medicion" tono="info" now={med.hechos} max={med.total} listo={med.hechos >= med.total}
+            rotulo={med.hechos >= med.total ? 'BPM y key' : 'Midiendo BPM y key'}
+            detalle={med.incluyeSemilla ? '(incluye el tema original)' : null}
+            final={textoMedidos(med)} />
+          : <p className="st-hint">No hay temas con id de SoundCloud para medir BPM y key.</p>}
+      </div>
+      <span className="sr-only" role="status">{anuncio}</span>
+    </section>
+  )
+}
+
+// Un tema de la Station que todavía no tiene sus versiones: la forma de la fila final (mismas
+// columnas), con casilleros grises donde van los datos y las acciones deshabilitadas.
+// "Buscando versiones…" si su pedido ya salió; "En cola" si espera turno (stationVersions.js).
+function FilaPendiente({ item, pos, buscando }) {
+  return (
+    <div className="trk-pending" aria-hidden="true" data-estado={buscando ? 'buscando' : 'cola'}>
+      <div className="trk-idx">{String(pos + 1).padStart(2, '0')}</div>
+      <div className="thumb"><Cover track={item} /></div>
+      <div className="trk-id">
+        <div className="trk-title" title={item.titulo}>{item.titulo}</div>
+        <div className="trk-artist"><span className="truncate">{item.artista}</span>
+          {item.duracion ? <><span className="sep">·</span><span className="mono">{fmtDur(item.duracion)}</span></> : null}</div>
+      </div>
+      <div className="trk-meta"><span className="sk" style={{ width: 72 }} /><span className="sk" style={{ width: 56 }} /></div>
+      <div className="trk-grade"><span className="sk sk-grade" /></div>
+      <div className="trk-vers st-pend-vers">
+        {buscando ? <><span className="spinner" /> Buscando versiones…</> : 'En cola'}
+      </div>
+      <div className="trk-acts">
+        <button type="button" className="btn btn-icon-sm" disabled tabIndex={-1}><IconPlus size={16} /></button>
+        <button type="button" className="btn btn-icon-sm" disabled tabIndex={-1}><IconDownload size={16} /></button>
+      </div>
+    </div>
+  )
+}
+
 /* ---------- Vista de resultados (búsqueda unificada / modo lista / Station) ---------- */
 export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpek, onDownload, onSelect, onEditar, onCompare, onStation }) {
   const { groups, sel, encontradas, total, no_encontradas, origen, query, station, cargando, items } = data
@@ -284,10 +372,10 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   // f45: "Orden: SoundCloud | Para mezclar". El default es SoundCloud; `vista` son los índices
   // de `groups` en el orden en pantalla (con SoundCloud, la identidad).
   const [modo, setModo] = useState('soundcloud')
-  const { analisis, analizando, mezcla } = data
+  const { analisis, analizando, mezcla, pedidos = 0 } = data
   const vista = esStation ? ordenVisible(groups, modo, mezcla) : groups.map((_, k) => k)
-  const nAnalizados = analisis ? Object.keys(analisis).length : 0
-  const nAnalizar = esStation ? new Set([station?.video_id, ...(items || []).map((it) => it.video_id)].filter(Boolean).map(String)).size : 0
+  // f46: la medición cuenta lo mismo que se manda a medir (refsAnalisis): semilla + temas con id.
+  const med = esStation ? estadoMedicion(analisis, station?.video_id, items) : null
   // Cola de la barra: la versión elegida de cada tema, en el orden de la lista EN PANTALLA.
   const reproducir = (p) => onPlay(vista.map((k) => fromResult(groups[k].opciones[sel[k]], metaMap, { n: sel[k] + 1, de: groups[k].opciones.length })), p)
   const [allLabel, setAllLabel] = useState(null)
@@ -320,33 +408,27 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
   }, [waitAll, esStation, cargando]) // eslint-disable-line react-hooks/exhaustive-deps
   // Cuántas filas terminaron con versiones de otras plataformas (resumen al terminar).
   const conOtras = esStation ? groups.filter((g) => g.opciones.some((o) => !o.estacion)).length : 0
-  const siguiente = esStation && cargando && items ? items[groups.length] : null
+  // f46: TODOS los temas que faltan, con la forma de la fila final (antes, solo el próximo).
+  const pendientes = esStation && cargando && items ? items.slice(groups.length) : []
 
   return (
     <>
       {/* Sin encabezado visible en esta vista: uno oculto para navegar por títulos con lector. */}
-      {esStation
-        ? (
-          // Encabezado honesto: es el recomendador de SoundCloud (su orden, sus temas), no una
-          // medición nuestra; por eso no hay BPM ni tonalidad de la semilla acá.
-          <div className="seedbar" style={{ margin: '0 var(--space-3) var(--space-3)' }}>
-            <div style={{ minWidth: 0 }}>
-              <div className="eyebrow">{modo === 'mezcla' ? 'Recomendado por SoundCloud · ordenado para mezclar por el motor' : 'Recomendado por SoundCloud, en su orden'}</div>
-              <h1 className="station-title">Radio de «{station?.titulo}» — según la Station de SoundCloud</h1>
-              {station?.artista && <p className="muted station-sub">{station.artista}</p>}
-            </div>
-          </div>
-        )
-        : <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : 'Resultados de la lista'}</h1>}
+      {!esStation && <h1 className="sr-only">{esBusqueda ? `Resultados${query ? ` de ${query}` : ''}` : 'Resultados de la lista'}</h1>}
 
-      <div className="cluster" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
+      <div className={`cluster${esStation ? ' station-top' : ''}`} style={{ padding: '0 var(--space-3) var(--space-3)' }}>
         {esStation
-          // Avance de la búsqueda de versiones: las filas aparecen abajo, en el orden de la Station.
-          ? <span className="eyebrow station-progress">
-            {cargando
-              ? <><span className="spinner" aria-hidden="true" /> {groups.length} de {total} temas con versiones…</>
-              : `${total} temas · ${conOtras} con versiones en otras plataformas`}
-          </span>
+          // Encabezado honesto (f46): es el recomendador de SoundCloud (su orden, sus temas), no
+          // una medición nuestra; por eso no hay BPM ni tonalidad de la semilla acá. "SoundCloud"
+          // una sola vez: en la línea de abajo, que dice de quién es la recomendación.
+          ? <header className="station-head">
+            <h1 className="station-title">Station de «{station?.titulo}»</h1>
+            <p className="station-sub">
+              {station?.artista && <>{station.artista} · </>}
+              {plural(total, 'tema recomendado', 'temas recomendados')} por SoundCloud
+              {modo === 'mezcla' && ` · ${total === 1 ? 'ordenado' : 'ordenados'} para mezclar por el motor`}
+            </p>
+          </header>
           : <span className="eyebrow">{esBusqueda ? `Resultados${query ? ` · ${query}` : ''}` : `${encontradas}/${total} encontradas`}</span>}
         <span className="push cluster" style={{ gap: 'var(--space-2)' }}>
           {!esBusqueda && !esStation && <button type="button" className="btn btn-ghost" onClick={onEditar}>Editar lista</button>}
@@ -380,28 +462,14 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
         </p>
       )}
 
-      {esStation && analisis && (
-        <div className="cluster station-orden" style={{ padding: '0 var(--space-3) var(--space-3)' }}>
-          <span className="eyebrow" id="station-orden-label">Orden:</span>
-          <span className="cluster" role="group" aria-labelledby="station-orden-label" style={{ gap: 'var(--space-1)' }}>
-            <button type="button" className={`btn ${modo === 'soundcloud' ? 'btn-secondary' : 'btn-ghost'}`} aria-pressed={modo === 'soundcloud'}
-              onClick={() => setModo('soundcloud')}>SoundCloud</button>
-            <button type="button" className={`btn ${modo === 'mezcla' ? 'btn-secondary' : 'btn-ghost'}`} aria-pressed={modo === 'mezcla'}
-              disabled={!mezcla?.exito}
-              title={analizando ? 'Se habilita cuando termine el análisis de audio' : (mezcla && !mezcla.exito ? mezcla.mensaje : undefined)}
-              onClick={() => setModo('mezcla')}>Para mezclar</button>
-          </span>
-          <span className="muted station-analisis" role="status">
-            {analizando
-              ? <><span className="spinner" aria-hidden="true" /> Analizando {nAnalizados} de {nAnalizar}…</>
-              : mezcla?.exito
-                ? `${mezcla.en_set} en el set${mezcla.fuera ? ` · ${mezcla.fuera} fuera de rango de BPM` : ''}${mezcla.sin_analisis ? ` · ${mezcla.sin_analisis} sin analizar` : ''}`
-                : (mezcla?.mensaje || '')}
-          </span>
-          {modo === 'mezcla' && mezcla?.aviso && <span className="note-warn">{mezcla.aviso}</span>}
-          {modo === 'mezcla' && (
-            <span className="muted">Un orden armado por la compuerta de BPM (±8 %) y la key: no dice si el set suena bien, eso lo decide tu oído.</span>
-          )}
+      {esStation && (
+        <StationEstado modo={modo} setModo={setModo} hechos={groups.length} total={total} cargando={cargando}
+          conOtras={conOtras} med={med} analizando={analizando} mezcla={mezcla} />
+      )}
+      {esStation && modo === 'mezcla' && (
+        <div className="cluster st-mezcla-nota">
+          {mezcla?.aviso && <span className="note-warn">{mezcla.aviso}</span>}
+          <span className="muted">Un orden armado por la compuerta de BPM (±8 %) y la key: no dice si el set suena bien, eso lo decide tu oído.</span>
         </div>
       )}
 
@@ -433,13 +501,10 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
             playing={player.isPlaying(songKey(g.opciones[sel[i]]))}
             onSelect={onSelect} onCompare={onCompare} onStation={onStation} />
         ))}
-        {/* La próxima fila de la Station, mientras busca sus versiones. */}
-        {siguiente && (
-          <div className="trk-pending" aria-hidden="true">
-            <span className="spinner" />
-            <span className="truncate">{String(groups.length + 1).padStart(2, '0')} · {siguiente.titulo} — buscando versiones en YouTube, MP3 y Spotify…</span>
-          </div>
-        )}
+        {/* Los temas de la Station que todavía buscan sus versiones (f46: con la forma de la fila). */}
+        {pendientes.map((it, k) => (
+          <FilaPendiente key={`p${groups.length + k}`} item={it} pos={groups.length + k} buscando={groups.length + k < pedidos} />
+        ))}
       </div>
     </>
   )

@@ -64,8 +64,10 @@ function grupo(item, d) {
 }
 
 // Arranca la carga. `onFila(i, grupo)` se llama en orden (0, 1, 2…); `onFin()` al terminar.
+// `onPedido(i)` (f46, solo aviso) cuando sale el pedido del tema i: la fila pendiente dice
+// "Buscando versiones…" si ya se pidió y "En cola" si no. No cambia la cola.
 // Devuelve `cancelar()`: corta los pedidos en vuelo y no entrega nada más.
-export function cargarVersiones(items, formato, { onFila, onFin, concurrencia = CONCURRENCIA, timeoutMs = TIMEOUT_FILA_MS } = {}) {
+export function cargarVersiones(items, formato, { onFila, onFin, onPedido, concurrencia = CONCURRENCIA, timeoutMs = TIMEOUT_FILA_MS } = {}) {
   let cancelado = false
   let proximo = 0          // siguiente índice a pedir
   let entregar = 0         // siguiente índice a entregar (orden de la Station)
@@ -86,6 +88,7 @@ export function cargarVersiones(items, formato, { onFila, onFin, concurrencia = 
     const item = items[i]
     const ctrl = new AbortController()
     enVuelo.add(ctrl)
+    onPedido?.(i)
     let porTiempo = false
     const t = setTimeout(() => { porTiempo = true; ctrl.abort() }, timeoutMs)
     let g

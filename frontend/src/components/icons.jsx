@@ -17,7 +17,9 @@ export const IconList = (p) => <S {...p}><path d="M8 6h13" /><path d="M8 12h13" 
 export const IconHistory = (p) => <S {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" /></S>
 export const IconPlay = (p) => <S {...p}><polygon points="6 3 20 12 6 21" /></S>
 export const IconDownload = (p) => <S {...p}><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></S>
-export const IconActivity = (p) => <S {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></S>
+export const IconLock = (p) => <S {...p}><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></S>
+export const IconPlus = (p) => <S {...p}><path d="M12 5v14M5 12h14" /></S>
+export const IconActivity =(p) => <S {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></S>
 export const IconCompare = (p) => <S {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18" /></S>
 export const IconSparkles = (p) => <S {...p}><path d="m12 3 1.9 4.1L18 9l-4.1 1.9L12 15l-1.9-4.1L6 9l4.1-1.9z" /><path d="M19 14.5l.7 1.6 1.8.7-1.8.7-.7 1.6-.7-1.6-1.8-.7 1.8-.7z" /></S>
 export const IconTrash = (p) => <S {...p}><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6" /><path d="M10 11v6" /><path d="M14 11v6" /></S>

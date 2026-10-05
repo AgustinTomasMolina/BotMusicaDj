@@ -524,12 +524,12 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 
 /* — result list: one row per track — */
 .results{display:flex;flex-direction:column}
-.results-head,.trk{display:grid;grid-template-columns:var(--trk-cols);align-items:center;gap:var(--space-3);padding:0 var(--space-3)}
+.results-head,.trk,.trk-pending{display:grid;grid-template-columns:var(--trk-cols);align-items:center;gap:var(--space-3);padding:0 var(--space-3)}
 .results-head{position:sticky;top:var(--topbar-h);z-index:20;height:34px;background:color-mix(in srgb,var(--color-bg) 92%,transparent);backdrop-filter:blur(10px);font-size:10px;letter-spacing:0.09em;text-transform:uppercase;color:var(--color-neutral-500)}
 .results-head>*{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trk{position:relative;min-height:var(--trk-h);border-radius:var(--radius-md);transition:background .14s var(--ease)}
-.trk::after{content:'';position:absolute;left:var(--space-3);right:var(--space-3);bottom:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 9%,transparent) 48px,color-mix(in srgb,var(--color-text) 9%,transparent) calc(100% - 48px),transparent)}
-.trk:last-child::after,.trk:hover::after{opacity:0}
+.trk::after,.trk-pending::after{content:'';position:absolute;left:var(--space-3);right:var(--space-3);bottom:0;height:1px;pointer-events:none;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 9%,transparent) 48px,color-mix(in srgb,var(--color-text) 9%,transparent) calc(100% - 48px),transparent)}
+.trk:last-child::after,.trk:hover::after,.trk-pending:last-child::after{opacity:0}
 .trk:hover{background:color-mix(in srgb,var(--color-text) 5%,transparent)}
 .trk[aria-selected=true]{background:color-mix(in srgb,var(--color-accent) 12%,transparent);box-shadow:inset 2px 0 0 var(--color-accent)}
 .trk-idx{font-family:var(--font-mono);font-size:12px;font-variant-numeric:tabular-nums;text-align:right;color:var(--color-neutral-600)}
@@ -549,10 +549,15 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 /* Una línea de aviso bajo el artista (f36): por qué faltan versiones, de dónde sale un Go+. */
 .trk-note{margin-top:2px;font-size:11px;line-height:1.35;color:var(--color-neutral-400);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trk-note.is-warn{color:var(--color-warn)}
-/* La próxima fila de la Station mientras busca sus versiones. */
-.trk-pending{display:flex;align-items:center;gap:var(--space-3);min-height:48px;padding:0 var(--space-3);font-size:12px;color:var(--color-neutral-500)}
-.station-progress{display:inline-flex;align-items:center;gap:var(--space-2)}
-.station-progress .spinner{width:12px;height:12px}
+/* Los temas de la Station que todavía buscan sus versiones (f46): la grilla de .trk, con
+   casilleros grises donde van metadata y nota, y las acciones deshabilitadas. */
+.trk-pending{position:relative;min-height:var(--trk-h);color:var(--color-neutral-500)}
+.trk-pending .trk-title{color:var(--color-text)}
+.sk{display:block;flex:none;height:18px;border-radius:5px;background:var(--color-raise)}
+.sk-grade{width:28px;height:24px}
+.st-pend-vers{display:flex;align-items:center;gap:var(--space-2);font-size:13px;color:var(--color-neutral-400)}
+.trk-pending[data-estado=cola] .st-pend-vers{color:var(--color-neutral-600)}
+.st-pend-vers .spinner{width:14px;height:14px}
 .station-ask .cluster{margin-top:var(--space-2)}
 
 /* — Station: las versiones son las mismas pastillas en línea (.vchips) que la búsqueda (f40;
@@ -801,9 +806,46 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .seedbar{position:relative;display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);padding-left:calc(var(--space-3) + 3px);border-radius:var(--radius-md);background:var(--color-well);overflow:hidden}
 .seedbar::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--color-accent)}
 .seedbar h4{margin:0;font-size:15px}
-/* Encabezado de la Station: el título del tema puede ser largo y a 400 px tiene que partirse, no cortarse */
-.station-title{margin:2px 0 0;font-size:15px;line-height:1.35;overflow-wrap:anywhere}
-.station-sub{margin:2px 0 0;font-size:12px;color:var(--color-neutral-500)}
+/* Encabezado de la Station (f46, opción A del dueño): título y una línea con el artista y de
+   quién es la recomendación; sin eyebrow ni borde de acento. El título del tema puede ser largo
+   y a 400 px tiene que partirse, no cortarse. */
+.station-top{align-items:flex-start}
+.station-head{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:var(--space-1)}
+.station-title{margin:0;font-family:var(--font-heading);font-size:22px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.station-sub{margin:0;font-size:14px;line-height:1.4;color:var(--color-neutral-400);overflow-wrap:anywhere}
+
+/* Panel de estado de la Station (f46): a la izquierda el orden (selector segmentado y su
+   aclaración), a la derecha los dos avances. Texto chico en n400/n500 sobre well: 5.15:1 o más. */
+.st-estado{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-6);margin:0 var(--space-3) var(--space-3);padding:14px var(--space-4);background:var(--color-well);border:1px solid color-mix(in srgb,var(--color-text) 8%,transparent);border-radius:calc(var(--radius-md) * 1.5)}
+.station-orden{display:flex;flex-direction:column;gap:6px;min-width:0}
+.st-rotulo{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)}
+/* Dos botones del mismo ancho. Sin overflow:hidden: el anillo de foco va por fuera (2px de
+   offset, el global) y se ve también sobre el botón elegido, que es del color del acento. */
+.st-seg{display:inline-grid;grid-template-columns:1fr 1fr;width:max-content;max-width:100%;border:1px solid var(--color-divider);border-radius:10px}
+.st-seg>button{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-width:0;height:40px;padding:0 var(--space-4);border:0;background:transparent;color:var(--color-neutral-300);font:600 14px var(--font-body);white-space:nowrap;cursor:pointer;transition:background .14s var(--ease)}
+.st-seg>button:first-child{border-radius:9px 0 0 9px}
+.st-seg>button:last-child{border-radius:0 9px 9px 0;border-left:1px solid var(--color-divider)}
+.st-seg>button[aria-pressed=true]{background:var(--color-accent);color:var(--color-bg)}
+.st-seg>button:hover:not(:disabled):not([aria-pressed=true]){background:var(--color-raise)}
+.st-seg>button:disabled{color:var(--color-neutral-600);cursor:not-allowed}
+.st-seg>button:focus-visible{z-index:1}
+.st-hint{margin:0;max-width:40ch;font-size:12px;line-height:1.4;color:var(--color-neutral-400)}
+.st-avances{flex:0 1 420px;min-width:0;display:flex;flex-direction:column;gap:var(--space-3)}
+.st-avance{display:flex;flex-direction:column;gap:6px}
+.st-avance-head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-3);font-size:13px;line-height:1.35;color:var(--color-text)}
+.st-avance-det{color:var(--color-neutral-500)}
+.st-avance-val{flex:none;font-variant-numeric:tabular-nums;color:var(--color-neutral-400);text-align:right}
+.st-bar{height:6px;border-radius:3px;background:var(--color-raise);overflow:hidden}
+.st-bar>i{display:block;height:100%;border-radius:inherit;transition:width .3s var(--ease)}
+.st-bar.is-accent>i{background:var(--color-accent)}
+.st-bar.is-info>i{background:var(--color-info)}
+.st-mezcla-nota{padding:0 var(--space-3) var(--space-3)}
+/* Angosto: el panel se apila (selector arriba, avances abajo). */
+@container main (max-width:728px){
+.st-estado{flex-direction:column;align-items:stretch;gap:var(--space-4)}
+.st-avances{flex:none}
+.st-hint{max-width:none}
+}
 
 /* — list mode: paste a set, search it, download it — */
 .paste{display:grid;grid-template-columns:44px 1fr;border-radius:var(--radius-md);overflow:hidden;background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-neutral-600)} /* a11y: borde del campo a 3:1 (era divider) */
@@ -906,11 +948,11 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    corte pasó de 830 a 894; sin Metadata la fila pide 722px y entra hasta el corte de 728. */
 /* El ocultado de Metadata es solo de resultados: el crate usa sus 7 columnas desde 729px y si
    también se le escondía quedaba un hueco de 140px entre el título y la nota. */
-@container main (max-width:893px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 192px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta{display:none}}
+@container main (max-width:893px){.results:not(.results-crate){--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(160px,1fr) 192px /* @kind other */}.results-head>.col-meta,.results:not(.results-crate) .trk>.trk-meta,.results:not(.results-crate) .trk-pending>.trk-meta{display:none}}
 /* Station: sus 7 columnas piden 966 px (30+44+160+140+52+236+208 + 6 huecos de 12 + 24),
    así que Metadata se va desde 965; sin Metadata pide 718 (versiones de 150) y entra hasta la
    tarjeta. Si VERSIONES queda angosta, las pastillas bajan a otro renglón (.vchips hace wrap). */
-@container main (max-width:965px){.results.results-station{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(150px,1fr) 208px /* @kind other */}.results-station .results-head>.col-meta,.results-station .trk>.trk-meta{display:none}}
+@container main (max-width:965px){.results.results-station{--trk-cols:30px 44px minmax(160px,1.7fr) 52px minmax(150px,1fr) 208px /* @kind other */}.results-station .results-head>.col-meta,.results-station .trk>.trk-meta,.results-station .trk-pending>.trk-meta{display:none}}
 /* El crate ya no tiene la lista de playlists al lado (es el rail), así que su fila de escritorio
    —que pide 712px: 26+44+170+140+52+112+72 + 6 huecos de 12 + 24 de padding— entra en todo lo que
    no sea la tarjeta de 728px de abajo. Por eso tiene dos layouts y no tres; el bloque de 829
@@ -921,13 +963,13 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
    y con el rail eso pasaba también en escritorio (861-1020px). Metadata y el índice se van. */
 @container main (max-width:728px){
 .results-head{display:none}
-.trk{grid-template-columns:44px minmax(0,1fr) 52px;grid-template-areas:'art id grade' 'art vers vers' 'art acts acts';row-gap:6px;padding:var(--space-2) var(--space-3)}
-.trk>.trk-idx,.trk>.trk-meta{display:none}
-.trk>.thumb{grid-area:art;align-self:start}
-.trk>.trk-id{grid-area:id}
-.trk>.trk-grade{grid-area:grade}
-.trk>.trk-acts{grid-area:acts}
-.trk>.trk-vers{grid-area:vers}
+.trk,.trk-pending{grid-template-columns:44px minmax(0,1fr) 52px;grid-template-areas:'art id grade' 'art vers vers' 'art acts acts';row-gap:6px;padding:var(--space-2) var(--space-3)}
+.trk>.trk-idx,.trk>.trk-meta,.trk-pending>.trk-idx,.trk-pending>.trk-meta{display:none}
+.trk>.thumb,.trk-pending>.thumb{grid-area:art;align-self:start}
+.trk>.trk-id,.trk-pending>.trk-id{grid-area:id}
+.trk>.trk-grade,.trk-pending>.trk-grade{grid-area:grade}
+.trk>.trk-acts,.trk-pending>.trk-acts{grid-area:acts}
+.trk>.trk-vers,.trk-pending>.trk-vers{grid-area:vers}
 /* En tarjeta la línea separadora va arriba (las acciones tienen su renglón), con 40px de área. */
 .trk-acts{opacity:1;justify-content:flex-start;flex-wrap:wrap}
 .results:not(.results-crate) .trk-acts{gap:var(--space-2);padding:6px 0 0;border-left:0;border-top:1px solid var(--color-divider)}

@@ -330,3 +330,26 @@ test('cargarVersiones: sin temas termina enseguida sin pedir nada', async () => 
     assert.equal(fake.pedidos.length, 0)
   })
 })
+
+test('cargarVersiones: onPedido avisa cada pedido cuando sale, en orden, sin cambiar la cola (f46)', async () => {
+  const fake = fetchFalso()
+  const items = Array.from({ length: 5 }, (_, i) => tema(i))
+  await conFetch(fake, async () => {
+    const pedidos = []
+    let fin = 0
+    cargarVersiones(items, 'wav', { onPedido: (i) => pedidos.push([i, fake.pedidos.length]), onFin: () => fin++ })
+    await hasta(() => fake.pedidos.length === 3, 'no arrancaron 3 pedidos')
+    // Los 3 primeros, y cada aviso ANTES de que el pedido salga (la fila dice "Buscando" ya).
+    assert.deepEqual(pedidos, [[0, 0], [1, 1], [2, 2]])
+    // La 2 contesta primero: no se entrega (falta la 0), pero libera un lugar y sale la 3.
+    fake.pedidos[2].contestar(respuesta(items[2]))
+    await hasta(() => pedidos.length === 4, 'no avisó el pedido de la 3')
+    assert.deepEqual(pedidos.at(-1), [3, 3])
+    for (const k of [0, 1, 3]) fake.pedidos[k].contestar(respuesta(items[k]))
+    await hasta(() => fake.pedidos.length === 5, 'no salió el último')
+    fake.pedidos[4].contestar(respuesta(items[4]))
+    await hasta(() => fin === 1, 'no terminó')
+    assert.deepEqual(pedidos.map((p) => p[0]), [0, 1, 2, 3, 4], 'un aviso por tema, en el orden en que salen')
+    assert.equal(fake.maxEnVuelo(), 3, 'el aviso cambió la cola')
+  })
+})
