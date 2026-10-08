@@ -317,6 +317,19 @@ export const calificarTransicion = (id, n, calificacion, motivo) =>
 export const descalificarTransicion = (id, n) =>
   pedirSets(`/api/radio/sets/${encodeURIComponent(id)}/transiciones/${n}`, 'DELETE')
 
+/* ---------- Editor de cues (f48) ----------
+   Las marcas del dueño (hot cues, memory cues, loops) de un track de la biblioteca del motor.
+   Misma forma {ok, status, data} que los sets guardados. Las escrituras devuelven la lista
+   ENTERA de marcas como quedó en la base: la pantalla dibuja eso y su «Guardado» es lo que
+   el servidor confirmó. Tiempos en segundos con tres decimales. */
+const rutaMarcas = (id) => `/api/radio/tracks/${encodeURIComponent(id)}/marcas`
+export const getMarcas = (id) => pedirSets(rutaMarcas(id))
+export const crearMarca = (id, marca) => pedirSets(rutaMarcas(id), 'POST', marca)
+export const cambiarMarca = (id, marcaId, cambios) => pedirSets(`${rutaMarcas(id)}/${encodeURIComponent(marcaId)}`, 'PATCH', cambios)
+export const borrarMarca = (id, marcaId) => pedirSets(`${rutaMarcas(id)}/${encodeURIComponent(marcaId)}`, 'DELETE')
+export const getOnda = (id) => pedirSets(`/api/radio/tracks/${encodeURIComponent(id)}/onda`)
+export const contarMarcas = (ids) => pedirSets(`/api/radio/marcas/conteo?ids=${encodeURIComponent(ids.join(','))}`)
+
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
 
 // El <audio> avisa que falló pero no deja leer el cuerpo de la respuesta, y el 404 de la

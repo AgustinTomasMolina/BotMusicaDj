@@ -7,6 +7,7 @@ import {
 import { fmtDur, normalizeText } from '../utils'
 import { IconRadio, IconPause, IconPlayFill, IconSearch, IconDownload } from './icons'
 import { SetsGuardados, GuardarDialog, CabeceraGuardado, Calificar } from './RadioSets'
+import CueEditor from './CueEditor'
 
 /* ============================================================================
    Pantalla de Radio DJ: elegir semilla → ajustar la radio → el set.
@@ -209,7 +210,7 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
 }
 
 /* ---------- 3. El set ---------- */
-function Paso({ paso, leyenda, sonando, onAudio, errorAudio, calificar }) {
+function Paso({ paso, leyenda, sonando, onAudio, errorAudio, calificar, onEditar }) {
   const t = paso.track
   // Solo un set guardado manda `en_biblioteca`: `false` = el archivo ya no está en la
   // biblioteca del motor. El paso se ve entero (es la foto) y no se puede reproducir.
@@ -243,6 +244,15 @@ function Paso({ paso, leyenda, sonando, onAudio, errorAudio, calificar }) {
         <DatosTrack t={t} leyenda={leyenda} />
         {paso.es_semilla && <span className="rtag-seed">semilla</span>}
         {falta && <span className="rtag-falta">ya no está en la biblioteca</span>}
+        {/* El editor de cues (f48): marcar hot cues, memory cues y loops de este track. Un
+            archivo que ya no está en la biblioteca no se puede marcar (no hay audio ni
+            duración contra la cual validar). */}
+        {!falta && onEditar && (
+          <button type="button" className="btn btn-secondary btn-sm reditar" data-editar={t.id}
+            aria-label={`Editar cues de ${t.titulo}`} onClick={() => onEditar(t)}>
+            Editar cues
+          </button>
+        )}
       </div>
       {/* El 404 de la radio explica si el archivo se movió o si la base se escaneó en otra
           máquina: se muestra el texto del backend, no uno resumido acá. */}
@@ -294,6 +304,9 @@ export default function Radio() {
   const [errorGuardar, setErrorGuardar] = useState(null)  // {texto, conflicto}
   const [errorSets, setErrorSets] = useState('')          // abrir / renombrar / borrar
   const [aviso, setAviso] = useState('')                  // región viva de guardar y calificar
+  // El editor de cues abierto (f48): el id del track con el que se abrió, o null. Mientras
+  // está abierto reemplaza a la grilla; el set (armado o guardado) sigue en memoria.
+  const [editor, setEditor] = useState(null)
   const guardadoTituloRef = useRef(null)
   const setTituloRef = useRef(null)
   const audioRef = useRef(null)
@@ -462,9 +475,16 @@ export default function Radio() {
   const enfocarSet = () => setFoco({ a: 'set', vez: Date.now() })
   useEffect(() => {
     if (!foco) return
-    const el = foco.a === 'guardado' ? guardadoTituloRef.current : setTituloRef.current
+    // Al cerrar el editor, el foco vuelve al botón «Editar cues» con el que se abrió.
+    const el = foco.a === 'editar'
+      ? document.querySelector(`.reditar[data-editar="${CSS.escape(foco.id)}"]`) || setTituloRef.current
+      : foco.a === 'guardado' ? guardadoTituloRef.current : setTituloRef.current
     el?.focus()
   }, [foco])
+
+  // Abrir el editor corta lo que suene en la radio: el editor reproduce con su propio audio.
+  const abrirEditor = (t) => { pararAudio(); setEditor(t.id) }
+  const cerrarEditor = () => { const id = editor; setEditor(null); setFoco({ a: 'editar', id, vez: Date.now() }) }
 
   // Guarda el set armado que está en pantalla. Viajan los ids de los pasos que se ven y la
   // huella que devolvió /api/radio/set: si el backend re-arma otra cosa contesta 409 y NO se
@@ -712,7 +732,11 @@ export default function Radio() {
         </p>
       </div>
 
-      <div className="radiodj-grid">
+      {editor && vista && (
+        <CueEditor pasos={vista.pasos} inicialId={editor} leyenda={vista.leyenda_key || leyenda} onCerrar={cerrarEditor} />
+      )}
+
+      <div className="radiodj-grid" hidden={!!(editor && vista)}>
         <div className="radiodj-col">
           <Semillero tracks={lib.tracks} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
           {cfg
@@ -820,7 +844,7 @@ export default function Radio() {
                   const tr = guardado && i > 0 ? guardado.transiciones.find((x) => x.n === vista.pasos[i - 1].n) : null
                   return (
                     <Paso key={p.n} paso={p} leyenda={leyenda}
-                      sonando={sonando === p.track.id} onAudio={alternarAudio}
+                      sonando={sonando === p.track.id} onAudio={alternarAudio} onEditar={abrirEditor}
                       errorAudio={errorAudio && errorAudio.id === p.track.id ? errorAudio.mensaje : null}
                       calificar={tr && (
                         <Calificar key={`${guardado.id}-${tr.n}`} setId={guardado.id} t={tr}

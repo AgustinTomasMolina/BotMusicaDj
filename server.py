@@ -2120,6 +2120,7 @@ def _usar_store_motor(accion) -> tuple[object, str, str | None]:
     """
     try:
         from motor.cli import db_por_defecto, esta_bloqueada
+        from motor.cue_marks import CueMarkNotFound, InvalidCueMark
         from motor.saved_sets import InvalidSavedSet, SavedSetNotFound
         from motor.store import EsquemaIncompatible, Store
     except ImportError as e:
@@ -2138,7 +2139,8 @@ def _usar_store_motor(accion) -> tuple[object, str, str | None]:
         # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
         with Store(db, espera_bloqueo_s=_RADIO_ESPERA_S) as store:
             return accion(store), _RADIO_OK, None
-    except (InvalidSavedSet, SavedSetNotFound):
+    except (InvalidSavedSet, SavedSetNotFound, InvalidCueMark, CueMarkNotFound):
+        # `InvalidCueMark` es un ValueError: sin esta línea caía abajo como "base ilegible".
         raise
     except EsquemaIncompatible as e:
         return None, _RADIO_ESQUEMA, str(e)
@@ -2530,14 +2532,9 @@ async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str |
                  "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
-@app.get("/api/radio/audio/{track_id}")
-async def radio_audio(track_id: str):
-    """Sirve el archivo de un track de la biblioteca del motor, para reproducir el set.
-    Solo LEE: nunca escribe ni mueve el original (regla del proyecto).
-
-    El id no es una ruta (`_radio_id`) y lo único que se sirve es lo que está en el índice
-    que armó la base, así que no hay forma de pedir un archivo de afuera de la biblioteca.
-    """
+async def _radio_ruta(track_id: str) -> str | None:
+    """La ruta real de un id de la radio, o None. La comparten el audio, la onda y las marcas:
+    el cliente nunca manda una ruta, solo el id opaco de /api/radio/biblioteca."""
     ruta = _radio_audio.get(track_id)
     if ruta is None and (not _radio_audio
                          or time.monotonic() - _radio_recarga_ts >= _RADIO_RECARGA_MIN_S):
@@ -2546,6 +2543,18 @@ async def radio_audio(track_id: str):
         # pedido. Con el índice vacío se recarga igual — ahí no hay nada que proteger.
         await asyncio.to_thread(_cargar_radio)
         ruta = _radio_audio.get(track_id)
+    return ruta
+
+
+@app.get("/api/radio/audio/{track_id}")
+async def radio_audio(track_id: str):
+    """Sirve el archivo de un track de la biblioteca del motor, para reproducir el set.
+    Solo LEE: nunca escribe ni mueve el original (regla del proyecto).
+
+    El id no es una ruta (`_radio_id`) y lo único que se sirve es lo que está en el índice
+    que armó la base, así que no hay forma de pedir un archivo de afuera de la biblioteca.
+    """
+    ruta = await _radio_ruta(track_id)
     if ruta is None:
         return JSONResponse({"error": "track no encontrado"}, status_code=404)
     if not Path(ruta).exists():
@@ -2880,6 +2889,301 @@ async def radio_sets_descalificar(set_id: int, n: int):
     borrada, resumen = res
     return {**_radio_envoltura(_RADIO_OK, None), "n": n, "borrada": borrada,
             "resumen": resumen}
+
+
+# --- Editor de cues: marcas del dueño y forma de onda (f48, `motor/cue_marks.py`) ----------
+#
+#   GET    /api/radio/tracks/{id}/marcas              el track (lo medido) y sus marcas
+#   POST   /api/radio/tracks/{id}/marcas              crear: {"tipo", "inicio", "fin"?, "num"?, "nombre"?}
+#   PATCH  /api/radio/tracks/{id}/marcas/{marca}      mover / renombrar / cambiar de pad
+#   DELETE /api/radio/tracks/{id}/marcas/{marca}      borrar UNA marca
+#   GET    /api/radio/tracks/{id}/onda                los picos del audio real (cacheados)
+#   GET    /api/radio/marcas/conteo?ids=a,b,...       cuántas marcas tiene cada track, y huérfanas
+#
+# `id` es el id opaco de /api/radio/biblioteca (`_radio_id`): la ruta sale de la base, nunca
+# del cliente. Los tiempos van en SEGUNDOS con tres decimales; la base los guarda en ms.
+# Errores: 400 pedido inválido (con el motivo), 404 track o marca que no existe (también un id
+# con forma imposible o fuera de rango), 403/415 pedido de otra página o que no es JSON (la
+# misma regla que `_cuerpo_json_propio`), 409 sin base utilizable. Nunca 500.
+#
+# Las escrituras devuelven SIEMPRE la lista entera de marcas del track tal como quedó en la
+# base: la pantalla dibuja eso, así su «Guardado» es lo que el servidor confirmó.
+
+_RE_TRACK_ID = re.compile(r"[0-9a-f]{16}")
+_RE_MARCA_ID = re.compile(r"[0-9]{1,19}")
+_CAMPOS_MARCA_POST = {"tipo", "inicio", "fin", "num", "nombre"}
+_CAMPOS_MARCA_PATCH = {"inicio", "fin", "num", "nombre"}
+_CONTEO_MAX_IDS = 500
+
+
+def _marca_json(m, duracion: float | None) -> dict:
+    """Una marca como la lee la pantalla. `fuera_del_track`: la marca quedó más allá de la
+    duración que la base tiene HOY (el archivo cambió y se re-escaneó): se muestra y se avisa,
+    no se borra ni se recorta."""
+    dur_ms = None if duracion is None else int(round(duracion * 1000))
+    fuera = dur_ms is not None and (m.start_ms >= dur_ms
+                                    or (m.end_ms is not None and m.end_ms > dur_ms))
+    return {"id": m.id, "tipo": m.kind, "num": m.num, "inicio": m.start_ms / 1000,
+            "fin": None if m.end_ms is None else m.end_ms / 1000, "nombre": m.name,
+            "creada": m.created_at, "modificada": m.updated_at, "fuera_del_track": fuera}
+
+
+def _track_editor(t) -> dict:
+    """El track para el editor: lo MEDIDO por el motor y nada más (§6). Un BPM 0.0 es lo que
+    devuelve el análisis cuando no encontró pulso: no es una medición, va `null` y la pantalla
+    dibuja «?» (y no ofrece moverse de a un beat). `key_acuerdo` viaja crudo ("2/3") porque el
+    editor lo muestra al lado de la key."""
+    d = _radio_track(t)
+    bpm = _num(t.bpm)
+    d["bpm"] = round(bpm, 1) if bpm is not None and bpm > 0 else None
+    d["key_acuerdo"] = t.key_acuerdo
+    return d
+
+
+def _limites_marcas() -> dict:
+    from motor.cue_marks import HOT_CUES, MAX_LOOPS, MAX_MEMORY, NAME_MAX
+
+    return {"hot_cues": HOT_CUES, "memory": MAX_MEMORY, "loops": MAX_LOOPS,
+            "nombre_max": NAME_MAX}
+
+
+async def _marcas_ruta(track_id: str) -> tuple[str | None, JSONResponse | None]:
+    """La ruta del track o el 404. Un id que no tiene la forma de `_radio_id` es 404 sin
+    tocar la base: no puede ser un track y no vale una recarga de la biblioteca."""
+    if not _RE_TRACK_ID.fullmatch(track_id or ""):
+        return None, JSONResponse({"error": "track no encontrado"}, status_code=404)
+    ruta = await _radio_ruta(track_id)
+    if ruta is None:
+        return None, JSONResponse({"error": "track no encontrado en la biblioteca del motor"},
+                                  status_code=404)
+    return ruta, None
+
+
+def _marca_id(texto: str) -> int | None:
+    """El id de marca de la URL, o None si no puede ser uno (→ 404, como los sets)."""
+    return int(texto) if _RE_MARCA_ID.fullmatch(texto or "") else None
+
+
+async def _cuerpo_marca(request: Request, permitidos: set[str]):
+    """El cuerpo JSON de una escritura de marcas, o la respuesta de rechazo. Misma defensa que
+    `_cuerpo_json_propio` (otra página → 403, no JSON → 415), con el motivo en `error` como el
+    resto de la radio, y además: campos que la operación no conoce → 400 (un `tipo` en un
+    PATCH no se ignora en silencio)."""
+    ajeno = _origen_ajeno(request)
+    if ajeno:
+        logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+        return None, JSONResponse({"error": "Pedido rechazado: no viene de MusiFlix."},
+                                  status_code=403)
+    tipo = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if tipo != "application/json":
+        return None, JSONResponse({"error": "El pedido tiene que ser JSON (Content-Type: "
+                                            "application/json)."}, status_code=415)
+    try:
+        cuerpo = await request.json()
+    except Exception:
+        return None, JSONResponse({"error": "El cuerpo no es JSON válido."}, status_code=400)
+    if not isinstance(cuerpo, dict):
+        return None, JSONResponse({"error": "El cuerpo tiene que ser un objeto JSON."},
+                                  status_code=400)
+    sobran = sorted(set(cuerpo) - permitidos)
+    if sobran:
+        return None, JSONResponse(
+            {"error": f"campos desconocidos: {', '.join(map(str, sobran))[:200]}. Se aceptan: "
+                      f"{', '.join(sorted(permitidos))}."}, status_code=400)
+    return cuerpo, None
+
+
+async def _marcas_escribir(accion) -> tuple[object, JSONResponse | None]:
+    """Corre `accion(store)` y traduce los errores del pedido: 400 / 404 / 409."""
+    from motor.cue_marks import CueMarkNotFound, InvalidCueMark
+
+    try:
+        res, estado, motivo = await asyncio.to_thread(_usar_store_motor, accion)
+    except InvalidCueMark as e:
+        return None, JSONResponse({"error": str(e)}, status_code=400)
+    except CueMarkNotFound as e:
+        return None, JSONResponse({"error": str(e)}, status_code=404)
+    if estado != _RADIO_OK:
+        return None, _sets_sin_base(estado, motivo)
+    return res, None
+
+
+def _marcas_de(store, ruta) -> list[dict]:
+    t = store.get(ruta)
+    return [_marca_json(m, None if t is None else t.duration) for m in store.list_cue_marks(ruta)]
+
+
+@app.get("/api/radio/tracks/{track_id}/marcas")
+async def radio_marcas(track_id: str):
+    """El track (BPM, key, acuerdo y duración tal como los midió el motor) y sus marcas."""
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+
+    def leer(store):
+        t = store.get(ruta)
+        return t, _marcas_de(store, ruta)
+
+    res, estado, motivo = await asyncio.to_thread(_usar_store_motor, leer)
+    if estado != _RADIO_OK:
+        return {**_radio_envoltura(estado, motivo), "track": None, "marcas": [],
+                "limites": None}
+    t, marcas = res
+    if t is None:
+        # Estaba en el índice pero ya no en la base (un scan entre medio).
+        return JSONResponse({"error": "track no encontrado en la biblioteca del motor"},
+                            status_code=404)
+    return {**_radio_envoltura(estado, motivo), "track": _track_editor(t), "marcas": marcas,
+            "limites": _limites_marcas()}
+
+
+@app.post("/api/radio/tracks/{track_id}/marcas")
+async def radio_marcas_crear(track_id: str, request: Request):
+    """Crea una marca. `tipo`: cue | memory | loop. `inicio` (y `fin` en un loop) en segundos.
+    `num` (0..7) solo en un hot cue; sin él toma el primer pad libre. 201 con la marca y la
+    lista entera."""
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    cuerpo, rechazo = await _cuerpo_marca(request, _CAMPOS_MARCA_POST)
+    if rechazo is not None:
+        return rechazo
+
+    def crear(store):
+        m = store.add_cue_mark(ruta, cuerpo.get("tipo"), cuerpo.get("inicio"), cuerpo.get("fin"),
+                               num=cuerpo.get("num"), name=cuerpo.get("nombre"))
+        return m, _marcas_de(store, ruta)
+
+    res, error = await _marcas_escribir(crear)
+    if error is not None:
+        return error
+    m, marcas = res
+    return JSONResponse({**_radio_envoltura(_RADIO_OK, None),
+                         "marca": next(x for x in marcas if x["id"] == m.id), "marcas": marcas},
+                        status_code=201)
+
+
+@app.patch("/api/radio/tracks/{track_id}/marcas/{marca_id}")
+async def radio_marcas_cambiar(track_id: str, marca_id: str, request: Request):
+    """Mueve (`inicio`, `fin`), renombra (`nombre`; "" o null = sin nombre) o cambia de pad
+    (`num`) una marca. Lo que no viene no cambia."""
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    mid = _marca_id(marca_id)
+    if mid is None:
+        return JSONResponse({"error": f"no hay una marca con id {marca_id[:40]!r}"},
+                            status_code=404)
+    cuerpo, rechazo = await _cuerpo_marca(request, _CAMPOS_MARCA_PATCH)
+    if rechazo is not None:
+        return rechazo
+    cambios = {{"inicio": "start_s", "fin": "end_s", "nombre": "name", "num": "num"}[k]: v
+               for k, v in cuerpo.items()}
+
+    def cambiar(store):
+        m = store.update_cue_mark(ruta, mid, **cambios)
+        return m, _marcas_de(store, ruta)
+
+    res, error = await _marcas_escribir(cambiar)
+    if error is not None:
+        return error
+    m, marcas = res
+    return {**_radio_envoltura(_RADIO_OK, None),
+            "marca": next(x for x in marcas if x["id"] == m.id), "marcas": marcas}
+
+
+@app.delete("/api/radio/tracks/{track_id}/marcas/{marca_id}")
+async def radio_marcas_borrar(track_id: str, marca_id: str, request: Request):
+    """Borra UNA marca. Sin cuerpo; igual se rechaza un pedido de otra página."""
+    ajeno = _origen_ajeno(request)
+    if ajeno:
+        logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+        return JSONResponse({"error": "Pedido rechazado: no viene de MusiFlix."}, status_code=403)
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    mid = _marca_id(marca_id)
+    if mid is None:
+        return JSONResponse({"error": f"no hay una marca con id {marca_id[:40]!r}"},
+                            status_code=404)
+
+    def borrar(store):
+        store.delete_cue_mark(ruta, mid)
+        return _marcas_de(store, ruta)
+
+    marcas, error = await _marcas_escribir(borrar)
+    if error is not None:
+        return error
+    return {**_radio_envoltura(_RADIO_OK, None), "borrada": mid, "marcas": marcas}
+
+
+@app.get("/api/radio/marcas/conteo")
+async def radio_marcas_conteo(ids: str = ""):
+    """Cuántas marcas tiene cada track de `ids` (separados por coma; los que no tienen van
+    con 0, los que no son de la biblioteca no aparecen) y cuántas quedaron huérfanas en toda
+    la base (de archivos que se movieron o ya no están: ver `motor/cue_marks.py`)."""
+    pedidos = [i.strip() for i in ids.split(",") if i.strip()]
+    if len(pedidos) > _CONTEO_MAX_IDS:
+        return JSONResponse({"error": f"como mucho {_CONTEO_MAX_IDS} ids por pedido; "
+                                      f"llegaron {len(pedidos)}"}, status_code=400)
+    rutas = {}
+    for i in dict.fromkeys(pedidos):
+        if _RE_TRACK_ID.fullmatch(i):
+            ruta = await _radio_ruta(i)
+            if ruta is not None:
+                rutas[i] = ruta
+
+    def contar(store):
+        conteos = store.cue_mark_counts(rutas.values())
+        huerfanas = store.orphan_cue_marks()
+        return ({i: conteos.get(os.path.normcase(os.path.abspath(r)), 0)
+                 for i, r in rutas.items()}, huerfanas)
+
+    res, estado, motivo = await asyncio.to_thread(_usar_store_motor, contar)
+    if estado != _RADIO_OK:
+        return {**_radio_envoltura(estado, motivo), "conteos": {}, "huerfanas": None}
+    conteos, huerfanas = res
+    return {**_radio_envoltura(estado, motivo), "conteos": conteos,
+            "huerfanas": {"tracks": len(huerfanas), "marcas": sum(n for _, n in huerfanas),
+                          # Solo el nombre del archivo, no la ruta: alcanza para reconocerlo.
+                          "archivos": [os.path.basename(k) for k, _ in huerfanas[:20]]}}
+
+
+@app.get("/api/radio/tracks/{track_id}/onda")
+async def radio_onda(track_id: str):
+    """Los picos del audio real del track (`motor.peaks`), para dibujar la forma de onda.
+
+    Se calculan leyendo el archivo por bloques (poca memoria) y se cachean en
+    `<MUSIFLIX_DATA_DIR>/peaks`; si el archivo cambia (tamaño o mtime) se recalculan. El
+    archivo se abre solo para leer. `duracion_audio` es la del audio DECODIFICADO: si no
+    coincide con la de la base, la pantalla lo avisa en vez de estirar la onda."""
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    from motor.peaks import UnreadableAudio, cached_peaks
+
+    try:
+        picos, de_cache = await asyncio.to_thread(cached_peaks, ruta, Path(db.DATA_DIR) / "peaks")
+    except FileNotFoundError:
+        return JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
+                                      f"base lo tiene en {ruta}. Se movió, o la base se escaneó "
+                                      f"en otro sistema."}, status_code=404)
+    except UnreadableAudio as e:
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: {e}"},
+                            status_code=422)
+    except OSError as e:
+        return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
+                            status_code=409)
+    except (RuntimeError, ValueError, ArithmeticError) as e:
+        # Cinturón: un decodificador que falla de una forma que `motor.peaks` no previó. Es un
+        # archivo que no se pudo leer (422), no un 500; queda en el log para mirarlo.
+        logger.warning(f"⚠️ Onda: {type(e).__name__} leyendo {ruta}: {e}")
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda "
+                                      f"({type(e).__name__})"}, status_code=422)
+    return {"bins": int(picos.peaks.size),
+            "picos": [float(v) for v in picos.peaks],          # 5 decimales, de la caché
+            "duracion_audio": round(picos.duration_s, 3), "sample_rate": picos.sample_rate,
+            "canales": picos.channels, "cache": de_cache}
 
 
 @app.get("/api/historial")
