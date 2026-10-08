@@ -1416,8 +1416,9 @@ const CASOS_F50 = [
       await page.keyboard.press('ArrowUp')
       await page.keyboard.up('Shift')
       await page.click(`.cue-tabla tr[data-id="${marca.id}"] .cue-in-n`)
+      // Solo ↑ (un ↑ y un ↓ se anularían y el caso no vería nada).
       await page.keyboard.press('ArrowUp')
-      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('ArrowUp')
       await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
       igual((await leerVolumenes(page)).editor.valor, '55', 'Shift+↑ o ↑ ↓ escribiendo el nombre cambiaron el volumen')
       await page.focus('.cue-wave')
