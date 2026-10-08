@@ -170,7 +170,7 @@ function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
 }
 
 /* ---------- 2. Los controles (valores del backend, nunca escritos acá) ---------- */
-function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
+function Controles({ cfg, setCfg, curvas }) {
   const set1 = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
   return (
     <section className="rpanel" aria-labelledby="r-cfg-h">
@@ -202,10 +202,18 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
           </div>
         ))}
       </div>
-      {/* aria-disabled y NO disabled: un botón que se deshabilita con el foco puesto hace
-          que Chrome mande el foco al <body>, y quien arma el set con teclado vuelve al
-          principio de la página en cada intento (WCAG 2.4.3). Así el botón sigue enfocado
-          mientras arma y el click se ignora acá. */}
+    </section>
+  )
+}
+
+/* «Armar el set» (f50: en la barra del panel de armado, así queda a la vista con el panel
+   plegado). aria-disabled y NO disabled: un botón que se deshabilita con el foco puesto hace
+   que Chrome mande el foco al <body>, y quien arma el set con teclado vuelve al principio de
+   la página en cada intento (WCAG 2.4.3). Así el botón sigue enfocado mientras arma y el click
+   se ignora acá. */
+function BotonArmar({ elegida, onArmar, armando }) {
+  return (
+    <>
       <button type="button" className="btn btn-primary rarmar" aria-disabled={armando || !elegida}
         aria-describedby={elegida ? undefined : 'r-armar-falta'}
         onClick={() => { if (!armando && elegida) onArmar() }}>
@@ -213,8 +221,8 @@ function Controles({ cfg, setCfg, curvas, elegida, onArmar, armando }) {
           ? <><span className="spinner" aria-hidden="true" /> Armando el set…</>
           : <><IconRadio size={16} /> Armar el set</>}
       </button>
-      {!elegida && <p className="rnota" id="r-armar-falta">Elegí primero un track semilla de la lista.</p>}
-    </section>
+      {!elegida && <p className="rnota rarmar-falta" id="r-armar-falta">Elegí primero un track semilla de la lista.</p>}
+    </>
   )
 }
 
@@ -675,7 +683,20 @@ export default function Radio({ onBiblioteca }) {
     }
     setSelN(pasos.length ? pasos[0].n : null)
   }, [claveVista]) // eslint-disable-line react-hooks/exhaustive-deps
-  const elegirFila = (n) => { setSelN(n); setSelClave(claveVista) }
+  // El panel de armado (semilla, controles, sets guardados) se pliega solo cuando aparece un set
+  // (armado o abierto), así la lista del set queda arriba, como en el canvas; sin set se abre.
+  // El botón de la barra lo abre y lo cierra cuando se quiera.
+  const [armaAbierta, setArmaAbierta] = useState(true)
+  useEffect(() => { setArmaAbierta(!vistaActual) }, [claveVista]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // `alEditor`: la fila se eligió con el mouse o con Enter → el foco pasa a la onda del editor
+  // (sus atajos actúan con el foco adentro). Con ↑ ↓ el foco se queda en la lista.
+  const [focoEditor, setFocoEditor] = useState(0)
+  const elegirFila = (n, { alEditor = false } = {}) => {
+    setSelN(n)
+    setSelClave(claveVista)
+    if (alEditor) setFocoEditor((x) => x + 1)
+  }
 
   // Columna «Cues»: UN pedido con todos los ids del set (los que siguen en la biblioteca).
   // Guardar el set que se ve no lo repite: son los mismos tracks.
@@ -799,14 +820,33 @@ export default function Radio({ onBiblioteca }) {
         <p className="rnota rexportar-ok" role="status">{avisoExport.texto}</p>
       )}
 
-      {/* Cómo se arma el set: la semilla, los controles del motor y los sets guardados. */}
-      <div className="radiodj-arma">
-        <Semillero tracks={lib.tracks} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
-        {cfg
-          ? <Controles cfg={cfg} setCfg={setCfg} curvas={curvas} elegida={elegida} onArmar={armar} armando={armando} />
-          : <p className="rnota">No puedo dibujar los controles: el servidor no mandó los valores del motor.</p>}
-        <SetsGuardados estado={sets} abiertoId={guardado ? guardado.id : null} onAbrir={abrirGuardado} />
-      </div>
+      {/* Cómo se arma el set: la semilla, los controles del motor y los sets guardados. Es un
+          panel plegable (se pliega solo cuando hay un set); la barra siempre a la vista dice
+          qué hay elegido y tiene «Armar el set». */}
+      <section className="radiodj-arma" aria-labelledby="r-arma-h">
+        <div className="rarma-bar">
+          <button type="button" className="rarma-toggle" aria-expanded={armaAbierta} aria-controls="r-arma-cuerpo"
+            onClick={() => setArmaAbierta((a) => !a)}>
+            <svg className="rarma-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+            <span id="r-arma-h">Armar el set</span>
+            <span className="sr-only">{armaAbierta ? ' (plegar semilla, controles y sets guardados)' : ' (desplegar semilla, controles y sets guardados)'}</span>
+          </button>
+          <span className="rarma-resumen">
+            <span>Semilla: <b>{elegida ? elegida.titulo : 'sin elegir'}</b></span>
+            {cfg && cfg.curva && <span>curva <b className="mono">{cfg.curva}</b></span>}
+            {cfg && cfg.largo != null && cfg.largo !== '' && <span>largo <b className="mono">{cfg.largo}</b></span>}
+            <span>{sets.sets.length} set{sets.sets.length === 1 ? '' : 's'} guardado{sets.sets.length === 1 ? '' : 's'}</span>
+          </span>
+          <span className="rarma-accion"><BotonArmar elegida={elegida} onArmar={armar} armando={armando} /></span>
+        </div>
+        <div className="radiodj-arma-grid" id="r-arma-cuerpo" hidden={!armaAbierta}>
+          <Semillero tracks={lib.tracks} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
+          {cfg
+            ? <Controles cfg={cfg} setCfg={setCfg} curvas={curvas} />
+            : <p className="rnota">No puedo dibujar los controles: el servidor no mandó los valores del motor.</p>}
+          <SetsGuardados estado={sets} abiertoId={guardado ? guardado.id : null} onAbrir={abrirGuardado} />
+        </div>
+      </section>
 
       <div className="radiodj-md">
         <section className="rpanel rpanel-set" aria-labelledby="r-set-h">
@@ -908,7 +948,7 @@ export default function Radio({ onBiblioteca }) {
         </section>
 
         <Detalle paso={pasoSel} anterior={pasoAnt} leyenda={vista ? (vista.leyenda_key || leyenda) : leyenda}
-          calificar={calificaciones} onConteo={alContar}
+          calificar={calificaciones} onConteo={alContar} focoEditor={focoEditor}
           notaCalificar={set_ && !guardado ? 'Para calificar esta transición, guardá el set.' : null} />
       </div>
 

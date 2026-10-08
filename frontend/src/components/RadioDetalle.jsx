@@ -21,6 +21,9 @@ import { CeldaKey } from './RadioLista'
      se pierden); se cambia de tema eligiendo otra fila.
    ========================================================================== */
 
+// Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor, «no declarado».
+const declarado = (v) => (typeof v === 'string' && v.trim() ? v : 'no declarado')
+
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))
 
 const PESTANAS = [
@@ -49,8 +52,8 @@ function Informacion({ paso, datos }) {
       <div className="rinfo">
         <p className="rnota">Este archivo ya no está en la biblioteca del motor: lo que se ve en la lista es la foto que se guardó con el set.</p>
         <dl className="rinfo-dl">
-          {t.licencia && <><dt>Licencia</dt><dd>{t.licencia}</dd></>}
-          {t.origen && <><dt>Origen</dt><dd>{t.origen}</dd></>}
+          <dt>Licencia</dt><dd>{declarado(t.licencia)}</dd>
+          <dt>Origen</dt><dd>{declarado(t.origen)}</dd>
         </dl>
       </div>
     )
@@ -74,18 +77,32 @@ function Informacion({ paso, datos }) {
         <dt>Key</dt><dd><CeldaKey t={x} leyenda={null} /></dd>
         <dt>Acuerdo de la key</dt><dd className="mono">{x.key_acuerdo ? `${x.key_acuerdo} tramos` : 'sin medir'}</dd>
         <dt>Energía</dt><dd className="mono">{x.energia_pct ?? '—'} <span className="rinfo-nota">percentil en la biblioteca</span></dd>
-        <dt>Licencia</dt><dd>{x.licencia || '—'}</dd>
-        <dt>Origen</dt><dd className="rinfo-ruta">{x.origen || '—'}</dd>
+        <dt>Licencia</dt><dd>{declarado(x.licencia)}</dd>
+        <dt>Origen</dt><dd className="rinfo-ruta">{declarado(x.origen)}</dd>
       </dl>
     </div>
   )
 }
 
-export default function Detalle({ paso, anterior, leyenda, calificar, notaCalificar, onConteo }) {
+export default function Detalle({ paso, anterior, leyenda, calificar, notaCalificar, onConteo, focoEditor = 0 }) {
   const [tab, setTab] = useState('cues')
   // Lo que la API de marcas dijo del tema abierto en el editor (para «Información»).
   const [datos, setDatos] = useState(null)
   const tabsRef = useRef(null)
+  const raizRef = useRef(null)
+
+  // Una fila elegida con el mouse o con Enter: el foco va a la onda del editor (si la pestaña
+  // «Cues y loops» está a la vista), así C, M, I/O y Espacio actúan enseguida. Con el detalle al
+  // costado (pegajoso) puede desplazarse adentro del panel; apilado (teléfono), la página no
+  // salta hasta el editor.
+  useEffect(() => {
+    if (!focoEditor) return
+    const raiz = raizRef.current
+    const onda = raiz && raiz.querySelector('#r-panel-cues:not([hidden]) .cue-wave')
+    if (!onda) return
+    const alCostado = getComputedStyle(raiz).position === 'sticky'
+    onda.focus({ preventScroll: !alCostado })
+  }, [focoEditor])
 
   if (!paso) {
     return (
@@ -112,7 +129,7 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   }
 
   return (
-    <aside className="rdet" id="r-det" aria-labelledby="r-det-h">
+    <aside className="rdet" id="r-det" aria-labelledby="r-det-h" ref={raizRef}>
       <div className="rdet-cab">
         <span className="rdet-art" aria-hidden="true"><Cover track={t} /></span>
         <div className="rdet-id">

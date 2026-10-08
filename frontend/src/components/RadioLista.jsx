@@ -15,8 +15,11 @@ import { IconPause, IconPlayFill } from './icons'
    - La miniondita sale de /api/radio/tracks/{id}/onda (los picos del audio real, cacheados en
      el server) y se pide SOLO cuando la fila entra en pantalla, por la cola compartida con el
      editor (src/ondas.js: de a dos). Mientras no llega, un casillero gris con su forma.
-   - Teclado: una sola parada de Tab por lista (la fila elegida); ↑ ↓ Inicio Fin cambian de
-     fila. El botón de reproducir de la fila elegida es la parada siguiente.
+   - Teclado: una sola parada de Tab por lista (el título de la fila elegida); ↑ ↓ Inicio Fin
+     cambian de fila y el foco se queda en la lista. El botón de reproducir de la fila elegida
+     está ANTES en el orden (se llega con Shift+Tab desde el título).
+   - Elegir una fila con el mouse o con Enter lleva el foco a la onda del editor: así C, M, I/O
+     y Espacio son del editor enseguida (sus atajos actúan con el foco adentro).
    ========================================================================== */
 
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))
@@ -135,7 +138,7 @@ export default function ListaSet({ pasos, selN, onSel, sonando, onAudio, errorAu
           return (
             <div role="row" key={p.n} data-n={p.n}
               className={`rtabla-fila rpaso${sel ? ' is-sel' : ''}${falta ? ' is-falta' : ''}`}
-              onClick={(e) => { if (!e.defaultPrevented) onSel(p.n) }}>
+              onClick={(e) => { if (!e.defaultPrevented) onSel(p.n, { alEditor: true }) }}>
               <span role="cell" className="c-n"><span className="rpaso-n mono">{p.n}</span></span>
               <span role="cell" className="c-play">
                 {falta
@@ -152,7 +155,7 @@ export default function ListaSet({ pasos, selN, onSel, sonando, onAudio, errorAu
               <span role="cell" className="c-track">
                 <button type="button" className="rpaso-sel" data-n={p.n} tabIndex={sel ? 0 : -1}
                   aria-current={sel ? 'true' : undefined} aria-controls="r-det"
-                  onClick={(e) => { e.preventDefault(); ir(p.n) }} onKeyDown={(e) => teclaFila(e, p.n)}>
+                  onClick={(e) => { e.preventDefault(); onSel(p.n, { alEditor: true }) }} onKeyDown={(e) => teclaFila(e, p.n)}>
                   <span className="rpaso-titulo truncate">{t.titulo}</span>
                   <span className="rpaso-artista truncate">{t.artista || '—'}</span>
                 </button>

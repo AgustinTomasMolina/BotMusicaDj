@@ -1320,11 +1320,25 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rexportar-box{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:100%}
 .rexportar-nota{font-size:12px;color:var(--color-neutral-400);text-align:right}
 
-/* — cómo se arma: semilla, controles y sets guardados, en una franja — */
-.radiodj-arma{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
+/* — cómo se arma: semilla, controles y sets guardados, en un panel plegable con una barra
+   de una línea (qué hay elegido + «Armar el set») que queda siempre a la vista — */
+.radiodj-arma{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-surface)}
+.rarma-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-4);min-width:0}
+.rarma-toggle{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 10px 0 6px;border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:600 15px var(--font-body);cursor:pointer}
+.rarma-toggle:hover{background:var(--color-well)}
+.rarma-chev{transition:transform .15s var(--ease)}
+.rarma-toggle[aria-expanded=true] .rarma-chev{transform:rotate(90deg)}
+.rarma-resumen{display:flex;flex-wrap:wrap;gap:2px var(--space-3);flex:1 1 240px;min-width:0;font-size:12.5px;color:var(--color-neutral-300)}
+.rarma-resumen b{font-weight:600;color:var(--color-text)}
+.rarma-accion{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);margin-left:auto}
+.rarma-accion .rarmar{margin-top:0}
+.rarmar-falta{max-width:260px}
+.radiodj-arma-grid{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
+.radiodj-arma-grid[hidden]{display:none}
+.radiodj-arma-grid>.rpanel{background:var(--color-well)}
 @container main (min-width:900px){
-  .radiodj-arma{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr)}
-  .radiodj-arma .rlista,.radiodj-arma .rsets{max-height:min(36vh,320px)}
+  .radiodj-arma-grid{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr)}
+  .radiodj-arma-grid .rlista,.radiodj-arma-grid .rsets{max-height:min(36vh,320px)}
 }
 
 /* — maestro / detalle — */

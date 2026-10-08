@@ -153,7 +153,18 @@ async function abrirRadio(page, ctx, { navegar = true } = {}) {
   await page.waitForSelector('.rsem', { timeout: ESPERA_MS })
 }
 
+// f50: la semilla, los controles y los sets guardados están en un panel que se pliega solo
+// cuando hay un set. Para tocarlos, se despliega con su botón (como lo haría el DJ).
+async function desplegarArmado(page) {
+  const abierto = await page.$eval('.rarma-toggle', (b) => b.getAttribute('aria-expanded'))
+  if (abierto === 'true') return
+  await page.click('.rarma-toggle')
+  await hasta(() => page.evaluate(() => window.__visible(document.querySelector('#r-arma-cuerpo .rsem, #r-arma-cuerpo .rpanel'))),
+    (v) => v, 'el panel de armado no se desplegó')
+}
+
 async function elegirSemilla(page, titulo) {
+  await desplegarArmado(page)
   const hay = await page.evaluate((t) => {
     const b = [...document.querySelectorAll('.rsem')].find((x) => x.querySelector('.rsem-titulo')?.textContent === t)
     b?.click()
@@ -308,6 +319,7 @@ async function guardarUnoPorApi(ctx, nombre) {
 
 // Abre desde la lista de «Sets guardados» el set `id` y espera a ver su cabecera.
 async function abrirGuardado(page, id) {
+  await desplegarArmado(page)
   const respuesta = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/radio/sets/${id}` && r.request().method() === 'GET', { timeout: ESPERA_MS })
   const hay = await hasta(() => page.evaluate((i) => {
     const b = [...document.querySelectorAll('.rsg')].find((x) => x.querySelector('.rsg-id')?.textContent === `#${i}`)
@@ -659,6 +671,7 @@ const CASOS_SETS = [
     // lo que hoy dicen los controles.
     const largoHoy = String(Math.max(1, Number(visto.config.largo) - 17))
     afirmar(largoHoy !== String(visto.config.largo), 'el largo de los controles no difiere del del set: el caso no probaría nada')
+    await desplegarArmado(page)
     await page.click('#r-cfg-largo', { clickCount: 3 })
     await page.type('#r-cfg-largo', largoHoy)
     await hasta(() => page.$eval('#r-cfg-largo', (i) => i.value), (v) => v === largoHoy, 'no pude cambiar el largo de los controles')
@@ -1492,6 +1505,139 @@ const CASOS_F50 = [
     const fin = await hasta(filas, (v) => v.every((f) => f.fase === 'ok'), 'las minionditas no se dibujaron al llegar la onda')
     const barras = await page.$$eval('.rpaso .rmini svg', (ss) => ss.map((s) => s.querySelectorAll('rect').length))
     afirmar(barras.length === fin.length && barras.every((n) => n > 0), `alguna miniondita quedó sin barras: ${json(barras)}`)
+  }],
+
+  ['radio (f50): elegir una fila con el mouse o Enter lleva el foco a la onda y C pone un cue; con ↑ ↓ el foco se queda en la lista', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
+    const [, p2, p3] = set.pasos
+    await limpiarMarcas(ctx, p2.track.id)
+    try {
+      await abrirRadio(page, ctx)
+      await elegirSemilla(page, 'Uno')
+      await armarSet(page)
+      const ayuda = await page.$eval('.cue-atajos', (p) => p.textContent)
+      afirmar(/atajos actúan con el foco en el editor/.test(ayuda), `la ayuda no dice dónde actúan los atajos: ${json(ayuda)}`)
+      const foco = () => page.evaluate(() => ({
+        onda: document.activeElement?.classList.contains('cue-wave') ?? false,
+        fila: document.activeElement?.classList.contains('rpaso-sel') ? document.activeElement.dataset.n : null,
+        titulo: document.querySelector('#r-det-h')?.textContent ?? null,
+        estado: document.querySelector('#r-panel-cues .cue-estado')?.textContent ?? '',
+      }))
+      // Con el mouse: el foco termina en la onda del editor del track elegido.
+      await page.click(`.rpaso-sel[data-n="${p2.n}"]`)
+      await hasta(foco, (v) => v.onda && v.titulo === p2.track.titulo && /guardadas en la biblioteca/.test(v.estado),
+        'elegí una fila con el mouse y el foco no pasó a la onda de su editor')
+      // …y C pone el cue en ESE track (sin tocar nada más), y Espacio reproduce (no re-elige).
+      const cue = await teclaQueGuarda(page, 'c')
+      igual([cue.status, cue.data.marca.tipo], [201, 'cue'], 'C después de elegir con el mouse')
+      igual((await marcasApi(ctx, p2.track.id)).length, 1, 'el cue no quedó en el track elegido')
+      await page.keyboard.press('Space')
+      await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${p2.track.id}`]), 'Espacio después de elegir con el mouse no reprodujo el track')
+      await page.keyboard.press('Space')
+      // Con Enter sobre una fila: lo mismo.
+      await page.focus(`.rpaso-sel[data-n="${p3.n}"]`)
+      await page.keyboard.press('Enter')
+      await hasta(foco, (v) => v.onda && v.titulo === p3.track.titulo, 'Enter sobre una fila no llevó el foco a la onda de su editor')
+      // Con ↑ ↓ el foco se queda en la lista (para seguir recorriéndola).
+      await page.focus(`.rpaso-sel[data-n="${p3.n}"]`)
+      await page.keyboard.press('ArrowUp')
+      let v = await hasta(foco, (x) => x.fila === String(p2.n) && x.titulo === p2.track.titulo, 'Flecha arriba no pasó a la fila anterior')
+      afirmar(!v.onda, 'con Flecha arriba el foco se fue al editor')
+      await page.keyboard.press('ArrowDown')
+      v = await hasta(foco, (x) => x.fila === String(p3.n), 'Flecha abajo no volvió a la fila siguiente')
+      afirmar(!v.onda, 'con Flecha abajo el foco se fue al editor')
+    } finally {
+      await limpiarMarcas(ctx, p2.track.id)
+    }
+  }],
+
+  ['radio (f50): a 1440×900 la lista del set se ve entera sin scroll; el armado se pliega solo y se despliega con teclado', async (page, ctx) => {
+    await page.setViewport({ width: 1440, height: 900 })
+    await abrirRadio(page, ctx)
+    igual(await page.$eval('.rarma-toggle', (b) => b.getAttribute('aria-expanded')), 'true', 'sin set, el panel de armado tiene que estar abierto')
+    await elegirSemilla(page, 'Uno')
+    const set = await armarSet(page)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    const medir = () => page.evaluate(() => {
+      const t = document.querySelector('.rtabla').getBoundingClientRect()
+      return {
+        expandido: document.querySelector('.rarma-toggle').getAttribute('aria-expanded'),
+        cuerpo: window.__visible(document.getElementById('r-arma-cuerpo')),
+        armar: window.__visible(document.querySelector('.rarmar')),
+        scrollY: window.scrollY, alto: innerHeight, tablaArriba: Math.round(t.top), tablaAbajo: Math.round(t.bottom),
+        filas: document.querySelectorAll('.rpaso').length,
+      }
+    })
+    const m = await hasta(medir, (x) => x.expandido === 'false', 'con un set armado el panel de armado no se plegó')
+    igual([m.cuerpo, m.armar, m.filas], [false, true, set.pasos.length], 'plegado: sin semilla/controles a la vista, con «Armar el set» y todas las filas')
+    afirmar(m.scrollY === 0 && m.tablaAbajo <= m.alto, `a 1440×900 la lista del set no entra sin scroll: ${json(m)}`)
+    // Se despliega y se pliega con el teclado.
+    await page.focus('.rarma-toggle')
+    await page.keyboard.press('Enter')
+    await hasta(medir, (x) => x.expandido === 'true' && x.cuerpo, 'Enter en «Armar el set» no desplegó el panel')
+    await page.keyboard.press('Space')
+    await hasta(medir, (x) => x.expandido === 'false' && !x.cuerpo, 'Espacio no volvió a plegar el panel')
+  }],
+
+  ['volumen (f50): el preview del mouse sigue el volumen de la app (al 10 % suena al 10 %, no al 55 %)', async (page, ctx) => {
+    const lib = await api(ctx, '/api/biblioteca')
+    const uno = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
+    const grupos = [{ opciones: [{ titulo: 'Tema Preview', artista: 'Artista P', duracion: 200, fuente: 'deezer', thumbnail: null,
+      url: 'https://www.deezer.com/track/1', preview_url: `${ctx.url}/api/audio/${uno.id}` }] }]
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const u = new URL(req.url())
+      const json_ = (body) => req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (u.pathname === '/api/buscar') return json_({ exito: true, grupos })
+      if (u.pathname === '/api/calidad') return json_({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return json_({ bpm: null, genero: null })
+      if (u.origin !== new URL(ctx.url).origin) return req.abort()
+      return req.continue()
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    try {
+      for (const nivel of ['0.1', '0.3']) {
+        await page.evaluate((n) => localStorage.setItem('musiflix.volumen', n), nivel)
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await page.waitForSelector('input[aria-label="Buscar una canción, artista o género"]', { timeout: ESPERA_MS })
+        await page.type('input[aria-label="Buscar una canción, artista o género"]', 'tema preview')
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.trk', { timeout: ESPERA_MS })
+        await page.hover('.trk')
+        const vol = await hasta(() => page.evaluate(() => {
+          const a = document.querySelector('.thumb-prev audio')
+          return a ? Math.round(a.volume * 100) / 100 : null
+        }), (x) => x !== null, 'pasar el mouse no arrancó el preview')
+        igual(vol, Number(nivel), `con la app al ${Number(nivel) * 100} % el preview no suena a ese volumen`)
+        await page.mouse.move(0, 0)
+      }
+    } finally {
+      await page.evaluate(() => localStorage.removeItem('musiflix.volumen')).catch(() => {})
+    }
+  }],
+
+  ['radio (f50): «Información» dice «no declarado» cuando la licencia o el origen no vienen', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await interceptar(page, async (req) => {
+      if (req.method() !== 'GET' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
+      // La respuesta real, con licencia y origen vacíos (lo que manda la API cuando no hay).
+      const r = await apiPedir(ctx, rutaMarcas(uno.id))
+      const cuerpo = { ...r.data, track: { ...r.data.track, licencia: null, origen: null } }
+      await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(cuerpo) })
+      return true
+    })
+    await abrirEditor(page, ctx)
+    await page.click('#r-tab-info')
+    const info = await hasta(() => page.evaluate(() => {
+      const dl = document.querySelector('#r-panel-info .rinfo-dl')
+      if (!dl) return null
+      const o = {}
+      dl.querySelectorAll('dt').forEach((dt) => { o[dt.textContent] = dt.nextElementSibling?.textContent ?? null })
+      return o
+    }), (v) => v !== null, '«Información» no se dibujó')
+    igual([info.Licencia, info.Origen], ['no declarado', 'no declarado'], 'sin licencia ni origen tiene que decir «no declarado»')
   }],
 
   ['400 px (f50): el detalle va debajo de la lista; pestañas, editor e «Información» sin desborde', async (page, ctx) => {

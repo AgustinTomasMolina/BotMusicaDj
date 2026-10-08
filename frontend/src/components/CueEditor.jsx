@@ -531,6 +531,7 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
           {/* El volumen de TODA la app (el mismo de la barra de abajo), al lado de reproducir. */}
           <Volumen className="cue-vol" ayudaId="cue-vol-ayuda" />
           <p className="rnota cue-atajos">
+            Los atajos actúan con el foco en el editor (elegir un track de la lista con el mouse o con Enter lo trae acá).{' '}
             <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al hot cue · Espacio reproduce o pausa (con el foco en un botón, Espacio y Enter activan ese botón).
             {' '}<span id="cue-vol-ayuda"><kbd className="cue-kbd">↑</kbd> <kbd className="cue-kbd">↓</kbd> volumen: uno solo para toda la app, se acuerda la próxima vez.</span>
             {' '}{bpm != null
