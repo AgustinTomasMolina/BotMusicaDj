@@ -11,6 +11,8 @@ import { createContext, useContext } from 'react'
 //   player.current   el track que está cargado (o null)
 //   player.status    'idle' | 'loading' | 'playing' | 'paused' | 'ended' | 'error' | 'embed' | 'none'
 //   player.isPlaying(key)  ¿ese tema es el que suena ahora?
+//   player.volume (0..1) y player.muted   el volumen de TODA la app (f50): un <audio> propio
+//                 de una pantalla (radio, editor de cues) lo aplica con useVolumenEn().
 //
 // Un solo audio en toda la app: al arrancar, la barra pausa cualquier otro <audio>/<video>
 // de la página y avisa con el evento 'musiflix:player-play' (la app corta el preview del

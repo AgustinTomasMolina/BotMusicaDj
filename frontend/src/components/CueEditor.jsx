@@ -1,14 +1,22 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { getMarcas, crearMarca, cambiarMarca, borrarMarca, getOnda, contarMarcas, radioAudioUrl, radioAudioMotivo } from '../api'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { getMarcas, crearMarca, cambiarMarca, borrarMarca, radioAudioUrl, radioAudioMotivo } from '../api'
 import {
   fmtTiempo, parseTiempo, pasoBeat, pctDe, tiempoDeX, padLibre, hotCue, errorLoop, beatsDeLoop,
   atajo, marcasRegla, fmtRegla, acotar, tramoOnda, avisoDuracion,
 } from '../cues'
+import { cargadorOndas } from '../ondas'
+import { usePlayer } from '../player/context'
+import { useVolumenEn } from '../hooks'
+import { pasoVolumen, teclaVolumen } from '../volumen'
 import { IconPause, IconPlayFill } from './icons'
+import Volumen from './Volumen'
 
 /* ============================================================================
-   Editor de cues y loops (f48, opción B del canvas): a la izquierda los temas del set, al
-   centro la forma de onda con el cursor y las marcas, abajo la tabla de marcas.
+   Editor de cues y loops (f48; desde f50 vive en la pestaña «Cues y loops» del detalle de la
+   pantalla de radio): la forma de onda con el cursor y las marcas, los controles y la tabla de
+   marcas del tema elegido en la lista del set. La lista del set (con su columna «Cues») hace
+   de lista de temas: este componente edita el tema `trackId` y avisa con `onConteo` cuántas
+   marcas le quedaron, y con `onDatos` lo que la API dice del tema (lo usa «Información»).
 
    REGLAS
    - Nada se inventa (§6): la onda son los picos del audio REAL (/onda), el BPM y la key son
@@ -22,6 +30,10 @@ import { IconPause, IconPlayFill } from './icons'
      (PlayerProvider) escucha ese `play` y cede; si arranca la barra, ella pausa a este.
    - El ±1 beat suma o resta 60/BPM al cursor. NO es una grilla (no tenemos el offset del
      primer beat), por eso no hay "ajustar al beat".
+   - Los atajos actúan solo con el foco ADENTRO del editor (f50): ahora comparte la pantalla
+     con la lista y las pestañas, y una «c» tecleada en otro lado no puede sembrar un cue.
+   - Volumen (f50): el de toda la app (PlayerProvider). ↑ ↓ lo mueven con el foco en el editor
+     o en la onda, salvo escribiendo o con un modificador.
    ========================================================================== */
 
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))
@@ -90,13 +102,10 @@ function CampoNombre({ valor, etiqueta, max, onCommit }) {
 }
 
 /* ---------- la pantalla ---------- */
-export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
-  const tracks = useMemo(() => pasos.map((p) => p.track), [pasos])
-  const [sel, setSel] = useState(inicialId)
+export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
+  const sel = trackId
   const [datos, setDatos] = useState(null)        // {track, marcas, limites} | {error}
   const [onda, setOnda] = useState(null)          // {picos, duracion_audio} | {error}
-  const [conteos, setConteos] = useState({})
-  const [huerfanas, setHuerfanas] = useState(null)
   const [sonando, setSonando] = useState(false)
   const [cursor, setCursor] = useState(0)         // para aria y la tabla; el dibujo va por refs
   const [loopIn, setLoopIn] = useState(null)
@@ -107,7 +116,6 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   const [borrando, setBorrando] = useState(null)  // id de la marca que pide confirmación
 
   const rootRef = useRef(null)
-  const tituloRef = useRef(null)
   const audioRef = useRef(null)
   const ondaRef = useRef(null)
   const canvasBase = useRef(null)
@@ -119,6 +127,13 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   selRef.current = sel
   const vuelo = useRef({ n: 0, seq: 0, aplicado: 0 })
   const arrastreRef = useRef(null)
+  // Los avisos al padre leen la función de ESTE render (pueden cambiar entre renders).
+  const avisos = useRef({})
+  avisos.current = { onConteo, onDatos }
+
+  // Un solo volumen para toda la app: el de la barra (PlayerProvider), también en este <audio>.
+  const player = usePlayer()
+  useVolumenEn(audioRef, player.volume, player.muted)
 
   const track = datos && datos.track && datos.track.id === sel ? datos.track : null
   const marcas = track ? datos.marcas : []
@@ -126,17 +141,12 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   const bpm = track ? track.bpm : null
   const max = datos && datos.limites ? datos.limites.nombre_max : null
 
-  // El foco va al título al abrir (WCAG 2.4.3): quien usa teclado sabe dónde está.
-  useEffect(() => { tituloRef.current?.focus({ preventScroll: false }) }, [])
-
-  // Cuántas marcas tiene cada tema del set, y si hay marcas huérfanas en la base.
+  // Lo que la API dice del tema (lo muestra «Información», sin pedirlo otra vez).
   useEffect(() => {
-    let vivo = true
-    contarMarcas(tracks.filter((t) => t.en_biblioteca !== false).map((t) => t.id))
-      .then((r) => { if (vivo && r.ok) { setConteos(r.data.conteos || {}); setHuerfanas(r.data.huerfanas || null) } })
-      .catch(() => { /* sin conteo: la lista dice «—» */ })
-    return () => { vivo = false }
-  }, [tracks])
+    if (!datos) return
+    const id = datos.track ? datos.track.id : datos.id
+    if (id === sel) avisos.current.onDatos?.(sel, datos)
+  }, [datos, sel])
 
   // Pinta el cursor sin pasar por React (60 veces por segundo mientras suena).
   const pintarCursor = useCallback((t) => {
@@ -165,16 +175,20 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
       .then((r) => {
         if (!vivo) return
         if (r.ok && r.data && r.data.track) setDatos(r.data)
-        else setDatos({ error: r.ok ? (r.data?.motivo || 'El servidor no devolvió el track.') : motivo(r) })
+        else setDatos({ id: sel, error: r.ok ? (r.data?.motivo || 'El servidor no devolvió el track.') : motivo(r) })
       })
-      .catch(() => vivo && setDatos({ error: CONEXION }))
-    getOnda(sel)
+      .catch(() => vivo && setDatos({ id: sel, error: CONEXION }))
+    // La onda por la cola compartida con las minionditas (src/ondas.js): pasa adelante de las
+    // filas, pero nunca hay más de dos decodificaciones a la vez, y si la fila ya la tenía no
+    // se vuelve a pedir.
+    const pedido = cargadorOndas.cargar(sel, { urgente: true })
+    pedido.promesa
       .then((r) => { if (vivo) setOnda(r.ok && Array.isArray(r.data?.picos) ? r.data : { error: motivo(r) }) })
       .catch(() => vivo && setOnda({ error: CONEXION }))
-    return () => { vivo = false }
+    return () => { vivo = false; pedido.cancelar() }
   }, [sel])
 
-  // Al desmontar (volver al set) el audio del editor no puede quedar sonando.
+  // Al desmontar el audio del editor no puede quedar sonando.
   useEffect(() => () => { audioRef.current?.pause() }, [])
 
   useLayoutEffect(() => { pintarCursor(cursorRef.current) })
@@ -295,7 +309,7 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
     try { r = await hacer() } catch { r = null }
     v.n -= 1
     if (r && r.ok && Array.isArray(r.data?.marcas)) {
-      setConteos((c) => ({ ...c, [trackId]: r.data.marcas.length }))
+      avisos.current.onConteo?.(trackId, r.data.marcas.length)
       if (trackId === selRef.current && seq >= v.aplicado) {
         v.aplicado = seq
         setDatos((d) => (d && d.track && d.track.id === trackId ? { ...d, marcas: r.data.marcas } : d))
@@ -374,6 +388,7 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   acciones.current = {
     play: alternar, cue: ponerCue, memory: ponerMemory, loopIn: ponerLoopIn, loopOut: ponerLoopOut,
     beat: (a) => moverBeat(a.dir), ir: (a) => irAPad(a.num),
+    volumen: (dir) => player.setVolume(pasoVolumen(player.muted ? 0 : player.volume, dir)),
   }
 
   useEffect(() => {
@@ -381,8 +396,12 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
       if (e.defaultPrevented) return
       const root = rootRef.current
       if (!root) return
-      // Solo con el foco en el editor (o en ningún lado): la barra de abajo tiene sus botones.
-      if (e.target !== document.body && !root.contains(e.target)) return
+      // Solo con el foco ADENTRO del editor: comparte la pantalla con la lista del set, las
+      // pestañas y la barra de abajo, que tienen sus propias teclas.
+      if (!root.contains(e.target)) return
+      // ↑ ↓: el volumen de la app (las flechas repetidas siguen subiendo o bajando).
+      const v = teclaVolumen(e)
+      if (v !== null) { e.preventDefault(); acciones.current.volumen(v); return }
       const a = atajo(e)
       if (!a) return
       // Mantener apretada una tecla no siembra marcas en fila; las flechas sí repiten.
@@ -447,79 +466,12 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   const hora = estado.hora ? estado.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
 
   return (
-    <section className="cue-ed" ref={rootRef} aria-labelledby="cue-ed-h">
+    <section className="cue-ed" ref={rootRef} aria-label={`Editor de cues y loops de ${titulo || 'este tema'}`}>
       <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alParar}
         onError={() => { setSonando(false) }}
         onLoadedMetadata={(e) => { if (cursorRef.current > 0) { try { e.currentTarget.currentTime = cursorRef.current } catch { /* nada */ } } }} />
 
-      <div className="cue-ed-top">
-        <button type="button" className="btn btn-secondary btn-sm cue-volver" onClick={onCerrar}>← Volver al set</button>
-        <p className="rnota cue-export-nota">Las marcas quedan guardadas en la biblioteca del motor. Llevarlas a Rekordbox (XML con cues) llega en otra etapa.</p>
-      </div>
-
-      <div className="cue-ed-grid">
-        {/* ---- izquierda: los temas del set ---- */}
-        <nav className="cue-temas" aria-label="Temas del set">
-          <span className="cue-th">Set · {tracks.length} tema{tracks.length === 1 ? '' : 's'}</span>
-          <ol className="cue-temas-lista">
-            {tracks.map((t, i) => {
-              const falta = t.en_biblioteca === false
-              const n = conteos[t.id]
-              const elegido = t.id === sel
-              return (
-                <li key={`${t.id}-${i}`}>
-                  <button type="button" className={`cue-tema${elegido ? ' is-sel' : ''}`}
-                    aria-current={elegido ? 'true' : undefined} aria-disabled={falta || undefined}
-                    onClick={() => { if (!falta && !elegido) setSel(t.id) }}>
-                    <span className="cue-tema-n mono">{String(i + 1).padStart(2, '0')}</span>
-                    <span className="cue-tema-id">
-                      <span className="cue-tema-titulo truncate">{t.titulo}</span>
-                      <span className="cue-tema-meta">
-                        {falta ? 'ya no está en la biblioteca'
-                          : n === undefined ? '—'
-                            : n === 0 ? 'sin marcas' : `${n} marca${n === 1 ? '' : 's'}`}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
-          </ol>
-          <p className="rnota">Las marcas van atadas a la ruta del archivo: si lo movés o lo renombrás y re-escaneás, quedan guardadas pero sin tema.</p>
-          {huerfanas && huerfanas.marcas > 0 && (
-            <p className="rnota cue-huerfanas" role="note">
-              Hay {huerfanas.marcas} marca{huerfanas.marcas === 1 ? '' : 's'} de {huerfanas.tracks} archivo{huerfanas.tracks === 1 ? '' : 's'} que ya no está{huerfanas.tracks === 1 ? '' : 'n'} en la biblioteca ({huerfanas.archivos.join(', ')}). No se borraron.
-            </p>
-          )}
-        </nav>
-
-        {/* ---- centro: el tema elegido ---- */}
         <div className="cue-main">
-          <div className="cue-cab">
-            <div className="cue-cab-id">
-              <span className="cue-th">Editando</span>
-              <h2 id="cue-ed-h" ref={tituloRef} tabIndex={-1} className="cue-titulo">
-                {track ? track.titulo : (tracks.find((t) => t.id === sel)?.titulo || 'Cargando…')}
-                {track && track.artista && <span className="cue-artista"> · {track.artista}</span>}
-              </h2>
-            </div>
-            {track && (
-              <div className="cue-chips">
-                <span className={`mb cue-chip${bpm == null ? ' is-dudosa' : ''}`} title={bpm == null ? 'El motor no midió un BPM para este tema' : 'BPM medido por el motor'}>
-                  <span className="mb-label">BPM</span><b>{fmtBpm(bpm) ?? '?'}</b>
-                </span>
-                <span className={`mb cue-chip mb-key${track.key_dudosa ? ' is-dudosa' : ''}`} title="Key medida por el motor (Camelot y clásica) y el acuerdo entre tramos">
-                  <span className="mb-label">Key</span>
-                  <b>{track.camelot || '?'}</b>
-                  {track.tonalidad && <span className="rkey-clasica">{track.tonalidad}</span>}
-                  {track.key_dudosa && <span className="rduda" role="img" aria-label={leyenda || 'la detección de la key no es confiable'} title={leyenda || ''}>?</span>}
-                  <span className="cue-acuerdo">{track.key_acuerdo ? `acuerdo ${track.key_acuerdo}` : 'acuerdo sin medir'}</span>
-                </span>
-                <span className="mb cue-chip" title="Duración según la biblioteca del motor"><span className="mb-label">Dur</span><b>{fmtTiempo(dur, 1)}</b></span>
-              </div>
-            )}
-          </div>
-
           {datos && datos.error && (
             <div className="alert alert-warn" role="alert"><div><div className="alert-title">No pude abrir este tema</div><p>{datos.error}</p></div></div>
           )}
@@ -576,9 +528,14 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
             <button type="button" className="btn btn-secondary cue-b-out" onClick={ponerLoopOut} aria-keyshortcuts="O" aria-disabled={!track || undefined}>Loop out <kbd className="cue-kbd">O</kbd></button>
             <span className="cue-reloj mono" ref={relojRef} aria-hidden="true">0:00.0</span>
           </div>
+          {/* El volumen de TODA la app (el mismo de la barra de abajo), al lado de reproducir. */}
+          <Volumen className="cue-vol" ayudaId="cue-vol-ayuda" />
           <p className="rnota cue-atajos">
             <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al hot cue · Espacio reproduce o pausa (con el foco en un botón, Espacio y Enter activan ese botón).
-            {' '}El beat sale del BPM medido{bpm != null ? ` (${fmtBpm(bpm)})` : ''}; Rekordbox puede tener otra grilla, así que acá no se ajusta nada a la grilla.
+            {' '}<span id="cue-vol-ayuda"><kbd className="cue-kbd">↑</kbd> <kbd className="cue-kbd">↓</kbd> volumen: uno solo para toda la app, se acuerda la próxima vez.</span>
+            {' '}{bpm != null
+              ? `El beat sale del BPM medido (${fmtBpm(bpm)}); Rekordbox puede tener otra grilla, así que acá no se ajusta nada a la grilla.`
+              : track ? 'Este tema no tiene BPM medido (el análisis no encontró pulso): sin BPM no hay ±1 beat.' : ''}
           </p>
           {loopIn !== null && <p className="rnota cue-pendiente">Entrada del loop: <span className="mono">{fmtTiempo(loopIn)}</span> (falta la salida).</p>}
 
@@ -657,8 +614,8 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
               </tbody>
             </table>
           </div>
+          <p className="rnota">Las marcas quedan guardadas en la biblioteca del motor, atadas a la ruta del archivo: si lo movés o lo renombrás y re-escaneás, quedan guardadas pero sin tema. Llevarlas a Rekordbox (XML con cues) llega en otra etapa.</p>
         </div>
-      </div>
     </section>
   )
 }

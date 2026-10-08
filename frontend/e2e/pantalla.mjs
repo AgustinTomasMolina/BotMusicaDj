@@ -85,6 +85,35 @@ function instrumentar() {
     })
     return { BPM: o.BPM ?? null, key: o.key ?? null, 'Energía': o['Energía'] ?? null, Dur: o.Dur ?? null }
   }
+  // f50: una fila de la lista del set (maestro/detalle). BPM, key y duración van en celdas; la
+  // energía no está en la fila (va en el detalle: ver `__detalle`).
+  window.__datosFila = (row) => {
+    const k = row.querySelector('.c-key')
+    const duda = k?.querySelector('.rduda')
+    const hayKey = !!k?.querySelector('.rkey-clasica')
+    return {
+      BPM: row.querySelector('.c-bpm b')?.textContent ?? null,
+      key: {
+        camelot: k?.querySelector('b')?.textContent ?? null,
+        clasica: hayKey ? k.querySelector('.rkey-clasica').textContent : null,
+        duda: duda && duda.textContent === '?' && visible(duda) ? duda.getAttribute('aria-label') : null,
+      },
+      Dur: row.querySelector('.c-dur')?.textContent ?? null,
+    }
+  }
+  // f50: lo que muestra el detalle del track elegido.
+  window.__detalle = () => {
+    const d = document.querySelector('.rdet')
+    if (!d) return null
+    return {
+      titulo: d.querySelector('#r-det-h')?.textContent ?? null,
+      artista: d.querySelector('.rdet-artista')?.textContent ?? null,
+      chips: [...d.querySelectorAll('.rdet-chips > .mb b, .rdet-chips .mb-key > b')].map((b) => b.textContent),
+      motivo: d.querySelector('.rdet-motivo')?.textContent ?? null,
+      energia: d.querySelector('.rdet-energia .mono')?.textContent ?? null,
+      why: d.querySelector('.rdet-why')?.textContent ?? null,
+    }
+  }
 }
 
 const erroresDe = new WeakMap()
@@ -209,6 +238,25 @@ function esperadoDatos(t, leyenda) {
   }
 }
 
+// f50: lo mismo para una fila de la lista del set (sin la energía, que va en el detalle).
+function esperadoFila(t, leyenda) {
+  const { BPM, key, Dur } = esperadoDatos(t, leyenda)
+  return { BPM, key, Dur }
+}
+
+// f50: elige la fila del paso `n` (clic en su título) y espera a que el detalle sea el suyo.
+async function elegirFila(page, n) {
+  const ya = await page.$eval(`.rpaso[data-n="${n}"]`, (r) => r.classList.contains('is-sel')).catch(() => null)
+  afirmar(ya !== null, `no hay una fila ${n} en la lista del set`)
+  if (ya) return
+  await page.click(`.rpaso-sel[data-n="${n}"]`)
+  await hasta(() => page.evaluate((i) => ({
+    sel: document.querySelector('.rpaso.is-sel')?.dataset.n ?? null,
+    titulo: document.querySelector('#r-det-h')?.textContent ?? null,
+    fila: document.querySelector(`.rpaso[data-n="${i}"] .rpaso-titulo`)?.textContent ?? null,
+  }), n), (v) => v.sel === String(n) && v.titulo === v.fila, `elegí la fila ${n} y el detalle no la muestra`)
+}
+
 // "Título — Artista" (sin artista, solo el título) para los anuncios de la barra.
 const quien = (t) => `${t.titulo}${t.artista ? ` — ${t.artista}` : ''}`
 
@@ -294,8 +342,10 @@ function leerGuardado(page) {
         artista: p.querySelector('.rpaso-artista')?.textContent ?? null,
         motivo: p.querySelector('.rpaso-why .mono')?.textContent ?? null,
         semilla: !!p.querySelector('.rtag-seed'),
-        datos: window.__datosTrack(p),
+        datos: window.__datosFila(p),
       })),
+      // Todas las calificaciones quedan montadas en el detalle (se ve la del track elegido):
+      // se leen todas, en orden de transición.
       transiciones: [...document.querySelectorAll('.rcal')].map((c) => ({
         n: Number(c.dataset.n),
         sel: c.querySelector('input[type=radio]:checked')?.value ?? null,
@@ -309,7 +359,7 @@ function leerGuardado(page) {
 // Lo que el set guardado de la API dice de cada paso, con la forma de `leerGuardado`.
 const esperadoPasos = (s) => s.pasos.map((p) => ({
   n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo,
-  semilla: p.es_semilla, datos: esperadoDatos(p.track, s.leyenda_key),
+  semilla: p.es_semilla, datos: esperadoFila(p.track, s.leyenda_key),
 }))
 
 // Calificación de la transición `n` según la API, y el resumen.
@@ -319,7 +369,12 @@ async function calificacionApi(ctx, id, n) {
   return { calificacion: t.calificacion, motivo: t.motivo, resumen: s.resumen }
 }
 
-const clickNivel = (page, n, nivel) => page.click(`.rcal[data-n="${n}"] .rcal-opt.is-${nivel}`)
+// f50: la calificación de la transición `n` (del paso n al n + 1) está en el detalle del paso
+// n + 1: primero se elige esa fila, después se toca el nivel (tiene que estar a la vista).
+const clickNivel = async (page, n, nivel) => {
+  await elegirFila(page, n + 1)
+  await page.click(`.rcal[data-n="${n}"] .rcal-opt.is-${nivel}`)
+}
 
 // Intercepta los pedidos de la página: `manejar(req)` devuelve true si se ocupó de ese pedido
 // (abortarlo, retenerlo, contestarlo); el resto sigue de largo.
@@ -388,8 +443,10 @@ const CASOS_SETS = [
     igual(real.fecha, s.guardado, 'la fecha de la cabecera (datetime) no es la de la API')
     igual(real.pasos, esperadoPasos(s), 'los pasos en pantalla no son la foto de GET /api/radio/sets/{id}')
     // Y la foto es el set que se había armado: mismos tracks, mismos porqués, mismos datos.
-    igual(esperadoPasos(s), visto.pasos.map((p) => ({ n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo, semilla: p.es_semilla, datos: esperadoDatos(p.track, visto.leyenda_key) })),
+    igual(esperadoPasos(s), visto.pasos.map((p) => ({ n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo, semilla: p.es_semilla, datos: esperadoFila(p.track, visto.leyenda_key) })),
       'lo guardado no es lo que se veía')
+    // La energía no está en la fila (f50: va en el detalle), pero la foto la guarda igual.
+    igual(s.pasos.map((p) => p.track.energia_pct), visto.pasos.map((p) => p.track.energia_pct), 'la energía guardada no es la que se veía')
     igual(real.transiciones, s.transiciones.map((t) => ({ n: t.n, sel: null, motivo: null })), 'un control de calificación por transición, todos sin calificar')
     igual(real.resumen, s.resumen, 'el resumen de la cabecera no es el de la API')
     afirmar(/#\d+/.test(real.aviso || '') && real.aviso.includes(`#${id}`), `la región viva no avisó que se guardó: ${json(real.aviso)}`)
@@ -437,7 +494,8 @@ const CASOS_SETS = [
     // OK con el mouse: se guarda al elegir.
     await clickNivel(page, 1, 'ok')
     await hasta(() => calificacionApi(ctx, s.id, 1), (v) => v.calificacion === 'ok', 'elegí OK en la transición 1 y la API no la tiene como ok')
-    // Regular con el teclado (Espacio sobre el radio).
+    // Regular con el teclado (Espacio sobre el radio), en el detalle del paso 3.
+    await elegirFila(page, 3)
     await page.focus('.rcal[data-n="2"] input[value=regular]')
     await page.keyboard.press('Space')
     await hasta(() => calificacionApi(ctx, s.id, 2), (v) => v.calificacion === 'regular', 'elegí Regular con el teclado en la transición 2 y la API no la tiene')
@@ -516,6 +574,12 @@ const CASOS_SETS = [
       const real = await leerGuardado(page)
       igual(real.pasos, esperadoPasos(s), 'el set guardado no se ve como la foto que se guardó')
       igual(real.pasos[1].datos.BPM, bpm1(paso.bpm), `el paso 2 («${paso.titulo}») muestra el BPM de hoy y no el de la foto`)
+      // El detalle del paso 2 también es la foto: su BPM, su porqué y la energía guardada.
+      await elegirFila(page, 2)
+      const det = await page.evaluate(() => window.__detalle())
+      igual({ bpm: det.chips[0], motivo: det.motivo, energia: det.energia },
+        { bpm: bpm1(paso.bpm), motivo: s.pasos[1].motivo, energia: `${s.pasos[0].track.energia_pct ?? '—'} → ${paso.energia_pct ?? '—'}` },
+        'el detalle del paso 2 no muestra la foto (BPM, porqué del motor y energía guardados)')
     } finally {
       mutarBase(ctx, 'bpm', paso.titulo, String(antes))
     }
@@ -533,7 +597,7 @@ const CASOS_SETS = [
       await abrirGuardado(page, s.id)
       const filas = await page.$$eval('.rpaso', (ps) => ps.map((p) => ({
         falta: p.querySelector('.rtag-falta')?.textContent ?? null,
-        play: p.querySelector('.rpaso-row button.rplay')?.getAttribute('aria-label') ?? null,
+        play: p.querySelector('.c-play button.rplay')?.getAttribute('aria-label') ?? null,
       })))
       igual(filas, hoy.pasos.map((p) => (p.track.en_biblioteca
         ? { falta: null, play: `Reproducir ${p.track.titulo}` }
@@ -836,20 +900,21 @@ const esperadoTabla = (marcas) => marcas.map((m) => ({
 
 const estadoEditor = (page) => page.evaluate(() => document.querySelector('.cue-estado')?.textContent ?? '')
 
-// Radio → set de «Uno» → «Editar cues» del tema `titulo`, y espera a que el editor lo cargue.
+// Radio → set de «Uno» → la fila del tema `titulo` (f50: el editor está en la pestaña «Cues y
+// loops» del detalle, abierta por defecto), y espera a que el editor lo cargue.
 async function abrirEditor(page, ctx, titulo = 'Uno', { navegar = true } = {}) {
   await abrirRadio(page, ctx, { navegar })
   await elegirSemilla(page, 'Uno')
   await armarSet(page)
-  const sel = `.reditar[aria-label="Editar cues de ${titulo}"]`
-  await page.waitForSelector(sel, { timeout: ESPERA_MS })
-  const respuesta = page.waitForResponse((r) => /^\/api\/radio\/tracks\/[0-9a-f]{16}\/marcas$/.test(new URL(r.url()).pathname) && r.request().method() === 'GET', { timeout: ESPERA_MS })
-  await page.click(sel)
-  await respuesta
+  const n = await page.evaluate((t) => [...document.querySelectorAll('.rpaso')].find((r) => r.querySelector('.rpaso-titulo')?.textContent === t)?.dataset.n ?? null, titulo)
+  afirmar(n, `el set de «Uno» no tiene a «${titulo}»`)
+  await elegirFila(page, Number(n))
   await hasta(() => page.evaluate(() => ({
-    titulo: document.querySelector('#cue-ed-h')?.firstChild?.textContent ?? null,
-    estado: document.querySelector('.cue-estado')?.textContent ?? '',
-  })), (v) => v.titulo === titulo && /guardadas en la biblioteca/.test(v.estado), `el editor no terminó de abrir «${titulo}»`)
+    titulo: document.querySelector('#r-det-h')?.textContent ?? null,
+    pestana: document.querySelector('[role=tab][aria-selected=true]')?.id ?? null,
+    estado: document.querySelector('#r-panel-cues:not([hidden]) .cue-estado')?.textContent ?? '',
+  })), (v) => v.titulo === titulo && v.pestana === 'r-tab-cues' && /guardadas en la biblioteca/.test(v.estado),
+  `el editor no terminó de abrir «${titulo}» en la pestaña «Cues y loops»`)
 }
 
 // Aprieta una tecla y espera la escritura que tiene que disparar (POST/PATCH/DELETE).
@@ -872,8 +937,10 @@ const CASOS_CUES = [
     const { uno } = await semillaUno(ctx)
     await limpiarMarcas(ctx, uno.id)
     await abrirEditor(page, ctx)
-    const cab = await page.evaluate(() => [...document.querySelectorAll('.cue-chip')].map((c) => c.querySelector('b')?.textContent))
-    igual(cab[0], bpm1(uno.bpm), 'el BPM del editor no es el de la API, con un decimal')
+    const cab = await page.evaluate(() => window.__detalle().chips)
+    igual(cab[0], bpm1(uno.bpm), 'el BPM del detalle no es el de la API, con un decimal')
+    const atajos = await page.$eval('.cue-atajos', (p) => p.textContent)
+    afirmar(atajos.includes(`El beat sale del BPM medido (${bpm1(uno.bpm)})`), `el editor no dice de qué BPM sale el beat: ${json(atajos)}`)
     const beat = 60 / uno.bpm          // el ±1 beat sale del BPM MEDIDO
     await page.focus('.cue-wave')
     for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight')
@@ -898,8 +965,9 @@ const CASOS_CUES = [
     await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)), 'la tabla no es la lista de la API')
     const estado = await estadoEditor(page)
     afirmar(/Guardado en la biblioteca/.test(estado) && /1 hot cue, 1 memory, 1 loop/.test(estado), `el indicador no dice que se guardó: ${json(estado)}`)
-    const cuenta = await page.$eval('.cue-tema.is-sel .cue-tema-meta', (e) => e.textContent)
-    igual(cuenta, '3 marcas', 'la lista de temas no cuenta las marcas del tema elegido')
+    const cuenta = await hasta(() => page.$eval('.rpaso.is-sel .rcues', (e) => e.textContent), (v) => v === '3 cues',
+      'la columna «Cues» de la lista no cuenta las marcas del tema elegido')
+    igual(cuenta, '3 cues', 'la columna «Cues» del tema elegido')
 
     await page.reload({ waitUntil: 'domcontentloaded' })
     await abrirEditor(page, ctx, 'Uno', { navegar: false })
@@ -1021,9 +1089,21 @@ const CASOS_CUES = [
     await page.keyboard.press('Space')
     await hasta(ver, (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && v.barra === 'paused',
       'Espacio otra vez: la barra no cedió')
-    // Volver al set corta el audio del editor.
-    await page.click('.cue-volver')
-    await hasta(() => sonando(page), (s) => s.length === 0, 'al volver al set el editor siguió sonando')
+    // Elegir otro track de la lista corta el audio del editor (f50: ya no hay «Volver al set»).
+    await elegirFila(page, 2)
+    await hasta(() => sonando(page), (s) => s.length === 0, 'al elegir otro track el editor siguió sonando')
+    // Y una fila de la radio que arranca pausa al editor (un solo audio también entre los dos
+    // audios de la pantalla).
+    await hasta(() => estadoEditor(page), (v) => /guardadas en la biblioteca/.test(v), 'el editor no cargó el paso 2')
+    await page.focus('.cue-wave')
+    await page.keyboard.press('Space')
+    const dosId = await page.$eval('.rpaso[data-n="2"]', (r) => r.querySelector('.rpaso-titulo').textContent)
+    const dos = (await api(ctx, '/api/radio/biblioteca')).tracks.find((t) => t.titulo === dosId)
+    await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${dos.id}`]), 'Espacio en la onda del paso 2 no lo hizo sonar')
+    await page.click('.rpaso[data-n="1"] .rplay')
+    await hasta(async () => ({ suenan: await sonando(page), editor: await page.$eval('.cue-play', (b) => b.textContent) }),
+      (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && /Reproducir/.test(v.editor),
+      'play en una fila con el editor sonando: tendría que sonar SOLO la fila y el editor volver a «Reproducir»')
   }],
 
   ['cues: «Guardado» recién con la respuesta; si falla, aviso con «Reintentar»', async (page, ctx) => {
@@ -1066,6 +1146,8 @@ const CASOS_CUES = [
     await limpiarMarcas(ctx, uno.id)
     const cue = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 30 })).data.marca
     await abrirEditor(page, ctx)
+    // f50: el editor está en el detalle, que tiene su propio scroll: la onda se trae a la vista.
+    await page.$eval('.cue-wave', (e) => e.scrollIntoView({ block: 'center' }))
     const caja = await page.$eval('.cue-wave', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
     // Clic al 25 % del ancho: el cursor va a 0.25 × la duración de la API.
     await page.mouse.click(caja.x + caja.w * 0.25, caja.y + caja.h / 2)
@@ -1089,7 +1171,7 @@ const CASOS_CUES = [
     await hasta(() => leerTabla(page), (v) => v.length === 1 && v[0].tiempos[0] === tiempoTabla(movida.inicio), 'la tabla no muestra el tiempo nuevo')
   }],
 
-  ['cues: 400 px sin desborde, con la lista de temas arriba y marcas en los bordes', async (page, ctx) => {
+  ['cues: 400 px sin desborde, con la lista del set arriba del detalle y marcas en los bordes', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
     await limpiarMarcas(ctx, uno.id)
     await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 0, nombre: 'Un nombre largo para ver que no empuja la tabla' })
@@ -1101,11 +1183,11 @@ const CASOS_CUES = [
     const d = await desbordeDe(page)
     afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `editor a 400 px: hay contenido fuera del ancho: ${json(d)}`)
     const geo = await page.evaluate(() => {
-      const l = document.querySelector('.cue-temas').getBoundingClientRect()
-      const m = document.querySelector('.cue-main').getBoundingClientRect()
-      return { listaAbajo: l.bottom, mainArriba: m.top }
+      const l = document.querySelector('.rpanel-set').getBoundingClientRect()
+      const m = document.querySelector('.rdet').getBoundingClientRect()
+      return { listaAbajo: l.bottom, detalleArriba: m.top }
     })
-    afirmar(geo.listaAbajo <= geo.mainArriba, `a 400 px la lista de temas tiene que ir arriba del editor: ${json(geo)}`)
+    afirmar(geo.listaAbajo <= geo.detalleArriba, `a 400 px el detalle (con el editor) tiene que ir debajo de la lista del set: ${json(geo)}`)
     // `desbordeDe` mira el viewport: un campo que se sale de SU celda y pisa la de al lado
     // queda adentro de la pantalla y no lo ve. Cada campo y botón tiene que entrar en su celda.
     const pisados = await page.$$eval('.cue-tabla td', (tds) => tds.flatMap((td) => {
@@ -1116,6 +1198,313 @@ const CASOS_CUES = [
       }).map((e) => `${e.className} (${Math.round(e.getBoundingClientRect().width)} px en ${Math.round(c.width)})`)
     }))
     igual(pisados, [], 'a 400 px hay campos de la tabla que se salen de su celda')
+  }],
+]
+
+/* ---------- Radio DJ en maestro/detalle y volumen (f50) ----------
+   Lo esperado sale de la API (/api/radio/set, marcas, conteo, onda) o de la definición que
+   pidió el dueño (volumen 45 % por defecto, de a 5 %), escrita acá y no importada del front. */
+
+// m:ss.d (el mismo formato del reloj del editor; contrato escrito acá).
+const mmssd = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
+// La columna «Cues»: 0 → «sin cues», 1 → «1 cue», n → «n cues» (pedido del dueño).
+const cuesTexto = (n) => (n === 0 ? 'sin cues' : `${n} cue${n === 1 ? '' : 's'}`)
+
+const geoMD = (page) => page.evaluate(() => {
+  const l = document.querySelector('.rpanel-set').getBoundingClientRect()
+  const d = document.querySelector('.rdet').getBoundingClientRect()
+  return { lista: { izq: l.left, der: l.right, arriba: l.top, abajo: l.bottom }, det: { izq: d.left, der: d.right, arriba: d.top, abajo: d.bottom } }
+})
+
+// Lo que muestra el control de volumen del editor y el de la barra, y a cuánto suena cada audio.
+const leerVolumenes = (page) => page.evaluate(() => {
+  const r = document.querySelector('.cue-vol .vol-range')
+  const barra = document.querySelector('.deck-range-vol')
+  const audioBarra = [...window.__medios].find((m) => /\/api\/audio\//.test(m.currentSrc || m.src))
+  const audioEditor = document.querySelector('.cue-ed audio')
+  return {
+    editor: r ? { valor: r.value, role: r.getAttribute('role'), label: r.getAttribute('aria-label'), now: r.getAttribute('aria-valuenow'), texto: r.getAttribute('aria-valuetext'), min: r.getAttribute('aria-valuemin'), max: r.getAttribute('aria-valuemax') } : null,
+    barra: barra ? barra.value : null,
+    audioEditor: audioEditor ? { volumen: Math.round(audioEditor.volume * 100) / 100, mudo: audioEditor.muted } : null,
+    audioBarra: audioBarra ? Math.round(audioBarra.volume * 100) / 100 : null,
+    guardado: localStorage.getItem('musiflix.volumen'),
+  }
+})
+
+const CASOS_F50 = [
+
+  ['radio (f50): maestro y detalle lado a lado a 1440 y 1280; el porqué es el del motor y no hay «% de match»', async (page, ctx) => {
+    const { lib } = await semillaUno(ctx)
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    const set = await armarSet(page)
+    for (const ancho of [1440, 1280]) {
+      await page.setViewport({ width: ancho, height: 900 })
+      await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= ancho, `el viewport no pasó a ${ancho} px`)
+      const g = await geoMD(page)
+      afirmar(g.lista.der <= g.det.izq && g.det.arriba < g.lista.abajo, `a ${ancho} px la lista y el detalle tienen que ir lado a lado: ${json(g)}`)
+      const d = await desbordeDe(page)
+      afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `a ${ancho} px hay scroll horizontal o contenido cortado: ${json(d)}`)
+    }
+    // A la izquierda, al pie del rail, el estado de la biblioteca con el dato real.
+    igual(await page.$eval('.pl-rail-lib .pl-rail-lib-n', (e) => e.textContent), `${lib.total} tracks analizados`, 'el estado de la biblioteca en el rail')
+    // La tabla: roles, una fila por paso y tantas celdas como columnas.
+    const tabla = await page.evaluate(() => {
+      const t = document.querySelector('.rtabla')
+      const filas = [...t.querySelectorAll('[role=row]')]
+      return { role: t.getAttribute('role'), filas: filas.length, cols: filas[0].querySelectorAll('[role=columnheader]').length, celdas: filas.slice(1).map((f) => f.querySelectorAll(':scope > [role=cell]').length) }
+    })
+    igual(tabla, { role: 'table', filas: set.pasos.length + 1, cols: tabla.cols, celdas: set.pasos.map(() => tabla.cols) }, 'la tabla del set (roles y celdas por columna)')
+    // El porqué del detalle es el del motor para cada paso, y no hay puntajes inventados.
+    for (const p of set.pasos) {
+      await elegirFila(page, p.n)
+      const d = await page.evaluate(() => window.__detalle())
+      igual(d.motivo, p.motivo, `el porqué del detalle del paso ${p.n}`)
+      const resto = d.why.replace(p.motivo, '')
+      afirmar(!/%/.test(resto), `el bloque del porqué del paso ${p.n} muestra un porcentaje que no es el del motor: ${json(resto)}`)
+    }
+    const texto = await page.$eval('.radiodj', (e) => e.textContent)
+    afirmar(!/match/i.test(texto) && !/g[eé]nero coincide/i.test(texto) && !/\+\d+\s*(pts|puntos)?\s*$/m.test(texto),
+      'la pantalla muestra un «match», un «género coincide» o un puntaje inventado')
+    // Teclado: una sola parada de Tab en la lista; ↑ ↓ Inicio Fin cambian de fila con el foco.
+    await elegirFila(page, set.pasos[0].n)
+    await page.focus(`.rpaso-sel[data-n="${set.pasos[0].n}"]`)
+    const ver = () => page.evaluate(() => ({
+      foco: document.activeElement?.dataset?.n ?? null,
+      sel: document.querySelector('.rpaso.is-sel')?.dataset.n ?? null,
+      actual: [...document.querySelectorAll('.rpaso-sel[aria-current=true]')].map((b) => b.dataset.n),
+      tab0: [...document.querySelectorAll('.rpaso-sel')].filter((b) => b.tabIndex === 0).map((b) => b.dataset.n),
+      titulo: document.querySelector('#r-det-h')?.textContent ?? null,
+    }))
+    const ns = set.pasos.map((p) => String(p.n))
+    const esperar = async (n, que) => hasta(ver, (v) => v.foco === n && v.sel === n && json(v.actual) === json([n]) && json(v.tab0) === json([n]), que)
+    await page.keyboard.press('ArrowDown')
+    const v1 = await esperar(ns[1], 'Flecha abajo no pasó a la segunda fila')
+    igual(v1.titulo, set.pasos[1].track.titulo, 'el detalle después de Flecha abajo')
+    await page.keyboard.press('End')
+    await esperar(ns[ns.length - 1], 'Fin no fue a la última fila')
+    await page.keyboard.press('ArrowDown')
+    await esperar(ns[ns.length - 1], 'Flecha abajo en la última fila no se tiene que mover')
+    await page.keyboard.press('Home')
+    await esperar(ns[0], 'Inicio no volvió a la primera fila')
+    await page.keyboard.press('ArrowUp')
+    await esperar(ns[0], 'Flecha arriba en la primera fila no se tiene que mover')
+  }],
+
+  ['radio (f50): pestañas con flechas; «Onda avanzada» deshabilitada no se activa; «Información» = la API', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await abrirEditor(page, ctx)
+    const tabs = () => page.evaluate(() => ({
+      lista: document.querySelector('[role=tablist]')?.getAttribute('aria-label') ?? null,
+      tabs: [...document.querySelectorAll('[role=tablist] [role=tab]')].map((t) => ({
+        id: t.id, texto: t.textContent, sel: t.getAttribute('aria-selected'), dis: t.getAttribute('aria-disabled'),
+        controla: t.getAttribute('aria-controls'), tab: t.tabIndex,
+      })),
+      foco: document.activeElement?.id ?? null,
+      paneles: [...document.querySelectorAll('.rdet [role=tabpanel]')].map((p) => ({ id: p.id, por: p.getAttribute('aria-labelledby'), visible: window.__visible(p) })),
+    }))
+    const t0 = await tabs()
+    igual(t0.tabs.map((t) => [t.id, t.sel, t.dis, t.controla, t.tab]), [
+      ['r-tab-cues', 'true', null, 'r-panel-cues', 0], ['r-tab-info', 'false', null, 'r-panel-info', -1], ['r-tab-onda', 'false', 'true', null, -1],
+    ], 'las pestañas al abrir: «Cues y loops» elegida, una sola parada de Tab, la tercera deshabilitada')
+    afirmar(/próximamente/.test(t0.tabs[2].texto), `la deshabilitada no dice «próximamente»: ${json(t0.tabs[2].texto)}`)
+    igual(t0.paneles, [{ id: 'r-panel-cues', por: 'r-tab-cues', visible: true }, { id: 'r-panel-info', por: 'r-tab-info', visible: false }], 'los paneles al abrir')
+    const elegida = (t) => t.tabs.find((x) => x.sel === 'true')?.id
+    await page.focus('#r-tab-cues')
+    await page.keyboard.press('ArrowRight')
+    let t = await hasta(tabs, (v) => elegida(v) === 'r-tab-info' && v.foco === 'r-tab-info', 'Flecha derecha no pasó a «Información»')
+    igual(t.paneles.map((p) => p.visible), [false, true], 'con «Información» elegida se ve su panel y no el del editor')
+    await page.keyboard.press('ArrowRight')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-cues' && v.foco === 'r-tab-cues', 'Flecha derecha desde «Información» tiene que saltear la deshabilitada y volver a la primera')
+    await page.keyboard.press('ArrowLeft')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-info' && v.foco === 'r-tab-info', 'Flecha izquierda desde la primera no dio la vuelta a «Información»')
+    await page.keyboard.press('Home')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-cues', 'Inicio no fue a la primera')
+    await page.keyboard.press('End')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-info', 'Fin no fue a la última habilitada')
+    // La deshabilitada no se activa con el mouse.
+    await page.click('#r-tab-onda')
+    t = await tabs()
+    igual([elegida(t), t.paneles.map((p) => p.visible)], ['r-tab-info', [false, true]], 'un clic en «Onda avanzada» cambió de pestaña')
+    // «Información»: lo que la API de marcas dice del archivo y la duración del audio de /onda.
+    const x = (await apiPedir(ctx, rutaMarcas(uno.id))).data.track
+    const onda = (await apiPedir(ctx, `/api/radio/tracks/${uno.id}/onda`)).data
+    const info = await hasta(() => page.evaluate(() => {
+      const dl = document.querySelector('#r-panel-info .rinfo-dl')
+      if (!dl) return null
+      const o = {}
+      const dts = [...dl.querySelectorAll('dt')]
+      dts.forEach((dt) => { o[dt.textContent] = dt.nextElementSibling?.textContent ?? null })
+      return o
+    }), (v) => v && !/leyendo/.test(v['Duración del audio'] || 'leyendo'), '«Información» no terminó de mostrar los datos')
+    igual({ archivo: info.Archivo, formato: info.Formato, bpm: info['BPM medido'], acuerdo: info['Acuerdo de la key'], licencia: info.Licencia, origen: info.Origen, dur: info['Duración (biblioteca)'], audio: info['Duración del audio'] },
+      { archivo: x.ruta, formato: x.formato.toUpperCase(), bpm: bpm1(x.bpm), acuerdo: `${x.key_acuerdo} tramos`, licencia: x.licencia, origen: x.origen, dur: mmssd(x.dur), audio: mmssd(onda.duracion_audio) },
+      '«Información» no dice lo que tiene la API')
+    afirmar(x.ruta && x.ruta.endsWith('uno.wav') && x.licencia && x.origen, `la API no trae ruta, licencia u origen: el caso no probaría nada (${json(x)})`)
+  }],
+
+  ['radio (f50): la columna «Cues» = las marcas de cada track en la base, con UN pedido de conteos por set', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
+    for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
+    const segundo = set.pasos[1].track
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8 })
+    await apiPedir(ctx, rutaMarcas(segundo.id), 'POST', { tipo: 'memory', inicio: 2 })
+    const conteos = []
+    page.on('request', (q) => { if (new URL(q.url()).pathname === '/api/radio/marcas/conteo') conteos.push(q.url()) })
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    const esperado = []
+    for (const p of set.pasos) esperado.push(cuesTexto((await marcasApi(ctx, p.track.id)).length))
+    afirmar(esperado.includes('sin cues') && esperado.includes('1 cue') && esperado.includes('2 cues'), `la base no tiene los tres casos: ${json(esperado)}`)
+    const leer = () => page.$$eval('.rpaso .c-cues .rcues', (es) => es.map((e) => e.textContent))
+    await hasta(leer, (v) => json(v) === json(esperado), 'la columna «Cues» no dice cuántas marcas tiene cada track en la base')
+    // «sin cues» en gris: el color del token neutral-400 (no el del texto).
+    const colores = await page.evaluate(() => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--color-neutral-400)'
+      document.body.appendChild(probe)
+      const gris = getComputedStyle(probe).color
+      probe.remove()
+      return [...document.querySelectorAll('.rpaso .rcues')].map((e) => ({ texto: e.textContent, gris: getComputedStyle(e).color === gris }))
+    })
+    igual(colores.map((c) => c.gris), esperado.map((e) => e === 'sin cues'), '«sin cues» en gris y los conteos no')
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    igual(conteos.length, 1, `un set pidió ${conteos.length} veces /api/radio/marcas/conteo`)
+    const ids = new URL(conteos[0]).searchParams.get('ids').split(',')
+    igual(ids, set.pasos.map((p) => p.track.id), 'el pedido de conteos no lleva los ids del set, en orden')
+    // Poner un cue en el editor actualiza la columna sin volver a pedir los conteos.
+    await hasta(() => estadoEditor(page), (v) => /guardadas en la biblioteca/.test(v), 'el editor no cargó «Uno»')
+    await page.focus('.cue-wave')
+    await teclaQueGuarda(page, 'c')
+    const n = (await marcasApi(ctx, uno.id)).length
+    await hasta(() => page.$eval('.rpaso[data-n="1"] .rcues', (e) => e.textContent), (v) => v === cuesTexto(n), 'la columna no se actualizó después de poner un cue')
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    igual(conteos.length, 1, 'poner un cue volvió a pedir todos los conteos')
+    for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
+  }],
+
+  ['volumen (f50): 45 % por defecto, mueve el <audio> del editor y el de la barra (un solo volumen) y se acuerda al recargar', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    const marca = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })).data.marca
+    await abrirHome(page, ctx)
+    // El perfil de Chrome es el mismo para toda la corrida: se arranca sin nada guardado.
+    await page.evaluate(() => localStorage.removeItem('musiflix.volumen'))
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.lib-card', { timeout: ESPERA_MS })
+    try {
+      await playEnHome(page, 'Uno')
+      await abrirEditor(page, ctx, 'Uno', { navegar: false })
+      let v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor && x.audioBarra !== null, 'no están los dos audios')
+      igual(v, {
+        editor: { valor: '45', role: 'slider', label: 'Volumen', now: '45', texto: '45 %', min: '0', max: '100' },
+        barra: '45', audioEditor: { volumen: 0.45, mudo: false }, audioBarra: 0.45, guardado: null,
+      }, 'sin nada guardado el volumen tiene que ser 45 % en el editor, en la barra y en los dos audios')
+      // ↑ con el foco en la onda: +5 % cada vez, en todos lados, y se guarda.
+      await page.focus('.cue-wave')
+      await page.keyboard.press('ArrowUp')
+      await page.keyboard.press('ArrowUp')
+      v = await hasta(() => leerVolumenes(page), (x) => x.editor.valor === '55', 'dos ↑ en la onda no subieron el volumen a 55 %')
+      igual([v.editor.now, v.editor.texto, v.barra, v.audioEditor.volumen, v.audioBarra, v.guardado], ['55', '55 %', '55', 0.55, 0.55, '0.55'],
+        'el volumen después de dos ↑: el mismo en el editor, la barra, los dos audios y lo guardado')
+      // Con un modificador o escribiendo, ↑ ↓ no son del volumen.
+      await page.keyboard.down('Shift')
+      await page.keyboard.press('ArrowUp')
+      await page.keyboard.up('Shift')
+      await page.click(`.cue-tabla tr[data-id="${marca.id}"] .cue-in-n`)
+      await page.keyboard.press('ArrowUp')
+      await page.keyboard.press('ArrowDown')
+      await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+      igual((await leerVolumenes(page)).editor.valor, '55', 'Shift+↑ o ↑ ↓ escribiendo el nombre cambiaron el volumen')
+      await page.focus('.cue-wave')
+      await page.keyboard.press('ArrowDown')
+      await hasta(() => leerVolumenes(page), (x) => x.editor.valor === '50' && x.audioEditor.volumen === 0.5 && x.audioBarra === 0.5, '↓ en la onda no bajó a 50 %')
+      // Silencio: el botón del editor silencia los dos (el de la barra dice lo mismo).
+      await page.click('.cue-vol .vol-mute')
+      v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor.mudo, 'Silenciar no silenció el audio del editor')
+      igual([v.editor.valor, v.editor.texto, v.barra, v.audioBarra], ['0', 'Silenciado', '0', 0], 'silenciado: los dos controles en 0 y la barra muda')
+      igual(await page.$eval('.deck .deck-vol button', (b) => b.getAttribute('aria-pressed')), 'true', 'la barra no se enteró del silencio')
+      await page.click('.cue-vol .vol-mute')
+      await hasta(() => leerVolumenes(page), (x) => !x.audioEditor.mudo && x.editor.valor === '50' && x.audioBarra === 0.5, 'Activar sonido no volvió a 50 %')
+      // Recargar: se acuerda.
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await abrirEditor(page, ctx, 'Uno', { navegar: false })
+      v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor, 'después de recargar no está el editor')
+      igual([v.editor.valor, v.audioEditor.volumen, v.guardado], ['50', 0.5, '0.5'], 'después de recargar el volumen no es el que quedó')
+    } finally {
+      await page.evaluate(() => localStorage.removeItem('musiflix.volumen')).catch(() => {})
+      await limpiarMarcas(ctx, uno.id)
+    }
+  }],
+
+  ['radio (f50): las minionditas se piden solo para las filas a la vista, de a dos, y el mismo tema una vez', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    const retenidos = []     // pedidos a /onda que todavía no se contestaron
+    const pedidos = []       // ids pedidos, en orden
+    let maxEnVuelo = 0
+    await interceptar(page, (req) => {
+      const m = /^\/api\/radio\/tracks\/([0-9a-f]{16})\/onda$/.exec(new URL(req.url()).pathname)
+      if (!m) return false
+      pedidos.push(m[1])
+      return new Promise((res) => {
+        retenidos.push({ id: m[1], soltar: () => { req.continue().catch(() => {}); res(true) } })
+        maxEnVuelo = Math.max(maxEnVuelo, retenidos.length)
+      })
+    })
+    await page.setViewport({ width: 1440, height: 640 })
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    const filas = () => page.evaluate(() => [...document.querySelectorAll('.rpaso')].map((r) => {
+      const m = r.querySelector('.rmini')
+      const b = m.getBoundingClientRect()
+      return { id: m.dataset.mini, visible: b.bottom > 0 && b.top < innerHeight, fase: (m.className.match(/is-(\w+)/) || [])[1] }
+    }))
+    // Una vuelta de red para que lo que se fuera a pedir ya haya salido.
+    await hasta(async () => retenidos.length, (n) => n >= 1, 'no se pidió ninguna onda (ni la del editor)')
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+    const f0 = await filas()
+    afirmar(f0.some((f) => !f.visible), `todas las filas están a la vista: el caso no probaría la carga perezosa (${json(f0)})`)
+    const elegido = set.pasos[0].track.id    // la fila elegida: su onda la pide el editor
+    const fuera = f0.filter((f) => !f.visible && f.id !== elegido).map((f) => f.id)
+    afirmar(fuera.length > 0, 'no hay filas fuera de pantalla además de la elegida')
+    igual(pedidos.filter((id) => fuera.includes(id)), [], 'se pidió la onda de filas que no están a la vista')
+    igual(f0.filter((f) => f.id !== elegido).map((f) => f.fase), f0.filter((f) => f.id !== elegido).map(() => 'cargando'), 'mientras no llega, cada fila tiene su casillero gris')
+    // A la vista: se piden, pero nunca más de dos a la vez.
+    await page.evaluate(() => document.querySelector('.rtabla').scrollIntoView({ block: 'center' }))
+    const todas = set.pasos.map((p) => p.track.id)
+    for (let vuelta = 0; vuelta < 20 && retenidos.length + pedidos.length > 0; vuelta++) {
+      await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
+      afirmar(retenidos.length <= 2, `hay ${retenidos.length} ondas pedidas a la vez (el tope es 2)`)
+      if (todas.every((id) => pedidos.includes(id)) && retenidos.length === 0) break
+      const r = retenidos.shift()
+      if (r) r.soltar()
+    }
+    igual([...pedidos].sort(), [...todas].sort(), 'cada tema del set se pidió exactamente una vez (la fila y el editor comparten el pedido)')
+    afirmar(maxEnVuelo === 2, `el pico de pedidos a la vez fue ${maxEnVuelo}: con el editor y las filas tendría que llegar a 2, no más`)
+    const fin = await hasta(filas, (v) => v.every((f) => f.fase === 'ok'), 'las minionditas no se dibujaron al llegar la onda')
+    const barras = await page.$$eval('.rpaso .rmini svg', (ss) => ss.map((s) => s.querySelectorAll('rect').length))
+    afirmar(barras.length === fin.length && barras.every((n) => n > 0), `alguna miniondita quedó sin barras: ${json(barras)}`)
+  }],
+
+  ['400 px (f50): el detalle va debajo de la lista; pestañas, editor e «Información» sin desborde', async (page, ctx) => {
+    await page.setViewport({ width: 400, height: 860 })
+    await abrirEditor(page, ctx)
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    const g = await geoMD(page)
+    afirmar(g.det.arriba >= g.lista.abajo, `a 400 px el detalle tiene que ir debajo de la lista: ${json(g)}`)
+    let d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `400 px con el editor: ${json(d)}`)
+    await page.click('#r-tab-info')
+    await page.waitForSelector('#r-panel-info .rinfo-dl', { timeout: ESPERA_MS })
+    d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `400 px con «Información»: ${json(d)}`)
   }],
 ]
 
@@ -1267,7 +1656,7 @@ const CASOS = [
         artista: p.querySelector('.rpaso-artista')?.textContent ?? null,
         motivo: p.querySelector('.rpaso-why .mono')?.textContent ?? null,
         semilla: !!p.querySelector('.rtag-seed'),
-        datos: window.__datosTrack(p),
+        datos: window.__datosFila(p),
       })),
       cuenta: document.querySelector('.rset-cuenta')?.textContent ?? null,
       corte: (() => {
@@ -1288,10 +1677,20 @@ const CASOS = [
       'el anuncio aria-live de la radio después de armar el set')
     const esperado = set.pasos.map((p) => ({
       n: String(p.n), titulo: p.track.titulo, artista: p.track.artista || '—', motivo: p.motivo,
-      semilla: p.es_semilla, datos: esperadoDatos(p.track, leyenda),
+      semilla: p.es_semilla, datos: esperadoFila(p.track, leyenda),
     }))
     igual(real.pasos.length, esperado.length, 'cantidad de pasos del set')
     for (let i = 0; i < esperado.length; i++) igual(real.pasos[i], esperado[i], `paso ${i + 1} del set`)
+    // La energía (que ya no está en la fila) y el porqué grande: en el detalle de cada paso.
+    for (let i = 0; i < set.pasos.length; i++) {
+      const p = set.pasos[i]
+      await elegirFila(page, p.n)
+      const d = await page.evaluate(() => window.__detalle())
+      const e = esperadoDatos(p.track, leyenda)
+      igual({ motivo: d.motivo, energia: d.energia, chips: d.chips },
+        { motivo: p.motivo, energia: i === 0 ? e['Energía'] : `${esperadoDatos(set.pasos[i - 1].track, leyenda)['Energía']} → ${e['Energía']}`, chips: [e.BPM, e.key.camelot, e.Dur] },
+        `el detalle del paso ${i + 1}`)
+    }
     igual(real.cuenta, `${set.total} track${set.total === 1 ? '' : 's'}${set.pedidos != null ? ` · ${set.total} de ${set.pedidos} pedidos` : ''}`, 'la cuenta del set')
     igual(real.corte, set.corte ? { titular: set.corte.titular, detalle: set.corte.detalle, codigo: set.corte.codigo ?? null } : null,
       'el aviso de por qué se cortó el set')
@@ -1380,7 +1779,10 @@ const CASOS = [
     const estado = () => page.evaluate(() => {
       const armar = document.querySelector('.rarmar')
       const exp = document.querySelector('.rexportar')
-      const desc = (b) => (b.getAttribute('aria-describedby') ? document.getElementById(b.getAttribute('aria-describedby'))?.textContent ?? '(id sin elemento)' : null)
+      // aria-describedby puede tener varios ids (f50: «Exportar set» lleva además su aclaración).
+      const desc = (b) => (b.getAttribute('aria-describedby')
+        ? b.getAttribute('aria-describedby').split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? '(id sin elemento)').join(' | ')
+        : null)
       return {
         armar: armar.getAttribute('aria-disabled'), armarPorQue: desc(armar),
         exportar: exp.getAttribute('aria-disabled'), exportarPorQue: desc(exp),
@@ -1391,6 +1793,8 @@ const CASOS = [
     const sinNada = await estado()
     afirmar(sinNada.armar === 'true' && sinNada.exportar === 'true' && !sinNada.disabled && sinNada.armarPorQue && sinNada.exportarPorQue,
       `sin semilla ni set los dos botones tienen que decir aria-disabled="true" y por qué: ${json(sinNada)}`)
+    afirmar(!/sin elemento/.test(sinNada.exportarPorQue) && /no hay set/.test(sinNada.exportarPorQue),
+      `sin set, «Exportar set» tiene que decir que falta el set: ${json(sinNada.exportarPorQue)}`)
     const pedidos = []
     page.on('request', (q) => { if (new URL(q.url()).pathname.startsWith('/api/radio/set')) pedidos.push(q.url()) })
     await page.click('.rexportar')
@@ -1405,7 +1809,9 @@ const CASOS = [
     const foco = await page.evaluate(() => ({ clase: document.activeElement?.className ?? null, tag: document.activeElement?.tagName ?? null }))
     afirmar(/\brarmar\b/.test(foco.clase || ''), `armar el set con Enter mandó el foco a otro lado: ${json(foco)}`)
     const conSet = await estado()
-    afirmar(conSet.exportar === 'false' && conSet.exportarPorQue === null, `con set, «Exportar» tendría que estar habilitado: ${json(conSet)}`)
+    // Con set: habilitado y solo con su aclaración (la de "falta el set" ya no).
+    afirmar(conSet.exportar === 'false' && conSet.exportarPorQue === 'Lista .m3u8 hoy · XML con cues cuando esté verificado',
+      `con set, «Exportar» tendría que estar habilitado y describirse solo con su aclaración: ${json(conSet)}`)
   }],
 
   ['400 px: sin scroll horizontal ni contenido cortado (home con la barra y radio con un set)', async (page, ctx) => {
@@ -1427,6 +1833,8 @@ const CASOS = [
   ...CASOS_SETS,
 
   ...CASOS_CUES,
+
+  ...CASOS_F50,
 
   ['resultados: se ve qué versión está elegida y cuál suena; YouTube/SoundCloud suenan como audio, sin monitor', async (page, ctx) => {
     // Sin red: la búsqueda, la calidad, los metadatos y el audio de las fuentes se simulan

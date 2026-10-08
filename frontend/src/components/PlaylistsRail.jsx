@@ -1,7 +1,10 @@
 // Rail lateral con las playlists, SIEMPRE a la vista (no hay que entrar a un menú).
 // En escritorio es la ÚNICA lista (la de adentro de la vista Playlists está escondida): click en
 // una abre su página, ＋ crea una nueva, y la que está abierta se marca con aria-current.
-export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen, onNueva }) {
+//
+// `biblioteca` (f50, solo en Radio DJ): el estado de la biblioteca del motor ({estado, total}),
+// como en el canvas de la radio: abajo de las playlists, cuántos tracks analizó el motor.
+export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen, onNueva, biblioteca = null }) {
   const cuenta = (p) =>
     p.total ?? p.n ?? (Array.isArray(p.items) ? p.items.length : (p.count ?? null))
   const esActiva = (p) =>
@@ -34,6 +37,16 @@ export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen,
           )
         })}
       </div>
+      {biblioteca && (
+        <section className="pl-rail-lib" aria-labelledby="pl-rail-lib-h">
+          <span className="pl-rail-lib-h" id="pl-rail-lib-h">Biblioteca del motor</span>
+          <span className="pl-rail-lib-n">
+            {biblioteca.estado === 'ok'
+              ? `${biblioteca.total} track${biblioteca.total === 1 ? '' : 's'} analizado${biblioteca.total === 1 ? '' : 's'}`
+              : biblioteca.configurada ? 'no se pudo leer (el motivo está en la radio)' : 'sin conectar'}
+          </span>
+        </section>
+      )}
       <p className="pl-rail-foot">Siempre a la vista — no hace falta entrar a un menú.</p>
     </aside>
   )

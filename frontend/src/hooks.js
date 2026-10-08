@@ -95,3 +95,16 @@ export function useMeta() {
 
   return { metaMap, enrich }
 }
+
+/* ---------- El volumen de la app en un <audio> propio (f50) ----------
+   La barra de abajo aplica el volumen en su motor; una pantalla que tiene su PROPIO <audio>
+   (la radio, el editor de cues) lo aplica con esto: el mismo número y el mismo silencio que
+   la barra, así hay un solo volumen en toda la app. */
+export function useVolumenEn(ref, volume, muted) {
+  useEffect(() => {
+    const a = ref.current
+    if (!a) return
+    a.volume = Math.max(0, Math.min(1, Number(volume) || 0))
+    a.muted = !!muted
+  })
+}

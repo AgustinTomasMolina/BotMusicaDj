@@ -30,6 +30,9 @@ export default function App() {
   const [historialData, setHistorialData] = useState(null)
   const [view, setView] = useState({ kind: 'home' })
   const [modal, setModal] = useState(null)
+  // Radio DJ (f50): el estado de la biblioteca del motor, para mostrarlo al pie del rail
+  // mientras se está en la radio (la columna de la izquierda del canvas). Lo manda la radio.
+  const [radioLib, setRadioLib] = useState(null)
 
   // Estado de descarga por canción (sobrevive a cambios de opción).
   const [dl, setDl] = useState({})
@@ -318,7 +321,7 @@ export default function App() {
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
   else if (view.kind === 'lista') body = <ListResults key={view.data.runId ?? 'lista'} data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
-  else if (view.kind === 'radio') body = <Radio />
+  else if (view.kind === 'radio') body = <Radio onBiblioteca={setRadioLib} />
   else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
@@ -359,7 +362,8 @@ export default function App() {
             se dibujaba en la home y al entrar a Playlists o buscar desaparecía. */}
         <PlaylistsRail playlists={misPlaylists} activa={activePlaylist}
           abierta={view.kind === 'playlists' ? playlistAbierta : null}
-          onOpen={openPlaylists} onNueva={nuevaPlaylistDesdeRail} />
+          onOpen={openPlaylists} onNueva={nuevaPlaylistDesdeRail}
+          biblioteca={view.kind === 'radio' ? radioLib : null} />
 
         <main className="app-main" id="contenido" tabIndex={-1}><div className="app-wrap">{body}</div></main>
       </div>

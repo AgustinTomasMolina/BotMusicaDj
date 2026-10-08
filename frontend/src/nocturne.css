@@ -1075,12 +1075,7 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 /* Encabezados que reciben el foco al volver de «Reintentar»: no son controles, así que no
    llevan anillo (el lector los anuncia igual y el scroll ya los deja a la vista). */
 .radiodj-head h1:focus-visible,.empty h3:focus-visible{outline:none}
-.radiodj-head .muted{margin:4px 0 0;font-size:13px;color:var(--color-neutral-500)}
-.radiodj-grid{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
-.radiodj-col{display:flex;flex-direction:column;gap:var(--space-4);min-width:0}
-/* Dos columnas recién cuando la de la izquierda (360px) y el set (mínimo 440px) entran sin
-   apretarse. Debajo de eso se apilan: a 400px de viewport la pantalla no scrollea de costado. */
-@container main (min-width:860px){.radiodj-grid{grid-template-columns:360px minmax(0,1fr)}}
+.radiodj-head .muted{margin:4px 0 0;font-size:13px;color:var(--color-neutral-400)}
 
 .rpanel{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface);min-width:0}
 .rpanel-h{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
@@ -1137,25 +1132,12 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rpanel-set{gap:var(--space-3)}
 .rset-head{display:flex;align-items:baseline;gap:var(--space-3);flex-wrap:wrap}
 .rset-cuenta{margin-left:auto;font-size:12px;color:var(--color-neutral-400)}
-/* Exportar a Rekordbox: va a la derecha del encabezado del set. Sin set sigue enfocable
-   (aria-disabled, como «Armar el set») y se ve apagado. */
-.rexportar{min-height:32px;margin-left:auto}
-.rset-cuenta+.rexportar{margin-left:0}
+/* Exportar el set (f50): botón grande arriba a la derecha de la pantalla, con su aclaración.
+   Sin set sigue enfocable (aria-disabled, como «Armar el set») y se ve apagado. */
+.rexportar{min-height:44px;padding:0 18px;font-size:14px;gap:8px}
 .rexportar[aria-disabled=true]{opacity:.45;cursor:not-allowed}
 .rexportar-ok{color:var(--color-neutral-300)}
-.rset{display:flex;flex-direction:column;gap:2px}
-.rpaso{padding:var(--space-1) 0}
-/* El porqué del motor, sobre la fila y con el hilo que la conecta con la anterior. */
-.rpaso-why{display:flex;align-items:center;gap:6px;margin:0 0 2px;padding-left:6px;font-size:11.5px;line-height:1.4;color:var(--color-accent-300)}
-.rpaso-why .mono{font-size:11.5px}
-.rpaso-why-ico{color:var(--color-neutral-600)}
-.rpaso-why.is-seed{color:var(--color-neutral-400)}
-.rpaso-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2);min-height:44px;padding:var(--space-1) var(--space-2);border-radius:var(--radius-md);background:var(--color-well)}
-.rpaso-n{width:24px;flex:none;text-align:right;font-size:12px;color:var(--color-neutral-600)}
-.rpaso-id{display:flex;flex-direction:column;min-width:130px;flex:1}
-.rpaso-titulo{font-size:13.5px;font-weight:500;line-height:1.25}
-.rpaso-artista{font-size:11.5px;color:var(--color-neutral-500)}
-/* 28px con 8px de separación: el objetivo efectivo (WCAG 2.5.8) queda sobre los 24px. */
+/* 28px con separación: el objetivo efectivo (WCAG 2.5.8) queda sobre los 24px. */
 .rplay{width:28px;height:28px;flex:none;display:grid;place-items:center;border:1px solid var(--color-divider);border-radius:50%;background:var(--color-surface);color:var(--color-text);cursor:pointer}
 .rplay:hover{border-color:var(--color-accent);color:var(--color-accent-200)}
 .rplay.on{border-color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 22%,transparent);color:var(--color-accent-200)}
@@ -1202,8 +1184,8 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rguardado .btn-sm{min-height:32px}
 .rborrar-ok{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
 .rborrar-ok:hover{background:color-mix(in srgb,var(--color-danger) 12%,transparent)}
-/* Calificar una transición: entre el porqué y la fila, chico y a mano con el tema sonando. */
-.rcal{display:flex;flex-direction:column;gap:4px;margin:0 0 4px;padding-left:22px;min-width:0}
+/* Calificar una transición: en el detalle del track, debajo de su porqué (f50). */
+.rcal{display:flex;flex-direction:column;gap:4px;margin:var(--space-1) 0 0;min-width:0}
 .rcal-fila{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
 .rcal-seg{background:var(--color-well)}
 /* 32px de alto: blanco cómodo sin mirar (WCAG 2.5.8 pide 24). */
@@ -1221,9 +1203,6 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rplay.is-sin{border-style:dashed;background:transparent;cursor:default}
 .rpaso.is-falta .rpaso-titulo{color:var(--color-neutral-300)}
 .rtag-falta{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-pill);font-size:10.5px;letter-spacing:0.03em;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 34%,transparent)}
-.reditar{min-height:32px;margin-left:auto}
-.rtag-seed+.reditar,.rtag-notrack+.reditar{margin-left:0}
-.radiodj-grid[hidden]{display:none}
 
 /* — editor de cues y loops (f48, opción B del canvas) —
    Colores de los 8 hot cues: SOLO tokens del sistema (los de las calificaciones, info, la
@@ -1252,37 +1231,12 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .cue-c5{--cue-c:var(--cue-5)}.cue-c6{--cue-c:var(--cue-6)}.cue-c7{--cue-c:var(--cue-7)}.cue-c8{--cue-c:var(--cue-8)}
 .cue-mem{--cue-c:var(--cue-mem)}.cue-loop{--cue-c:var(--cue-loop)}
 
+/* Desde f50 el editor vive en la pestaña «Cues y loops» del detalle (.rdet, contenedor `det`):
+   la lista de temas es la lista del set, y el título y los datos del tema van en la cabecera
+   del detalle. */
 .cue-ed{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
-.cue-ed-top{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-4)}
-.cue-volver{min-height:32px}
-.cue-export-nota{flex:1 1 240px;min-width:0}
-.cue-ed-grid{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
-/* Dos columnas cuando entra la lista (250px) y el editor sin apretarse; debajo, la lista de
-   temas pasa ARRIBA (y con su propio scroll vertical: un set de 30 no empuja la onda). */
-@container main (min-width:860px){.cue-ed-grid{grid-template-columns:250px minmax(0,1fr)}}
-.cue-th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-400)}
-
-.cue-temas{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface);min-width:0}
-.cue-temas-lista{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;max-height:min(40vh,420px);overflow-y:auto;overscroll-behavior:contain}
-.cue-tema{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:44px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
-.cue-tema:hover{background:var(--color-well)}
-.cue-tema.is-sel{background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 3px 0 0 var(--color-accent)}
-.cue-tema[aria-disabled=true]{cursor:not-allowed}
-.cue-tema[aria-disabled=true] .cue-tema-titulo{color:var(--color-neutral-400)}
-.cue-tema-n{font-size:12px;color:var(--color-neutral-400);flex:none}
-.cue-tema-id{display:flex;flex-direction:column;min-width:0;flex:1}
-.cue-tema-titulo{font-size:13.5px;font-weight:600}
-.cue-tema-meta{font-size:12px;color:var(--color-neutral-400)}
 .cue-huerfanas{color:var(--color-warn)}
-
-.cue-main{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface)}
-.cue-cab{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-2) var(--space-3)}
-.cue-cab-id{min-width:0}
-.cue-titulo{margin:4px 0 0;font-size:20px;font-weight:600;overflow-wrap:anywhere}
-.cue-titulo:focus-visible{outline:none}
-.cue-artista{font-weight:400;color:var(--color-neutral-400)}
-.cue-chips{display:flex;flex-wrap:wrap;gap:4px}
-.cue-acuerdo{font-size:10.5px;color:var(--color-neutral-400);margin-left:4px}
+.cue-main{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
 
 .cue-wavebox{display:flex;flex-direction:column;gap:6px;padding:var(--space-3) var(--space-4);border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
 /* La onda deja 12px de cada lado dentro de su caja: las banderitas de las marcas del borde
@@ -1346,14 +1300,170 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .cue-confirma{display:inline-flex;flex-direction:column;gap:4px;align-items:flex-end}
 .cue-confirma .btn-sm{min-height:28px;padding:2px 8px}
 .cue-si{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
-/* A 400px la tabla es angosta: el tipo pasa a la línea de abajo del número (se lee igual
-   por el encabezado) y la columna de tiempo se lleva más ancho. */
-@container main (max-width:520px){
+/* Detalle angosto (el panel de la derecha a 1280 px, o la pantalla entera a 400 px): la
+   columna del tipo se esconde (el número de la marca ya lo dice: 1-8, M o L) y la de tiempo
+   se lleva más ancho. */
+@container det (max-width:520px){
   .cue-tabla .c-tipo{display:none}
   .cue-tabla .c-t{width:38%}
   .cue-reloj{margin-left:0;width:100%}
   .cue-wavebox{padding:var(--space-2) var(--space-3)}
 }
+
+/* ===== Radio DJ en maestro/detalle (f50, canvas elegido por el dueño) =====
+   Arriba cómo se arma el set; abajo la lista del set (maestro) y el detalle del track elegido.
+   Solo tokens del sistema (el canvas tenía colores fijos de mockup). Los cortes se miden con
+   contenedores: `main` (la pantalla sin el rail), `rset` (el panel de la lista) y `det` (el
+   detalle), así la misma regla vale a 1280 px con el detalle al costado y a 400 px apilado. */
+.radiodj-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--space-3) var(--space-4)}
+.radiodj-head-id{min-width:0;flex:1 1 280px}
+.rexportar-box{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:100%}
+.rexportar-nota{font-size:12px;color:var(--color-neutral-400);text-align:right}
+
+/* — cómo se arma: semilla, controles y sets guardados, en una franja — */
+.radiodj-arma{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
+@container main (min-width:900px){
+  .radiodj-arma{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr)}
+  .radiodj-arma .rlista,.radiodj-arma .rsets{max-height:min(36vh,320px)}
+}
+
+/* — maestro / detalle — */
+.radiodj-md{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
+@container main (min-width:960px){.radiodj-md{grid-template-columns:minmax(0,1fr) 400px}}
+@container main (min-width:1300px){.radiodj-md{grid-template-columns:minmax(0,1fr) 460px}}
+.rpanel-set{container:rset / inline-size}
+
+/* La lista del set: una grilla por fila (role=table/row/cell explícitos, así el CSS puede
+   reacomodar las celdas sin que el lector de pantalla pierda la tabla). */
+.rtabla{display:flex;flex-direction:column;min-width:0;border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+.rtabla .rtabla-fila{display:grid;align-items:center;column-gap:8px;row-gap:2px;padding:8px 10px;min-width:0;
+  grid-template-columns:24px 28px minmax(0,1fr) auto;
+  grid-template-areas:'n play track cues' '. . why why' '. . onda onda' '. . datos datos'}
+.rtabla .c-n{grid-area:n;text-align:right}
+.rtabla .c-play{grid-area:play;display:flex}
+.rtabla .c-art{display:none}
+.rtabla .c-track{grid-area:track;min-width:0;display:flex;flex-direction:column;gap:2px}
+/* El porqué: un renglón propio a lo ancho de la fila (debajo del título). */
+.rtabla .c-why{grid-area:why;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px}
+.rtabla-th .c-why{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.rtabla .c-onda{grid-area:onda;min-width:0}
+.rtabla .c-cues{grid-area:cues;justify-self:end}
+/* Angosto: BPM, key y duración van juntos en el tercer renglón. */
+.rtabla .rpaso .c-bpm,.rtabla .rpaso .c-key,.rtabla .rpaso .c-dur{grid-area:datos;min-width:0}
+.rtabla .rpaso .c-bpm{justify-self:start}
+.rtabla .rpaso .c-key{justify-self:center}
+.rtabla .rpaso .c-dur{justify-self:end}
+.rtabla-th{border-bottom:1px solid var(--color-divider)}
+.rtabla-th>[role=columnheader]{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-400)}
+/* Angosto, los encabezados de dato no tienen columna propia: quedan para el lector. */
+.rtabla-th .c-onda,.rtabla-th .c-bpm,.rtabla-th .c-key,.rtabla-th .c-dur{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@container rset (min-width:500px){
+  .rtabla .rtabla-fila{grid-template-columns:24px 28px minmax(0,1fr) 84px 52px 74px 42px 62px;grid-template-areas:'n play track onda bpm key dur cues' '. . why why why why why why'}
+  .rtabla .c-onda{grid-area:onda}
+  .rtabla .rpaso .c-bpm{grid-area:bpm;justify-self:end}
+  .rtabla .rpaso .c-key{grid-area:key;justify-self:start}
+  .rtabla .rpaso .c-dur{grid-area:dur;justify-self:end}
+  .rtabla-th .c-bpm{grid-area:bpm;text-align:right}
+  .rtabla-th .c-key{grid-area:key}
+  .rtabla-th .c-dur{grid-area:dur;text-align:right}
+  .rtabla-th .c-onda,.rtabla-th .c-bpm,.rtabla-th .c-key,.rtabla-th .c-dur{position:static;width:auto;height:auto;overflow:visible;clip:auto}
+}
+/* Con lugar, la carátula (sin carátula, el placeholder "white label" de siempre). */
+@container rset (min-width:660px){
+  .rtabla .rtabla-fila{grid-template-columns:24px 28px 40px minmax(0,1fr) 96px 56px 76px 44px 66px;grid-template-areas:'n play art track onda bpm key dur cues' '. . . why why why why why why'}
+  .rtabla .c-art{display:block;grid-area:art}
+}
+.rset{display:flex;flex-direction:column}
+.rpaso{border-top:1px solid color-mix(in srgb,var(--color-text) 7%,transparent);cursor:pointer}
+.rpaso:hover{background:color-mix(in srgb,var(--color-text) 4%,transparent)}
+.rpaso.is-sel{background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 3px 0 0 var(--color-accent)}
+.rpaso-n{font-size:12px;color:var(--color-neutral-400)}
+.rart{display:block;width:40px;height:40px;border-radius:var(--radius-sm);overflow:hidden}
+/* El botón que elige la fila: título y artista. Es la parada de Tab de la lista. */
+.rpaso-sel{display:flex;flex-direction:column;align-items:flex-start;min-width:0;width:100%;padding:2px 4px;margin:-2px -4px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
+.rpaso-sel:focus-visible{outline-offset:0}
+.rpaso-titulo{display:block;max-width:100%;font-size:13.5px;font-weight:600;line-height:1.25}
+.rpaso-artista{display:block;max-width:100%;font-size:12px;color:var(--color-neutral-400)}
+/* El porqué del motor, en chico debajo del artista (en grande en el detalle). */
+.rpaso-why{display:flex;align-items:baseline;gap:6px;min-width:0;font-size:11.5px;line-height:1.35;color:var(--color-accent-300)}
+.rpaso-why .mono{font-size:11.5px;overflow-wrap:anywhere}
+.rpaso-why-ico{color:var(--color-neutral-400)}
+.rpaso-why.is-seed{color:var(--color-neutral-300)}
+.rpaso-tags{display:flex;flex-wrap:wrap;gap:4px}
+.rpaso-err{display:block}
+.rtabla .c-bpm b,.rtabla .c-dur .mono{font-family:var(--font-mono);font-size:12.5px}
+.rtabla .c-bpm .mb,.rtabla .c-key .mb{background:transparent;box-shadow:none;padding:0}
+.rtabla .c-key .mb-key.is-dudosa{padding:0 4px}
+/* La columna «Cues»: cuántas marcas; «sin cues» en gris. */
+.rcues{display:inline-flex;align-items:center;justify-content:center;min-width:56px;height:22px;padding:0 6px;border-radius:6px;font-size:12px;color:var(--color-text);box-shadow:inset 0 0 0 1px var(--color-divider);white-space:nowrap}
+.rcues.is-sin{color:var(--color-neutral-400)}
+/* La miniondita: el casillero gris tiene la forma de la final (mismo alto y ancho). */
+.rmini{display:block;width:100%;height:24px;border-radius:3px;background:var(--color-raise);overflow:hidden}
+.rmini svg{display:block;width:100%;height:100%}
+.rmini svg rect{fill:var(--color-neutral-400)}
+.rpaso.is-sel .rmini svg rect{fill:var(--color-accent-400)}
+.rmini.is-ok{background:transparent}
+.rmini.is-error,.rmini.is-falta{background:transparent;border:1px dashed var(--color-divider)}
+@container rset (max-width:499px){.rmini{height:18px}}
+
+/* — el detalle — */
+.rdet{container:det / inline-size;display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface)}
+/* Al costado de la lista queda a la vista mientras se recorre el set (con su propio scroll). */
+@container main (min-width:960px){
+  .rdet{position:sticky;top:calc(var(--topbar-h) + var(--space-2));max-height:calc(100vh - var(--topbar-h) - var(--player-h) - var(--space-4));overflow-y:auto;overscroll-behavior:contain}
+}
+.rdet-vacio{padding:var(--space-2)}
+.rdet-cab{display:flex;gap:var(--space-3);align-items:center;min-width:0}
+.rdet-art{flex:none;width:84px;height:84px;border-radius:var(--radius-md);overflow:hidden}
+.rdet-id{min-width:0;flex:1}
+.rdet-th{display:block;margin:0;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-400)}
+.rdet-titulo{margin:2px 0 0;font-size:18px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.rdet-artista{margin:0;font-size:14px;color:var(--color-neutral-300)}
+.rdet-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:var(--space-2)}
+.rdet-key{display:inline-flex;align-items:center;gap:4px}
+.rdet-key>.mb-label{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-400)}
+.rdet-why{display:flex;flex-direction:column;gap:6px;padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+.rdet-motivo{margin:0;font-size:13.5px;color:var(--color-text);overflow-wrap:anywhere}
+.rdet-energia{margin:0;font-size:13px;color:var(--color-neutral-300)}
+.rinfo-nota{font-size:11.5px;color:var(--color-neutral-400)}
+
+/* Pestañas (patrón tablist). La deshabilitada se ve apagada y dice «próximamente». */
+.rdet-tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--color-divider)}
+.rtab{min-height:40px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--color-neutral-300);font:600 13px var(--font-body);cursor:pointer}
+.rtab:hover:not([aria-disabled=true]){color:var(--color-text)}
+.rtab.is-on{color:var(--color-text);border-bottom-color:var(--color-accent)}
+.rtab:focus-visible{outline-offset:-2px}
+.rtab[aria-disabled=true]{color:var(--color-neutral-400);cursor:not-allowed;display:inline-flex;flex-direction:column;justify-content:center;line-height:1.15}
+.rtab-pronto{font-weight:400;font-size:11px}
+.rdet-panel{min-width:0}
+.rdet-panel[hidden]{display:none}
+
+/* «Información» */
+.rinfo{display:flex;flex-direction:column;gap:var(--space-2)}
+.rinfo-dl{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:6px var(--space-3);margin:0;font-size:13px}
+.rinfo-dl dt{color:var(--color-neutral-400)}
+.rinfo-dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.rinfo-ruta{font-size:12px}
+@container det (max-width:360px){.rinfo-dl{grid-template-columns:minmax(0,1fr)}.rinfo-dl dd{margin-bottom:4px}}
+
+/* Volumen (editor): el mismo control que la barra de abajo, con el número a la vista. */
+.vol{display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.vol-mute{display:grid;place-items:center;width:32px;height:32px;flex:none;padding:0;border:1px solid var(--color-divider);border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);cursor:pointer}
+.vol-mute:hover{color:var(--color-text)}
+.vol-mute[aria-pressed=true]{color:var(--color-accent-300);border-color:var(--color-accent)}
+.vol-range{flex:1 1 120px;min-width:80px;height:24px;margin:0;padding:0;background:transparent;cursor:pointer;-webkit-appearance:none;appearance:none}
+.vol-range:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px;border-radius:6px}
+.vol-range::-webkit-slider-runnable-track{height:4px;border-radius:var(--radius-pill);background:linear-gradient(to right,var(--color-accent) var(--pct),color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well)) var(--pct))}
+.vol-range::-moz-range-track{height:4px;border-radius:var(--radius-pill);background:linear-gradient(to right,var(--color-accent) var(--pct),color-mix(in srgb,var(--color-neutral-600) 72%,var(--color-well)) var(--pct))}
+.vol-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border:0;border-radius:50%;background:var(--color-accent-200);box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 35%,transparent)}
+.vol-range::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:var(--color-accent-200)}
+.vol-pct{flex:none;min-width:40px;font-size:12px;color:var(--color-neutral-300);text-align:right}
+
+/* El estado de la biblioteca del motor al pie del rail (solo en la radio). */
+.pl-rail-lib{margin-top:auto;display:flex;flex-direction:column;gap:4px;padding:12px;border-radius:12px;background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+.pl-rail-lib+.pl-rail-foot{margin-top:0}
+.pl-rail-lib-h{font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--color-neutral-400)}
+.pl-rail-lib-n{font-size:13px;color:var(--color-text)}
 
 
 /* ===== Carátulas (2026-09-25) =====
