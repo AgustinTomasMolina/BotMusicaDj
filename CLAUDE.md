@@ -53,7 +53,7 @@ Un cambio que rompe cualquiera de estos no entra.
 
 **Cosas que no se tocan**
 - Nunca modificar ni pisar los archivos de audio originales. El pipeline escribe copias procesadas en un destino aparte.
-- `licencia` y `origen` son obligatorios en cualquier modelo de track desde el primer día.
+- `licencia` y `origen` son columnas del modelo de track y se guardan siempre. **Decisión del dueño (2026-10-09): por ahora NO se piden ni son obligatorios** — son datos del usuario de su propia biblioteca, no hay plataforma que los verifique. Si no se declaran, el valor es `no declarado` (nunca un valor inventado). Se reactivan cuando haya una web pública con subida de música.
 - El embedding tiene que seguir siendo intercambiable: cualquier backend devuelve un `np.ndarray` 1-D y el resto del sistema no se entera.
 
 ## Regla de oro — el oído gana
