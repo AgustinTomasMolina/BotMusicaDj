@@ -125,12 +125,10 @@ def _atributos_track(d: dict, i: int, carpeta_itunes: Path) -> dict:
 
     # Tonality en NOTACIÓN CLÁSICA ('D#m'), no en Camelot.
     #
-    # NO se pudo verificar contra un export real de Rekordbox: no hay ninguno en esta
-    # máquina. La evidencia usada es del propio repo: `ground_truth/rekordbox.py:20-29`
-    # mapea clásica → Camelot, o sea que el parser fue escrito esperando que Rekordbox
-    # escriba la clásica (y su docstring aclara que Rekordbox usa una u otra según
-    # configuración). Si algún día se confirma lo contrario, se cambia acá y el test de
-    # ida y vuelta lo valida solo.
+    # Verificado contra un export real (Rekordbox 7.2.16, prueba 5.68 del 2026-10-08): escribe
+    # la clásica ("Ebm"), que es lo que `ground_truth/rekordbox.py` mapea a Camelot. Su
+    # docstring aclara que Rekordbox puede usar una u otra según configuración; si algún día
+    # aparece la otra, se cambia acá y el test de ida y vuelta lo valida solo.
     clasica = (d.get("clasica") or "").strip()
     if not clasica and d.get("camelot"):
         clasica = camelot_a_clasica(d["camelot"])

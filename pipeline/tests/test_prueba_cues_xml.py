@@ -185,7 +185,36 @@ def test_una_base_de_esquema_viejo_no_se_abre(audio_100s, tmp_path):
     assert _sha(db) == antes
 
 
+def test_una_base_con_la_version_al_dia_pero_sin_tablas_no_se_abre(audio_100s, tmp_path):
+    """Auditoría de f47: el chequeo miraba solo `user_version`, y el Store crea el esquema en
+    una base sin tablas: abrirla así también es escribir la base del dueño."""
+    db = tmp_path / "vacia.sqlite"
+    con = sqlite3.connect(str(db))
+    con.execute(f"PRAGMA user_version = {VERSION_ESQUEMA}")
+    con.commit()
+    con.close()
+    antes = _sha(db)
+    with pytest.raises(ErrorDePrueba, match="no tiene la tabla de tracks"):
+        datos_de_la_base(db, audio_100s)
+    assert _sha(db) == antes, "la base se modificó"
+    con = sqlite3.connect(str(db))
+    assert con.execute("SELECT name FROM sqlite_master").fetchall() == [], "se creó el esquema"
+    con.close()
+
+
 def test_la_salida_tiene_que_ser_xml_para_no_pisar_el_audio(audio_100s, tmp_path):
     antes = _sha(audio_100s)
     assert main(["--audio", str(audio_100s), "--salida", str(audio_100s)]) == 1
     assert _sha(audio_100s) == antes
+
+
+def test_no_pisa_un_xml_que_ya_existe_sin_forzar(audio_100s, tmp_path):
+    """Auditoría de f47: el reexport de Rekordbox (la colección entera) se guarda en la misma
+    carpeta que la prueba; correr la prueba de nuevo no puede pisarlo sin pedirlo."""
+    xml = tmp_path / "prueba.xml"
+    otro = '<?xml version="1.0"?><DJ_PLAYLISTS><COLLECTION Entries="346"/></DJ_PLAYLISTS>'
+    xml.write_text(otro, encoding="utf-8")
+    assert main(["--audio", str(audio_100s), "--salida", str(xml)]) == 1
+    assert xml.read_text(encoding="utf-8") == otro, "pisó el XML existente sin --forzar"
+    assert main(["--audio", str(audio_100s), "--salida", str(xml), "--forzar"]) == 0
+    assert [m["Name"] for m in _marcas(xml)] == ["PRUEBA hot 1", "", "PRUEBA memory", "PRUEBA loop 4s"]

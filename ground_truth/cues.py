@@ -19,8 +19,9 @@ from ground_truth.rekordbox import parsear
 _AUTOGENERADO = "1.1Bars"
 # Qué es cada POSITION_MARK. Lectura VERIFICADA contra Rekordbox 7.2.16 (prueba 5.68,
 # pipeline/PRUEBA_CUES.md, 2026-10-08): importó un XML con hot cues, una memory cue y un loop
-# escritos así y los reexportó idénticos; y las 154 marcas Type=4 del XML real de la
-# biblioteca traen End (duran 1,6-4 s). Es la especificación pública:
+# escritos así y los reexportó idénticos; y en los dos exports reales de la biblioteca todas
+# las marcas Type=4 traen End (07/09: 154; 08/10: 243, de 0,75 a 6,96 s). Es la
+# especificación pública:
 #   Type 0 = cue, 1 = fade-in, 2 = fade-out, 3 = load, 4 = loop (lleva End)
 #   Num -1 = memory, 0..7 = hot cue A..H
 # Antes este módulo leía "Type=4, Num=0, sin nombre" como memory cue anónimo: era un loop en

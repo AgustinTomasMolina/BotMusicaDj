@@ -26,15 +26,13 @@ Las marcas por defecto:
     memory cue  Type=0  Num=-1  Start=15.000              Name="PRUEBA memory"  sin color
     loop        Type=4  Num=2   Start=90.000  End=94.000  Name="PRUEBA loop 4s" naranja
 
-AMBIGÜEDAD QUE ESTA PRUEBA VIENE A RESOLVER
--------------------------------------------
-`ground_truth/cues.py:33-35` lee el XML real del dueño suponiendo otra cosa: trata
-`Type=4, Num=0, sin nombre` como "memory cue anónimo", y corrido sobre ese XML contó muchas
-más marcas Type 4 que Type 0. Según la especificación, `Type=4` es un loop y `Num=0` es el hot
-cue A, y el memory cue es `Num=-1`. Además `ground_truth/rekordbox.py:82-85` no lee `End`,
-así que con lo que hay en el repo no se puede saber si esas marcas Type 4 son loops. No se
-asume ninguna de las dos lecturas: este XML sigue la especificación pública, y lo que
-muestre Rekordbox (y cómo lo vuelva a exportar) dice cuál vale.
+QUÉ RESOLVIÓ ESTA PRUEBA (2026-10-08, ver PRUEBA_CUES.md §5)
+-----------------------------------------------------------
+Había dos lecturas de `Type`/`Num`: la especificación pública (este XML la sigue) y la de
+`ground_truth/cues.py`, que trataba `Type=4, Num=0, sin nombre` como "memory cue anónimo".
+Rekordbox 7.2.16 importó este XML con las cuatro marcas en su lugar y lo reexportó idéntico:
+vale la especificación (`Type=4` = loop con `End`, `Num` = slot, memory = `Num=-1`), y
+`ground_truth` ya se corrigió con eso (el parser lee `End`, `cues.clase()`).
 
 El audio NO se modifica: se lee para medir la duración (`motor.analisis.cargar`). BPM y
 tonalidad salen de la base del motor si se pasa `--db` y el track está analizado; si no,
@@ -162,8 +160,10 @@ def medir_duracion(audio: Path) -> float:
 def datos_de_la_base(db: Path, audio: Path) -> dict:
     """BPM y key (Camelot) del track si la base del motor lo tiene analizado; `{}` si no.
 
-    La base NO se modifica: primero se mira la versión del esquema con una conexión de solo
-    lectura, y si no es la actual no se abre con el `Store` (la migraría)."""
+    La base NO se modifica: primero se miran la versión del esquema y la tabla `tracks` con
+    una conexión de solo lectura; si la versión no es la actual, o la tabla no está, no se
+    abre con el `Store`, que en los dos casos ESCRIBIRÍA la base (migrarla o crear el esquema:
+    una base con la versión al día pero sin tablas pasaba el chequeo, auditoría de f47)."""
     from motor.store import VERSION_ESQUEMA, Store
 
     if not db.is_file():
@@ -171,8 +171,14 @@ def datos_de_la_base(db: Path, audio: Path) -> dict:
     con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
     try:
         version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        con_tracks = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'").fetchone()
     finally:
         con.close()
+    if con_tracks is None:
+        raise ErrorDePrueba(
+            f"La base {db} no tiene la tabla de tracks: abrirla crearía el esquema, y esta "
+            f"prueba no escribe la base. Corré sin --db.")
     if version != VERSION_ESQUEMA:
         raise ErrorDePrueba(
             f"La base {db} tiene esquema versión {version} y el actual es {VERSION_ESQUEMA}: "
@@ -226,6 +232,8 @@ def main(argv=None) -> int:
     ap.add_argument("--loop-largo", type=float, default=4.0,
                     help="Largo del loop, en s (default 4).")
     ap.add_argument("--nombre-hot1", default="PRUEBA hot 1", help="Nombre del hot cue 1.")
+    ap.add_argument("--forzar", action="store_true",
+                    help="Pisar la salida si ya existe (sin esto, no se pisa).")
     args = ap.parse_args(argv)
 
     try:
@@ -233,6 +241,11 @@ def main(argv=None) -> int:
             raise ErrorDePrueba(f"No existe el audio: {args.audio}")
         if args.salida.suffix.lower() != ".xml":
             raise ErrorDePrueba(f"La salida tiene que ser un .xml: {args.salida}")
+        if args.salida.exists() and not args.forzar:
+            # Puede ser un export de Rekordbox con toda la colección (el reexport de la prueba
+            # se guarda en la misma carpeta): no se pisa sin pedirlo.
+            raise ErrorDePrueba(f"Ya existe {args.salida}: no lo piso. Elegí otro nombre o "
+                                f"agregá --forzar.")
         marcas = marcas_de_prueba(args.hot1, args.hot2, args.memory, args.loop,
                                   args.loop_largo, args.nombre_hot1)
         duracion = medir_duracion(args.audio)

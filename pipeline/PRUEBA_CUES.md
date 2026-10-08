@@ -100,23 +100,18 @@ las 243 marcas Type 4 traen `End` (0,75-6,96 s, mediana 3,2 s). La lectura de
 loops en el hot cue A. Corregido en f47: el parser lee `End` y `cues.clase()` clasifica cada
 marca con esta lectura.
 
-## La duda que esta prueba resuelve
+## La duda que esta prueba resolvió
 
-Hay dos lecturas de `Type` y `Num` que se contradicen, y no se asume ninguna:
+Había dos lecturas de `Type` y `Num` que se contradecían:
 
 - **Especificación pública del XML de Rekordbox:** `Type` 0 = cue, 1 = fade-in, 2 = fade-out,
   3 = load, 4 = loop; `Num` -1 = memory cue, 0-7 = hot cues A-H; el loop lleva `End`.
   El XML de esta prueba sigue esta lectura.
-- **Lo que supone nuestro análisis del XML real** (`ground_truth/cues.py`): trata
-  `Type=4, Num=0, sin nombre` como "memory cue anónimo", y en tu biblioteca contó muchas más
-  marcas Type 4 que Type 0, con los Num 6/7 cayendo en el medio del track. Según la
-  especificación, `Type=4, Num=0` sería un loop en el hot cue A, no un memory cue. Además el parser
-  (`ground_truth/rekordbox.py`) no lee `End`, así que con lo que tenemos no se puede saber
-  si esas marcas Type 4 son loops o no.
+- **Lo que suponía `ground_truth/cues.py`:** `Type=4, Num=0, sin nombre` = "memory cue
+  anónimo", y el parser no leía `End`.
 
-Si Rekordbox muestra la memory cue con `Num=-1` y el loop con `Type=4` como loop en el hot
-cue C, y al reexportar los escribe igual, vale la especificación y hay que corregir
-`ground_truth/cues.py`. Si no, el reexport dice cómo escribirlos.
+**Resultado (§5): vale la especificación.** `ground_truth` ya se corrigió: el parser lee `End`
+y `cues.clase()` clasifica cada marca con esta lectura.
 
 ## Al terminar
 
