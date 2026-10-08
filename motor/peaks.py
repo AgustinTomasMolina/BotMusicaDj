@@ -19,6 +19,7 @@ con la ruta, el tamaño y el mtime del archivo. Si alguno cambió, se recalcula;
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -217,10 +218,8 @@ def cached_peaks(path: Path | str, cache_dir: Path | str, bins: int = PEAK_BINS,
         guardado = None                                  # sin caché o ilegible: se rehace
     res = _desde_cache(guardado, firma, bins)
     if res is not None:
-        try:
+        with contextlib.suppress(OSError):
             os.utime(archivo)                            # usada: la poda la deja para el final
-        except OSError:
-            pass
         return res, True
 
     res = compute_peaks(ruta, bins)
