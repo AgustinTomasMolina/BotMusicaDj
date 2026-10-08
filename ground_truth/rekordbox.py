@@ -79,9 +79,12 @@ def parsear(xml_path: Path) -> list[dict]:
         raise ValueError("No encontré <COLLECTION> — ¿es un XML de Rekordbox?")
     tracks = []
     for tr in col.findall("TRACK"):
+        # `end`: solo los loops (Type=4) lo traen; es lo único que distingue un loop de un cue
+        # en el mismo slot. None si la marca no tiene End (prueba 5.68, ver ground_truth/cues.py).
         cues = [{
             "name": pm.get("Name", ""), "type": pm.get("Type", ""),
             "start": float(pm.get("Start") or 0), "num": pm.get("Num", ""),
+            "end": float(pm.get("End")) if pm.get("End") else None,
         } for pm in tr.findall("POSITION_MARK")]
         tracks.append({
             "track_id": tr.get("TrackID", ""),
@@ -116,10 +119,11 @@ def escribir_csv(tracks: list[dict], out_dir: Path) -> tuple[Path, Path]:
             w.writerow([t[c] for c in _COLS])
     with cues_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["track_id", "cue_name", "cue_type", "start_s", "num"])
+        w.writerow(["track_id", "cue_name", "cue_type", "start_s", "num", "end_s"])
         for t in tracks:
             for c in t["cues"]:
-                w.writerow([t["track_id"], c["name"], c["type"], c["start"], c["num"]])
+                w.writerow([t["track_id"], c["name"], c["type"], c["start"], c["num"],
+                            "" if c["end"] is None else c["end"]])
     return tracks_csv, cues_csv
 
 

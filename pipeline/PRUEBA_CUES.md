@@ -74,23 +74,31 @@ guardalo fuera del repo, abrilo con el Bloc de notas, buscá el nombre del track
 sus líneas `<POSITION_MARK .../>`** al cuadro de abajo. Así vemos cómo escribe Rekordbox
 *sus propias* marcas, que es la verdad, no la especificación.
 
-## 5. Cuadro de resultado (completar)
+## 5. Resultado (2026-10-08, PC de casa)
 
-Versión de Rekordbox: ______  ·  Fecha: ______  ·  ¿El track ya estaba en la colección? ______
+Versión de Rekordbox: **7.2.16** · Fecha: **2026-10-08** · ¿El track ya estaba en la colección?
+**No**: se usó una COPIA de un track en una carpeta aparte (el original no se tocó).
 
-| Marca | Escribimos Type / Num / Start / End | ¿Apareció? | Qué mostró Rekordbox (slot, tiempo, nombre, color, ¿loop?) | Cómo la reexportó (Type / Num / Start / End) |
+| Marca | Escribimos Type / Num / Start / End | ¿Apareció? | Qué mostró Rekordbox | Cómo la reexportó (Type / Num / Start / End) |
 |---|---|---|---|---|
-| hot cue 1 | 0 / 0 / 30.000 / — | | | |
-| hot cue 2 | 0 / 1 / 60.000 / — | | | |
-| memory cue | 0 / -1 / 15.000 / — | | | |
-| loop | 4 / 2 / 90.000 / 94.000 | | | |
+| hot cue 1 | 0 / 0 / 30.000 / — | sí | pad A, "PRUEBA hot 1", rojo | 0 / 0 / 30.000 / — · nombre y color iguales |
+| hot cue 2 | 0 / 1 / 60.000 / — | sí | pad B, sin nombre (muestra "01:00"), azul | 0 / 1 / 60.000 / — · color igual |
+| memory cue | 0 / -1 / 15.000 / — | sí | triángulo rojo sobre la onda, al principio | 0 / -1 / 15.000 / — · nombre igual |
+| loop | 4 / 2 / 90.000 / 94.000 | sí | pad C con el ícono de loop, "PRUEBA loop 4s", naranja | 4 / 2 / 90.000 / 94.000 · nombre y color iguales |
 
-Cues que el track ya tenía: antes ______ · después ______
+**El reexport es idéntico a lo que escribimos**, atributo por atributo. Rekordbox además analizó
+el track solo (147.00 BPM, Ebm): el XML de la prueba no llevaba BPM ni tonalidad.
 
-**Si algo falla, anotá qué apareció y qué no**, en qué slot cayó cada marca (A, B, C…), si
-el tiempo está corrido (cuánto), si un nombre o color no llegó, y cualquier mensaje de
-Rekordbox. Una marca que no aparece también es un resultado: no lo arregles a mano antes
-de anotarlo.
+Cues que el track ya tenía: no aplica (era una copia nueva).
+
+### Conclusión
+
+Vale la **especificación pública**: `Type` 0 = cue, 4 = loop (con `End`); `Num` -1 = memory,
+0-7 = hot cue A-H. Lo confirma también el XML real de la biblioteca (export de Rekordbox 7.2.16):
+las 243 marcas Type 4 traen `End` (0,75-6,96 s, mediana 3,2 s). La lectura de
+`ground_truth/cues.py` ("Type=4, Num=0, sin nombre" = memory cue anónimo) era incorrecta: son
+loops en el hot cue A. Corregido en f47: el parser lee `End` y `cues.clase()` clasifica cada
+marca con esta lectura.
 
 ## La duda que esta prueba resuelve
 

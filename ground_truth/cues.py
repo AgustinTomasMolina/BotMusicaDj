@@ -17,8 +17,16 @@ from ground_truth.rekordbox import parsear
 
 # Cues que Rekordbox autogenera (grilla de compases): NO son decisiones humanas.
 _AUTOGENERADO = "1.1Bars"
-# Tolerancia para considerar que dos cues del mismo track están "en la misma posición".
-_TOL_COINCIDE_S = 1.0
+# Qué es cada POSITION_MARK. Lectura VERIFICADA contra Rekordbox 7.2.16 (prueba 5.68,
+# pipeline/PRUEBA_CUES.md, 2026-10-08): importó un XML con hot cues, una memory cue y un loop
+# escritos así y los reexportó idénticos; y las 154 marcas Type=4 del XML real de la
+# biblioteca traen End (duran 1,6-4 s). Es la especificación pública:
+#   Type 0 = cue, 1 = fade-in, 2 = fade-out, 3 = load, 4 = loop (lleva End)
+#   Num -1 = memory, 0..7 = hot cue A..H
+# Antes este módulo leía "Type=4, Num=0, sin nombre" como memory cue anónimo: era un loop en
+# el hot cue A.
+_TIPO = {"0": "cue", "1": "fade-in", "2": "fade-out", "3": "load", "4": "loop"}
+_SLOTS = "ABCDEFGH"
 
 
 def _zona(rel: float) -> str:
@@ -30,14 +38,15 @@ def _zona(rel: float) -> str:
     return "medio"
 
 
-def _es_memory_sin_nombre(cue: dict) -> bool:
-    """Memory cue anónimo de Rekordbox: Type=4, Num=0 y sin nombre."""
-    return cue["type"] == "4" and cue["num"] == "0" and not cue["name"]
-
-
-def _coincide_con_otro(cue: dict, otros: list[dict], tol_s: float = _TOL_COINCIDE_S) -> bool:
-    """¿Hay OTRO cue del mismo track a menos de `tol_s` de este? (duplicaría un hot cue)."""
-    return any(abs(cue["start"] - o["start"]) <= tol_s for o in otros)
+def clase(cue: dict) -> str:
+    """Qué es la marca: 'memory cue', 'hot cue A', 'hot loop G', 'memory loop', 'fade-in'…"""
+    tipo = _TIPO.get(cue["type"], f"Type {cue['type']}")
+    num = cue["num"]
+    if num == "-1":
+        return f"memory {tipo}"
+    if num.isdigit() and int(num) < len(_SLOTS):
+        return f"hot {tipo} {_SLOTS[int(num)]}"
+    return f"{tipo} (Num {num})"
 
 
 def analizar(tracks: list[dict]) -> None:
@@ -71,7 +80,9 @@ def analizar(tracks: list[dict]) -> None:
               f"  zonas {dict(zonas)}")
 
     # --- Hipótesis: Num=6 y Num=7 = entrada/salida de mezcla (convención propia) ---
-    print(f"\n{'-'*70}\nHipótesis 'Num=6/7 = entrada/salida de mezcla':")
+    # En la biblioteca real casi todas las marcas en G/H son LOOPS (Type=4), no cues: la
+    # hipótesis es sobre dónde el DJ guarda sus loops, no dónde marca la entrada/salida.
+    print(f"\n{'-'*70}\nHipótesis 'Num=6/7 = entrada/salida de mezcla' (ver sus clases abajo):")
     for num in ("6", "7"):
         rels = por_num.get(num, [])
         if rels:
@@ -80,23 +91,16 @@ def analizar(tracks: list[dict]) -> None:
             print(f"  Num={num}: {len(rels)} cues · zona dominante '{dom[0]}' ({dom[1]}/{len(rels)}) "
                   f"· mediana rel {sorted(rels)[len(rels)//2]:.2f}")
 
-    # --- Memory cues sin nombre (Type=4, Num=0): ¿coinciden con otro cue del track? ---
-    print(f"\n{'-'*70}\nMemory cues sin nombre (Type=4, Num=0):")
-    coinciden = solos = 0
-    total_mem = 0
-    for t in con_cues:
-        mem = [c for c in t["cues"] if _es_memory_sin_nombre(c)]
-        otros = [c for c in t["cues"] if not _es_memory_sin_nombre(c)]
-        for m in mem:
-            total_mem += 1
-            if _coincide_con_otro(m, otros):
-                coinciden += 1
-            else:
-                solos += 1
-    print(f"  total: {total_mem}")
-    print(f"  coinciden (±{_TOL_COINCIDE_S:g}s) con OTRO cue del mismo track: {coinciden}")
-    print(f"  solos (no coinciden con ningún otro cue): {solos}")
-    print("  → si casi todos están 'solos', son marcadores independientes, no duplican hot cues")
+    # --- Qué es cada marca (lectura verificada, ver `clase`) ---
+    print(f"\n{'-'*70}\nClases de marca (cues humanos):")
+    for k, n in sorted(Counter(clase(c) for _, c in humanos).items()):
+        print(f"  {k:<16} {n}")
+    loops = [c for _, c in humanos if c["type"] == "4"]
+    con_end = sorted(c["end"] - c["start"] for c in loops if c["end"] is not None)
+    print(f"\nloops: {len(loops)} · con End {len(con_end)} · sin End {len(loops) - len(con_end)}")
+    if con_end:
+        print(f"  duración: min {con_end[0]:.2f} s · mediana {con_end[len(con_end)//2]:.2f} s "
+              f"· max {con_end[-1]:.2f} s")
 
 
 def main(argv=None) -> int:
