@@ -169,13 +169,29 @@ def escribir_xml_rekordbox(decisiones: list[dict], destino: Path,
 
     El formato es el mismo que lee `ground_truth.rekordbox.parsear`, así que lo exportado
     se puede volver a auditar con el harness sin escribir un parser nuevo.
+
+    Cómo toma Rekordbox las marcas se prueba aparte, a mano, con `pipeline.prueba_cues_xml`
+    (tarea 5.68): ese script usa el mismo armado de abajo y agrega las marcas él, así que
+    esta salida sigue sin ninguna.
+    """
+    root, _ = armar_xml_rekordbox(decisiones, carpeta_itunes)
+    return guardar_xml_rekordbox(root, destino)
+
+
+def armar_xml_rekordbox(decisiones: list[dict],
+                        carpeta_itunes: Path) -> tuple[ET.Element, list[ET.Element]]:
+    """El árbol `DJ_PLAYLISTS` / `COLLECTION` / `TRACK` + la playlist, sin escribirlo.
+
+    Devuelve la raíz y los `<TRACK>` de la colección en el mismo orden que `decisiones`,
+    para que quien necesite colgarles hijos (la prueba de cues) lo haga sin rearmar nada.
     """
     root = ET.Element("DJ_PLAYLISTS", {"Version": "1.0.0"})
     ET.SubElement(root, "PRODUCT", {"Name": "MusiFlix", "Version": "1.0",
                                     "Company": "MusiFlix"})
     col = ET.SubElement(root, "COLLECTION", {"Entries": str(len(decisiones))})
+    tracks = []
     for i, d in enumerate(decisiones, 1):
-        ET.SubElement(col, "TRACK", _atributos_track(d, i, carpeta_itunes))
+        tracks.append(ET.SubElement(col, "TRACK", _atributos_track(d, i, carpeta_itunes)))
         # Acá van los <POSITION_MARK> cuando exista #5.4.
     # Una playlist con todo lo aprobado, para que entre agrupado y no suelto.
     playlists = ET.SubElement(root, "PLAYLISTS")
@@ -184,7 +200,11 @@ def escribir_xml_rekordbox(decisiones: list[dict], destino: Path,
                                          "KeyType": "0", "Entries": str(len(decisiones))})
     for i in range(1, len(decisiones) + 1):
         ET.SubElement(lista, "TRACK", {"Key": str(i)})
+    return root, tracks
 
+
+def guardar_xml_rekordbox(root: ET.Element, destino: Path) -> Path:
+    """Escribe el árbol en `destino` (UTF-8, con declaración XML), creando la carpeta."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(destino, encoding="utf-8", xml_declaration=True)
     return destino
