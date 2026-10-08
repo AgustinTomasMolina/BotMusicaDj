@@ -11,7 +11,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   fmtTiempo, parseTiempo, beatSegundos, pasoBeat, pctDe, tiempoDeX, padLibre, hotCue,
-  errorLoop, beatsDeLoop, escribiendo, atajo, marcasRegla, fmtRegla,
+  errorLoop, beatsDeLoop, escribiendo, atajo, marcasRegla, fmtRegla, activable, tramoOnda,
+  avisoDuracion,
 } from '../src/cues.js'
 
 test('fmtTiempo: m:ss.mmm con el redondeo hecho una sola vez', () => {
@@ -119,6 +120,47 @@ test('ningún atajo actúa mientras se escribe', () => {
   assert.equal(escribiendo({ tagName: 'BUTTON' }), false)
   assert.equal(escribiendo({ tagName: 'INPUT', type: 'button' }), false)
   assert.deepEqual(atajo({ key: 'c', target: { tagName: 'BUTTON' } }), { tipo: 'cue' })
+})
+
+test('Espacio en un botón es del botón; en la onda o el cuerpo, del reproductor', () => {
+  const boton = { tagName: 'BUTTON' }
+  for (const target of [boton, { tagName: 'A' }, { tagName: 'INPUT', type: 'checkbox' },
+    { tagName: 'DIV', getAttribute: (k) => (k === 'role' ? 'button' : null) }]) {
+    assert.equal(activable(target), true, JSON.stringify(target))
+    assert.equal(atajo({ key: ' ', target }), null, `Espacio en ${JSON.stringify(target)} no es play`)
+  }
+  const onda = { tagName: 'DIV', getAttribute: (k) => (k === 'role' ? 'slider' : null) }
+  assert.equal(activable(onda), false)
+  assert.deepEqual(atajo({ key: ' ', target: onda }), { tipo: 'play' })
+  assert.deepEqual(atajo({ key: ' ', target: { tagName: 'BODY' } }), { tipo: 'play' })
+  // Las letras sí siguen andando con el foco en un botón.
+  assert.deepEqual(atajo({ key: 'c', target: boton }), { tipo: 'cue' })
+})
+
+test('con Shift no hay atajo: Shift+C no es C', () => {
+  for (const k of ['C', 'c', 'M', 'I', 'O', ' ', '1', 'ArrowLeft']) {
+    assert.equal(atajo({ key: k, shiftKey: true, target: { tagName: 'DIV' } }), null, `Shift+${k}`)
+  }
+})
+
+test('la onda se ubica en su tiempo real cuando el archivo y la base no coinciden', () => {
+  // Más corto: ocupa su parte del ancho, con todos los picos.
+  assert.deepEqual(tramoOnda(1000, 60, 240), { ancho: 0.25, picos: 1000 })
+  // Más largo: todo el ancho, solo los picos de los primeros `dur` segundos (no se comprime).
+  assert.deepEqual(tramoOnda(1000, 300, 240), { ancho: 1, picos: 800 })
+  assert.deepEqual(tramoOnda(1000, 240, 240), { ancho: 1, picos: 1000 })
+  assert.deepEqual(tramoOnda(1000, 0, 240), { ancho: 0, picos: 0 })
+})
+
+test('el aviso de duración dice lo que hace el dibujo en cada caso', () => {
+  assert.equal(avisoDuracion(240.3, 240), null)
+  const corto = avisoDuracion(60, 240)
+  assert.match(corto, /dura 1:00\.0 y la biblioteca dice 4:00\.0/)
+  assert.match(corto, /ocupa solo los 1:00\.0 del archivo/)
+  const largo = avisoDuracion(300, 240)
+  assert.match(largo, /dura 5:00\.0, más que los 4:00\.0/)
+  assert.match(largo, /muestra solo los primeros 4:00\.0/)
+  assert.doesNotMatch(largo, /ocupa solo/)
 })
 
 test('la regla de tiempo deja como mucho 6 etiquetas redondas', () => {

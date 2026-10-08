@@ -945,6 +945,60 @@ const CASOS_CUES = [
     igual((await marcasApi(ctx, uno.id)).map((m) => m.nombre), ['c m i o 1 8'], 'el nombre no quedó en la API')
   }],
 
+  ['cues: mantener C apretada pone UN hot cue (la tecla repetida no siembra marcas)', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    await abrirEditor(page, ctx)
+    const pedidos = pedidosDeMarcas(page)
+    await page.focus('.cue-wave')
+    const r = page.waitForResponse((x) => x.request().method() === 'POST', { timeout: ESPERA_MS })
+    // keyboard.down sobre una tecla ya apretada manda keydown con repeat=true, como el SO al
+    // mantenerla.
+    for (let i = 0; i < 5; i++) await page.keyboard.down('c')
+    await page.keyboard.up('c')
+    igual((await r).status(), 201, 'el primer keydown no creó el hot cue')
+    await page.evaluate(() => fetch('/api/radio/biblioteca').then((x) => x.text()))
+    igual(pedidos.length, 1, `mantener C apretada mandó ${pedidos.length} pedidos`)
+    igual((await marcasApi(ctx, uno.id)).length, 1, 'la API tiene más de un hot cue')
+  }],
+
+  ['cues: Espacio activa el botón con foco (Cue aquí, Borrar de la confirmación), reproduce en la onda; Shift+C no pone un cue', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    const mem = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'memory', inicio: 2 })).data.marca
+    await abrirEditor(page, ctx)
+    const pedidos = pedidosDeMarcas(page)
+    const sentinela = () => page.evaluate(() => fetch('/api/radio/biblioteca').then((x) => x.text()))
+    // Shift+C: no es un atajo.
+    await page.focus('.cue-wave')
+    await page.keyboard.down('Shift')
+    await page.keyboard.press('KeyC')
+    await page.keyboard.up('Shift')
+    await sentinela()
+    igual(pedidos, [], 'Shift+C escribió en la base')
+    // Espacio en «Cue aquí»: el botón se activa (un POST) y no arranca el audio.
+    await page.focus('.cue-b-cue')
+    let r = page.waitForResponse((x) => x.request().method() === 'POST', { timeout: ESPERA_MS })
+    await page.keyboard.press('Space')
+    igual((await r).status(), 201, 'Espacio en «Cue aquí» no puso el cue')
+    igual(await sonando(page), [], 'Espacio en «Cue aquí» arrancó el audio')
+    // Espacio en «Borrar» de la confirmación: borra, no reproduce.
+    await page.click(`.cue-tabla tr[data-id="${mem.id}"] .cue-borrar`)
+    await page.waitForSelector(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`, { timeout: ESPERA_MS })
+    await page.focus(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`)
+    r = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
+    await page.keyboard.press('Space')
+    igual((await r).status(), 200, 'Espacio en «Borrar» no borró')
+    igual(await sonando(page), [], 'Espacio en «Borrar» arrancó el audio')
+    afirmar(!(await marcasApi(ctx, uno.id)).some((m) => m.id === mem.id), 'la memory sigue en la API')
+    // En la onda, Espacio es reproducir.
+    await page.focus('.cue-wave')
+    await page.keyboard.press('Space')
+    await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${uno.id}`]), 'Espacio en la onda no reprodujo')
+    await page.keyboard.press('Space')
+    await hasta(() => sonando(page), (s) => s.length === 0, 'Espacio otra vez en la onda no pausó')
+  }],
+
   ['cues: un solo audio (el editor y la barra se ceden el lugar)', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
     const lib = await api(ctx, '/api/biblioteca')

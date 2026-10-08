@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { getMarcas, crearMarca, cambiarMarca, borrarMarca, getOnda, contarMarcas, radioAudioUrl, radioAudioMotivo } from '../api'
 import {
   fmtTiempo, parseTiempo, pasoBeat, pctDe, tiempoDeX, padLibre, hotCue, errorLoop, beatsDeLoop,
-  atajo, marcasRegla, fmtRegla, acotar,
+  atajo, marcasRegla, fmtRegla, acotar, tramoOnda, avisoDuracion,
 } from '../cues'
 import { IconPause, IconPlayFill } from './icons'
 
@@ -205,12 +205,13 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
     const w = cont.clientWidth
     const h = cont.clientHeight
     const dpr = window.devicePixelRatio || 1
-    // La onda ocupa en el eje lo que dura el AUDIO: si el archivo dura menos que lo que dice
-    // la base, no se estira para llenar (se avisa abajo).
-    const frac = Math.min(1, (Number(onda.duracion_audio) || 0) / dur)
-    const cols = Math.max(1, Math.floor(w * frac))
+    // Cada pico en SU tiempo sobre el eje de la base (`tramoOnda`): un archivo más corto no se
+    // estira, uno más largo no se comprime (se cortan los picos que caen después de `dur`).
+    // En los dos casos se avisa abajo (`avisoDuracion`).
+    const tramo = tramoOnda(onda.picos.length, Number(onda.duracion_audio), dur)
+    const cols = Math.max(1, Math.floor(w * tramo.ancho))
     const picos = onda.picos
-    const n = picos.length
+    const n = tramo.picos
     for (const [ref, color] of [[canvasBase, '--cue-wave'], [canvasSonado, '--cue-wave-sonado']]) {
       const cv = ref.current
       if (!cv) continue
@@ -441,7 +442,7 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
   const regla = marcasRegla(dur)
   const cuenta = (tipo) => marcas.filter((m) => m.tipo === tipo).length
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
-  const desfasada = track && onda && !onda.error && Math.abs(Number(onda.duracion_audio) - dur) > 0.5
+  const desfasada = track && onda && !onda.error ? avisoDuracion(Number(onda.duracion_audio), dur) : null
   const fuera = marcas.filter((m) => m.fuera_del_track).length
   const hora = estado.hora ? estado.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
 
@@ -561,11 +562,7 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
             <p className="rnota" id="cue-wave-ayuda">
               Onda del audio real. Clic en la onda para ir a ese punto; arrastrá una marca para moverla (o editá su tiempo en la tabla). En la onda: Inicio / Fin y RePág / AvPág (±10 s).
             </p>
-            {desfasada && (
-              <p className="rnota cue-aviso-dur" role="note">
-                Ojo: el archivo dura {fmtTiempo(onda.duracion_audio, 1)} y la biblioteca dice {fmtTiempo(dur, 1)}. La onda se dibuja con lo que dura el archivo; re-escaneá el tema para que coincidan.
-              </p>
-            )}
+            {desfasada && <p className="rnota cue-aviso-dur" role="note">{desfasada}</p>}
           </div>
 
           <div className="cue-ctrl">
@@ -580,7 +577,7 @@ export default function CueEditor({ pasos, inicialId, leyenda, onCerrar }) {
             <span className="cue-reloj mono" ref={relojRef} aria-hidden="true">0:00.0</span>
           </div>
           <p className="rnota cue-atajos">
-            <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al hot cue · Espacio siempre reproduce o pausa (Enter activa el botón con foco).
+            <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al hot cue · Espacio reproduce o pausa (con el foco en un botón, Espacio y Enter activan ese botón).
             {' '}El beat sale del BPM medido{bpm != null ? ` (${fmtBpm(bpm)})` : ''}; Rekordbox puede tener otra grilla, así que acá no se ajusta nada a la grilla.
           </p>
           {loopIn !== null && <p className="rnota cue-pendiente">Entrada del loop: <span className="mono">{fmtTiempo(loopIn)}</span> (falta la salida).</p>}

@@ -100,13 +100,27 @@ export function escribiendo(target) {
   return !['button', 'submit', 'reset', 'image', 'range', 'color', 'file'].includes(tipo)
 }
 
+// ¿El foco está en algo que Espacio ACTIVA (un botón, un link, una casilla)? Ahí Espacio es
+// del control, no del reproductor: «Borrar» de la confirmación tiene que borrar con Espacio,
+// como cualquier botón. La onda (role="slider") no es de estos: ahí Espacio reproduce.
+const ROLES_ACTIVABLES = ['button', 'link', 'checkbox', 'radio', 'switch', 'menuitem', 'tab', 'option']
+export function activable(target) {
+  if (!target) return false
+  const tag = (target.tagName || '').toLowerCase()
+  if (tag === 'button' || tag === 'a' || tag === 'summary') return true
+  if (tag === 'input' && ['button', 'submit', 'reset', 'checkbox', 'radio', 'image'].includes((target.type || '').toLowerCase())) return true
+  const role = typeof target.getAttribute === 'function' ? target.getAttribute('role') : target.role
+  return ROLES_ACTIVABLES.includes((role || '').toLowerCase())
+}
+
 // La acción de un atajo, o null. `e` es un KeyboardEvent (o algo con key, ctrlKey...).
 //   play · cue · memory · loopIn · loopOut · beat(±1) · ir(num 0..7)
+// Con Shift (o Ctrl/Alt/Cmd) no hay atajo: Shift+C no es «C».
 export function atajo(e) {
-  if (!e || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return null
+  if (!e || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.isComposing) return null
   if (escribiendo(e.target)) return null
   const k = e.key
-  if (k === ' ' || k === 'Spacebar') return { tipo: 'play' }
+  if (k === ' ' || k === 'Spacebar') return activable(e.target) ? null : { tipo: 'play' }
   if (k === 'ArrowLeft') return { tipo: 'beat', dir: -1 }
   if (k === 'ArrowRight') return { tipo: 'beat', dir: 1 }
   if (/^[1-8]$/.test(k)) return { tipo: 'ir', num: Number(k) - 1 }
@@ -117,6 +131,30 @@ export function atajo(e) {
     case 'o': return { tipo: 'loopOut' }
     default: return null
   }
+}
+
+// Cómo se dibuja la onda en el eje de la BIBLIOTECA (`dur`, contra el que se validan las
+// marcas) cuando el archivo decodificado dura otra cosa (`durAudio`). Cada pico queda en SU
+// tiempo real:
+//   - archivo más corto: la onda ocupa solo `durAudio / dur` del ancho, con todos los picos;
+//   - archivo más largo: ocupa todo el ancho, pero solo con los picos de los primeros `dur`
+//     segundos (lo que pasa después no entra en el eje).
+// Devuelve { ancho: fracción 0..1 del ancho, picos: cuántos picos del principio se dibujan }.
+export function tramoOnda(nPicos, durAudio, dur) {
+  if (!(nPicos > 0) || !(durAudio > 0) || !(dur > 0)) return { ancho: 0, picos: 0 }
+  if (durAudio <= dur) return { ancho: durAudio / dur, picos: nPicos }
+  return { ancho: 1, picos: Math.max(1, Math.round(nPicos * (dur / durAudio))) }
+}
+
+// El aviso cuando el archivo y la biblioteca no coinciden en la duración (más de medio
+// segundo), o null. Dice lo que efectivamente hace el dibujo en cada caso.
+export function avisoDuracion(durAudio, dur) {
+  if (!(durAudio > 0) || !(dur > 0) || Math.abs(durAudio - dur) <= 0.5) return null
+  const a = fmtTiempo(durAudio, 1)
+  const b = fmtTiempo(dur, 1)
+  return durAudio < dur
+    ? `Ojo: el archivo dura ${a} y la biblioteca dice ${b}. La onda ocupa solo los ${a} del archivo; el resto del eje queda vacío. Re-escaneá el tema para que coincidan.`
+    : `Ojo: el archivo dura ${a}, más que los ${b} que dice la biblioteca. La onda muestra solo los primeros ${b} (el eje y las marcas usan la duración de la biblioteca). Re-escaneá el tema para que coincidan.`
 }
 
 // Marcas de la regla de tiempo: un paso "redondo" que deje como mucho `max` etiquetas.
