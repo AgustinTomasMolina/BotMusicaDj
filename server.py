@@ -3174,6 +3174,12 @@ async def radio_onda(track_id: str):
     except OSError as e:
         return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
                             status_code=409)
+    except (RuntimeError, ValueError, ArithmeticError) as e:
+        # Cinturón: un decodificador que falla de una forma que `motor.peaks` no previó. Es un
+        # archivo que no se pudo leer (422), no un 500; queda en el log para mirarlo.
+        logger.warning(f"⚠️ Onda: {type(e).__name__} leyendo {ruta}: {e}")
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda "
+                                      f"({type(e).__name__})"}, status_code=422)
     return {"bins": int(picos.peaks.size),
             "picos": [float(v) for v in picos.peaks],          # 5 decimales, de la caché
             "duracion_audio": round(picos.duration_s, 3), "sample_rate": picos.sample_rate,

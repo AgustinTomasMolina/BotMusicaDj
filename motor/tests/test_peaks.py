@@ -159,6 +159,124 @@ def test_archivo_que_no_existe(tmp_path):
         cached_peaks(tmp_path / "no.wav", tmp_path / "peaks")
 
 
+@pytest.mark.parametrize("como", ["truncado", "basura en el medio"])
+def test_flac_que_falla_a_mitad_del_stream(audio, tmp_path, como):
+    """libsndfile ABRE bien estos FLAC y falla recién al decodificar el medio: tiene que ser
+    UnreadableAudio (la API lo contesta 422), no un RuntimeError suelto."""
+    y, sr = sf.read(str(audio), dtype="float32", always_2d=True)
+    flac = tmp_path / "danado.flac"
+    sf.write(str(flac), y, sr, format="FLAC")
+    b = flac.read_bytes()
+    mitad = len(b) // 2
+    flac.write_bytes(b[:mitad] if como == "truncado"
+                     else b[:mitad] + b"\x00" * 5000 + b[mitad + 5000:])
+    with pytest.raises(UnreadableAudio, match="se corta o está dañado"):
+        compute_peaks(flac, bins=BINS)
+
+
+def test_wav_truncado_no_dibuja_silencio_inventado(audio, tmp_path):
+    """Un WAV cortado a 3/4: los bins se reparten sobre lo que DE VERDAD hay (libsndfile
+    corrige solo el largo de un WAV truncado; el decodificador que declara de más está en
+    `test_audioread_que_estima_de_mas_se_relee`)."""
+    corto = tmp_path / "truncado.wav"
+    b = audio.read_bytes()
+    corto.write_bytes(b[: 44 + (len(b) - 44) * 3 // 4])        # 3/4 del audio, header intacto
+    y, sr = sf.read(str(corto), dtype="float32", always_2d=True)
+    p = compute_peaks(corto, bins=100)
+    assert p.duration_s == len(y) / sr and p.duration_s < 30.0, p.duration_s
+    amp = np.abs(y).max(axis=1)
+    bordes = [-((-k * len(amp)) // 100) for k in range(101)]
+    esperado = [amp[a:b].max() for a, b in zip(bordes[:-1], bordes[1:], strict=True)]
+    np.testing.assert_array_equal(p.peaks, np.asarray(esperado, dtype=np.float32))
+    # 100 bins de 0.225 s: silencio hasta los 10 s (bin 44), kick hasta los 20 s (bin 88) y
+    # el silencio REAL del final (20 a 22.5 s), no un relleno de lo que falta.
+    assert p.peaks[:44].max() == 0.0 and p.peaks[45:88].min() > 0 and p.peaks[90:].max() == 0.0
+
+
+def test_audioread_que_estima_de_mas_se_relee(audio, monkeypatch):
+    """Por el camino de audioread (MP3/M4A vía ffmpeg) la duración es una ESTIMACIÓN. Un
+    decodificador falso que dice 60 s y entrega los 30 del archivo: los bins se reparten sobre
+    lo entregado (si no, la mitad de la onda sería un silencio que no existe). En esta PC
+    audioread no tiene ffmpeg, por eso el decodificador es falso; los datos son los del WAV."""
+    import audioread
+
+    y, sr = sf.read(str(audio), dtype="int16", always_2d=True)
+
+    class Falso:
+        samplerate, channels, duration = sr, y.shape[1], 2 * len(y) / sr
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            datos = y.astype("<i2").tobytes()
+            for i in range(0, len(datos), 4096 + 2):     # pedazos que no caen en un frame
+                yield datos[i:i + 4096 + 2]
+
+    monkeypatch.setattr(peaks_mod, "_con_soundfile", lambda *a, **k: None)
+    monkeypatch.setattr(audioread, "audio_open", lambda _ruta: Falso())
+    p = compute_peaks(audio, bins=BINS)
+    assert p.duration_s == 30.0, p.duration_s
+    # int16 → /32768: el mismo valor que lee soundfile en float32 del PCM_16.
+    np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-6)
+
+
+def test_muestras_nan_son_audio_ilegible(tmp_path):
+    y = np.full((22050, 1), 0.5, dtype=np.float32)
+    y[100] = np.nan
+    ruta = tmp_path / "nan.wav"
+    sf.write(str(ruta), y, 22050, subtype="FLOAT")
+    with pytest.raises(UnreadableAudio, match="NaN"):
+        compute_peaks(ruta)
+
+
+@pytest.mark.parametrize("veneno", ["null", "[]", '{"peaks": [[1]]}', "PICOS_NULL", "PICOS_ANIDADOS",
+                                    "PICOS_NEGATIVOS", "DUR_TEXTO", "SR_FLOAT"])
+def test_una_cache_con_otra_forma_se_rehace(audio, tmp_path, veneno):
+    import json
+
+    cache = tmp_path / "peaks"
+    bueno, _ = cached_peaks(audio, cache, bins=BINS)
+    (archivo,) = list(cache.glob("*.json"))
+    j = json.loads(archivo.read_text(encoding="utf-8"))
+    cambios = {"PICOS_NULL": ("peaks", [None] * BINS), "PICOS_ANIDADOS": ("peaks", [[1]] * BINS),
+               "PICOS_NEGATIVOS": ("peaks", [-1.0] * BINS), "DUR_TEXTO": ("duration_s", "abc"),
+               "SR_FLOAT": ("sample_rate", 22050.5)}
+    if veneno in cambios:
+        j[cambios[veneno][0]] = cambios[veneno][1]
+        archivo.write_text(json.dumps(j), encoding="utf-8")
+    else:
+        archivo.write_text(veneno, encoding="utf-8")
+    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is False
+    np.testing.assert_array_equal(p.peaks, bueno.peaks)
+    assert (p.duration_s, p.sample_rate, p.channels) == (30.0, SR, 2)
+
+
+def test_la_cache_tiene_tope_y_poda_lo_menos_usado(tmp_path):
+    """Con tope 3: al escribir el quinto quedan como mucho 3 archivos, y el que se acaba de
+    LEER de la caché sobrevive aunque sea de los primeros que se escribieron."""
+    cache = tmp_path / "peaks"
+    rutas = []
+    for i in range(5):
+        r = tmp_path / f"t{i}.wav"
+        sf.write(str(r), np.full((2205, 1), 0.1 * (i + 1), dtype=np.float32), 22050)
+        rutas.append(r)
+    for r in rutas[:3]:
+        cached_peaks(r, cache, bins=10, tope=3)
+    for a in cache.glob("*.json"):                          # todos viejos...
+        os.utime(a, (1, 1))
+    _, de_cache = cached_peaks(rutas[0], cache, bins=10, tope=3)   # ...y el 0 se usa ahora
+    assert de_cache is True
+    for r in rutas[3:]:
+        cached_peaks(r, cache, bins=10, tope=3)
+    assert len(list(cache.glob("*.json"))) <= 3
+    assert cached_peaks(rutas[0], cache, bins=10, tope=3)[1] is True, "podó el recién usado"
+
+
 def test_archivo_que_no_es_audio(tmp_path):
     ruta = tmp_path / "roto.wav"
     ruta.write_bytes(b"RIFF\x00\x00\x00\x00WAVEesto no es audio" * 10)

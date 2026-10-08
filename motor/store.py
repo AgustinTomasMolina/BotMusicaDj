@@ -20,6 +20,10 @@ Tres decisiones del esquema que NO son detalles:
    porque son de la BIBLIOTECA, no de ningún track. Están para que `normalize_one` pueda
    ubicar un vector suelto en la misma escala que la matriz sin recalcular todo.
 
+Migraciones (ver `VERSION_ESQUEMA`): son de ida. Una base que abrió este código no la lee un
+djradio más viejo. Volver de la v5 (marcas del dueño, f48) a la v4 es a mano y borra las
+marcas: `DROP TABLE cue_marks; PRAGMA user_version = 4;` sobre una copia de la base.
+
 Determinismo (spec §5): el orden de todo lo que devuelve el store lo fija Python ordenando
 por la clave de la ruta (absoluta + `normcase`), no la collation de SQLite ni el orden de
 inserción.
@@ -54,6 +58,13 @@ from motor.modelos import (
 #   3  columnas key_acuerdo / key_tramos (la confianza de la key, tarea 17)
 #   4  tablas saved_sets / saved_set_steps / saved_set_ratings (sets guardados, tarea 16)
 #   5  tabla cue_marks (hot cues, memory cues y loops del dueño, f48)
+#
+# OJO, la migración es de ida: una base que abrió este código queda en la versión nueva y un
+# djradio más viejo la rechaza con `EsquemaIncompatible` (sin tocarla). Para volver a usar
+# una base v5 con un código v4 hay que bajarla a mano, y eso BORRA las marcas del dueño
+# (copiá la base antes):
+#     sqlite3 biblioteca.sqlite "DROP TABLE cue_marks; PRAGMA user_version = 4;"
+# Ninguna otra tabla cambia de la 4 a la 5, así que el resto queda como estaba.
 VERSION_ESQUEMA = 5
 
 # Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está

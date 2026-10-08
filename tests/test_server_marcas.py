@@ -139,6 +139,12 @@ def test_crear_cambiar_y_borrar_queda_en_la_base(client, biblioteca):
     ({"tipo": "cue", "inicio": -1}, "negativo"),
     ({"tipo": "cue", "inicio": 240}, "dura 240.000"),
     ({"tipo": "cue", "inicio": 10 ** 400}, "fuera de rango"),
+    # Finitos pero enormes (H1 de la auditoría: eran un 500 por OverflowError en `round`).
+    ({"tipo": "cue", "inicio": 1e306}, "fuera de rango"),
+    ({"tipo": "cue", "inicio": 1.7976931348623157e308}, "fuera de rango"),
+    ({"tipo": "loop", "inicio": 1, "fin": 1e306}, "fuera de rango"),
+    ({"tipo": "memory", "inicio": 1, "nombre": "a​b"}, "invisibles"),
+    ({"tipo": "memory", "inicio": 1, "nombre": "﻿intro"}, "invisibles"),
     ({"tipo": "cue", "inicio": 1, "num": 8}, "de 0 a 7"),
     ({"tipo": "cue", "inicio": 1, "num": "1"}, "de 0 a 7"),
     ({"tipo": "memory", "inicio": 1, "num": 2}, "solo un hot cue"),
@@ -174,6 +180,8 @@ def test_el_noveno_hot_cue_es_400(client, biblioteca):
     ({"num": None}, "siempre tiene número"),
     ({"num": 9}, "de 0 a 7"),
     ({"nombre": "\u202eal revés"}, "una sola línea"),
+    ({"inicio": 1e306}, "fuera de rango"),
+    ({"nombre": "x\u2060"}, "invisibles"),
 ])
 def test_cambiar_invalido_es_400(client, biblioteca, cuerpo, pista):
     m = client.post(_url(biblioteca), json={"tipo": "cue", "inicio": 1}).json()["marca"]
@@ -307,3 +315,51 @@ def test_onda_sin_archivo_es_404_y_archivo_roto_es_422(client, biblioteca):
     biblioteca["rutas"]["tres.wav"].write_bytes(b"RIFF\x00\x00\x00\x00WAVEbasura" * 20)
     r = client.get(f"/api/radio/tracks/{biblioteca['ids']['tres.wav']}/onda")
     assert r.status_code == 422 and "no pude leer el audio" in r.json()["error"]
+
+
+def _flac_danado(ruta, como):
+    """Un FLAC de 3 s que libsndfile ABRE bien y que falla recién al decodificar el medio."""
+    y = (0.5 * np.sin(np.arange(44100 * 3) / 20)).astype(np.float32)
+    sf.write(str(ruta), np.stack([y, y], 1), 44100, format="FLAC")
+    b = ruta.read_bytes()
+    mitad = len(b) // 2
+    ruta.write_bytes(b[:mitad] if como == "truncado"
+                     else b[:mitad] + b"\x00" * 5000 + b[mitad + 5000:])
+
+
+@pytest.mark.parametrize("como", ["truncado", "basura en el medio"])
+def test_onda_de_un_flac_que_falla_a_mitad_es_422_y_no_500(client, biblioteca, como):
+    """H2 de la auditoría: soundfile abre el archivo y revienta en el medio del stream; antes
+    solo se capturaba al abrir y la API devolvía 500."""
+    _flac_danado(biblioteca["rutas"]["tres.wav"], como)
+    r = client.get(f"/api/radio/tracks/{biblioteca['ids']['tres.wav']}/onda")
+    assert r.status_code == 422, r.text
+    assert "se corta o está dañado" in r.json()["error"], r.json()
+
+
+_VENENOS = {"PEAKS_NULL": ("peaks", [None] * 1000), "PEAKS_NAN": ("peaks", [float("nan")] * 1000),
+            "PEAKS_ANIDADOS": ("peaks", [[1]] * 1000), "PEAKS_TEXTO": ("peaks", ["x"] * 1000),
+            "DUR_TEXTO": ("duration_s", "abc"), "SR_CERO": ("sample_rate", 0)}
+
+
+@pytest.mark.parametrize("veneno", ["null", "[]", '"x"', *_VENENOS])
+def test_una_cache_envenenada_se_rehace_y_no_es_500(client, server, biblioteca, veneno):
+    """H3: un JSON que parsea pero no es lo que se escribió se recalcula: ni 500 ni una onda
+    falsa. Lo esperado es la primera respuesta, calculada del archivo."""
+    import json
+
+    url = f"/api/radio/tracks/{biblioteca['ids']['uno.wav']}/onda"
+    bueno = client.get(url).json()
+    (archivo,) = list((server.db.DATA_DIR / "peaks").glob("*.json"))
+    if veneno in _VENENOS:
+        j = json.loads(archivo.read_text(encoding="utf-8"))
+        clave, valor = _VENENOS[veneno]
+        j[clave] = valor
+        archivo.write_text(json.dumps(j), encoding="utf-8")
+    else:
+        archivo.write_text(veneno, encoding="utf-8")
+    r = client.get(url)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert (d["cache"], d["picos"], d["duracion_audio"]) == \
+        (False, bueno["picos"], bueno["duracion_audio"])

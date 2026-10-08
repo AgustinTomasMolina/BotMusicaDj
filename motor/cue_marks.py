@@ -54,7 +54,17 @@ NAME_MAX = 64
 # párrafo (Zl, Zp): los controles de dirección del texto. Un nombre con U+202E se dibuja al
 # revés en la pantalla y en Rekordbox, y no es algo que el dueño escriba a mano.
 _BIDI = frozenset("‪‫‬‭‮⁦⁧⁨⁩")
-_CATEGORIAS_PROHIBIDAS = frozenset({"Cc", "Cs", "Zl", "Zp"})
+# Cf (formato) también: son invisibles (U+200B, U+FEFF, U+2060, U+00AD...) y hacen que dos
+# nombres que se ven iguales sean distintos. Dos excepciones, porque sin ellas no se puede
+# escribir texto real: U+200D (ZWJ, une emoji como 👩‍🎤) y U+200C (ZWNJ, lo usan el persa y
+# otras escrituras).
+_CATEGORIAS_PROHIBIDAS = frozenset({"Cc", "Cs", "Zl", "Zp", "Cf"})
+_FORMATO_PERMITIDO = frozenset("‌‍")
+
+# El track más largo que tiene sentido marcar, con mucho margen (un set grabado de 24 h). Un
+# tiempo más grande es un pedido roto, no un dato: además, 1e306 × 1000 da infinito y
+# `round(inf)` revienta con OverflowError (era un 500 de la API).
+MAX_SECONDS = 24 * 3600
 
 
 class InvalidCueMark(ValueError):
@@ -117,6 +127,9 @@ def seconds_to_ms(value: object, campo: str) -> int:
         raise InvalidCueMark(f"`{campo}` tiene que ser un número finito; recibí {value!r}")
     if v < 0:
         raise InvalidCueMark(f"`{campo}` no puede ser negativo; recibí {v:g}")
+    if v > MAX_SECONDS:
+        raise InvalidCueMark(f"`{campo}` está fuera de rango: {v:g} s es más que "
+                             f"{MAX_SECONDS // 3600} horas")
     return int(round(v * 1000))
 
 
@@ -132,10 +145,11 @@ def clean_mark_name(name: object) -> str | None:
     if not isinstance(name, str):
         raise InvalidCueMark(f"el nombre de una marca es un texto; recibí {name!r}")
     for c in name:
-        if unicodedata.category(c) in _CATEGORIAS_PROHIBIDAS or c in _BIDI:
+        if (unicodedata.category(c) in _CATEGORIAS_PROHIBIDAS and c not in _FORMATO_PERMITIDO) \
+                or c in _BIDI:
             raise InvalidCueMark(
-                f"el nombre de una marca va en una sola línea y sin caracteres de control "
-                f"(tiene U+{ord(c):04X})")
+                f"el nombre de una marca va en una sola línea y sin caracteres de control ni "
+                f"invisibles (tiene U+{ord(c):04X})")
     name = name.strip()
     if not name:
         return None

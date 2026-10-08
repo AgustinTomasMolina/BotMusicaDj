@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -62,6 +63,15 @@ def _acumular(out: np.ndarray, amp: np.ndarray, pos: int, total: int) -> None:
     out[uniq] = np.maximum(out[uniq], np.maximum.reduceat(amp, starts))
 
 
+def _declara_otro_largo(leidos: int, declarados: int) -> bool:
+    """¿El decodificador entregó una cantidad de frames distinta de la que declaró? Pasa con
+    audioread (MP3/M4A vía ffmpeg: la duración es una estimación). Los bins se reparten sobre
+    lo DECLARADO: si falta un pedazo, la cola
+    de la onda quedaría en cero y se dibujaría como silencio un audio que no existe. Con más
+    de un 0.1 % de diferencia se vuelve a leer repartiendo sobre lo que de verdad hay."""
+    return leidos > 0 and abs(leidos - declarados) > max(1, declarados // 1000)
+
+
 def _con_soundfile(path: str, bins: int, block_frames: int) -> Peaks | None:
     import soundfile as sf
 
@@ -71,21 +81,29 @@ def _con_soundfile(path: str, bins: int, block_frames: int) -> Peaks | None:
         return None
     with f:
         total, sr, ch = int(f.frames), int(f.samplerate), int(f.channels)
-        if total <= 0 or sr <= 0:
+        if total <= 0 or sr <= 0 or ch <= 0:
             raise UnreadableAudio("el archivo no tiene audio")
         out = np.zeros(bins, dtype=np.float32)
         pos = 0
-        for bloque in f.blocks(blocksize=block_frames, dtype="float32", always_2d=True):
-            if not len(bloque):
-                break
-            _acumular(out, np.abs(bloque).max(axis=1), pos, total)
-            pos += len(bloque)
+        # libsndfile abre bien un FLAC truncado o con basura en el medio y falla RECIÉN al
+        # decodificar ese tramo (LibsndfileError, un RuntimeError): sin este try era un 500.
+        try:
+            for bloque in f.blocks(blocksize=block_frames, dtype="float32", always_2d=True):
+                if not len(bloque):
+                    break
+                _acumular(out, np.abs(bloque).max(axis=1), pos, total)
+                pos += len(bloque)
+        except (RuntimeError, ValueError) as e:
+            raise UnreadableAudio(f"el archivo se corta o está dañado a los {pos / sr:.1f} s "
+                                  f"({type(e).__name__}: {e})") from None
     if pos == 0:
         raise UnreadableAudio("el archivo no tiene audio")
+    # Acá no hace falta releer como en `_con_audioread`: libsndfile corrige solo el largo de
+    # un WAV truncado y, si un FLAC declara de más, falla al leer (UnreadableAudio, arriba).
     return Peaks(out, pos / sr, sr, ch)
 
 
-def _con_audioread(path: str, bins: int) -> Peaks:
+def _con_audioread(path: str, bins: int, total_real: int | None = None) -> Peaks:
     try:
         import audioread
     except ImportError as e:      # pragma: no cover — viene con librosa
@@ -93,7 +111,7 @@ def _con_audioread(path: str, bins: int) -> Peaks:
     try:
         with audioread.audio_open(path) as f:
             sr, ch = int(f.samplerate), int(f.channels)
-            total = int(round(float(f.duration) * sr))
+            total = total_real or int(round(float(f.duration) * sr))
             if total <= 0 or sr <= 0 or ch <= 0:
                 raise UnreadableAudio("el archivo no tiene audio")
             out = np.zeros(bins, dtype=np.float32)
@@ -115,6 +133,8 @@ def _con_audioread(path: str, bins: int) -> Peaks:
         raise UnreadableAudio(f"no se pudo decodificar el audio ({type(e).__name__}: {e})") from None
     if pos == 0:
         raise UnreadableAudio("el archivo no tiene audio")
+    if total_real is None and _declara_otro_largo(pos, total):
+        return _con_audioread(path, bins, total_real=pos)
     return Peaks(out, pos / sr, sr, ch)
 
 
@@ -126,32 +146,82 @@ def compute_peaks(path: Path | str, bins: int = PEAK_BINS,
     if not os.path.isfile(ruta):
         raise FileNotFoundError(ruta)
     res = _con_soundfile(ruta, bins, block_frames)
-    return res if res is not None else _con_audioread(ruta, bins)
+    res = res if res is not None else _con_audioread(ruta, bins)
+    # Un WAV en float puede traer NaN o infinitos: no son audio, y en el JSON de la API
+    # serían un 500 (NaN no es JSON válido). Se dice que el archivo está dañado.
+    if not np.all(np.isfinite(res.peaks)):
+        raise UnreadableAudio("el archivo tiene muestras inválidas (NaN o infinitas)")
+    return res
+
+
+# Tope de la caché: ~9 KB por track, así que 5000 archivos son ~45 MB. Pasado el tope se
+# borran los MENOS USADOS (mtime más viejo; leer de la caché le actualiza el mtime) hasta
+# quedar en el 90 %. Una biblioteca de 10k tracks que se editan todos recalcula los viejos,
+# que cuesta ~1.5 s por tema (medido en f48).
+CACHE_MAX_ARCHIVOS = 5000
 
 
 def _archivo_cache(cache_dir: Path, clave: str) -> Path:
     return cache_dir / f"{hashlib.sha256(clave.encode('utf-8')).hexdigest()[:32]}.json"
 
 
-def cached_peaks(path: Path | str, cache_dir: Path | str,
-                 bins: int = PEAK_BINS) -> tuple[Peaks, bool]:
+def _desde_cache(guardado: object, firma: dict, bins: int) -> Peaks | None:
+    """Los picos de una caché VÁLIDA, o None (y se rehace). Se valida la forma entera: un JSON
+    que parsea pero no es lo que se escribió (null, [], picos que no son números finitos,
+    listas anidadas) no puede terminar en un 500 ni, peor, en una onda inventada."""
+    if not isinstance(guardado, dict) or {k: guardado.get(k) for k in firma} != firma:
+        return None
+    picos, dur = guardado.get("peaks"), guardado.get("duration_s")
+    sr, ch = guardado.get("sample_rate"), guardado.get("channels")
+    if not (isinstance(picos, list) and len(picos) == bins
+            and all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in picos)):
+        return None
+    if not (type(dur) in (int, float) and math.isfinite(dur) and dur > 0):
+        return None
+    if not (type(sr) is int and sr > 0 and type(ch) is int and ch > 0):
+        return None
+    return Peaks(np.asarray(picos, dtype=np.float64), float(dur), sr, ch)
+
+
+def _podar(cache_dir: Path, tope: int) -> None:
+    """Si hay más de `tope` archivos, borra los de mtime más viejo hasta quedar en el 90 %.
+    Nunca falla hacia afuera: es limpieza, no puede tirar abajo un pedido."""
+    try:
+        archivos = [(p.stat().st_mtime_ns, p) for p in cache_dir.glob("*.json")]
+        if len(archivos) <= tope:
+            return
+        archivos.sort()
+        for _, p in archivos[: len(archivos) - int(tope * 0.9)]:
+            p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def cached_peaks(path: Path | str, cache_dir: Path | str, bins: int = PEAK_BINS,
+                 tope: int | None = None) -> tuple[Peaks, bool]:
     """`(picos, salió_de_la_caché)`. Recalcula si no hay caché, si el archivo cambió (tamaño
-    o mtime), si la caché es de otra versión del cálculo o si no se puede leer."""
+    o mtime), si la caché es de otra versión del cálculo o si no tiene la forma esperada.
+    `tope`: cuántos archivos guarda la caché como mucho (default `CACHE_MAX_ARCHIVOS`)."""
     ruta = os.path.abspath(os.fspath(path))
     clave = os.path.normcase(ruta)
     st = os.stat(ruta)                                   # FileNotFoundError si no está
+    if not os.path.isfile(ruta):
+        raise FileNotFoundError(ruta)                    # un directorio no es un track
     firma = {"version": PEAKS_VERSION, "path_key": clave, "size": st.st_size,
              "mtime_ns": st.st_mtime_ns, "bins": bins}
     cache_dir = Path(cache_dir)
     archivo = _archivo_cache(cache_dir, clave)
     try:
         guardado = json.loads(archivo.read_text(encoding="utf-8"))
-        if {k: guardado.get(k) for k in firma} == firma and len(guardado["peaks"]) == bins:
-            return Peaks(np.asarray(guardado["peaks"], dtype=np.float64),
-                         float(guardado["duration_s"]), int(guardado["sample_rate"]),
-                         int(guardado["channels"])), True
-    except (OSError, ValueError, KeyError, TypeError):
-        pass                                             # sin caché o ilegible: se rehace
+    except (OSError, ValueError):
+        guardado = None                                  # sin caché o ilegible: se rehace
+    res = _desde_cache(guardado, firma, bins)
+    if res is not None:
+        try:
+            os.utime(archivo)                            # usada: la poda la deja para el final
+        except OSError:
+            pass
+        return res, True
 
     res = compute_peaks(ruta, bins)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +237,7 @@ def cached_peaks(path: Path | str, cache_dir: Path | str,
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+    _podar(cache_dir, CACHE_MAX_ARCHIVOS if tope is None else tope)
     # Los mismos valores que va a devolver la caché: la primera respuesta y las siguientes
     # tienen que ser idénticas.
     return Peaks(np.asarray(datos["peaks"], dtype=np.float64), res.duration_s,
