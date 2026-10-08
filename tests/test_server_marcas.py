@@ -119,6 +119,21 @@ def test_formato_sin_extension_es_null_y_no_adivinado(client, biblioteca, monkey
     assert (d["formato"], d["ruta"]) == (None, str(ruta.with_suffix(""))), d
 
 
+@pytest.mark.parametrize("vacio", ["", "   ", None])
+def test_licencia_y_origen_no_declarados_van_null(client, biblioteca, server, vacio):
+    """Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor van null
+    —la pantalla dice «no declarado»—, nunca un texto vacío ni uno inventado."""
+    with Store(biblioteca["db"]) as store:
+        real = store.get(biblioteca["rutas"]["uno.wav"])
+    t = type("T", (), {})()
+    for k in ("path", "bpm", "key", "key_acuerdo", "energy", "duration", "artist", "title", "label"):
+        setattr(t, k, getattr(real, k))
+    t.license = vacio
+    t.source_url = vacio
+    d = server._track_editor(t)
+    assert (d["licencia"], d["origen"]) == (None, None), d
+
+
 def test_sin_bpm_medido_es_null_y_no_cero(client, biblioteca):
     """`cuatro.wav` tiene BPM 0.0 en la base (lo que da el análisis sobre silencio): no es una
     medición, la API dice null y la pantalla dibuja «?»."""

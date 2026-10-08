@@ -2936,9 +2936,10 @@ def _track_editor(t) -> dict:
 
     f50: también lo que la pestaña «Información» del detalle muestra del archivo, tal como lo
     tiene la base: la ruta, el formato (la extensión; sin extensión, None y no uno adivinado),
-    la licencia y el origen (§5: obligatorios en todo track; §6: la licencia siempre visible).
-    La ruta es la del archivo del propio dueño en su máquina: la misma que ya viaja en el
-    .m3u8 del set."""
+    la licencia y el origen. Licencia y origen son datos OPCIONALES (decisión del dueño,
+    2026-10-09, CLAUDE.md): viajan tal cual están en la base, y vacíos van None; la pantalla
+    dice «no declarado», nunca un valor inventado. La ruta es la del archivo del propio dueño
+    en su máquina: la misma que ya viaja en el .m3u8 del set."""
     d = _radio_track(t)
     bpm = _num(t.bpm)
     d["bpm"] = round(bpm, 1) if bpm is not None and bpm > 0 else None
@@ -2946,8 +2947,8 @@ def _track_editor(t) -> dict:
     ruta = Path(t.path)
     d["ruta"] = str(ruta)
     d["formato"] = ruta.suffix.lstrip(".").lower() or None
-    d["licencia"] = t.license
-    d["origen"] = t.source_url
+    d["licencia"] = (getattr(t, "license", None) or "").strip() or None
+    d["origen"] = (getattr(t, "source_url", None) or "").strip() or None
     return d
 
 
