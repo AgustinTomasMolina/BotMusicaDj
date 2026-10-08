@@ -266,6 +266,9 @@ export default function Radio({ onBiblioteca }) {
   // El track elegido en la lista del set (f50): el `n` de su paso. Su detalle (porqué,
   // calificación, cues e información) va en el panel de la derecha.
   const [selN, setSelN] = useState(null)
+  // De qué set es esa selección: con un set recién abierto (antes de que corra su efecto) la
+  // selección vieja no vale y se muestra el primer track, sin un cuadro con el detalle vacío.
+  const [selClave, setSelClave] = useState(null)
   // Cuántas marcas tiene cada track del set (columna «Cues»): UN pedido por set a
   // /api/radio/marcas/conteo; el editor avisa cuando cambian. Y las marcas huérfanas de la base.
   const [conteos, setConteos] = useState({})
@@ -477,6 +480,7 @@ export default function Radio({ onBiblioteca }) {
       // la huella lo garantiza). `set_` se suelta: ya está guardado, y «Cerrar» no tiene que
       // volver a ofrecer guardarlo otra vez. El track elegido sigue siendo el mismo.
       mantenerSel.current = true
+      setSelClave(`g${s.id}`)
       setGuardado(s)
       setSet(null)
       setAviso(`Set guardado como #${s.id}${s.nombre ? ` «${s.nombre}»` : ''}. Ya podés calificar sus transiciones.`)
@@ -664,12 +668,14 @@ export default function Radio({ onBiblioteca }) {
   const claveVista = guardado ? `g${guardado.id}` : set_
   useEffect(() => {
     const pasos = vistaActual ? vistaActual.pasos : []
+    setSelClave(claveVista)
     if (mantenerSel.current) {
       mantenerSel.current = false
       if (pasos.some((p) => p.n === selN)) return
     }
     setSelN(pasos.length ? pasos[0].n : null)
   }, [claveVista]) // eslint-disable-line react-hooks/exhaustive-deps
+  const elegirFila = (n) => { setSelN(n); setSelClave(claveVista) }
 
   // Columna «Cues»: UN pedido con todos los ids del set (los que siguen en la biblioteca).
   // Guardar el set que se ve no lo repite: son los mismos tracks.
@@ -720,7 +726,11 @@ export default function Radio({ onBiblioteca }) {
       ? `Set de ${set_.total} track${set_.total === 1 ? '' : 's'} desde ${set_.semilla ? set_.semilla.label : 'la semilla'}.`
       : ''
   // El paso elegido y el anterior (el detalle muestra su energía y la transición que llega).
-  const iSel = vista ? vista.pasos.findIndex((p) => p.n === selN) : -1
+  // Hasta que el efecto de la selección corra (un set recién abierto), vale el primero: así el
+  // detalle y sus calificaciones aparecen en el mismo cuadro que el set, sin un parpadeo vacío.
+  const nSel = vista && selClave === claveVista && vista.pasos.some((p) => p.n === selN)
+    ? selN : (vista && vista.pasos.length ? vista.pasos[0].n : null)
+  const iSel = vista ? vista.pasos.findIndex((p) => p.n === nSel) : -1
   const pasoSel = iSel >= 0 ? vista.pasos[iSel] : null
   const pasoAnt = iSel > 0 ? vista.pasos[iSel - 1] : null
   const icono = <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z" /><path d="M12 10v4.5" /><circle cx="12" cy="17.4" r=".9" fill="currentColor" stroke="none" /></svg>
@@ -733,7 +743,7 @@ export default function Radio({ onBiblioteca }) {
     const tr = guardado.transiciones.find((x) => x.n === vista.pasos[i - 1].n)
     if (!tr) return null
     return (
-      <div key={`${guardado.id}-${tr.n}`} className="rdet-cal" hidden={p.n !== selN}>
+      <div key={`${guardado.id}-${tr.n}`} className="rdet-cal" hidden={p.n !== nSel}>
         <Calificar setId={guardado.id} t={tr}
           desdeTitulo={vista.pasos[i - 1].track.titulo} hastaTitulo={p.track.titulo}
           onGuardar={calificar} onQuitar={descalificar} />
@@ -870,7 +880,7 @@ export default function Radio({ onBiblioteca }) {
           {vista && (
             <>
               <Curva pasos={vista.pasos} />
-              <ListaSet pasos={vista.pasos} selN={selN} onSel={setSelN} sonando={sonando} onAudio={alternarAudio}
+              <ListaSet pasos={vista.pasos} selN={nSel} onSel={elegirFila} sonando={sonando} onAudio={alternarAudio}
                 errorAudio={errorAudio} conteos={conteos} leyenda={leyenda} />
 
               {/* Por qué se cortó: el titular y el detalle son los del motor. */}
