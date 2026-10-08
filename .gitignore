@@ -5,6 +5,8 @@
 
 # === Datos locales / generados ===
 downloads/
+# Caché de la forma de onda del editor de cues (motor/peaks.py): se rehace sola
+peaks/
 # OJO: git no admite comentarios al final de una línea de patrón ("dir/  # texto" no ignora
 # nada). Los comentarios van SIEMPRE en su propia línea.
 # CSVs derivados del XML de Rekordbox (rutas personales)
