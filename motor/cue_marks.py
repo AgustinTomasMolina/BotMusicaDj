@@ -53,13 +53,13 @@ NAME_MAX = 64
 # Además de las categorías de control de Unicode (Cc, Cs) y los separadores de línea y
 # párrafo (Zl, Zp): los controles de dirección del texto. Un nombre con U+202E se dibuja al
 # revés en la pantalla y en Rekordbox, y no es algo que el dueño escriba a mano.
-_BIDI = frozenset("‪‫‬‭‮⁦⁧⁨⁩")
+_BIDI = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 # Cf (formato) también: son invisibles (U+200B, U+FEFF, U+2060, U+00AD...) y hacen que dos
 # nombres que se ven iguales sean distintos. Dos excepciones, porque sin ellas no se puede
-# escribir texto real: U+200D (ZWJ, une emoji como 👩‍🎤) y U+200C (ZWNJ, lo usan el persa y
+# escribir texto real: U+200D (ZWJ, une emoji como 👩\u200d🎤) y U+200C (ZWNJ, lo usan el persa y
 # otras escrituras).
 _CATEGORIAS_PROHIBIDAS = frozenset({"Cc", "Cs", "Zl", "Zp", "Cf"})
-_FORMATO_PERMITIDO = frozenset("‌‍")
+_FORMATO_PERMITIDO = frozenset("\u200c\u200d")
 
 # El track más largo que tiene sentido marcar, con mucho margen (un set grabado de 24 h). Un
 # tiempo más grande es un pedido roto, no un dato: además, 1e306 × 1000 da infinito y

@@ -192,13 +192,13 @@ def test_pedidos_a_la_vez_no_repiten_pad(base):
     ("cue", 1.0, None, None, "nul\x00", r"U\+0000"),
     ("cue", 1.0, None, None, "tab\tx", r"U\+0009"),
     ("cue", 1.0, None, None, "nel\x85", r"U\+0085"),
-    ("cue", 1.0, None, None, "línea ", r"U\+2028"),
-    ("cue", 1.0, None, None, "al revés ‮", r"U\+202E"),
+    ("cue", 1.0, None, None, "línea\u2028", r"U\+2028"),
+    ("cue", 1.0, None, None, "al revés \u202e", r"U\+202E"),
     # Invisibles de formato (Cf): dos nombres que se ven iguales y no lo son.
-    ("cue", 1.0, None, None, "a​b", r"U\+200B"),
-    ("cue", 1.0, None, None, "﻿intro", r"U\+FEFF"),
-    ("cue", 1.0, None, None, "drop⁠", r"U\+2060"),
-    ("cue", 1.0, None, None, "pa­labra", r"U\+00AD"),
+    ("cue", 1.0, None, None, "a\u200bb", r"U\+200B"),
+    ("cue", 1.0, None, None, "\ufeffintro", r"U\+FEFF"),
+    ("cue", 1.0, None, None, "drop\u2060", r"U\+2060"),
+    ("cue", 1.0, None, None, "pa\u00adlabra", r"U\+00AD"),
     ("cue", 1.0, None, None, "x" * (NAME_MAX + 1), "como mucho"),
     ("cue", 1.0, None, None, 42, "es un texto"),
 ])
@@ -217,8 +217,8 @@ def test_nombres_con_caracteres_raros_vuelven_iguales(base):
     solo se sacan los espacios de los bordes, y vacío es sin nombre."""
     db, rutas = base
     # El emoji con ZWJ (U+200D) y el persa con ZWNJ (U+200C) son Cf pero son texto real.
-    nombres = ["Señor Coconut — «drop»", "👩‍🎤 vox", "東京 intro", "\"A\" & <B>",
-               "می‌خواهم", "ü" * NAME_MAX]
+    nombres = ["Señor Coconut — «drop»", "👩\u200d🎤 vox", "東京 intro", "\"A\" & <B>",
+               "می\u200cخواهم", "ü" * NAME_MAX]
     with Store(db) as store:
         for i, n in enumerate(nombres):
             store.add_cue_mark(rutas["uno.wav"], "memory", 10.0 + i, name=n)
@@ -282,7 +282,7 @@ def test_mover_renombrar_y_cambiar_de_pad(base):
             with pytest.raises(InvalidCueMark, match="fuera de rango"):
                 store.update_cue_mark(uno, loop.id, **enorme)
         with pytest.raises(InvalidCueMark, match=r"U\+200B"):
-            store.update_cue_mark(uno, cue.id, name="x​")
+            store.update_cue_mark(uno, cue.id, name="x\u200b")
         final = [(x.kind, x.num, x.start_ms, x.end_ms, x.name) for x in store.list_cue_marks(uno)]
     assert final == [("cue", 1, 20000, None, None), ("cue", 6, 11111, None, None),
                      ("loop", None, 30000, 36500, None)]
