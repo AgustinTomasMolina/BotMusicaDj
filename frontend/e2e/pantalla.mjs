@@ -680,6 +680,8 @@ const CASOS_SETS = [
     const antesLista = (await api(ctx, '/api/radio/sets')).sets.map((x) => x.id)
     const { antes } = mutarBase(ctx, 'bpm', paso.titulo, String(nuevo))
     try {
+      // Al centro antes del clic: con el armado desplegado el botón queda bajo la barra fija de arriba si solo se lo trae «a la vista».
+      await page.$eval('.rguardar', (b) => b.scrollIntoView({ block: 'center' }))
       await page.click('.rguardar')
       await page.waitForSelector('#r-guardar-nombre', { timeout: ESPERA_MS })
       const respuesta = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/radio/sets' && r.request().method() === 'POST', { timeout: ESPERA_MS })
@@ -708,6 +710,8 @@ const CASOS_SETS = [
       await hasta(() => leerGuardado(page), (v) => v.pasos.some((p) => p.titulo === paso.titulo && p.datos.BPM === bpm1(nuevo)),
         'después de «Re-armar el set» la pantalla no muestra el BPM de hoy')
       igual(await page.$('.rguardar-error'), null, 'el aviso del 409 quedó pegado al set re-armado')
+      // Al centro antes del clic: con el armado desplegado el botón queda bajo la barra fija de arriba si solo se lo trae «a la vista».
+      await page.$eval('.rguardar', (b) => b.scrollIntoView({ block: 'center' }))
       await page.click('.rguardar')
       await page.waitForSelector('#r-guardar-nombre', { timeout: ESPERA_MS })
       const otra = page.waitForResponse((x) => new URL(x.url()).pathname === '/api/radio/sets' && x.request().method() === 'POST', { timeout: ESPERA_MS })
