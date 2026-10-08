@@ -53,7 +53,8 @@ from motor.modelos import (
 #   2  columna path_key (ruta absoluta + normcase) con índice único
 #   3  columnas key_acuerdo / key_tramos (la confianza de la key, tarea 17)
 #   4  tablas saved_sets / saved_set_steps / saved_set_ratings (sets guardados, tarea 16)
-VERSION_ESQUEMA = 4
+#   5  tabla cue_marks (hot cues, memory cues y loops del dueño, f48)
+VERSION_ESQUEMA = 5
 
 # Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está
 # migrando) antes de rendirse con `sqlite3.OperationalError: database is locked`. La CLI
@@ -177,6 +178,37 @@ _DDL_SETS = (
     PRIMARY KEY (set_id, transition),
     CHECK (rating <> 'mala' OR (reason IS NOT NULL AND trim(reason) <> ''))
 )""",
+)
+
+# Marcas del dueño (f48, `motor/cue_marks.py`). Como `saved_set_steps`, NO referencia a
+# `tracks`: el scan hace INSERT OR REPLACE de la fila del track al reanalizarlo y la BORRA si
+# hoy no está en disco, y ninguna de las dos cosas puede llevarse lo que el dueño marcó a mano.
+# La clave es `path_key` (la del store): sin huella del contenido, es lo único estable.
+#
+# Los CHECK repiten en la base las reglas de `cue_marks.py` que no dependen del track (la
+# duración sí, y esa se valida al escribir): una fila escrita por fuera tampoco puede tener un
+# hot cue sin número, un loop sin salida o una salida antes de la entrada.
+# `AUTOINCREMENT`: sin él SQLite reusa el id de la última marca borrada, y una pantalla vieja
+# que manda "borrá la 7" borraría otra.
+_DDL_CUES = (
+    """CREATE TABLE IF NOT EXISTS cue_marks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    path_key    TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('cue', 'memory', 'loop')),
+    num         INTEGER CHECK (num IS NULL OR (num >= 0 AND num <= 7)),
+    start_ms    INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms      INTEGER,
+    name        TEXT,
+    created_at  TEXT NOT NULL,          -- ISO 8601 UTC
+    updated_at  TEXT NOT NULL,
+    CHECK ((kind = 'cue') = (num IS NOT NULL)),
+    CHECK ((kind = 'loop') = (end_ms IS NOT NULL)),
+    CHECK (end_ms IS NULL OR end_ms > start_ms)
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_cue_marks_path ON cue_marks(path_key)",
+    # Un solo hot cue por número en cada track (el pad 3 es UNO).
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cue_marks_hot ON cue_marks(path_key, num) "
+    "WHERE num IS NOT NULL",
 )
 
 
@@ -472,6 +504,7 @@ class Store:
             else:
                 self._con.execute(_DDL_TRACKS)
                 self._migrar_a_4_sets()
+                self._migrar_a_5_cues()
             for ddl in _DDL_INDICES:
                 self._con.execute(ddl)
             self._con.execute(_DDL_NORM_STATS)
@@ -560,6 +593,12 @@ class Store:
         v3 sigue igual y arranca sin sets. `IF NOT EXISTS` porque también la usa una base
         nueva, y porque una base que otro código ya llevó a 4 no puede fallar acá."""
         for ddl in _DDL_SETS:
+            self._con.execute(ddl)
+
+    def _migrar_a_5_cues(self) -> None:
+        """Crea la tabla de marcas del dueño (f48). No toca `tracks` ni los sets: una base v4
+        sigue igual y arranca sin marcas. `IF NOT EXISTS` por lo mismo que el paso 4."""
+        for ddl in _DDL_CUES:
             self._con.execute(ddl)
 
     # -- sets guardados (tarea 16, motor/saved_sets.py) -----------------------
@@ -757,6 +796,203 @@ class Store:
                                   f"transiciones van {rango}; recibí {transition!r}")
         return transition
 
+    # -- marcas del dueño: hot cues, memory cues y loops (f48, motor/cue_marks.py) ----------
+    #
+    # Todo se valida ADENTRO de la transacción de escritura (como `rate_transition`): el track,
+    # su duración, el número libre y los topes se leen con el lock tomado, así dos pedidos a la
+    # vez no pueden dejar dos hot cues 3 ni pasar el tope entre los dos.
+
+    def list_cue_marks(self, path: Path | str) -> list:
+        """Las marcas de un track, en el orden de la tabla de la pantalla: hot cues por número,
+        después memory cues y loops por tiempo. Lista vacía si no tiene (esté o no en la
+        biblioteca: las marcas de un archivo que hoy no está siguen siendo suyas)."""
+        filas = self._con.execute("SELECT * FROM cue_marks WHERE path_key = ?",
+                                  (self._key(path),)).fetchall()
+        return _ordenar_marcas([_marca(f) for f in filas])
+
+    def cue_mark_counts(self, paths: Iterable[Path | str]) -> dict[str, int]:
+        """Cuántas marcas tiene cada track, por clave del store (`_key`). Los que no tienen
+        no aparecen."""
+        claves = sorted({self._key(p) for p in paths})
+        conteos: dict[str, int] = {}
+        # De a tandas: SQLite tiene un tope de parámetros por sentencia.
+        for i in range(0, len(claves), 500):
+            tanda = claves[i:i + 500]
+            marcas = ", ".join("?" * len(tanda))
+            for f in self._con.execute(
+                    f"SELECT path_key, COUNT(*) AS n FROM cue_marks WHERE path_key IN ({marcas}) "
+                    f"GROUP BY path_key", tanda):
+                conteos[f["path_key"]] = int(f["n"])
+        return conteos
+
+    def orphan_cue_marks(self) -> list[tuple[str, int]]:
+        """Marcas cuyo archivo ya no está en la biblioteca: `[(path_key, cantidad)]`, ordenado.
+
+        Pasa cuando el archivo se movió o se renombró y se re-escaneó (la marca se ata a la
+        ruta, ver `motor/cue_marks.py`), o cuando hoy no está en disco. NO se borran: se
+        cuentan para que la pantalla lo diga."""
+        filas = self._con.execute("""
+            SELECT m.path_key, COUNT(*) AS n FROM cue_marks m
+             WHERE NOT EXISTS (SELECT 1 FROM tracks t WHERE t.path_key = m.path_key)
+             GROUP BY m.path_key ORDER BY m.path_key""").fetchall()
+        return [(f["path_key"], int(f["n"])) for f in filas]
+
+    def add_cue_mark(self, path: Path | str, kind: str, start_s: float,
+                     end_s: float | None = None, *, num: int | None = None,
+                     name: str | None = None):
+        """Crea una marca en un track de la biblioteca y la devuelve.
+
+        - `cue` (hot cue): `num` 0..7; sin `num` toma el primer pad libre. Ocupado o sin pads
+          libres → `InvalidCueMark` (no se pisa un hot cue en silencio).
+        - `memory`: sin número, hasta `MAX_MEMORY` por track.
+        - `loop`: `end_s` obligatorio y después de `start_s`, hasta `MAX_LOOPS`.
+
+        Track que no está en la biblioteca → `CueMarkNotFound`: sin su duración no hay con qué
+        validar que la marca caiga adentro."""
+        from motor.cue_marks import (
+            KIND_CUE,
+            KIND_LOOP,
+            InvalidCueMark,
+            clean_mark_name,
+            require_kind,
+            require_num,
+            seconds_to_ms,
+            validate_times,
+        )
+
+        kind = require_kind(kind)
+        start_ms = seconds_to_ms(start_s, "inicio")
+        end_ms = None if end_s is None else seconds_to_ms(end_s, "fin")
+        nombre = clean_mark_name(name)
+        if kind != KIND_CUE and num is not None:
+            raise InvalidCueMark("solo un hot cue lleva número")
+        if num is not None:
+            num = require_num(num)
+        clave = self._key(path)
+        cuando = _ahora()
+        with self._escritura():
+            validate_times(kind, start_ms, end_ms, self._duracion_marcable(clave))
+            if kind == KIND_CUE:
+                num = self._num_hot_cue(clave, num)
+            else:
+                self._dentro_del_tope(clave, kind)
+            cur = self._con.execute(
+                "INSERT INTO cue_marks (path_key, kind, num, start_ms, end_ms, name, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (clave, kind, num, start_ms, end_ms if kind == KIND_LOOP else None, nombre,
+                 cuando, cuando))
+            mark_id = int(cur.lastrowid)
+        return self._marca_por_id(clave, mark_id)
+
+    _SIN_CAMBIO = object()
+
+    def update_cue_mark(self, path: Path | str, mark_id: int, *, start_s=_SIN_CAMBIO,
+                        end_s=_SIN_CAMBIO, name=_SIN_CAMBIO, num=_SIN_CAMBIO):
+        """Mueve, renombra o cambia de pad una marca del track. Lo que no se pasa queda como
+        está. El tipo no cambia (un hot cue no se vuelve loop: se borra uno y se crea el otro).
+        La marca resultante se valida entera, como si fuera nueva."""
+        from motor.cue_marks import (
+            KIND_CUE,
+            KIND_LOOP,
+            InvalidCueMark,
+            clean_mark_name,
+            require_num,
+            seconds_to_ms,
+            validate_times,
+        )
+
+        cambios: dict[str, object] = {}
+        if start_s is not self._SIN_CAMBIO:
+            cambios["start_ms"] = seconds_to_ms(start_s, "inicio")
+        if end_s is not self._SIN_CAMBIO:
+            cambios["end_ms"] = None if end_s is None else seconds_to_ms(end_s, "fin")
+        if name is not self._SIN_CAMBIO:
+            cambios["name"] = clean_mark_name(name)
+        if num is not self._SIN_CAMBIO:
+            cambios["num"] = None if num is None else require_num(num)
+        if not cambios:
+            raise InvalidCueMark("no hay nada que cambiar: mandá `inicio`, `fin`, `nombre` o `num`")
+        clave = self._key(path)
+        with self._escritura():
+            actual = self._marca_por_id(clave, mark_id)
+            kind = actual.kind
+            if "num" in cambios and kind != KIND_CUE:
+                raise InvalidCueMark("solo un hot cue lleva número")
+            if "num" in cambios and cambios["num"] is None:
+                raise InvalidCueMark("un hot cue siempre tiene número (0 a 7)")
+            if "end_ms" in cambios and kind != KIND_LOOP:
+                raise InvalidCueMark("solo un loop tiene salida (`fin`)")
+            start_ms = cambios.get("start_ms", actual.start_ms)
+            end_ms = cambios.get("end_ms", actual.end_ms)
+            validate_times(kind, start_ms, end_ms, self._duracion_marcable(clave))
+            if "num" in cambios and cambios["num"] != actual.num:
+                self._num_hot_cue(clave, cambios["num"])     # ocupado → InvalidCueMark
+            asignaciones = ", ".join(f"{c} = ?" for c in cambios)
+            self._con.execute(
+                f"UPDATE cue_marks SET {asignaciones}, updated_at = ? WHERE id = ?",
+                (*cambios.values(), _ahora(), actual.id))
+        return self._marca_por_id(clave, actual.id)
+
+    def delete_cue_mark(self, path: Path | str, mark_id: int) -> None:
+        """Borra UNA marca del track. `CueMarkNotFound` si ese track no la tiene. Funciona
+        también si el track ya no está en la biblioteca: borrar una marca huérfana es una
+        decisión del dueño, no algo que dependa de dónde quedó el archivo."""
+        clave = self._key(path)
+        with self._escritura():
+            marca = self._marca_por_id(clave, mark_id)
+            self._con.execute("DELETE FROM cue_marks WHERE id = ?", (marca.id,))
+
+    def _marca_por_id(self, clave: str, mark_id) -> object:
+        """La marca `mark_id` de ESE track. Un id de otro track, inexistente, que no es un
+        entero o fuera del rango de SQLite es lo mismo: no existe (`CueMarkNotFound`)."""
+        from motor.cue_marks import CueMarkNotFound
+
+        if isinstance(mark_id, bool) or not isinstance(mark_id, int) \
+                or not -(2 ** 63) <= mark_id < 2 ** 63:
+            raise CueMarkNotFound(f"no hay una marca con id {mark_id!r}")
+        fila = self._con.execute("SELECT * FROM cue_marks WHERE id = ? AND path_key = ?",
+                                 (mark_id, clave)).fetchone()
+        if fila is None:
+            raise CueMarkNotFound(f"este track no tiene una marca con id {mark_id}")
+        return _marca(fila)
+
+    def _duracion_marcable(self, clave: str) -> float:
+        from motor.cue_marks import CueMarkNotFound
+
+        fila = self._con.execute("SELECT duration FROM tracks WHERE path_key = ?",
+                                 (clave,)).fetchone()
+        if fila is None:
+            raise CueMarkNotFound("el track no está en la biblioteca del motor: sin su duración "
+                                  "no se puede validar una marca")
+        return float(fila["duration"])
+
+    def _num_hot_cue(self, clave: str, num: int | None) -> int:
+        """`num` si está libre, o el primer pad libre si `num` es None."""
+        from motor.cue_marks import HOT_CUES, InvalidCueMark
+
+        usados = {int(f[0]) for f in self._con.execute(
+            "SELECT num FROM cue_marks WHERE path_key = ? AND num IS NOT NULL", (clave,))}
+        if num is None:
+            libres = [n for n in range(HOT_CUES) if n not in usados]
+            if not libres:
+                raise InvalidCueMark(f"el track ya tiene los {HOT_CUES} hot cues: borrá uno "
+                                     f"o movelo")
+            return libres[0]
+        if num in usados:
+            raise InvalidCueMark(f"el hot cue {num + 1} ya está puesto en este track: borralo o "
+                                 f"movelo antes de poner otro en el mismo pad")
+        return num
+
+    def _dentro_del_tope(self, clave: str, kind: str) -> None:
+        from motor.cue_marks import KIND_LOOP, MAX_LOOPS, MAX_MEMORY, InvalidCueMark
+
+        tope = MAX_LOOPS if kind == KIND_LOOP else MAX_MEMORY
+        n = int(self._con.execute("SELECT COUNT(*) FROM cue_marks WHERE path_key = ? AND kind = ?",
+                                  (clave, kind)).fetchone()[0])
+        if n >= tope:
+            que = "loops" if kind == KIND_LOOP else "memory cues"
+            raise InvalidCueMark(f"el track ya tiene {n} {que}; el tope es {tope} por track")
+
     def _rows(self) -> list[sqlite3.Row]:
         """Todas las filas, ORDENADAS POR CLAVE EN PYTHON — no por la collation de SQLite,
         que depende de cómo se compiló. Determinismo: mismo contenido, mismo orden. Se
@@ -840,7 +1076,26 @@ _MIGRACIONES = (
     (2, Store._migrar_a_2_path_key),
     (3, Store._migrar_a_3_acuerdo_key),
     (4, Store._migrar_a_4_sets),
+    (5, Store._migrar_a_5_cues),
 )
+
+
+def _marca(fila: sqlite3.Row):
+    from motor.cue_marks import CueMark
+
+    return CueMark(id=int(fila["id"]), path_key=fila["path_key"], kind=fila["kind"],
+                   num=None if fila["num"] is None else int(fila["num"]),
+                   start_ms=int(fila["start_ms"]),
+                   end_ms=None if fila["end_ms"] is None else int(fila["end_ms"]),
+                   name=fila["name"], created_at=fila["created_at"],
+                   updated_at=fila["updated_at"])
+
+
+def _ordenar_marcas(marcas: list) -> list:
+    """Hot cues por número; después memory cues y loops mezclados por tiempo (como se leen
+    en la onda). El id desempata: el orden no depende de cómo devuelva SQLite las filas."""
+    return sorted(marcas, key=lambda m: (0, m.num, 0, m.id) if m.kind == "cue"
+                  else (1, 0, m.start_ms, m.id))
 
 
 def _curva(config: str) -> str | None:

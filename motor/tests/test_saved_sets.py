@@ -396,7 +396,8 @@ def test_base_v3_se_migra_y_conserva_la_biblioteca(tmp_path):
         assert [t.path.name for t in store.load_library()] == ["dos.wav", "tres.wav", "uno.wav"]
 
     version, _, _, filas = _foto(db)
-    assert (version, VERSION_ESQUEMA) == (4, 4)
+    # Una base v3 abierta hoy pasa por la 4 (sets) y la 5 (marcas, f48) en la misma apertura.
+    assert (version, VERSION_ESQUEMA) == (5, 5)
     assert filas == filas_antes, "la migración 4 tocó las filas de `tracks`"
     assert {"saved_sets", "saved_set_steps", "saved_set_ratings"} <= _tablas(db)
 
@@ -412,7 +413,8 @@ def test_migracion_4_que_falla_deja_la_base_v3_como_estaba(tmp_path, monkeypatch
         raise RuntimeError("falla inyectada al final de la migración 4")
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:3],
-                                                       (4, paso_4_que_falla)))
+                                                       (4, paso_4_que_falla),
+                                                       *modulo_store._MIGRACIONES[4:]))
     with pytest.raises(RuntimeError, match="migración 4"):
         Store(db)
     assert _foto(db) == antes, "la migración 4 fallida dejó la base modificada"
@@ -436,7 +438,8 @@ def test_migracion_4_que_falla_al_escribir_la_version_deja_la_base_v3(tmp_path, 
         self._con = _ConexionQueFalla(self._con, "PRAGMA user_version =")
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:3],
-                                                       (4, paso_4_y_romper_la_version)))
+                                                       (4, paso_4_y_romper_la_version),
+                                                       *modulo_store._MIGRACIONES[4:]))
     with pytest.raises(RuntimeError, match="user_version"):
         Store(db)
     assert _foto(db) == antes, "la falla al escribir la versión dejó la base modificada"
@@ -462,7 +465,8 @@ def test_dos_aperturas_simultaneas_de_una_base_v3_migran_una_vez(tmp_path, monke
         Store._migrar_a_4_sets(self)
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:3],
-                                                       (4, paso_4_que_se_frena_en_a)))
+                                                       (4, paso_4_que_se_frena_en_a),
+                                                       *modulo_store._MIGRACIONES[4:]))
     resultados: dict[str, object] = {}
 
     def abrir(nombre):
@@ -484,7 +488,7 @@ def test_dos_aperturas_simultaneas_de_una_base_v3_migran_una_vez(tmp_path, monke
 
     assert resultados == {"A": (3, []), "B": (3, [])}, f"aperturas simultáneas: {resultados}"
     assert migraron == ["A"], f"la migración corrió en {migraron}"
-    assert _foto(db)[0] == 4
+    assert _foto(db)[0] == 5
 
 
 def test_dos_procesos_guardando_a_la_vez_no_se_pisan(base):
