@@ -1221,6 +1221,139 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rplay.is-sin{border-style:dashed;background:transparent;cursor:default}
 .rpaso.is-falta .rpaso-titulo{color:var(--color-neutral-300)}
 .rtag-falta{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-pill);font-size:10.5px;letter-spacing:0.03em;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 34%,transparent)}
+.reditar{min-height:32px;margin-left:auto}
+.rtag-seed+.reditar,.rtag-notrack+.reditar{margin-left:0}
+.radiodj-grid[hidden]{display:none}
+
+/* — editor de cues y loops (f48, opción B del canvas) —
+   Colores de los 8 hot cues: SOLO tokens del sistema (los de las calificaciones, info, la
+   marca y el acento). No dependen únicamente del tono: cada marca lleva su NÚMERO escrito, y
+   la luminosidad cambia de un pad al siguiente (1 medio, 2 claro, 3-4 claros verdes, 5
+   oscuro, 6-7 medios, 8 el más claro), así dos pads vecinos no se confunden aunque no se
+   distinga el color. Todos dan más de 3:1 contra el fondo de la onda (--color-well) y el
+   número va en --cue-ink (el fondo de la app) con más de 4.5:1 sobre cada uno. */
+:root{
+  --cue-1:var(--color-grade-f);
+  --cue-2:var(--color-grade-c);
+  --cue-3:var(--color-grade-a);
+  --cue-4:var(--color-info);
+  --cue-5:var(--color-brand-500);
+  --cue-6:var(--color-accent-400);
+  --cue-7:var(--color-grade-d);
+  --cue-8:var(--color-neutral-200);
+  --cue-mem:var(--color-neutral-400);
+  --cue-loop:var(--color-accent);
+  --cue-ink:var(--color-bg);
+  --cue-wave:var(--color-neutral-700);
+  --cue-wave-sonado:var(--color-accent-500);
+  --cue-cabezal:var(--color-text);
+}
+.cue-c1{--cue-c:var(--cue-1)}.cue-c2{--cue-c:var(--cue-2)}.cue-c3{--cue-c:var(--cue-3)}.cue-c4{--cue-c:var(--cue-4)}
+.cue-c5{--cue-c:var(--cue-5)}.cue-c6{--cue-c:var(--cue-6)}.cue-c7{--cue-c:var(--cue-7)}.cue-c8{--cue-c:var(--cue-8)}
+.cue-mem{--cue-c:var(--cue-mem)}.cue-loop{--cue-c:var(--cue-loop)}
+
+.cue-ed{display:flex;flex-direction:column;gap:var(--space-3);min-width:0}
+.cue-ed-top{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-4)}
+.cue-volver{min-height:32px}
+.cue-export-nota{flex:1 1 240px;min-width:0}
+.cue-ed-grid{display:grid;gap:var(--space-4);grid-template-columns:minmax(0,1fr);align-items:start}
+/* Dos columnas cuando entra la lista (250px) y el editor sin apretarse; debajo, la lista de
+   temas pasa ARRIBA (y con su propio scroll vertical: un set de 30 no empuja la onda). */
+@container main (min-width:860px){.cue-ed-grid{grid-template-columns:250px minmax(0,1fr)}}
+.cue-th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-400)}
+
+.cue-temas{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface);min-width:0}
+.cue-temas-lista{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none;max-height:min(40vh,420px);overflow-y:auto;overscroll-behavior:contain}
+.cue-tema{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:44px;padding:var(--space-2);border:0;border-radius:var(--radius-md);background:transparent;color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
+.cue-tema:hover{background:var(--color-well)}
+.cue-tema.is-sel{background:color-mix(in srgb,var(--color-accent) 16%,transparent);box-shadow:inset 3px 0 0 var(--color-accent)}
+.cue-tema[aria-disabled=true]{cursor:not-allowed}
+.cue-tema[aria-disabled=true] .cue-tema-titulo{color:var(--color-neutral-400)}
+.cue-tema-n{font-size:12px;color:var(--color-neutral-400);flex:none}
+.cue-tema-id{display:flex;flex-direction:column;min-width:0;flex:1}
+.cue-tema-titulo{font-size:13.5px;font-weight:600}
+.cue-tema-meta{font-size:12px;color:var(--color-neutral-400)}
+.cue-huerfanas{color:var(--color-warn)}
+
+.cue-main{display:flex;flex-direction:column;gap:var(--space-3);min-width:0;padding:var(--space-3);border-radius:var(--radius-md);background:var(--color-surface)}
+.cue-cab{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-2) var(--space-3)}
+.cue-cab-id{min-width:0}
+.cue-titulo{margin:4px 0 0;font-size:20px;font-weight:600;overflow-wrap:anywhere}
+.cue-titulo:focus-visible{outline:none}
+.cue-artista{font-weight:400;color:var(--color-neutral-400)}
+.cue-chips{display:flex;flex-wrap:wrap;gap:4px}
+.cue-acuerdo{font-size:10.5px;color:var(--color-neutral-400);margin-left:4px}
+
+.cue-wavebox{display:flex;flex-direction:column;gap:6px;padding:var(--space-3) var(--space-4);border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+/* La onda deja 12px de cada lado dentro de su caja: las banderitas de las marcas del borde
+   no se salen. */
+.cue-wave{position:relative;height:140px;margin:18px 0 0;cursor:pointer;touch-action:none;border-radius:var(--radius-sm)}
+.cue-wave:focus-visible{outline:2px solid var(--color-accent);outline-offset:4px}
+.cue-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.cue-canvas.is-sonado{clip-path:inset(0 100% 0 0)}
+.cue-wave-msg{position:absolute;inset:0;display:grid;place-items:center;padding:0 var(--space-3);font-size:12px;color:var(--color-neutral-400);text-align:center}
+.cue-wave-msg.is-err{color:var(--color-warn)}
+.cue-cabezal{position:absolute;top:-4px;bottom:-4px;left:0;width:2px;margin-left:-1px;background:var(--cue-cabezal);pointer-events:none}
+.cue-mk{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--cue-c)}
+.cue-mk-loop{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--cue-loop) 26%,transparent);box-shadow:inset 2px 0 0 var(--cue-loop),inset -2px 0 0 var(--cue-loop)}
+.cue-flag{position:absolute;top:-18px;left:0;transform:translateX(-50%);min-width:18px;height:18px;padding:0 4px;border-radius:4px;display:grid;place-items:center;font:700 11px/1 var(--font-body);color:var(--cue-ink);background:var(--cue-c);cursor:grab;touch-action:none;user-select:none}
+.cue-flag:active{cursor:grabbing}
+.cue-mk-loop>.cue-flag{left:0}
+.cue-mk-loop>.cue-flag.is-fin{left:100%}
+.cue-loopin{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed var(--cue-loop);pointer-events:none}
+.cue-regla{position:relative;height:14px;font-size:11px;color:var(--color-neutral-400)}
+.cue-regla>span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.cue-regla>span.is-0{transform:none}
+.cue-regla>span.is-fin{transform:translateX(-100%)}
+.cue-aviso-dur{color:var(--color-warn)}
+
+.cue-ctrl{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.cue-ctrl .btn{min-height:40px;gap:8px}
+.cue-ctrl .btn[aria-disabled=true]{opacity:.45;cursor:not-allowed}
+.cue-kbd{font:500 11px var(--font-mono);color:var(--color-neutral-300);border:1px solid var(--color-divider);border-radius:5px;padding:1px 6px;background:transparent}
+.btn-primary .cue-kbd{color:inherit;border-color:currentColor}
+.cue-reloj{margin-left:auto;font-size:18px}
+.cue-atajos{line-height:1.7}
+.cue-pendiente{color:var(--color-accent-300)}
+.cue-aviso:empty{display:none}
+.cue-estado{margin:0;font-size:13px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--color-neutral-300)}
+.cue-estado.is-guardado{color:var(--color-ok)}
+.cue-estado:empty{display:none}
+.cue-falla-acc{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-top:var(--space-2)}
+.cue-falla .btn-sm{min-height:32px}
+
+.cue-tablabox{border-radius:var(--radius-md);background:var(--color-well);box-shadow:inset 0 0 0 1px var(--color-divider)}
+/* `fixed`: las columnas no crecen con el contenido; los campos se achican en vez de empujar
+   la tabla afuera a 400px. */
+.cue-tabla{width:100%;table-layout:fixed;border-collapse:collapse;font-size:13px}
+.cue-tabla th{padding:8px 6px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-400);border-bottom:1px solid var(--color-divider)}
+.cue-tabla td{padding:6px;vertical-align:middle;border-bottom:1px solid color-mix(in srgb,var(--color-text) 8%,transparent);min-width:0}
+.cue-tabla tr:last-child td{border-bottom:0}
+.cue-tabla .c-n{width:46px}
+.cue-tabla .c-tipo{width:76px}
+.cue-tabla .c-t{width:40%}
+.cue-tabla .c-acc{width:52px;text-align:right}
+.cue-tiempos{display:flex;flex-direction:column;gap:4px;min-width:0}
+.cue-tabla td.c-t,.cue-tabla td.c-nom{min-width:0}
+.cue-in-t,.cue-in-n{width:100%;min-width:0;height:32px;padding:0 8px;font-size:12.5px;background:var(--color-surface)}
+.cue-in-t[aria-invalid=true]{border-color:var(--color-danger)}
+.cue-beats{font-size:11px;color:var(--color-neutral-400)}
+.cue-vacia{color:var(--color-neutral-400);font-size:12.5px;text-align:center;padding:14px 6px}
+.cue-tabla tr.is-fuera td{color:var(--color-warn)}
+.cue-tag{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:7px;font:700 12px var(--font-body);color:var(--cue-ink);background:var(--cue-c);cursor:pointer}
+.cue-borrar{width:32px;height:32px;padding:0;display:inline-grid;place-items:center;border:1px solid var(--color-divider);border-radius:var(--radius-md);background:transparent;color:var(--color-neutral-300);cursor:pointer}
+.cue-borrar:hover{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+.cue-confirma{display:inline-flex;flex-direction:column;gap:4px;align-items:flex-end}
+.cue-confirma .btn-sm{min-height:28px;padding:2px 8px}
+.cue-si{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+/* A 400px la tabla es angosta: el tipo pasa a la línea de abajo del número (se lee igual
+   por el encabezado) y la columna de tiempo se lleva más ancho. */
+@container main (max-width:520px){
+  .cue-tabla .c-tipo{display:none}
+  .cue-tabla .c-t{width:38%}
+  .cue-reloj{margin-left:0;width:100%}
+  .cue-wavebox{padding:var(--space-2) var(--space-3)}
+}
 
 
 /* ===== Carátulas (2026-09-25) =====
