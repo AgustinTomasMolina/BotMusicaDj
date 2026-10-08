@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { metaKey, previewable } from './utils'
 import { fetchMeta } from './api'
 
@@ -128,8 +128,10 @@ export function useVolumenEmbebido(ref, vol) {
       try { f.contentWindow.postMessage(JSON.stringify({ method: 'setVolume', value: cien }), '*') } catch { /* ignore */ }
     })
   }
-  // Un iframe no escucha mensajes hasta cargar: se le manda el volumen al cargar.
-  useEffect(() => {
+  // Un iframe no escucha mensajes hasta cargar: se le manda el volumen al cargar. Va en un
+  // layout effect: un <audio autoPlay> recién montado tiene volumen 1 hasta que alguien se lo
+  // baja, y con un efecto común había un instante (medible) en que el preview arrancaba fuerte.
+  useLayoutEffect(() => {
     const root = ref.current
     if (!root) return undefined
     // Un <audio> nuevo (otro tema en el mismo reproductor) arranca con el volumen de la app.
