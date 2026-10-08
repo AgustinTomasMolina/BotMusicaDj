@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { PlayerCtx, PlayerTimeCtx } from './context'
 import { engineFor, playable, NOMBRE_FUENTE } from './track'
 import { AudioEngine, YouTubeEngine, SoundCloudEngine } from './engines'
+import { leerVolumen, guardarVolumen } from '../volumen'
 
-const VOL_KEY = 'musiflix.volumen'
-const loadVol = () => {
-  try { const v = Number(window.localStorage.getItem(VOL_KEY)); if (v >= 0 && v <= 1 && window.localStorage.getItem(VOL_KEY) !== null) return v } catch { /* sin storage */ }
-  return 0.8
-}
-const saveVol = (v) => { try { window.localStorage.setItem(VOL_KEY, String(v)) } catch { /* solo esta sesión */ } }
+// El volumen es UNO para toda la app (f50): lo leen la barra, la pantalla de radio y el editor
+// de cues. Por defecto 45 % (src/volumen.js); lo elegido se acuerda entre sesiones.
+const storage = () => { try { return window.localStorage } catch { return null } }
+const loadVol = () => leerVolumen(storage())
+const saveVol = (v) => guardarVolumen(storage(), v)
 
 const IFRAME_ENGINES = ['youtube', 'soundcloud']
 

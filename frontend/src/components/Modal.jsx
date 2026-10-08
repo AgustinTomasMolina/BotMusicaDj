@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { spectroUrl } from '../api'
 import { SRC_COLOR, FUENTE_CORTO, nombresDeVersiones } from '../utils'
 import { getCalidad, GRADE_RANK, gradeClass } from './common'
-import { useDialog } from '../hooks'
+import { useDialog, useVolumenEmbebido } from '../hooks'
+import { usePlayer } from '../player/context'
+import { volumenPreview } from '../volumen'
 import Cover from './Cover'
 
 const IcoX = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
@@ -12,15 +14,9 @@ const IcoCheck = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="non
 /* Reproductor embebido (YouTube/Spotify/SoundCloud o audio directo). */
 function Player({ song: c }) {
   const ref = useRef(null)
-  useEffect(() => {
-    const b = ref.current
-    if (!b) return
-    const a = b.querySelector('audio'); if (a) a.volume = 0.5
-    const yt = b.querySelector('iframe[data-yt]')
-    if (yt) yt.addEventListener('load', () => { try { yt.contentWindow.postMessage('{"event":"command","func":"setVolume","args":[50]}', '*') } catch { /* ignore */ } })
-    const sc = b.querySelector('iframe[data-sc]')
-    if (sc) sc.addEventListener('load', () => { try { sc.contentWindow.postMessage(JSON.stringify({ method: 'setVolume', value: 50 }), '*') } catch { /* ignore */ } })
-  }, [c])
+  // El volumen es el de la app (f50; antes fijo en 50 %), también para YouTube y SoundCloud.
+  const player = usePlayer()
+  useVolumenEmbebido(ref, volumenPreview(player?.volume, player?.muted))
 
   let node
   const titulo = `Reproductor: ${c.titulo}${c.artista ? ` — ${c.artista}` : ''}`   // los iframes necesitan title

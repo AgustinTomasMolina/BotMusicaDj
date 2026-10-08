@@ -2932,11 +2932,23 @@ def _track_editor(t) -> dict:
     """El track para el editor: lo MEDIDO por el motor y nada más (§6). Un BPM 0.0 es lo que
     devuelve el análisis cuando no encontró pulso: no es una medición, va `null` y la pantalla
     dibuja «?» (y no ofrece moverse de a un beat). `key_acuerdo` viaja crudo ("2/3") porque el
-    editor lo muestra al lado de la key."""
+    editor lo muestra al lado de la key.
+
+    f50: también lo que la pestaña «Información» del detalle muestra del archivo, tal como lo
+    tiene la base: la ruta, el formato (la extensión; sin extensión, None y no uno adivinado),
+    la licencia y el origen. Licencia y origen son datos OPCIONALES (decisión del dueño,
+    2026-10-09, CLAUDE.md): viajan tal cual están en la base, y vacíos van None; la pantalla
+    dice «no declarado», nunca un valor inventado. La ruta es la del archivo del propio dueño
+    en su máquina: la misma que ya viaja en el .m3u8 del set."""
     d = _radio_track(t)
     bpm = _num(t.bpm)
     d["bpm"] = round(bpm, 1) if bpm is not None and bpm > 0 else None
     d["key_acuerdo"] = t.key_acuerdo
+    ruta = Path(t.path)
+    d["ruta"] = str(ruta)
+    d["formato"] = ruta.suffix.lstrip(".").lower() or None
+    d["licencia"] = (getattr(t, "license", None) or "").strip() or None
+    d["origen"] = (getattr(t, "source_url", None) or "").strip() or None
     return d
 
 

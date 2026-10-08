@@ -90,6 +90,50 @@ def test_el_track_trae_lo_medido_por_el_motor(client, biblioteca):
     assert d["limites"] == {"hot_cues": 8, "memory": 32, "loops": 32, "nombre_max": 64}
 
 
+@pytest.mark.parametrize("nombre", ["uno.wav", "cinco.wav"])
+def test_el_track_trae_ruta_formato_licencia_y_origen_de_la_base(client, biblioteca, nombre):
+    """f50: la pestaña «Información» muestra el archivo como lo tiene la base. Lo esperado sale
+    del store (no de la API) y de los valores que el catálogo escribió."""
+    from sinteticos import LICENCIA, ORIGEN
+
+    with Store(biblioteca["db"]) as store:
+        t = store.get(biblioteca["rutas"][nombre])
+    assert t is not None, f"{nombre} no está en la base: el test no probaría nada"
+    d = client.get(_url(biblioteca, nombre)).json()["track"]
+    assert (d["ruta"], d["formato"], d["licencia"], d["origen"]) == \
+        (str(t.path), "wav", LICENCIA, ORIGEN), d
+    assert d["ruta"].endswith(nombre), "la ruta no es la de este archivo"
+
+
+def test_formato_sin_extension_es_null_y_no_adivinado(client, biblioteca, monkeypatch, server):
+    """Un archivo sin extensión no tiene formato que decir: null, no un «wav» supuesto."""
+    t = type("T", (), {})()
+    ruta = biblioteca["rutas"]["uno.wav"]
+    with Store(biblioteca["db"]) as store:
+        real = store.get(ruta)
+    for k in ("bpm", "key", "key_acuerdo", "energy", "duration", "artist", "title", "license",
+              "source_url", "label"):
+        setattr(t, k, getattr(real, k))
+    t.path = ruta.with_suffix("")
+    d = server._track_editor(t)
+    assert (d["formato"], d["ruta"]) == (None, str(ruta.with_suffix(""))), d
+
+
+@pytest.mark.parametrize("vacio", ["", "   ", None])
+def test_licencia_y_origen_no_declarados_van_null(client, biblioteca, server, vacio):
+    """Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor van null
+    —la pantalla dice «no declarado»—, nunca un texto vacío ni uno inventado."""
+    with Store(biblioteca["db"]) as store:
+        real = store.get(biblioteca["rutas"]["uno.wav"])
+    t = type("T", (), {})()
+    for k in ("path", "bpm", "key", "key_acuerdo", "energy", "duration", "artist", "title", "label"):
+        setattr(t, k, getattr(real, k))
+    t.license = vacio
+    t.source_url = vacio
+    d = server._track_editor(t)
+    assert (d["licencia"], d["origen"]) == (None, None), d
+
+
 def test_sin_bpm_medido_es_null_y_no_cero(client, biblioteca):
     """`cuatro.wav` tiene BPM 0.0 en la base (lo que da el análisis sobre silencio): no es una
     medición, la API dice null y la pantalla dibuja «?»."""
