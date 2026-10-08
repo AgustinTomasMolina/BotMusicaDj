@@ -39,6 +39,17 @@ export function pasoVolumen(v, dir) {
   return Math.round(x * 100) / 100
 }
 
+// El preview del mouse y el reproductor del modal siguen el volumen de la app (f50, pedido del
+// dueño: con la app al 10 % el preview sonaba al 55 %). Proporcional (×1): nunca más fuerte que
+// la app, y en silencio no suena. Devuelve 0..1; los reproductores embebidos usan × 100.
+export const PROPORCION_PREVIEW = 1
+export function volumenPreview(volume, muted) {
+  if (muted) return 0
+  const v = Number(volume)
+  if (volume === null || volume === undefined || !Number.isFinite(v)) return VOL_DEFECTO * PROPORCION_PREVIEW
+  return Math.round(Math.min(1, Math.max(0, v * PROPORCION_PREVIEW)) * 100) / 100
+}
+
 // ¿Esta tecla sube (1) o baja (-1) el volumen? Solo ↑ y ↓, sin modificadores (Shift+↑ en un
 // campo selecciona texto) y nunca mientras se escribe ni sobre un control que ya usa las
 // flechas por su cuenta (el propio deslizador del volumen, un desplegable).

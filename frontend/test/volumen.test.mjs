@@ -13,7 +13,16 @@ const vite = await createServer({
   server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom',
 })
 after(() => vite.close())
-const { leerVolumen, guardarVolumen, pasoVolumen, teclaVolumen, VOL_KEY, VOL_DEFECTO } = await vite.ssrLoadModule('/src/volumen.js')
+const { leerVolumen, guardarVolumen, pasoVolumen, teclaVolumen, volumenPreview, VOL_KEY, VOL_DEFECTO } = await vite.ssrLoadModule('/src/volumen.js')
+
+test('volumenPreview: el preview y el modal suenan como la app, nunca más fuerte, y callan en silencio', () => {
+  assert.equal(volumenPreview(0.1, false), 0.1, 'con la app al 10 % el preview no puede ir al 55 % (la queja del dueño)')
+  assert.equal(volumenPreview(0.45, false), 0.45)
+  assert.equal(volumenPreview(1, false), 1)
+  assert.equal(volumenPreview(0.7, true), 0, 'silenciada la app, el preview no suena')
+  assert.equal(volumenPreview(undefined, false), 0.45, 'sin reproductor (fuera del provider), el de fábrica')
+  assert.equal(volumenPreview(3, false), 1, 'nunca pasa de 1')
+})
 
 const almacen = (inicial = {}) => {
   const datos = { ...inicial }

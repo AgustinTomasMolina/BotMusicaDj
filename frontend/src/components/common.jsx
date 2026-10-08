@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { metaKey, songKey, cuePoint, DEFAULT_FORMAT, FUENTE_CORTO } from '../utils'
 import { calidad as fetchCalidad } from '../api'
+import { useVolumenEmbebido } from '../hooks'
+import { usePlayer } from '../player/context'
+import { volumenPreview } from '../volumen'
 
 /* ---------- Nota de calidad (A/B/C/D/F) con carga lazy ----------
    Analizar la calidad real cuesta (resolver yt-dlp / decodificar audio), así que:
@@ -155,23 +158,21 @@ export function PreviewLayer({ song: c }) {
     if (!root) return
     const a = root.querySelector('audio')
     if (a) {
-      a.volume = 0.55
+      // El volumen lo pone useVolumenEmbebido (el de la app, f50); acá solo el punto de arranque.
       if (seekAudio) {
         const seek = () => { try { if (seekAudio < (a.duration || Infinity)) a.currentTime = seekAudio } catch { /* ignore */ } }
         a.addEventListener('loadedmetadata', seek, { once: true })
         if (a.readyState >= 1) seek()
       }
     }
-    const yt = root.querySelector('iframe[data-yt]')
-    if (yt) yt.addEventListener('load', () => { try { yt.contentWindow.postMessage('{"event":"command","func":"setVolume","args":[55]}', '*') } catch { /* ignore */ } })
     const sc = root.querySelector('iframe[data-sc]')
-    if (sc) sc.addEventListener('load', () => {
-      try {
-        sc.contentWindow.postMessage(JSON.stringify({ method: 'setVolume', value: 55 }), '*')
-        if (cue) setTimeout(() => { try { sc.contentWindow.postMessage(JSON.stringify({ method: 'seekTo', value: cue * 1000 }), '*') } catch { /* ignore */ } }, 350)
-      } catch { /* ignore */ }
+    if (sc && cue) sc.addEventListener('load', () => {
+      setTimeout(() => { try { sc.contentWindow.postMessage(JSON.stringify({ method: 'seekTo', value: cue * 1000 }), '*') } catch { /* ignore */ } }, 350)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // El volumen del preview es el de la app (antes fijo en 55 %): nunca más fuerte que ella.
+  const player = usePlayer()
+  useVolumenEmbebido(ref, volumenPreview(player?.volume, player?.muted))
 
   if (!node) return null
   return (

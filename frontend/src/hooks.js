@@ -108,3 +108,36 @@ export function useVolumenEn(ref, volume, muted) {
     a.muted = !!muted
   })
 }
+
+/* ---------- El volumen de la app en un preview o reproductor embebido (f50) ----------
+   El preview del mouse y el reproductor del modal iban a un volumen fijo (55 % y 50 %): con
+   la app al 10 % el preview sonaba al 55 %. Ahora siguen el de la app (`volumenPreview` en
+   src/volumen.js): el <audio> directo, y YouTube / SoundCloud por su API de mensajes, al
+   cargar el iframe y cada vez que el volumen cambia. */
+export function useVolumenEmbebido(ref, vol) {
+  const volRef = useRef(vol)
+  volRef.current = vol
+  const mandar = (root) => {
+    const v = volRef.current
+    const cien = Math.round(v * 100)
+    root.querySelectorAll('audio').forEach((a) => { a.volume = v })
+    root.querySelectorAll('iframe[data-yt]').forEach((f) => {
+      try { f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'setVolume', args: [cien] }), '*') } catch { /* ignore */ }
+    })
+    root.querySelectorAll('iframe[data-sc]').forEach((f) => {
+      try { f.contentWindow.postMessage(JSON.stringify({ method: 'setVolume', value: cien }), '*') } catch { /* ignore */ }
+    })
+  }
+  // Un iframe no escucha mensajes hasta cargar: se le manda el volumen al cargar.
+  useEffect(() => {
+    const root = ref.current
+    if (!root) return undefined
+    // Un <audio> nuevo (otro tema en el mismo reproductor) arranca con el volumen de la app.
+    root.querySelectorAll('audio').forEach((a) => { if (a.volume !== volRef.current) a.volume = volRef.current })
+    const frames = [...root.querySelectorAll('iframe')]
+    const alCargar = () => mandar(root)
+    frames.forEach((f) => f.addEventListener('load', alCargar))
+    return () => frames.forEach((f) => f.removeEventListener('load', alCargar))
+  })
+  useEffect(() => { if (ref.current) mandar(ref.current) }, [vol]) // eslint-disable-line react-hooks/exhaustive-deps
+}
