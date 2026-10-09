@@ -3241,9 +3241,29 @@ async def historial_limpiar(que: str = "todo"):
 # ============================================================
 #  Mis Playlists (crates)
 # ============================================================
+def _metricas_bpm_motor(items_analizados: list[dict]) -> dict:
+    """Las métricas de BPM con lo que sabe el motor (items ya pasados por `_analisis_items`):
+    si midió algún tema, salen SOLO de lo medido (db.metricas_bpm no mezcla fuentes). La usan
+    el crate y el rail, así los dos dicen lo mismo."""
+    return db.metricas_bpm((it["analisis"].get("bpm"), it["analisis"].get("dato"))
+                           for it in items_analizados)
+
+
+def _listar_con_motor() -> list[dict]:
+    """`db.listar_playlists` con las métricas de BPM del motor (una sola pasada por la base
+    del motor para todos los temas de todas las playlists)."""
+    ps = db.listar_playlists()
+    items = {p["id"]: (db.get_playlist_mia(p["id"], True) or {}).get("items") or [] for p in ps}
+    analizados, _ = _analisis_items([it for its in items.values() for it in its])
+    por_id = {it["id"]: it for it in analizados}
+    for p in ps:
+        p.update(_metricas_bpm_motor([por_id[it["id"]] for it in items[p["id"]]]))
+    return ps
+
+
 @app.get("/api/playlists")
 async def playlists_listar():
-    return {"exito": True, "playlists": await asyncio.to_thread(db.listar_playlists)}
+    return {"exito": True, "playlists": await asyncio.to_thread(_listar_con_motor)}
 
 
 @app.get("/api/playlists/activa")
@@ -3270,8 +3290,7 @@ async def playlists_get(pid: int):
     data["items"], data["motor"] = await asyncio.to_thread(_analisis_items, data.get("items") or [])
     # Las métricas de BPM con lo que sabe el motor: si midió algún tema, el promedio y el rango
     # salen SOLO de lo medido (db.metricas_bpm no mezcla fuentes).
-    data["metrics"] = {**(data.get("metrics") or {}), **db.metricas_bpm(
-        (it["analisis"].get("bpm"), it["analisis"].get("dato")) for it in data["items"])}
+    data["metrics"] = {**(data.get("metrics") or {}), **_metricas_bpm_motor(data["items"])}
     # Cada item dice si se puede bajar desde acá y por qué no (f41): la pantalla muestra el
     # motivo que decide el server en vez de repetir el criterio.
     data["items"] = [_item_publico(it) for it in data.get("items") or []]
@@ -3544,8 +3563,9 @@ def descargar_item_playlist(pid: int, item_id: int, formato: str) -> dict:
 #  - si el navegador dice de dónde viene: Sec-Fetch-Site no "cross-site", y Origin = este
 #    server (mismo host:puerto que pidió el navegador). Si no vienen (curl, TestClient, un
 #    navegador viejo) no se exige: lo que protege ahí es el Content-Type.
-# El proxy de Vite en desarrollo no cambia Host (changeOrigin false), así que Origin y Host
-# coinciden también ahí.
+# El proxy de Vite en desarrollo tiene que dejar el Host como lo pidió el navegador: Vite 8
+# pone changeOrigin: true si el proxy se escribe como string (Host = 127.0.0.1:8000 y Origin =
+# localhost:5173 → 403). Por eso frontend/vite.config.js lo declara con changeOrigin: false.
 
 def _origen_ajeno(request: Request) -> str | None:
     """Por qué el pedido viene de otra página, o None si es de la propia app (o no se sabe)."""

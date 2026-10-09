@@ -527,15 +527,15 @@ def test_leer_cuerpo_xml_corta_en_cuanto_se_pasa(server, monkeypatch):
 def test_dos_importaciones_a_la_vez_no_duplican(client, entorno, server, monkeypatch):
     """Buscar-y-crear es atómico: con los dos pedidos parados adentro de `buscar_importada`
     (sin lock los dos ven "no está" y crean), queda UNA playlist."""
+    import contextlib
     import threading
     barrera = threading.Barrier(2)
     real = server.db.buscar_importada
 
     def lenta(*a, **k):
-        try:
-            barrera.wait(timeout=1.5)    # con lock el segundo nunca llega: se rompe y sigue
-        except threading.BrokenBarrierError:
-            pass
+        # Con lock el segundo nunca llega a la barrera: se rompe por tiempo y sigue.
+        with contextlib.suppress(threading.BrokenBarrierError):
+            barrera.wait(timeout=1.5)
         return real(*a, **k)
     monkeypatch.setattr(server.db, "buscar_importada", lenta)
     res = [None, None]
@@ -602,7 +602,9 @@ def test_db_agregar_item_ignora_la_ruta_del_track(entorno, server, tmp_path):
     pid = server.db.crear_playlist("Directo")["id"]
     r = server.db.agregar_item(pid, {"titulo": "T", "artista": "A", "ruta": str(secreto),
                                      "archivo": "secreto.wav", "formato": "exe"})
+    assert r == {"ok": True, "id": r["id"]}, f"agregar_item no dijo que agregó el tema: {r}"
     it = server.db.get_playlist_mia(pid, True)["items"][0]
+    assert it["id"] == r["id"], "el item guardado no es el que devolvió agregar_item"
     assert (it["ruta"], it.get("nombre_archivo"), it.get("formato"), it["archivo_estado"]) ==         (None, None, None, "sin-archivo"), it
 
 
@@ -659,3 +661,17 @@ def test_metricas_de_la_playlist_usan_lo_medido_por_el_motor(client, entorno):
     assert (m["bpm_min"], m["bpm_max"]) == (min(medidos), max(medidos))
     con_bpm = sum(1 for i in d["items"] if i["analisis"].get("bpm"))
     assert m["bpm_afuera"] == con_bpm - len(medidos)
+
+
+def test_rail_y_crate_dicen_el_mismo_bpm_y_la_misma_fuente(client, entorno):
+    """El rail (GET /api/playlists) usaba solo el BPM guardado y nunca podía decir «medido por
+    el motor», contradiciendo al crate. Con un tema medido, los dos coinciden."""
+    _click(entorno["raiz"] / "Rail" / "uno.wav", 127.5, seed=6)
+    pid = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": "Rail"}).json()["id"]
+    assert client.post(f"/api/playlists/{pid}/analizar", json={}).status_code == 200
+    assert entorno["an"].esperar(120)
+    crate = _playlist(client, pid)["metrics"]
+    rail = {p["id"]: p for p in client.get("/api/playlists").json()["playlists"]}[pid]
+    claves = ("bpm_prom", "bpm_min", "bpm_max", "bpm_fuente", "bpm_n", "bpm_afuera")
+    assert crate["bpm_fuente"] == "motor" and crate["bpm_n"] == 1, crate
+    assert {k: rail[k] for k in claves} == {k: crate[k] for k in claves}, "el rail no dice lo que dice el crate"
