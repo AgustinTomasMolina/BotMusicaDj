@@ -57,6 +57,26 @@ def test_location_vacio(tmp_path):
     assert resolver("", [str(tmp_path)]).estado == NO_ENCONTRADO
 
 
+def test_por_cola_reubica_sin_ancla_y_desempata_homonimos(tmp_path):
+    """f53: la ruta de otra PC no tiene 'Escritorio'; la cola (Techno/x.wav) decide entre
+    homónimos. Sin `por_cola` los defaults de siempre: ambiguo."""
+    exacto = _tocar(tmp_path / "Techno" / "x.wav")
+    _tocar(tmp_path / "House" / "x.wav")
+    vieja = "C:/Users/otro/Music/Techno/x.wav"
+    idx = construir_indice([str(tmp_path)])
+    r = resolver(vieja, [str(tmp_path)], idx, por_cola=True)
+    assert r.estado == OK and r.ruta == str(exacto)
+    assert resolver(vieja, [str(tmp_path)], idx).estado == AMBIGUO
+
+
+def test_confinar_ignora_lo_que_esta_fuera_de_las_raices(tmp_path):
+    afuera = _tocar(tmp_path / "afuera" / "x.wav")
+    raiz = tmp_path / "musica"
+    raiz.mkdir()
+    assert resolver(str(afuera), [str(raiz)]).estado == OK            # defaults de siempre
+    assert resolver(str(afuera), [str(raiz)], confinar=True).estado == NO_ENCONTRADO
+
+
 def test_el_ancla_gana_sobre_el_homonimo(tmp_path):
     """Si el ancla da una ruta concreta, no se cae al índice aunque haya homónimos."""
     exacto = _tocar(tmp_path / "GROOOOVE" / "track.wav")
