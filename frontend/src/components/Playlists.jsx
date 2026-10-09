@@ -439,7 +439,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 </button>
               </div>
               {(prog?.corriendo || porAnalizar > 0 || txtProg) && (
-                <div className="crate-dl crate-analisis">
+                <div className="crate-analisis">
                   <div role="status" className="crate-dl-txt">
                     {prog?.corriendo ? txtProg
                       : porAnalizar ? `${porAnalizar} tema${porAnalizar === 1 ? '' : 's'} sin analizar${txtProg ? ` · ${txtProg}` : ''}` : txtProg}

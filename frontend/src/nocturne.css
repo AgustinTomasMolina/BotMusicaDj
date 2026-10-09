@@ -1679,6 +1679,9 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .crate-accion:disabled .crate-accion-n{background:var(--color-raise);color:var(--color-neutral-300)}
 .crate-accion-t{grid-area:t;font-weight:600;font-size:13.5px}
 .crate-accion-d{grid-area:d;font-size:11.5px;color:var(--color-neutral-300)}
+/* El progreso del análisis: la misma forma que el de las descargas (.crate-dl), otra clase
+   para no confundirse con él. */
+.crate-analisis{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3)}
 .crate-genero{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:12.5px}
 .crate-genero .input{width:min(200px,100%);min-height:32px}
 .trk-estado{margin-top:2px;font-size:11.5px;line-height:1.35;color:var(--color-neutral-300);overflow-wrap:anywhere}

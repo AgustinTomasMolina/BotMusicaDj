@@ -22,12 +22,46 @@ sys.path[:0] = [str(RAIZ_REPO), str(RAIZ_REPO / "tests")]
 
 from sinteticos import (  # noqa: E402
     armar_base_radio,
+    biblioteca_importable,
     pistas_biblioteca,
     pistas_caratulas,
     xml_rekordbox,
 )
 
 SEGUNDOS = 60.0
+
+
+def importables(raiz: Path, destino: Path) -> dict:
+    """f53: lo que se importa en el E2E, adentro de la raíz de música permitida.
+
+    - `Importar/…`: la colección de `biblioteca_importable` (Locations percent-encoded, uno
+      reubicado desde otra PC, un homónimo ambiguo, uno que no está); su XML queda FUERA de la
+      raíz, en `destino`, como el que el dueño elige con «Elegir el XML…».
+    - `Importar/Set`: dos clics del generador de `motor.sintetico` (BPM conocido) con tags de
+      título y artista y sin género, para importar como carpeta y analizar con el motor."""
+    import numpy as np
+    import soundfile as sf
+    from mutagen.id3 import TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    from motor.sintetico import click_track
+
+    xml, _ = biblioteca_importable(raiz / "Importar", segundos=4.0)
+    ruta_xml = destino / "coleccion de prueba.xml"
+    ruta_xml.write_text(xml, encoding="utf-8")
+    carpeta = raiz / "Importar" / "Set"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    for i, (nombre, bpm, titulo) in enumerate((("01 kick.wav", 128.0, "Kick Uno"),
+                                               ("02 kick.wav", 132.0, "Kick Dos"))):
+        y, sr = click_track(bpm, dur=8.0, nota="A", modo="min", seed=i)
+        ruta = carpeta / nombre
+        sf.write(str(ruta), y.astype(np.float32), sr, subtype="PCM_16")
+        audio = WAVE(str(ruta))
+        audio.add_tags()
+        audio.tags.add(TIT2(encoding=3, text=titulo))
+        audio.tags.add(TPE1(encoding=3, text="Generador"))
+        audio.save()
+    return {"importar_xml": str(ruta_xml)}
 
 
 def _tamano_png(datos: bytes) -> list[int]:
@@ -56,6 +90,7 @@ def main(destino: Path) -> dict:
         # carátula (404).
         "caratula_dibujable": {"1": _tamano_png(imagenes["png"]),
                                "2": _tamano_png(imagenes["png_otro"])},
+        **importables(raiz, destino),
     }
 
 

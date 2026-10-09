@@ -3280,6 +3280,12 @@ const CASOS = [
       if (previa) await apiPedir(ctx, `/api/playlists/${previa.id}`, 'PATCH', { activar: true })
     }
   }],
+
+  // ---------------------------------------------------------------------- f53: importar
+  // Al final a propósito: el análisis agrega temas a la base del motor de juguete, y los casos
+  // de la radio de arriba comparan contra esa base.
+  // (una función y no una constante: está declarada al final del archivo y se iza).
+  ...casosF53(),
 ]
 
 // Nombre visible de cada plataforma. Contrato de f38 (pedido del dueño): los MP3 dicen solo
