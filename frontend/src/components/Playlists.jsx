@@ -541,7 +541,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     {motivoAnalisis && <div className={`trk-motivo${st.tono === 'error' ? ' is-error' : ''}`}>{motivoAnalisis}</div>}
                   </div>
                   <div className="trk-meta">
-                    <span className="mb" title={dt.fuente ? `BPM ${dt.fuente}` : 'BPM medido por el motor'}><span className="mb-label">BPM</span><b>{dt.bpm ?? '?'}</b></span>
+                    <span className="mb" title={dt.bpm === null ? 'sin BPM' : dt.fuente ? `BPM ${dt.fuente}` : 'BPM medido por el motor'}><span className="mb-label">BPM</span><b>{dt.bpm ?? '?'}</b></span>
                     <span className="mb mb-key" title={dt.dudosa ? 'Key dudosa: los tramos del tema no votaron todos lo mismo' : undefined}><span className="mb-label">KEY</span><b>{dt.key ?? '?'}</b></span>
                     {dt.fuente && (dt.bpm || dt.key) && <span className="mb mb-fuente">{dt.fuente}</span>}
                     {/* El tipo de marca no va solo por color: el texto dice cuántas de cada una. */}

@@ -64,7 +64,7 @@ test('resumenPlaylist: duración, rango de BPM y de dónde sale, géneros, sin g
   // Con algo medido por el motor, el rango es SOLO el medido (el 140 de Rekordbox no se mezcla)
   // y se dice cuántos quedaron afuera.
   assert.deepEqual(m.resumenPlaylist(items), {
-    temas: 4, duracion: '1 h 06 min', bpm: '128.4', bpmFuente: '1 medido por el motor · 1 sin medir afuera',
+    temas: 4, duracion: '1 h 06 min', bpm: '128.4', bpmFuente: '1 medido por el motor · 1 de otra fuente afuera',
     generos: ['Techno', 'Acid'], sinGenero: 1, analizados: 1,
   })
   const soloXml = m.resumenPlaylist([tema({ analisis: { bpm: 130, dato: 'rekordbox' } })])
@@ -77,12 +77,12 @@ test('resumenPlaylist: un BPM de la búsqueda (YouTube/SoundCloud) NO se rotula 
   // La playlist «Techno» del dueño: temas bajados, BPM de la metadata de la búsqueda (dato "otro").
   const otros = [99, 172].map((bpm) => tema({ analisis: { bpm, dato: 'otro' } }))
   const r = m.resumenPlaylist(otros)
-  assert.equal(r.bpm, '99.0–172.0')
+  assert.equal(r.bpm, '99–172', 'un BPM entero de la metadata no gana un decimal inventado')
   assert.equal(r.bpmFuente, 'sin medir')
   assert.ok(!/Rekordbox/.test(r.bpmFuente), `rotula Rekordbox lo que no es de Rekordbox: ${r.bpmFuente}`)
   // Mezcla Rekordbox + búsqueda: el rango es el de Rekordbox y se dice cuántos quedan afuera.
   const mezcla = m.resumenPlaylist([...otros, tema({ analisis: { bpm: 126, dato: 'rekordbox' } })])
-  assert.deepEqual([mezcla.bpm, mezcla.bpmFuente], ['126.0', 'de Rekordbox · 2 sin medir afuera'])
+  assert.deepEqual([mezcla.bpm, mezcla.bpmFuente], ['126', 'de Rekordbox · 2 de otra fuente afuera'])
 })
 
 test('textoEncontrados y detalleFaltantes: no se esconde por qué faltan', () => {
@@ -111,10 +111,19 @@ test('origenTexto y motivoDe', () => {
 
 test('metricaBpm: un decimal, de dónde sale y «sin medir» sin número', () => {
   assert.deepEqual(m.metricaBpm({ bpm_prom: 129, bpm_min: 127.9, bpm_max: 130.2, bpm_fuente: 'otro', bpm_afuera: 0 }),
-    { promedio: '129.0', rango: '127.9–130.2', fuente: 'sin medir' })
+    { promedio: '129', rango: '127.9–130.2', fuente: 'sin medir' })
   assert.deepEqual(m.metricaBpm({ bpm_prom: 126.4, bpm_min: 126.4, bpm_max: 126.4, bpm_fuente: 'rekordbox', bpm_afuera: 2 }),
     { promedio: '126.4', rango: '126.4', fuente: 'de Rekordbox · 2 de otra fuente afuera' })
   assert.equal(m.metricaBpm({ bpm_prom: 128.04, bpm_min: 128.04, bpm_max: 128.04, bpm_fuente: 'motor', bpm_afuera: 0 }).fuente, 'medido por el motor')
   assert.deepEqual(m.metricaBpm({ bpm_prom: null, bpm_min: null, bpm_max: null, bpm_fuente: null }),
     { promedio: null, rango: null, fuente: 'sin medir' })
+})
+
+test('fmtBpm: decimal para lo medido o lo que ya trae decimal; entero para la metadata entera', () => {
+  assert.deepEqual([m.fmtBpm(112), m.fmtBpm(127.9), m.fmtBpm(128, true), m.fmtBpm(128.04, true), m.fmtBpm(0), m.fmtBpm(null)],
+    ['112', '127.9', '128.0', '128.0', null, null])
+  assert.equal(m.datosTema({ analisis: { bpm: 112, dato: 'otro' } }).bpm, '112')
+  assert.equal(m.datosTema({ analisis: { bpm: 128, dato: 'motor' } }).bpm, '128.0')
+  assert.equal(m.metricaBpm({ bpm_prom: 128, bpm_min: 126, bpm_max: 130, bpm_fuente: 'motor', bpm_afuera: 0 }).rango, '126.0–130.0')
+  assert.equal(m.metricaBpm({ bpm_prom: 135.5, bpm_min: 99, bpm_max: 172, bpm_fuente: 'otro', bpm_afuera: 0 }).rango, '99–172')
 })

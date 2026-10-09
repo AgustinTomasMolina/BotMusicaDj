@@ -3653,6 +3653,9 @@ export async function correr(ctx) {
    ========================================================================== */
 function casosF53() {
   const ANALISIS_MS = 180000   // el primer análisis carga librosa (MUSIFLIX_SIN_CALENTAR=1)
+  // Contrato del BPM (auditoría f53): lo medido por el motor con un decimal; lo que no se
+  // midió, con la precisión que trae (un entero de la metadata no gana un «.0» inventado).
+  const bpmTxt = (v, medido) => (medido || !Number.isInteger(Number(v)) ? Number(v).toFixed(1) : String(Number(v)))
   const ESTADO_ANALISIS = { analizado: 'Analizado', analizando: 'Analizando…', 'en-cola': 'En cola para analizar',
     fallo: 'No se pudo analizar', pendiente: 'Falta analizar' }
 
@@ -3696,6 +3699,7 @@ function casosF53() {
       titulo: r.querySelector('.trk-title')?.textContent ?? null,
       estado: r.querySelector('.trk-estado')?.textContent ?? null,
       bpm: chip('BPM'),
+      bpmTitulo: [...r.querySelectorAll('.trk-meta .mb')].find((m) => m.querySelector('.mb-label')?.textContent === 'BPM')?.getAttribute('title') ?? null,
       key: chip('KEY'),
       fuente: r.querySelector('.mb-fuente')?.textContent ?? null,
       genero: g ? g.querySelector('b')?.textContent ?? null : null,
@@ -3716,7 +3720,9 @@ function casosF53() {
     const key = a.camelot ? `${a.camelot}${a.tonalidad ? ` · ${a.tonalidad}` : ''}${a.key_dudosa ? ' ?' : ''}` : '?'
     return {
       titulo: it.titulo, estado,
-      bpm: a.bpm ? bpm1(a.bpm) : '?', key,
+      bpm: a.bpm ? bpmTxt(a.bpm, a.dato === 'motor') : '?',
+      bpmTitulo: a.bpm ? (a.dato === 'motor' ? 'BPM medido por el motor' : a.dato === 'rekordbox' ? 'BPM de Rekordbox' : 'BPM sin medir') : 'sin BPM',
+      key,
       fuente: a.dato === 'rekordbox' && (a.bpm || a.camelot) ? 'de Rekordbox' : null,
       genero: it.genero || '+ género', generoVisible: true,
     }
@@ -3775,8 +3781,9 @@ function casosF53() {
   const esperadasBpm = (m) => {
     if (m.bpm_prom === null) return [['sin medir', 'BPM']]
     const f = `${FUENTE_BPM[m.bpm_fuente]}${m.bpm_afuera ? ` · ${m.bpm_afuera} de otra fuente afuera` : ''}`
-    const r = m.bpm_min === m.bpm_max ? m.bpm_min.toFixed(1) : `${m.bpm_min.toFixed(1)}–${m.bpm_max.toFixed(1)}`
-    return [[m.bpm_prom.toFixed(1), `BPM promedio · ${f}`], [r, `Rango BPM · ${f}`]]
+    const t = (v) => bpmTxt(v, m.bpm_fuente === 'motor')
+    const r = m.bpm_min === m.bpm_max ? t(m.bpm_min) : `${t(m.bpm_min)}–${t(m.bpm_max)}`
+    return [[t(m.bpm_prom), `BPM promedio · ${f}`], [r, `Rango BPM · ${f}`]]
   }
   const esperarMetricas = async (page, ctx, pid, que) => {
     const m = (await api(ctx, `/api/playlists/${pid}`)).data.metrics
@@ -3940,6 +3947,7 @@ function casosF53() {
         await abrirEnRail(page, 'E2E sin BPM')
         const m2 = await esperarMetricas(page, ctx, pid, 'las métricas con un BPM de la búsqueda no son las de la API')
         igual([m2.bpm_prom, m2.bpm_fuente], [131, 'otro'], 'la API no rotula el BPM de la búsqueda como «otro»')
+        igual((await metricasBpm(page))[0][0], '131', 'un BPM entero de la búsqueda ganó un decimal inventado')
       } finally {
         await apiPedir(ctx, `/api/playlists/${pid}`, 'DELETE')
       }

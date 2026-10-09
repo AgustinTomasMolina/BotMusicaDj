@@ -38,14 +38,23 @@ export function estadoTema(it) {
   }
 }
 
-export const fmtBpm = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) || Number(v) <= 0
-  ? null : Number(v).toFixed(1))
+// El BPM como se muestra. Lo MEDIDO (el motor) va siempre con un decimal; lo que no se midió
+// va con la precisión que trae: un 112 de la metadata de YouTube/SoundCloud es «112», no
+// «112.0» (ese decimal sería inventado), y un 127.9 sigue siendo «127.9».
+export const fmtBpm = (v, medido = false) => {
+  const n = Number(v)
+  if (v === null || v === undefined || !Number.isFinite(n) || n <= 0) return null
+  return medido || !Number.isInteger(n) ? n.toFixed(1) : String(n)
+}
+
+// «N de otra fuente afuera»: el mismo texto en el encabezado y en las métricas.
+export const textoAfuera = (n) => (n ? `${n} de otra fuente afuera` : null)
 
 // BPM y key como se muestran, con de dónde salen. `null` si no hay dato (no un 0 ni un guion
 // que parezca medido).
 export function datosTema(it) {
   const a = it?.analisis || {}
-  const bpm = fmtBpm(a.bpm)
+  const bpm = fmtBpm(a.bpm, a.dato === 'motor')
   const key = a.camelot ? `${a.camelot}${a.tonalidad ? ` · ${a.tonalidad}` : ''}${a.key_dudosa ? ' ?' : ''}` : null
   const fuente = a.dato === 'motor' ? null : a.dato === 'rekordbox' ? 'de Rekordbox' : a.dato ? 'sin medir' : null
   return { bpm, key, fuente, dudosa: !!a.key_dudosa }
@@ -92,8 +101,8 @@ function rangoBpm(items) {
     const vs = con.filter((x) => (f.dato === 'otro' ? x.dato !== 'motor' && x.dato !== 'rekordbox' : x.dato === f.dato)).map((x) => x.bpm)
     if (!vs.length) continue
     const afuera = con.length - vs.length
-    const lo = Math.min(...vs).toFixed(1), hi = Math.max(...vs).toFixed(1)
-    const partes = [f.rotulo(vs.length, afuera), afuera ? `${afuera} sin medir afuera` : null].filter(Boolean)
+    const lo = fmtBpm(Math.min(...vs), f.dato === 'motor'), hi = fmtBpm(Math.max(...vs), f.dato === 'motor')
+    const partes = [f.rotulo(vs.length, afuera), textoAfuera(afuera)].filter(Boolean)
     return { bpm: lo === hi ? lo : `${lo}–${hi}`, bpmFuente: partes.length ? partes.join(' · ') : null }
   }
   return { bpm: null, bpmFuente: null }
@@ -147,12 +156,13 @@ export function motivoDe(r) {
 }
 
 // Las métricas del crate (server: db.metricas_bpm, ya sin mezclar fuentes): el promedio y el
-// rango con UN decimal y de dónde salen. Sin ningún BPM: «sin medir», no un número.
+// rango (con un decimal si son medidos; ver `fmtBpm`) y de dónde salen. Sin ningún BPM:
+// «sin medir», no un número.
 const FUENTE_METRICA = { motor: 'medido por el motor', rekordbox: 'de Rekordbox', otro: 'sin medir' }
 export function metricaBpm(m) {
   if (!m || m.bpm_prom === null || m.bpm_prom === undefined) return { promedio: null, rango: null, fuente: 'sin medir' }
-  const f = (v) => Number(v).toFixed(1)
-  const afuera = m.bpm_afuera ? ` · ${m.bpm_afuera} de otra fuente afuera` : ''
+  const f = (v) => fmtBpm(v, m.bpm_fuente === 'motor')
+  const afuera = m.bpm_afuera ? ` · ${textoAfuera(m.bpm_afuera)}` : ''
   return {
     promedio: f(m.bpm_prom),
     rango: m.bpm_min === m.bpm_max ? f(m.bpm_min) : `${f(m.bpm_min)}–${f(m.bpm_max)}`,
