@@ -3627,3 +3627,341 @@ export async function correr(ctx) {
   }
   return resultados
 }
+
+/* ============================================================================
+   f53 — importar playlists (Rekordbox y carpeta), estado de cada tema, género y análisis.
+
+   Lo esperado sale de la API (`/api/importar/...`, `/api/playlists/{id}`) o de la base de
+   juguete (base_juguete.py: qué archivos existen y con qué BPM se GENERÓ cada clic). Los textos
+   que se comparan literales son el contrato de la pantalla (los del canvas F/G y el pedido del
+   dueño): «N de M encontrados», «No encuentro el archivo», «En tu PC», «de Rekordbox».
+   ========================================================================== */
+function casosF53() {
+  const ANALISIS_MS = 180000   // el primer análisis carga librosa (MUSIFLIX_SIN_CALENTAR=1)
+  const ESTADO_ANALISIS = { analizado: 'Analizado', analizando: 'Analizando…', 'en-cola': 'En cola para analizar',
+    fallo: 'No se pudo analizar', pendiente: 'Falta analizar' }
+
+  const abrirImportar = async (page, ctx) => {
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.pl-rail-importar', { timeout: ESPERA_MS })
+    await page.click('.pl-rail-importar')
+    await page.waitForSelector('.imp-dialog[role="dialog"]', { timeout: ESPERA_MS })
+  }
+  // El mismo XML, leído por la API como lo manda la pantalla (cuerpo crudo).
+  const leerXmlApi = async (ctx, ruta) => {
+    const r = await fetch(`${ctx.url}/api/importar/rekordbox/leer`, {
+      method: 'POST', body: fs.readFileSync(ruta),
+      headers: { 'Content-Type': 'application/xml', 'X-Nombre-Archivo': encodeURIComponent(path.basename(ruta)) },
+    })
+    return { status: r.status, data: await r.json() }
+  }
+  const subirXml = async (page, ruta) => {
+    const input = await page.$('.imp-file input[type="file"]')
+    afirmar(input, 'no está el campo para elegir el XML')
+    await input.uploadFile(ruta)
+  }
+  const leerChecklist = (page) => page.$$eval('.imp-pl', (lis) => lis.map((li) => {
+    const i = li.querySelector('input[type="checkbox"]')
+    const det = i?.getAttribute('aria-describedby')
+    return {
+      nombre: li.querySelector('.imp-pl-nombre')?.textContent ?? null,
+      carpeta: li.querySelector('.imp-pl-carpeta')?.textContent ?? null,
+      n: li.querySelector('.imp-pl-n')?.textContent ?? null,
+      tildada: i ? i.checked : null,
+      detalle: [...li.querySelectorAll('.imp-pl-det > span')].map((s) => s.textContent),
+      describe: det ? document.getElementById(det)?.textContent ?? null : null,
+    }
+  }))
+  const encontradosTxt = (p) => `${p.encontrados} de ${p.total} encontrado${p.total === 1 ? '' : 's'}`
+
+  const leerFilasPl = (page) => page.$$eval('.results-crate .trk', (rs) => rs.map((r) => {
+    const chip = (l) => [...r.querySelectorAll('.trk-meta .mb')].find((m) => m.querySelector('.mb-label')?.textContent === l)?.querySelector('b')?.textContent ?? null
+    const g = r.querySelector('.mb-genero')
+    return {
+      titulo: r.querySelector('.trk-title')?.textContent ?? null,
+      estado: r.querySelector('.trk-estado')?.textContent ?? null,
+      bpm: chip('BPM'),
+      key: chip('KEY'),
+      fuente: r.querySelector('.mb-fuente')?.textContent ?? null,
+      genero: g ? g.querySelector('b')?.textContent ?? null : null,
+      generoVisible: g ? window.__visible(g) : false,
+      status: r.querySelector('.trk-status')?.textContent.trim() ?? null,
+    }
+  }))
+  // Lo que la fila tiene que decir de un item de la API.
+  const filaEsperada = (it) => {
+    const a = it.analisis || {}
+    let estado
+    if (it.archivo_estado === 'ok') estado = `En tu PC · ${ESTADO_ANALISIS[a.estado]}`
+    else if (it.archivo_estado === 'no-encontrado' || it.archivo_estado === 'no-existe') estado = 'No encuentro el archivo'
+    else if (it.archivo_estado === 'ambiguo') estado = `Hay ${it.homonimos || 2} archivos con ese nombre`
+    else estado = 'Sin archivo'
+    // El nombre del archivo que no se encuentra va al lado (sin la ruta).
+    if (it.archivo_estado !== 'ok' && it.nombre_archivo) estado += ` · ${it.nombre_archivo}`
+    const key = a.camelot ? `${a.camelot}${a.tonalidad ? ` · ${a.tonalidad}` : ''}${a.key_dudosa ? ' ?' : ''}` : '?'
+    return {
+      titulo: it.titulo, estado,
+      bpm: a.bpm ? bpm1(a.bpm) : '?', key,
+      fuente: a.dato === 'rekordbox' && (a.bpm || a.camelot) ? 'de Rekordbox' : null,
+      genero: it.genero || '+ género', generoVisible: true,
+    }
+  }
+  const sinStatus = (filas) => filas.map(({ status, ...f }) => f)  // eslint-disable-line no-unused-vars
+  const itemsApi = async (ctx, pid) => (await api(ctx, `/api/playlists/${pid}`)).data.items
+  const filasCoinciden = async (page, ctx, pid) => {
+    const esperado = (await itemsApi(ctx, pid)).map(filaEsperada)
+    const real = sinStatus(await leerFilasPl(page))
+    return { real, esperado, ok: json(real) === json(esperado) }
+  }
+  const esperarFilas = async (page, ctx, pid, que, ms = ESPERA_MS) => {
+    await hasta(() => filasCoinciden(page, ctx, pid), (x) => x.ok, que, ms)
+    return leerFilasPl(page)
+  }
+  const esperarAnalisisApi = (ctx, pid) => hasta(async () => (await api(ctx, `/api/playlists/${pid}/analisis`)).progreso,
+    (p) => !p.corriendo, 'el análisis no terminó', ANALISIS_MS)
+  // Todo lo que se toca mide 44 px o más (pedido del dueño). Devuelve los que no.
+  const chicos = (page, sel) => page.$$eval(sel, (els) => els.filter((e) => window.__visible(e)).map((e) => {
+    const r = e.getBoundingClientRect()
+    return { el: `${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} «${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}»`, w: Math.round(r.width), h: Math.round(r.height) }
+  }).filter((x) => x.w < 44 || x.h < 44))
+  // La ruta de la PC nunca se muestra (el server resuelve; la pantalla ve nombres).
+  const sinRutas = async (page, ctx, que) => {
+    const t = await page.evaluate(() => document.body.innerText)
+    for (const r of [...ctx.base.library_roots, ctx.tmp].flatMap((x) => [x, x.replace(/\\/g, '/')])) {
+      afirmar(!t.includes(r), `${que}: la pantalla muestra una ruta de la PC (${r})`)
+    }
+  }
+  const borrarImportadas = async (ctx) => {
+    for (const p of (await api(ctx, '/api/playlists')).playlists) {
+      if (p.origen === 'rekordbox' || p.origen === 'carpeta') await apiPedir(ctx, `/api/playlists/${p.id}`, 'DELETE')
+    }
+  }
+  const nombreAbierta = (page) => page.$eval('.crate-head .name-edit', (i) => i.value).catch(() => null)
+  const abrirEnRail = async (page, nombre) => {
+    await hasta(() => page.evaluate((n) => [...document.querySelectorAll('.pl-item')].some((b) => b.querySelector('.pl-item-name')?.textContent === n), nombre),
+      (v) => v, `«${nombre}» no aparece en el rail`)
+    await page.evaluate((n) => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === n).click(), nombre)
+    await hasta(() => nombreAbierta(page), (v) => v === nombre, `no se abrió «${nombre}»`)
+  }
+  const leerAcciones = (page) => page.$$eval('.crate-accion', (bs) => bs.map((b) => {
+    const d = document.getElementById(b.getAttribute('aria-describedby') || '')
+    return {
+      titulo: b.querySelector('.crate-accion-t')?.textContent ?? null,
+      deshabilitada: b.disabled || b.getAttribute('aria-disabled') === 'true',
+      motivo: d && window.__visible(d) ? d.textContent : null,
+      enfocable: b.tabIndex >= 0 && !b.disabled,
+    }
+  }))
+  const dialogos = (page) => page.evaluate(() => document.querySelectorAll('[role="dialog"]').length)
+
+  return [
+    ['importar (f53): Rekordbox — «N de M encontrados», el porqué de los que faltan, «No encuentro el archivo» y el XML con DOCTYPE', async (page, ctx) => {
+      await borrarImportadas(ctx)
+      try {
+        await abrirImportar(page, ctx)
+        // Pestañas con rol: la de Rekordbox arranca elegida.
+        const tabs = await page.$$eval('.imp-dialog [role="tab"]', (ts) => ts.map((t) => [t.textContent, t.getAttribute('aria-selected')]))
+        igual(tabs, [['Desde Rekordbox', 'true'], ['Desde una carpeta de la PC', 'false']], 'las pestañas del diálogo no son las del tablero G')
+
+        // Un XML con DOCTYPE: el motivo del server, tal cual, y nada de lista.
+        const malo = path.join(ctx.tmp, 'con doctype.xml')
+        fs.writeFileSync(malo, '<?xml version="1.0"?>\n<!DOCTYPE DJ_PLAYLISTS [<!ENTITY x "y">]>\n<DJ_PLAYLISTS Version="1.0.0"><COLLECTION Entries="0"/></DJ_PLAYLISTS>')
+        const rMalo = await leerXmlApi(ctx, malo)
+        afirmar(rMalo.status >= 400 && rMalo.status < 500 && rMalo.data.mensaje, `la API no rechazó el DOCTYPE con un 4xx y motivo: ${json(rMalo)}`)
+        await subirXml(page, malo)
+        const alerta = await hasta(() => page.$eval('.imp-dialog [role="alert"]', (e) => e.textContent).catch(() => null), (v) => v, 'no apareció el motivo del rechazo')
+        igual(alerta, rMalo.data.mensaje, 'la pantalla no muestra el motivo del server para el XML con DOCTYPE')
+        igual(await page.$$eval('.imp-pl', (x) => x.length), 0, 'con el XML rechazado no tiene que haber lista de playlists')
+
+        // El XML bueno: cada playlist con «N de M encontrados» de la API y el porqué de los que faltan.
+        const lectura = (await leerXmlApi(ctx, ctx.base.importar_xml)).data
+        afirmar(lectura.exito && lectura.playlists.length >= 2, `la API no leyó el XML de prueba: ${json(lectura)}`)
+        await subirXml(page, ctx.base.importar_xml)
+        const filas = await hasta(() => leerChecklist(page), (f) => f.length === lectura.playlists.length, 'no aparecieron las playlists del XML')
+        const resumen = await page.$eval('.imp-resumen', (e) => e.textContent)
+        igual(resumen, `${lectura.archivo}: ${lectura.temas} tema${lectura.temas === 1 ? '' : 's'} · ${lectura.playlists.length} playlists`, 'el resumen no dice cuántos temas y playlists trae el XML')
+        lectura.playlists.forEach((p, k) => {
+          const f = filas[k]
+          igual([f.nombre, f.carpeta, f.n, f.tildada], [p.nombre, p.carpeta || null, encontradosTxt(p), p.encontrados > 0 && !p.ya_importada],
+            `la playlist ${p.ruta} no dice lo de la API (nombre, carpeta, encontrados, tildada por defecto)`)
+          // Cada faltante tiene su porqué con su número: la suma de los números dichos es la de la API.
+          const dichos = f.detalle.map((t) => Number((t.match(/^(\d+) /) || [])[1] || 0)).reduce((a, b) => a + b, 0)
+          igual(dichos, p.ambiguos + p.faltan + p.inexistentes, `${p.ruta}: los que faltan no se explican todos (${json(f.detalle)})`)
+          if (p.encontrados < p.total) afirmar(f.describe, `${p.ruta}: el checkbox no tiene descripción (aria-describedby) de los que faltan`)
+        })
+        // La base de juguete: «Peak» tiene un homónimo ambiguo y un TrackID que no está; «Cierre» un fantasma.
+        const peak = lectura.playlists.find((p) => p.nombre === 'Peak')
+        const cierre = lectura.playlists.find((p) => p.nombre === 'Cierre')
+        igual([peak.encontrados, peak.ambiguos, peak.inexistentes, cierre.encontrados, cierre.faltan], [2, 1, 1, 1, 1],
+          'el resolver no encontró lo que la base de juguete tiene en disco (ver tests/sinteticos.py:biblioteca_importable)')
+
+        igual(await chicos(page, '.imp-dialog button, .imp-dialog .imp-check, .imp-dialog .imp-file'), [], 'hay controles del diálogo de menos de 44 px')
+        await sinRutas(page, ctx, 'diálogo de Rekordbox')
+
+        // Importar las tildadas: se abre la primera y arranca el análisis.
+        const tildadas = filas.filter((f) => f.tildada).map((f) => f.nombre)
+        const boton = await page.$eval('.imp-dialog .dialog-actions .btn-primary', (b) => b.textContent.trim())
+        igual(boton, `Importar ${tildadas.length} playlist${tildadas.length === 1 ? '' : 's'}`, 'el botón no cuenta las playlists tildadas')
+        await page.click('.imp-dialog .dialog-actions .btn-primary')
+        await hasta(() => page.$('.imp-dialog'), (v) => !v, 'el diálogo no se cerró al importar')
+        const lista = (await api(ctx, '/api/playlists')).playlists.filter((p) => p.origen === 'rekordbox')
+        igual(lista.map((p) => p.nombre).sort(), [...tildadas].sort(), 'la API no tiene importadas justo las tildadas')
+        await hasta(() => nombreAbierta(page), (v) => v === tildadas[0], 'no se abrió la primera playlist importada')
+        const eyebrow = await page.$eval('.crate-head .eyebrow', (e) => e.textContent)
+        afirmar(eyebrow.includes('Rekordbox'), `el encabezado no dice que vino de Rekordbox: ${eyebrow}`)
+
+        // Peak: el ambiguo y los encontrados; las filas dicen lo de la API (estado, BPM/key y de dónde salen).
+        const pidPeak = lista.find((p) => p.nombre === 'Peak').id
+        await abrirEnRail(page, 'Peak')
+        await esperarAnalisisApi(ctx, pidPeak)
+        const filasPeak = await esperarFilas(page, ctx, pidPeak, 'las filas de Peak no dicen lo de la API', 15000)
+        const itemsPeak = await itemsApi(ctx, pidPeak)
+        igual(itemsPeak.map((i) => [i.titulo, i.archivo_estado]), [['Reubicado', 'ok'], ['Ácido #1', 'ok'], ['Repetido', 'ambiguo']],
+          'la API no resolvió Peak como está en disco (el 999 no está en la colección y no entra)')
+        afirmar(filasPeak.find((f) => f.titulo === 'Repetido').estado.startsWith('Hay 2 archivos con ese nombre'), 'el homónimo no dice que hay dos archivos')
+
+        // Las acciones 2 y 3: deshabilitadas, con el motivo A LA VISTA y alcanzables con el teclado.
+        const acc = await leerAcciones(page)
+        igual(acc.slice(1).map((a) => [a.titulo, a.deshabilitada, a.enfocable]), [['Armar un set', true, true], ['Exportar a Rekordbox (con cues)', true, true]],
+          'Armar un set / Exportar a Rekordbox tienen que estar deshabilitados (y alcanzables con el teclado)')
+        for (const a of acc.slice(1)) afirmar(a.motivo && /^Todavía no/.test(a.motivo), `«${a.titulo}» no muestra por qué está deshabilitado: ${json(a)}`)
+        const antes = await dialogos(page)
+        await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Armar un set')).click())
+        igual(await dialogos(page), antes, '«Armar un set» deshabilitado abrió algo')
+
+        // El género: el tema sin género lo dice; se cambia con el teclado y queda en la API.
+        const sinG = itemsPeak.filter((i) => !(i.genero || '').trim()).length
+        igual(sinG, 1, 'en la base de juguete «Repetido» es el único de Peak sin género')
+        igual(await page.$eval('.crate-genero label', (l) => l.textContent).catch(() => null), '1 tema sin género:', 'no avisa cuántos temas no tienen género')
+        afirmar((await leerAcciones(page))[1].motivo.includes('sin género no va'), 'Armar un set no avisa que el tema sin género no va a entrar')
+        await page.focus('button[aria-label="Ponerle género a «Repetido»"]')
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('input[aria-label="Género de «Repetido»"]', { timeout: ESPERA_MS })
+        await page.keyboard.type('Acid')
+        await page.keyboard.press('Enter')
+        await hasta(async () => (await itemsApi(ctx, pidPeak)).find((i) => i.titulo === 'Repetido').genero, (g) => g === 'Acid', 'el género no llegó a la API')
+        await esperarFilas(page, ctx, pidPeak, 'la fila no muestra el género nuevo')
+        await hasta(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null), (v) => v && v.startsWith('Género de «Repetido»: Acid'), 'el foco no volvió al botón del género')
+        igual(await page.$('.crate-genero'), null, 'con todos los temas con género, el aviso «sin género» tiene que irse')
+        igual(await chicos(page, '.crate-accion, .crate-head .crate-actions .btn, .mb-genero, .results-crate .trk-status .btn, .results-crate .trk-acts .btn, .crate-analisis .btn'), [],
+          'hay controles de la playlist de menos de 44 px')
+
+        // Cierre: el que no está en disco dice «No encuentro el archivo» (no se esconde).
+        const pidCierre = lista.find((p) => p.nombre === 'Cierre').id
+        await abrirEnRail(page, 'Cierre')
+        await esperarAnalisisApi(ctx, pidCierre)
+        const filasCierre = await esperarFilas(page, ctx, pidCierre, 'las filas de Cierre no dicen lo de la API', 15000)
+        const fantasma = filasCierre.find((f) => f.titulo === 'Fantasma')
+        afirmar(fantasma && fantasma.estado.startsWith('No encuentro el archivo') && fantasma.status === 'No está',
+          `el tema que no está en disco no dice «No encuentro el archivo»: ${json(fantasma)}`)
+        await sinRutas(page, ctx, 'playlist importada')
+
+        // Volver a leer el mismo XML: las importadas lo dicen y no vienen tildadas.
+        await page.click('.pl-rail-importar')
+        await page.waitForSelector('.imp-dialog[role="dialog"]', { timeout: ESPERA_MS })
+        await subirXml(page, ctx.base.importar_xml)
+        const relectura = (await leerXmlApi(ctx, ctx.base.importar_xml)).data
+        const filas2 = await hasta(() => leerChecklist(page), (f) => f.length === relectura.playlists.length, 'no se releyó el XML')
+        relectura.playlists.forEach((p, k) => {
+          igual(filas2[k].tildada, p.encontrados > 0 && !p.ya_importada, `${p.ruta}: la ya importada viene tildada (o al revés)`)
+          if (p.ya_importada) afirmar(filas2[k].detalle.some((t) => t.includes(`«${p.ya_importada.nombre}»`)), `${p.ruta}: no dice que ya está importada`)
+        })
+        igual(relectura.playlists.filter((p) => p.ya_importada).length, tildadas.length, 'la API no marca como importadas las que se importaron')
+
+        // 400 px: el diálogo y la playlist entran sin cortarse, y el género se sigue pudiendo tocar.
+        await page.setViewport({ width: 400, height: 860 })
+        await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+        let d = await desbordeDe(page)
+        afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `diálogo a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+        await page.keyboard.press('Escape')
+        await hasta(() => page.$('.imp-dialog'), (v) => !v, 'Escape no cerró el diálogo')
+        const filas400 = await leerFilasPl(page)
+        afirmar(filas400.length > 0 && filas400.every((f) => f.generoVisible), `a 400 px el género de cada tema no se ve: ${json(filas400)}`)
+        d = await desbordeDe(page)
+        afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `playlist importada a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+      } finally {
+        await borrarImportadas(ctx)
+      }
+    }],
+
+    ['importar (f53): carpeta — navegar sin rutas, importar, barra de progreso del análisis y BPM medido contra el generado', async (page, ctx) => {
+      await borrarImportadas(ctx)
+      try {
+        await abrirImportar(page, ctx)
+        // A la otra pestaña con el teclado (flechas, como un tablist).
+        await page.focus('.imp-dialog [role="tab"][aria-selected="true"]')
+        await page.keyboard.press('ArrowRight')
+        await hasta(() => page.evaluate(() => [document.activeElement?.textContent, document.activeElement?.getAttribute('aria-selected')]),
+          (v) => v[0] === 'Desde una carpeta de la PC' && v[1] === 'true', 'la flecha no pasó (con el foco) a la pestaña de carpeta')
+
+        const raices = (await api(ctx, '/api/importar/carpetas')).raices
+        const nombresCarpetas = () => page.$$eval('.imp-dialog .imp-carpeta .imp-pl-nombre', (s) => s.map((x) => x.textContent))
+        const botonesRaiz = await hasta(nombresCarpetas, (v) => v.length > 0, 'no aparecen las carpetas de música')
+        igual(botonesRaiz, raices.map((r) => r.nombre), 'las carpetas de música no son las de la API (por su nombre, sin ruta)')
+        await sinRutas(page, ctx, 'lista de carpetas')
+
+        const entrar = (nombre) => page.evaluate((n) => [...document.querySelectorAll('.imp-dialog .imp-carpeta')].find((b) => b.querySelector('.imp-pl-nombre')?.textContent === n).click(), nombre)
+        // La raíz de lo importable (base_juguete.py: RAIZ_IMPORTAR) → sus subcarpetas → «Set».
+        const r = raices.find((x) => x.nombre === ctx.base.importar_raiz)
+        afirmar(r, `la API no lista la raíz «${ctx.base.importar_raiz}»: ${json(raices)}`)
+        await entrar(r.nombre)
+        const nivel1 = await api(ctx, `/api/importar/carpetas?raiz=${r.id}&ruta=`)
+        await hasta(nombresCarpetas, (v) => json(v) === json(nivel1.subcarpetas.map((s) => s.nombre)), 'las subcarpetas no son las de la API')
+        afirmar(nivel1.subcarpetas.some((s) => s.nombre === 'Set'), 'la API no lista la carpeta Set')
+        await entrar('Set')
+        const set = await api(ctx, `/api/importar/carpetas?raiz=${r.id}&ruta=Set`)
+        const resumen = await hasta(() => page.$eval('.imp-dialog .imp-resumen', (e) => e.textContent).catch(() => null), (v) => v && v.startsWith(`${set.audios} audio`), 'no se abrió la carpeta Set')
+        igual(resumen, `${set.audios} audios en esta carpeta · 0 subcarpetas`, 'la carpeta no dice cuántos audios tiene (según la API)')
+        igual(set.audios, Object.keys(ctx.base.importar_set).length, 'la API no cuenta los audios que la base de juguete puso en Set')
+        igual(await chicos(page, '.imp-dialog button, .imp-dialog .imp-check'), [], 'hay controles de la pestaña de carpeta de menos de 44 px')
+        await sinRutas(page, ctx, 'carpeta abierta')
+
+        // Importar: se abre «Set» y el análisis muestra su barra mientras corre.
+        await page.evaluate(() => [...document.querySelectorAll('.imp-dialog .dialog-actions .btn-primary')].find((b) => b.textContent.includes('Importar')).click())
+        await hasta(() => nombreAbierta(page), (v) => v === 'Set', 'no se abrió la playlist «Set»')
+        const pid = (await api(ctx, '/api/playlists')).playlists.find((p) => p.origen === 'carpeta' && p.nombre === 'Set').id
+        const vistos = []
+        const fin = await hasta(async () => {
+          const s = await page.evaluate(() => {
+            const b = document.querySelector('.crate-analisis [role="progressbar"]')
+            return { texto: document.querySelector('.crate-analisis [role="status"]')?.textContent ?? null,
+              now: b?.getAttribute('aria-valuenow') ?? null, max: b?.getAttribute('aria-valuemax') ?? null }
+          })
+          if (s.max) vistos.push(s)
+          return s
+        }, (s) => s.texto && s.texto.startsWith('Análisis terminado'), 'el análisis no terminó en pantalla', ANALISIS_MS)
+        afirmar(vistos.length > 0, 'mientras analizaba no se vio la barra de progreso')
+        for (const v of vistos) {
+          afirmar(v.max === '2' && Number(v.now) >= 0 && Number(v.now) <= 2 && /^Analizando [12] de 2/.test(v.texto), `la barra no cuenta los 2 temas de la carpeta: ${json(v)}`)
+        }
+        const prog = (await api(ctx, `/api/playlists/${pid}/analisis`)).progreso
+        const f = prog.fallidos.length
+        igual(fin.texto, `Análisis terminado: ${prog.hechos - f} de ${prog.total} analizados${f ? ` · ${f} no se ${f === 1 ? 'pudo' : 'pudieron'} analizar` : ''}`, 'el final del análisis no dice lo de la API')
+        igual([prog.hechos, prog.total, f], [2, 2, 0], 'el motor no analizó los dos clics')
+
+        // BPM con un decimal, el del motor, y cerca del BPM con que se generó cada clic.
+        const filas = await esperarFilas(page, ctx, pid, 'las filas analizadas no dicen lo de la API', 15000)
+        const items = await itemsApi(ctx, pid)
+        for (const it of items) {
+          const generado = ctx.base.importar_set[it.titulo]
+          afirmar(generado, `«${it.titulo}» no es uno de los clics generados`)
+          igual(it.analisis.dato, 'motor', `«${it.titulo}»: el BPM no lo midió el motor`)
+          afirmar(Math.abs(it.analisis.bpm - generado) <= 1.0, `«${it.titulo}»: el motor midió ${it.analisis.bpm} BPM y se generó a ${generado}`)
+        }
+        afirmar(filas.every((r) => /^\d+\.\d$/.test(r.bpm) && r.fuente === null && r.estado === 'En tu PC · Analizado'), `las filas no muestran el BPM medido con un decimal: ${json(filas)}`)
+        const acc = await leerAcciones(page)
+        igual([acc[0].titulo, acc[0].deshabilitada], ['Marcar cues', false], 'con temas analizados, «Marcar cues» tiene que estar disponible')
+
+        // Sin género en los tags: no se inventa; se pone a todos con el formulario.
+        igual(items.map((i) => i.genero || null), [null, null], 'la carpeta inventó un género que los tags no traen')
+        await page.type('#genero-todos', 'Techno')
+        await page.click('.crate-genero button[type="submit"]')
+        await hasta(async () => (await itemsApi(ctx, pid)).map((i) => i.genero), (g) => json(g) === json(['Techno', 'Techno']), 'el género no llegó a los dos temas en la API')
+        await esperarFilas(page, ctx, pid, 'las filas no muestran el género puesto a todos')
+        igual(await page.$('.crate-genero'), null, 'el aviso «sin género» sigue con todos los temas con género')
+      } finally {
+        await borrarImportadas(ctx)
+      }
+    }],
+  ]
+}

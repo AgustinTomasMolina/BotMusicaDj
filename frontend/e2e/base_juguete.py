@@ -29,16 +29,20 @@ from sinteticos import (  # noqa: E402
 )
 
 SEGUNDOS = 60.0
+# f53: la segunda raíz de música, la de lo que se importa (su nombre es lo que ve la pantalla).
+RAIZ_IMPORTAR = "Musica DJ"
 
 
 def importables(raiz: Path, destino: Path) -> dict:
-    """f53: lo que se importa en el E2E, adentro de la raíz de música permitida.
+    """f53: lo que se importa en el E2E, en `raiz` (una SEGUNDA raíz de música permitida).
 
-    - `Importar/…`: la colección de `biblioteca_importable` (Locations percent-encoded, uno
-      reubicado desde otra PC, un homónimo ambiguo, uno que no está); su XML queda FUERA de la
-      raíz, en `destino`, como el que el dueño elige con «Elegir el XML…».
-    - `Importar/Set`: dos clics del generador de `motor.sintetico` (BPM conocido) con tags de
-      título y artista y sin género, para importar como carpeta y analizar con el motor."""
+    - la colección de `biblioteca_importable` colgando de la raíz (Locations percent-encoded,
+      uno reubicado desde otra PC, un homónimo ambiguo, uno que no está). Va en la raíz misma y
+      no en una subcarpeta: el resolver cuelga la cola de la ruta del XML de cada raíz
+      ('<otra PC>/Music/Techno/x.wav' → '<raíz>/Techno/x.wav'), como en la PC del dueño. Su XML
+      queda FUERA de las raíces, en `destino`, como el que se elige con «Elegir el XML…»;
+    - `Set`: dos clics del generador de `motor.sintetico` (BPM conocido) con tags de título y
+      artista y sin género, para importar como carpeta y analizar con el motor."""
     import numpy as np
     import soundfile as sf
     from mutagen.id3 import TIT2, TPE1
@@ -46,13 +50,15 @@ def importables(raiz: Path, destino: Path) -> dict:
 
     from motor.sintetico import click_track
 
-    xml, _ = biblioteca_importable(raiz / "Importar", segundos=4.0)
+    xml, _ = biblioteca_importable(raiz, segundos=4.0)
     ruta_xml = destino / "coleccion de prueba.xml"
     ruta_xml.write_text(xml, encoding="utf-8")
-    carpeta = raiz / "Importar" / "Set"
+    carpeta = raiz / "Set"
     carpeta.mkdir(parents=True, exist_ok=True)
+    generados = {}
     for i, (nombre, bpm, titulo) in enumerate((("01 kick.wav", 128.0, "Kick Uno"),
                                                ("02 kick.wav", 132.0, "Kick Dos"))):
+        generados[titulo] = bpm
         y, sr = click_track(bpm, dur=8.0, nota="A", modo="min", seed=i)
         ruta = carpeta / nombre
         sf.write(str(ruta), y.astype(np.float32), sr, subtype="PCM_16")
@@ -61,7 +67,9 @@ def importables(raiz: Path, destino: Path) -> dict:
         audio.tags.add(TIT2(encoding=3, text=titulo))
         audio.tags.add(TPE1(encoding=3, text="Generador"))
         audio.save()
-    return {"importar_xml": str(ruta_xml)}
+    # `importar_set`: título → BPM con que se GENERÓ cada clic (el ground truth contra el que
+    # se compara lo que mide el motor; nunca un número escrito en el caso del E2E).
+    return {"importar_xml": str(ruta_xml), "importar_set": generados, "importar_raiz": raiz.name}
 
 
 def _tamano_png(datos: bytes) -> list[int]:
@@ -81,7 +89,7 @@ def main(destino: Path) -> dict:
     return {
         "djradio_db": str(db),
         "library_xml": str(xml),
-        "library_roots": [str(raiz)],
+        "library_roots": [str(raiz), str(destino / RAIZ_IMPORTAR)],
         # Qué tiene que terminar mostrando cada tarjeta de la home: id → [ancho, alto] de SU
         # imagen. Los ids 1 y 2 traen PNG de tamaños distintos (2×2 y 3×1, leídos de la
         # cabecera de los bytes que se embebieron), así una tarjeta que muestra la carátula de
@@ -90,7 +98,7 @@ def main(destino: Path) -> dict:
         # carátula (404).
         "caratula_dibujable": {"1": _tamano_png(imagenes["png"]),
                                "2": _tamano_png(imagenes["png_otro"])},
-        **importables(raiz, destino),
+        **importables(destino / RAIZ_IMPORTAR, destino),
     }
 
 
