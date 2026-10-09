@@ -291,6 +291,11 @@ def test_tramo_bordes_reales_de_los_cuadros(tres_elementos):
     d, h, r = mb.tramo(b, 1.234, 2.0, 1000)
     assert (d, h) == (1.23, 2.0)
     np.testing.assert_array_equal(r, b.q[:, 123:200])         # 77 cuadros < 1000 puntos
+    # `desde` a 0,7 de cuadro: el primer cuadro sigue siendo el que lo CONTIENE (123), no el
+    # más cercano (124). Con 0,4 de cuadro (arriba) redondear y truncar dan lo mismo.
+    d, h, r = mb.tramo(b, 1.237, 2.0, 1000)
+    assert d == 1.23, f"el tramo arranca en {d}: se perdió el cuadro que contiene a `desde`"
+    np.testing.assert_array_equal(r, b.q[:, 123:200])
     d, h, r = mb.tramo(b, 0.0, b.duration_s, 500)              # 2000 cuadros → 4 por punto
     np.testing.assert_array_equal(r, b.q.reshape(3, 500, 4).max(axis=2))
 
@@ -427,6 +432,33 @@ def test_sin_cambios_de_arreglo_no_se_inventa_el_1(tmp_path, caso):
     g = mb.grilla(mb.compute_bandas(_wav(tmp_path / "l.wav", y)), 128.0)
     assert g["primer_beat_s"] is not None, "el test no probaría nada: no hay grilla de beats"
     assert g["compas_ref"] is None and g["compas_motivo"], g
+
+
+def test_el_primer_compas_no_se_compara_contra_un_beat_sin_subida():
+    """El borde de `estimar_compas`: el beat 0 no tiene beat anterior, así que su «subida» es 0
+    por construcción, no por la música. Un acento que se repite en el 1 de CADA compás desde
+    el principio se cancela compás a compás… salvo en el beat 4, que se compararía contra ese 0
+    y votaría como si fuera algo nuevo. Por eso el beat 4 tampoco vota.
+
+    Energías por beat armadas a mano (tramos de beat con un valor constante en la banda de
+    graves; P = 0,5 s, primer beat 0,2 s): acento 0,3 en j % 4 == 0 y 0,15 en el resto, y dos
+    capas que entran en los beats 21 y 41 (posición 1 del compás). Lo nuevo de verdad está en
+    la posición 1; si el beat 4 votara (0,15 por la posición 0 contra 0,2 de las capas), el
+    margen caería a 0,14 y no habría compás."""
+    tasa, p, primero, nb = 100, 0.5, 0.2, 60
+    e = np.where(np.arange(nb + 2) % 4 == 0, 0.3, 0.15)
+    e[21:] += 0.25
+    e[41:] += 0.25
+    n = int((primero + (nb + 1) * p) * tasa)
+    t = np.arange(n) / tasa
+    j = np.floor((t - (primero - p / 8)) / p).astype(int)        # el beat de cada cuadro
+    valores = np.zeros((3, n))
+    valores[0] = np.where(j >= 0, e[np.clip(j, 0, nb + 1)], 0.0)
+    c = mb.estimar_compas(valores, primero, p, tasa)
+    assert c["compas_ref"] is not None, c
+    assert abs(c["compas_ref"] - (primero + p)) < 1e-9, \
+        f"el 1 quedó en {c['compas_ref']} s; las capas entran en la posición 1 ({primero + p} s)"
+    assert c["compas_confianza"] == 1.0, c
 
 
 def test_la_grilla_lista_para_json(tres_elementos):
