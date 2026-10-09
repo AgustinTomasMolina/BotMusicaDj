@@ -82,6 +82,8 @@ async def lifespan(app: FastAPI):
     logger.info("🌐 Servidor web iniciado. Buscador listo.")
     threading.Thread(target=_calentar_librosa, name="calentar-librosa", daemon=True).start()
     yield
+    # f53: el análisis de playlists en segundo plano corta después del archivo en curso.
+    _analizador.detener()
 
 
 def _calentar_librosa() -> None:
@@ -3387,9 +3389,29 @@ async def historial_limpiar(que: str = "todo"):
 # ============================================================
 #  Mis Playlists (crates)
 # ============================================================
+def _metricas_bpm_motor(items_analizados: list[dict]) -> dict:
+    """Las métricas de BPM con lo que sabe el motor (items ya pasados por `_analisis_items`):
+    si midió algún tema, salen SOLO de lo medido (db.metricas_bpm no mezcla fuentes). La usan
+    el crate y el rail, así los dos dicen lo mismo."""
+    return db.metricas_bpm((it["analisis"].get("bpm"), it["analisis"].get("dato"))
+                           for it in items_analizados)
+
+
+def _listar_con_motor() -> list[dict]:
+    """`db.listar_playlists` con las métricas de BPM del motor (una sola pasada por la base
+    del motor para todos los temas de todas las playlists)."""
+    ps = db.listar_playlists()
+    items = {p["id"]: (db.get_playlist_mia(p["id"], True) or {}).get("items") or [] for p in ps}
+    analizados, _ = _analisis_items([it for its in items.values() for it in its])
+    por_id = {it["id"]: it for it in analizados}
+    for p in ps:
+        p.update(_metricas_bpm_motor([por_id[it["id"]] for it in items[p["id"]]]))
+    return ps
+
+
 @app.get("/api/playlists")
 async def playlists_listar():
-    return {"exito": True, "playlists": await asyncio.to_thread(db.listar_playlists)}
+    return {"exito": True, "playlists": await asyncio.to_thread(_listar_con_motor)}
 
 
 @app.get("/api/playlists/activa")
@@ -3398,7 +3420,9 @@ async def playlists_activa():
 
 
 @app.post("/api/playlists")
-async def playlists_crear(payload: dict):
+async def playlists_crear(payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     nombre = (payload.get("nombre") or "").strip() or "Nueva playlist"
     p = await asyncio.to_thread(db.crear_playlist, nombre)
     return {"exito": bool(p), "playlist": p}
@@ -3406,9 +3430,15 @@ async def playlists_crear(payload: dict):
 
 @app.get("/api/playlists/{pid}")
 async def playlists_get(pid: int):
-    data = await asyncio.to_thread(db.get_playlist_mia, pid)
+    data = await asyncio.to_thread(db.get_playlist_mia, pid, True)
     if not data:
         return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
+    # f53: qué sabe el motor de cada tema (estado del análisis, BPM/key medidos, id de la
+    # radio, marcas). Necesita la ruta, que `_item_publico` saca antes de responder.
+    data["items"], data["motor"] = await asyncio.to_thread(_analisis_items, data.get("items") or [])
+    # Las métricas de BPM con lo que sabe el motor: si midió algún tema, el promedio y el rango
+    # salen SOLO de lo medido (db.metricas_bpm no mezcla fuentes).
+    data["metrics"] = {**(data.get("metrics") or {}), **_metricas_bpm_motor(data["items"])}
     # Cada item dice si se puede bajar desde acá y por qué no (f41): la pantalla muestra el
     # motivo que decide el server en vez de repetir el criterio.
     data["items"] = [_item_publico(it) for it in data.get("items") or []]
@@ -3416,7 +3446,9 @@ async def playlists_get(pid: int):
 
 
 @app.patch("/api/playlists/{pid}")
-async def playlists_editar(pid: int, payload: dict):
+async def playlists_editar(pid: int, payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     if "nombre" in payload:
         await asyncio.to_thread(db.renombrar_playlist, pid, payload.get("nombre") or "")
     if payload.get("activar"):
@@ -3425,20 +3457,48 @@ async def playlists_editar(pid: int, payload: dict):
 
 
 @app.delete("/api/playlists/{pid}")
-async def playlists_borrar(pid: int):
+async def playlists_borrar(pid: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.borrar_playlist_mia, pid)}
 
 
 @app.post("/api/playlists/{pid}/items")
-async def playlists_agregar_item(pid: int, payload: dict):
-    r = await asyncio.to_thread(db.agregar_item, pid, payload.get("track") or payload)
+async def playlists_agregar_item(pid: int, payload: dict, request: Request):
+    """Agrega un tema a la playlist.
+
+    f53 (tomado de f33): un tema de la biblioteca local (la home) llega con `fuente:
+    "biblioteca"` y `lib_id` (el id de /api/biblioteca): el SERVER resuelve su archivo con su
+    propio índice (`_lib_audio`) y lo guarda en el item, así se puede exportar y analizar con el
+    motor (antes quedaba sin archivo y "por bajar" para siempre). Una `ruta` (o `archivo`/
+    `formato`) que venga en el cuerpo se IGNORA: este endpoint no tiene CORS y cualquier página
+    abierta en el navegador puede pegarle; una ruta suya haría que el motor lea cualquier
+    archivo de la PC. `con_archivo` dice si el item quedó con archivo local."""
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
+    track = payload.get("track") or payload
+    if not isinstance(track, dict):
+        return JSONResponse({"exito": False, "mensaje": "El tema tiene que ser un objeto."},
+                            status_code=400)
+    track = {k: v for k, v in track.items() if k not in ("ruta", "archivo", "formato")}
+    ruta_local = None
+    lib_id = track.get("lib_id")
+    if str(track.get("fuente") or "").strip().casefold() == "biblioteca" and lib_id is not None:
+        lib_id = str(lib_id)
+        if lib_id not in _lib_audio:
+            # Vacío (recién arrancó el server) o un id nuevo (el XML cambió): se relee.
+            await asyncio.to_thread(_cargar_biblioteca)
+        ruta_local = _lib_audio.get(lib_id)
+    r = await asyncio.to_thread(db.agregar_item, pid, track, ruta_local)
     if r is None:
         return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
-    return {"exito": True, **r}
+    return {"exito": True, **r, "con_archivo": bool(ruta_local)}
 
 
 @app.delete("/api/playlists/{pid}/items/{item_id}")
-async def playlists_quitar_item(pid: int, item_id: int):
+async def playlists_quitar_item(pid: int, item_id: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.quitar_item, item_id)}
 
 
@@ -3651,8 +3711,9 @@ def descargar_item_playlist(pid: int, item_id: int, formato: str) -> dict:
 #  - si el navegador dice de dónde viene: Sec-Fetch-Site no "cross-site", y Origin = este
 #    server (mismo host:puerto que pidió el navegador). Si no vienen (curl, TestClient, un
 #    navegador viejo) no se exige: lo que protege ahí es el Content-Type.
-# El proxy de Vite en desarrollo no cambia Host (changeOrigin false), así que Origin y Host
-# coinciden también ahí.
+# El proxy de Vite en desarrollo tiene que dejar el Host como lo pidió el navegador: Vite 8
+# pone changeOrigin: true si el proxy se escribe como string (Host = 127.0.0.1:8000 y Origin =
+# localhost:5173 → 403). Por eso frontend/vite.config.js lo declara con changeOrigin: false.
 
 def _origen_ajeno(request: Request) -> str | None:
     """Por qué el pedido viene de otra página, o None si es de la propia app (o no se sabe)."""
@@ -3670,6 +3731,16 @@ def _origen_ajeno(request: Request) -> str | None:
     if not netloc or netloc != host:
         return f"Origin {origen[:80]}"
     return None
+
+
+def _guarda_ajeno(request: Request) -> JSONResponse | None:
+    """403 si el pedido viene de otra página (ver `_origen_ajeno`); None si es de la app. Para
+    los endpoints que escriben y ya leen su cuerpo con FastAPI (las playlists propias, f53)."""
+    ajeno = _origen_ajeno(request)
+    if not ajeno:
+        return None
+    logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+    return JSONResponse(_RECHAZO_AJENO, status_code=403)
 
 
 async def _cuerpo_json_propio(request: Request) -> tuple[dict | None, JSONResponse | None]:
@@ -3746,17 +3817,519 @@ async def playlists_descargar_item(pid: int, item_id: int, request: Request):
 
 
 @app.post("/api/playlists/{pid}/orden")
-async def playlists_reordenar(pid: int, payload: dict):
+async def playlists_reordenar(pid: int, payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.reordenar, pid, payload.get("orden") or [])}
 
 
 @app.post("/api/playlists/{pid}/export")
-async def playlists_export(pid: int):
+async def playlists_export(pid: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     recibo = await asyncio.to_thread(db.armar_m3u8, pid)
     if not recibo:
         return JSONResponse({"exito": False, "mensaje": "No pude exportar la playlist."}, status_code=502)
     logger.info(f"📃 Playlist exportada: {recibo['archivo']} ({recibo['incluidos']} temas)")
     return {"exito": True, **recibo}
+
+
+# ============================================================
+#  Playlists como centro (f53): importar de Rekordbox o de una carpeta, editar el género y
+#  el puente con el motor (análisis en segundo plano + estado de cada tema)
+# ============================================================
+#   POST  /api/importar/rekordbox/leer          XML crudo (application/xml | text/xml) o
+#                                               {"usar_configurado": true} → resumen + token
+#   POST  /api/importar/rekordbox               {token, playlists: [ids], actualizar?}
+#   GET   /api/importar/carpetas?raiz=&ruta=    raíces (sin raiz) o subcarpetas con sus audios
+#   POST  /api/importar/carpeta                 {raiz, ruta, recursivo?, actualizar?}
+#   PATCH /api/playlists/{pid}/items/{item}     {genero}
+#   POST  /api/playlists/{pid}/genero           {genero}: a todos los que no tienen
+#   POST  /api/playlists/{pid}/analizar         {} → encola lo que el motor no tiene vigente
+#   GET   /api/playlists/{pid}/analisis         progreso del análisis
+#
+# Lo que escribe o dispara trabajo pasa por la defensa contra otras páginas (`_origen_ajeno`
+# + tipo de contenido: JSON, o XML en la lectura). Nunca 500: 400/403/404/409/410/413/415 con
+# el motivo en `mensaje`. Las respuestas no llevan rutas absolutas de la PC: nombres de
+# archivo, de playlist y carpetas relativas a su raíz. La lógica de lectura está en
+# `playlist_import.py` y la cola de análisis en `playlist_analisis.py`.
+
+import playlist_analisis  # noqa: E402
+import playlist_import  # noqa: E402
+
+_sesiones_xml = playlist_import.Sesiones()
+_RE_ID_URL = re.compile(r"[0-9]{1,12}")
+_RECHAZO_AJENO = {"exito": False, "mensaje": "Pedido rechazado: no viene de MusiFlix."}
+
+
+def _raices() -> list[str]:
+    """Las carpetas de música permitidas (MUSIFLIX_LIBRARY_ROOTS). Función para que los tests
+    puedan cambiarlas sin recargar el módulo."""
+    return list(_LIB_ROOTS)
+
+
+def _sin_raices_motivo() -> str:
+    return ("No hay carpetas de música configuradas, así que no puedo buscar tus archivos. Poné "
+            "en MUSIFLIX_LIBRARY_ROOTS las carpetas donde tenés los temas (separadas por ';' en "
+            "Windows) y reiniciá el servidor.")
+
+
+def _rechazo(e: "playlist_import.Rechazo") -> JSONResponse:
+    return JSONResponse({"exito": False, "mensaje": e.mensaje}, status_code=e.status)
+
+
+def _id_url(texto: str) -> int | None:
+    return int(texto) if _RE_ID_URL.fullmatch(texto or "") else None
+
+
+# --- el motor: análisis en segundo plano -----------------------------------------------------
+
+def _analizar_y_guardar(ruta: str) -> str | None:
+    """Lo que hace el hilo con UN archivo: el análisis del scan y el upsert en la base del motor
+    (creándola si no existe, como `scan`). None si anduvo, el motivo si no."""
+    from motor.cli import analizar_para_guardar, db_por_defecto, esta_bloqueada, guardar_analisis
+    from motor.store import EsquemaIncompatible, Store
+
+    res = analizar_para_guardar(ruta)
+    if isinstance(res, str):
+        return res
+    try:
+        with Store(db_por_defecto()) as store:
+            guardar_analisis(store, ruta, res)      # licencia y origen: "no declarado"
+    except EsquemaIncompatible:
+        return "la base del motor es de otra versión: no la toco"
+    except sqlite3.OperationalError as e:
+        return ("la base del motor está ocupada (un scan u otra instancia): reintentá en un rato"
+                if esta_bloqueada(e) else f"no pude escribir en la base del motor ({e})")
+    return None
+
+
+def _al_guardar(ruta: str) -> None:
+    """El editor de cues abre el tema por su id de la radio: queda en el índice ya, sin esperar
+    a la próxima recarga de la biblioteca (`_RADIO_RECARGA_MIN_S`)."""
+    _radio_audio[_radio_id(Path(ruta))] = str(Path(ruta))
+
+
+_analizador = playlist_analisis.AnalizadorFondo(_analizar_y_guardar, _al_guardar)
+
+
+def _marcas_por_clase(store, rutas: list[str]) -> dict[str, dict]:
+    """{clave del store: {total, pads, memory, loop}} — los puntos de color de la tabla. Primero
+    `cue_mark_counts` (una consulta para todos); el detalle solo de los que tienen marcas."""
+    from motor.store import Store as _S
+
+    conteos = store.cue_mark_counts(rutas)
+    out = {}
+    for r in rutas:
+        k = _S._key(r)
+        if not conteos.get(k):
+            continue
+        marcas = store.list_cue_marks(r)
+        out[k] = {"total": len(marcas),
+                  "pads": sorted(m.num for m in marcas if m.kind == "cue" and m.num is not None),
+                  "memory": sum(1 for m in marcas if m.kind == "memory"),
+                  "loop": sum(1 for m in marcas if m.kind == "loop")}
+    return out
+
+
+def _dato_externo(it: dict) -> dict:
+    """BPM/key que NO midió el motor: los del XML de Rekordbox (o de la búsqueda), marcados."""
+    camelot = it.get("camelot") or None
+    tonalidad = None
+    if camelot:
+        try:
+            from motor.tonalidad import camelot_a_clasica
+            tonalidad = camelot_a_clasica(camelot) or None
+        except ImportError:
+            tonalidad = None
+    dato = None
+    if it.get("bpm") or camelot:
+        dato = "rekordbox" if (it.get("fuente") or "").lower() in ("rekordbox", "biblioteca") else "otro"
+    return {"bpm": it.get("bpm"), "camelot": camelot, "tonalidad": tonalidad,
+            "key_dudosa": False, "dato": dato}
+
+
+_MOTIVO_ARCHIVO = {
+    "no-existe": "No encuentro el archivo: se movió o se borró desde que se agregó.",
+    "no-encontrado": "No encuentro el archivo en tus carpetas de música.",
+    "sin-archivo": "Sin archivo en la PC: no hay nada que analizar todavía.",
+}
+
+
+def _analisis_items(items: list[dict]) -> tuple[list[dict], dict]:
+    """Cada item con su `analisis` (estado, motivo, radio_id, BPM/key y de dónde salen,
+    marcas), y el estado de la base del motor. Nunca levanta por la base: sin base o con la
+    base ocupada los temas quedan "pendiente" y `motor.motivo` dice por qué."""
+    con_archivo = [it for it in items if it.get("archivo_estado") == "ok" and it.get("ruta")]
+
+    def leer(store):
+        vistos = {}
+        for it in con_archivo:
+            ruta = os.path.abspath(it["ruta"])
+            f = store.get_features(ruta)
+            vistos[it["id"]] = (f, f is not None and not store.needs_analysis(ruta))
+        return vistos, _marcas_por_clase(store, [os.path.abspath(it["ruta"]) for it in con_archivo])
+
+    vistos, marcas, estado, motivo = {}, {}, _RADIO_OK, None
+    try:
+        from motor.store import Store as _S
+    except ImportError:
+        # Sin motor (imagen sin motor/): cada tema muestra lo que trajo su origen.
+        _, estado, motivo = _usar_store_motor(lambda store: None)
+        return ([{**it, "analisis": {"estado": "pendiente" if it.get("archivo_estado") == "ok"
+                                     else "sin-archivo", "motivo": motivo, "radio_id": None,
+                                     "marcas": None, **_dato_externo(it)}} for it in items],
+                _radio_envoltura(estado, motivo))
+    if con_archivo:
+        res, estado, motivo = _usar_store_motor(leer)
+        if estado == _RADIO_OK:
+            vistos, marcas = res
+
+    out = []
+    for it in items:
+        a = {"estado": "sin-archivo", "motivo": None, "radio_id": None, "marcas": None,
+             **_dato_externo(it)}
+        ae = it.get("archivo_estado")
+        if ae == "ambiguo":
+            n = it.get("homonimos") or 2
+            a["motivo"] = (f"Hay {n} archivos con ese nombre en tus carpetas y no elijo uno a la "
+                           f"suerte: dejá uno solo o renombrá los otros, y actualizá la importación.")
+        elif ae != "ok":
+            a["motivo"] = _MOTIVO_ARCHIVO.get(ae)
+        else:
+            ruta = os.path.abspath(it["ruta"])
+            f, vigente = vistos.get(it["id"], (None, False))
+            en_curso = _analizador.estado_de(ruta)
+            if en_curso:
+                a["estado"] = en_curso
+            elif vigente:
+                a["estado"] = "analizado"
+            elif (m := _analizador.motivo_fallo(ruta)):
+                a["estado"], a["motivo"] = "fallo", m
+            else:
+                a["estado"] = "pendiente"
+                if f is not None:
+                    a["motivo"] = "El archivo cambió desde que se analizó: hay que volver a analizarlo."
+            if vigente and f is not None:
+                from motor.cli import key_dudosa
+                from motor.tonalidad import camelot_a_clasica
+                rid = _radio_id(Path(ruta))
+                _radio_audio.setdefault(rid, str(Path(ruta)))
+                bpm = _num(f.bpm)
+                a.update({"radio_id": rid,
+                          "bpm": round(bpm, 1) if bpm is not None and bpm > 0 else None,
+                          "camelot": f.key or None, "tonalidad": camelot_a_clasica(f.key) or None,
+                          "key_dudosa": key_dudosa(f.key_acuerdo), "dato": "motor",
+                          "marcas": marcas.get(_S._key(ruta),
+                                               {"total": 0, "pads": [], "memory": 0, "loop": 0})})
+        out.append({**it, "analisis": a})
+    return out, _radio_envoltura(estado, motivo)
+
+
+@app.post("/api/playlists/{pid}/analizar")
+async def playlists_analizar(pid: str, request: Request):
+    """Encola en el análisis de fondo los temas de la playlist que tienen archivo y que el motor
+    no tiene vigente (`needs_analysis`). Idempotente. 409 si la base del motor no se puede usar
+    (ocupada, de otra versión, ilegible) o no hay motor."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    p = _id_url(pid)
+    data = await asyncio.to_thread(db.get_playlist_mia, p, True) if p is not None else None
+    if not data:
+        return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
+
+    def preparar():
+        try:
+            from motor.cli import db_por_defecto
+            from motor.store import Store
+        except ImportError:
+            return None, _RADIO_SIN_MOTOR, ("Esta instalación no incluye el motor (motor/): no "
+                                            "se pueden analizar temas.")
+        base = db_por_defecto()
+        if not base.exists():
+            try:                                   # la crea, como `scan`
+                Store(base, espera_bloqueo_s=_RADIO_ESPERA_S).close()
+            except (sqlite3.Error, OSError) as e:
+                return None, _RADIO_ILEGIBLE, f"No pude crear la base del motor: {e}"
+        rutas = [(it["id"], os.path.abspath(it["ruta"]),
+                  " — ".join(x for x in (it.get("artista"), it.get("titulo")) if x) or "tema")
+                 for it in data["items"] if it.get("archivo_estado") == "ok" and it.get("ruta")]
+        return _usar_store_motor(lambda store: [t for t in rutas if store.needs_analysis(t[1])])
+
+    pendientes, estado, motivo = await asyncio.to_thread(preparar)
+    if estado != _RADIO_OK:
+        return JSONResponse({"exito": False, "mensaje": motivo, "estado": estado}, status_code=409)
+    progreso = _analizador.encolar(p, pendientes)
+    return {"exito": True, "encolados": progreso.pop("encolados"), "progreso": progreso}
+
+
+@app.get("/api/playlists/{pid}/analisis")
+async def playlists_analisis(pid: str):
+    """Cómo va el análisis de la playlist: corriendo, hechos/total, tema actual y fallidos (con
+    el motivo, sin rutas)."""
+    p = _id_url(pid)
+    if p is None or not await asyncio.to_thread(db.get_playlist_mia, p):
+        return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
+    return {"exito": True, "progreso": _analizador.progreso(p)}
+
+
+# --- editar el género ------------------------------------------------------------------------
+
+@app.patch("/api/playlists/{pid}/items/{item_id}")
+async def playlists_editar_item(pid: str, item_id: str, request: Request):
+    """Cambia el género de UN tema: {"genero": "Techno"} ("" o null = sin género). Queda
+    marcado como editado a mano: actualizar la importación no lo pisa."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    sobran = sorted(set(cuerpo) - {"genero"})
+    if sobran or "genero" not in cuerpo:
+        return JSONResponse({"exito": False, "mensaje": "Solo se puede cambiar el género "
+                             "({\"genero\": \"...\"})."}, status_code=400)
+    g = cuerpo["genero"]
+    if g is not None and not isinstance(g, str):
+        return JSONResponse({"exito": False, "mensaje": "El género tiene que ser un texto."},
+                            status_code=400)
+    p, i = _id_url(pid), _id_url(item_id)
+    item = (await asyncio.to_thread(db.editar_genero_item, p, i, g)
+            if p is not None and i is not None else None)
+    if item is None:
+        return JSONResponse({"exito": False, "mensaje": "Ese tema no está en esta playlist."},
+                            status_code=404)
+    return {"exito": True, "item": _item_publico(item)}
+
+
+@app.post("/api/playlists/{pid}/genero")
+async def playlists_genero_a_todos(pid: str, request: Request):
+    """Pone el mismo género a todos los temas de la playlist que NO tienen uno."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    g = cuerpo.get("genero")
+    if not isinstance(g, str) or db.sanear_genero(g) is None:
+        return JSONResponse({"exito": False, "mensaje": "Escribí el género que querés poner."},
+                            status_code=400)
+    p = _id_url(pid)
+    n = await asyncio.to_thread(db.genero_a_los_sin_genero, p, g) if p is not None else None
+    if n is None:
+        return JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."}, status_code=404)
+    return {"exito": True, "cambiados": n, "genero": db.sanear_genero(g)}
+
+
+# --- importar desde Rekordbox ------------------------------------------------------------------
+
+_TIPOS_XML = ("application/xml", "text/xml")
+
+
+async def _leer_cuerpo_xml(request: Request) -> bytes:
+    """El cuerpo crudo con tope (`XML_MAX_BYTES`): se corta al pasarse, sin juntarlo entero."""
+    tope = playlist_import.XML_MAX_BYTES
+    largo = request.headers.get("content-length")
+    if largo and largo.isdigit() and int(largo) > tope:
+        raise playlist_import.Rechazo(413, f"El XML pesa más de {tope // (1024 * 1024)} MB: no lo leo.")
+    partes, total = [], 0
+    async for trozo in request.stream():
+        total += len(trozo)
+        if total > tope:
+            raise playlist_import.Rechazo(413, f"El XML pesa más de {tope // (1024 * 1024)} MB: no lo leo.")
+        partes.append(trozo)
+    return b"".join(partes)
+
+
+def _nombre_xml(request: Request) -> str:
+    """El nombre del archivo elegido (cabecera X-Nombre-Archivo, url-encoded): solo el nombre."""
+    from urllib.parse import unquote
+
+    crudo = unquote(request.headers.get("x-nombre-archivo") or "")[:200]
+    nombre = playlist_import.nombre_de_ruta(crudo.replace("\\", "/")) if crudo else ""
+    nombre = re.sub(r"[\x00-\x1f]", "", nombre).strip()
+    return nombre or "rekordbox.xml"
+
+
+def _leer_y_resolver(datos: bytes, nombre: str) -> dict:
+    col = playlist_import.leer_rekordbox(datos, nombre)
+    raices = _raices()
+    playlist_import.resolver_coleccion(col, raices)
+    token = _sesiones_xml.guardar(col)
+    playlists = []
+    for p in col.playlists:
+        r = playlist_import.resumen_playlist(col, p)
+        r["ya_importada"] = db.buscar_importada("rekordbox", p["ruta"])
+        playlists.append(r)
+    return {"exito": True, "token": token, "archivo": col.nombre_xml,
+            "temas": sum(1 for t in col.tracks.values() if t["rb_track_id"]),
+            "playlists": playlists, "raices_configuradas": bool(raices),
+            "motivo_raices": None if raices else _sin_raices_motivo()}
+
+
+@app.post("/api/importar/rekordbox/leer")
+async def importar_rekordbox_leer(request: Request):
+    """Lee un XML de Rekordbox y devuelve qué playlists trae y cuántos archivos se encontraron
+    de cada una, más un `token` para importarlas (vale unos minutos, en memoria).
+
+    El XML llega como CUERPO CRUDO (Content-Type application/xml o text/xml; nombre en
+    X-Nombre-Archivo) o, con {"usar_configurado": true} en JSON, se lee el de
+    MUSIFLIX_LIBRARY_XML."""
+    ajeno = _origen_ajeno(request)
+    if ajeno:
+        logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+        return JSONResponse(_RECHAZO_AJENO, status_code=403)
+    tipo = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    try:
+        if tipo in _TIPOS_XML:
+            datos, nombre = await _leer_cuerpo_xml(request), _nombre_xml(request)
+        elif tipo == "application/json":
+            cuerpo, rechazo = await _cuerpo_json_propio(request)
+            if rechazo:
+                return rechazo
+            if cuerpo.get("usar_configurado") is not True:
+                return JSONResponse({"exito": False, "mensaje": "Mandá el XML o "
+                                     "{\"usar_configurado\": true}."}, status_code=400)
+            if not _LIB_XML:
+                return JSONResponse({"exito": False, "mensaje": "No hay un XML configurado "
+                                     "(MUSIFLIX_LIBRARY_XML): elegí el archivo."}, status_code=409)
+            ruta = Path(_LIB_XML)
+            try:
+                if ruta.stat().st_size > playlist_import.XML_MAX_BYTES:
+                    raise playlist_import.Rechazo(413, "El XML configurado es demasiado grande.")
+                datos = await asyncio.to_thread(ruta.read_bytes)
+            except OSError:
+                return JSONResponse({"exito": False, "mensaje": "No pude leer el XML configurado "
+                                     "(MUSIFLIX_LIBRARY_XML): revisá que exista."}, status_code=409)
+            nombre = ruta.name
+        else:
+            return JSONResponse({"exito": False, "mensaje": "Mandá el XML (Content-Type: "
+                                 "application/xml) o JSON."}, status_code=415)
+        return await asyncio.to_thread(_leer_y_resolver, datos, nombre)
+    except playlist_import.Rechazo as e:
+        return _rechazo(e)
+    except ImportError:
+        return JSONResponse({"exito": False, "mensaje": "Esta instalación no incluye el lector "
+                             "de Rekordbox (ground_truth)."}, status_code=409)
+    except Exception as e:  # noqa: BLE001 — un XML raro no es un 500
+        logger.warning(f"⚠️ Importar: no pude leer el XML: {type(e).__name__}: {e}")
+        return JSONResponse({"exito": False, "mensaje": f"No pude leer el XML ({type(e).__name__})."},
+                            status_code=400)
+
+
+# Buscar-y-crear tiene que ser atómico: dos pedidos a la vez (doble clic, dos pestañas) creaban
+# la misma playlist dos veces. Un solo lock alcanza: importar es raro y corre en un hilo.
+_LOCK_IMPORTAR = threading.Lock()
+
+
+def _importar_o_actualizar(origen: str, ref: str, nombre: str, archivo: str | None,
+                           temas: list[dict], actualizar: bool) -> dict:
+    with _LOCK_IMPORTAR:
+        return _importar_o_actualizar_sin_lock(origen, ref, nombre, archivo, temas, actualizar)
+
+
+def _importar_o_actualizar_sin_lock(origen: str, ref: str, nombre: str, archivo: str | None,
+                                    temas: list[dict], actualizar: bool) -> dict:
+    previa = db.buscar_importada(origen, ref)
+    if previa and not actualizar:
+        return {"estado": "ya-importada", "id": previa["id"], "nombre": previa["nombre"]}
+    if previa:
+        r = db.actualizar_importada(previa["id"], origen, temas, archivo)
+        if r is None:
+            return {"estado": "error", "mensaje": "No pude actualizar la playlist."}
+        return {"estado": "actualizada", **r}
+    r = db.crear_importada(nombre, origen, ref, archivo, temas)
+    if r is None:
+        return {"estado": "error", "mensaje": "No pude guardar la playlist."}
+    return {"estado": "creada", **r}
+
+
+@app.post("/api/importar/rekordbox")
+async def importar_rekordbox(request: Request):
+    """Importa las playlists elegidas de un XML ya leído: {token, playlists: [ids],
+    actualizar?: bool}. Una playlist ya importada (misma ruta adentro de Rekordbox) no se crea
+    de nuevo: vuelve "ya-importada", y con `actualizar` agrega lo nuevo y refresca lo que no
+    editó el dueño."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    col = _sesiones_xml.leer(cuerpo.get("token"))
+    if col is None:
+        return JSONResponse({"exito": False, "mensaje": "La lectura del XML venció o no existe: "
+                             "elegí el archivo de nuevo."}, status_code=410)
+    ids = cuerpo.get("playlists")
+    if (not isinstance(ids, list) or not ids or len(ids) > 500
+            or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        return JSONResponse({"exito": False, "mensaje": "Elegí al menos una playlist."},
+                            status_code=400)
+    por_id = {p["id"]: p for p in col.playlists}
+    if any(i not in por_id for i in ids):
+        return JSONResponse({"exito": False, "mensaje": "Esa playlist no está en el XML."},
+                            status_code=404)
+    actualizar = cuerpo.get("actualizar") is True
+
+    def importar():
+        out = []
+        for i in dict.fromkeys(ids):
+            p = por_id[i]
+            temas = playlist_import.temas_de_playlist(col, p)
+            out.append({"playlist": i, "ruta": p["ruta"],
+                        **_importar_o_actualizar("rekordbox", p["ruta"], p["nombre"],
+                                                 col.nombre_xml, temas, actualizar)})
+        return out
+
+    resultados = await asyncio.to_thread(importar)
+    return {"exito": all(r["estado"] != "error" for r in resultados), "resultados": resultados}
+
+
+# --- importar desde una carpeta ----------------------------------------------------------------
+
+@app.get("/api/importar/carpetas")
+async def importar_carpetas(raiz: str | None = None, ruta: str = ""):
+    """Sin `raiz`: las carpetas de música permitidas, por su nombre. Con `raiz` (su número) y
+    `ruta` (relativa a ella): las subcarpetas inmediatas con cuántos audios tiene cada una."""
+    raices = _raices()
+    if raiz is None:
+        return {"exito": True, "configuradas": bool(raices),
+                "motivo": None if raices else _sin_raices_motivo(),
+                "raices": playlist_import.raices_publicas(raices)}
+    try:
+        real, base, partes = await asyncio.to_thread(playlist_import.carpeta_segura, raices, raiz, ruta)
+        lista = await asyncio.to_thread(playlist_import.listar_carpeta, real, base)
+    except playlist_import.Rechazo as e:
+        return _rechazo(e)
+    publica = playlist_import.raices_publicas(raices)[int(raiz)]
+    return {"exito": True, "raiz": publica, "ruta": "/".join(partes),
+            "nombre": partes[-1] if partes else publica["nombre"], **lista}
+
+
+@app.post("/api/importar/carpeta")
+async def importar_carpeta(request: Request):
+    """Crea una playlist con los audios de una carpeta: {raiz, ruta, recursivo?, actualizar?}.
+    Nombre = el de la carpeta; orden alfabético natural; título/artista/género de los tags."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    raices = _raices()
+    try:
+        real, base, partes = await asyncio.to_thread(
+            playlist_import.carpeta_segura, raices, cuerpo.get("raiz"), cuerpo.get("ruta") or "")
+    except playlist_import.Rechazo as e:
+        return _rechazo(e)
+    recursivo = cuerpo.get("recursivo") is True
+    archivos, pasado = await asyncio.to_thread(playlist_import.audios_de_carpeta, real, base, recursivo)
+    if not archivos:
+        return JSONResponse({"exito": False, "mensaje": "Esa carpeta no tiene audios"
+                             + ("." if recursivo else " (probá incluyendo las subcarpetas).")},
+                            status_code=400)
+    temas = await asyncio.to_thread(lambda: [playlist_import.tema_de_archivo(p) for p in archivos])
+    publica = playlist_import.raices_publicas(raices)[int(cuerpo.get("raiz"))]
+    ref = "/".join([publica["nombre"], *partes])
+    nombre = partes[-1] if partes else publica["nombre"]
+    r = await asyncio.to_thread(_importar_o_actualizar, "carpeta", ref, nombre, None, temas,
+                                cuerpo.get("actualizar") is True)
+    if r["estado"] == "error":
+        return JSONResponse({"exito": False, "mensaje": r["mensaje"]}, status_code=409)
+    aviso = (f"La carpeta tiene más de {playlist_import.CARPETA_MAX_ARCHIVOS} audios: se "
+             f"importaron los primeros {len(archivos)}.") if pasado else None
+    return {"exito": True, **r, "ruta": ref, "aviso": aviso,
+            "ilegibles": sum(1 for t in temas if t.get("import_motivo"))}
 
 
 # ============================================================

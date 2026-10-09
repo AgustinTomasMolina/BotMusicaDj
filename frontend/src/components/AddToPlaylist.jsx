@@ -72,7 +72,9 @@ export function AddToPlaylist({ track }) {
     btnRef.current?.focus()   // el menú se desmonta: el foco vuelve al botón, no al principio de la página
     try {
       const r = await agregarAPlaylist(id, track)
-      if (r.dup) toast.info({ title: `«${track.titulo}» ya estaba en ${nom}` })
+      // f53: un tema que ya estaba sin archivo (la home lo guardaba así) se completa con él.
+      if (r.dup && r.archivo_completado) { toast.ok({ title: `«${track.titulo}» ya estaba en ${nom}`, body: 'Ahora con su archivo de tu PC.' }); avisarPlaylists() }
+      else if (r.dup) toast.info({ title: `«${track.titulo}» ya estaba en ${nom}` })
       else { toast.ok({ title: `Agregado a ${nom}`, body: track.titulo }); avisarPlaylists() }
     } catch { toast.danger({ title: 'No pude agregar a la playlist', body: 'Revisá que el servidor esté corriendo y probá de nuevo.' }) }
   }

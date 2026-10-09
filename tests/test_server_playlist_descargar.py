@@ -479,7 +479,12 @@ def test_migracion_agrega_solo_preview_a_una_base_vieja(server, tmp_path):
         con.execute("CREATE TABLE mi_playlist_items (id INTEGER PRIMARY KEY, playlist_id INTEGER, titulo TEXT)")
         con.execute("INSERT INTO mi_playlist_items (id, playlist_id, titulo) VALUES (1, 1, 'Viejo')")
     eng = create_engine(f"sqlite:///{vieja}")
-    assert server.db._migrar(eng) == ["mi_playlist_items.solo_preview"]
+    # f53 agrega las columnas de los temas importados (la tabla de playlists no existe en esta
+    # base vieja: no se toca).
+    assert server.db._migrar(eng) == [
+        "mi_playlist_items.solo_preview", "mi_playlist_items.rb_track_id",
+        "mi_playlist_items.resolucion", "mi_playlist_items.homonimos",
+        "mi_playlist_items.genero_editado", "mi_playlist_items.import_motivo"]
     assert server.db._migrar(eng) == [], "la migración no es idempotente"
     with sqlite3.connect(vieja) as con:
         assert con.execute("SELECT titulo, solo_preview FROM mi_playlist_items").fetchall() == [("Viejo", None)]

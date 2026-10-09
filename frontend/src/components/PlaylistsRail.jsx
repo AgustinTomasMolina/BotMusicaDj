@@ -4,7 +4,12 @@
 //
 // `biblioteca` (f50, solo en Radio DJ): el estado de la biblioteca del motor ({estado, total}),
 // como en el canvas de la radio: abajo de las playlists, cuántos tracks analizó el motor.
-export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen, onNueva, biblioteca = null }) {
+//
+// f53: cada playlist dice de dónde salió (Rekordbox / MusiFlix / Carpeta), en texto; y
+// «Importar…» abre el diálogo de importar (`onImportar`).
+import { origenTexto } from '../playlistImport'
+
+export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen, onNueva, biblioteca = null, onImportar }) {
   const cuenta = (p) =>
     p.total ?? p.n ?? (Array.isArray(p.items) ? p.items.length : (p.count ?? null))
   const esActiva = (p) =>
@@ -18,6 +23,9 @@ export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen,
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
         </button>
       </div>
+      {onImportar && (
+        <button type="button" className="pl-rail-importar" onClick={onImportar}>Importar…<span className="sr-only"> playlists de Rekordbox o de una carpeta</span></button>
+      )}
       <div className="pl-rail-list">
         {playlists.length === 0 && (
           <p className="pl-rail-empty">Todavía no tenés playlists. Creá una con ＋ y aparece acá.</p>
@@ -31,7 +39,7 @@ export default function PlaylistsRail({ playlists = [], activa, abierta, onOpen,
               <span className={`pl-thumb g${(i % 6) + 1}`} aria-hidden="true" />
               <span className="pl-item-txt">
                 <span className="pl-item-name">{p.nombre || 'Playlist'}</span>
-                <span className="pl-item-sub">{n != null ? `${n} tracks` : 'crate'}{act ? ' · activa' : ''}</span>
+                <span className="pl-item-sub"><span className={`pl-origen o-${p.origen || 'musiflix'}`}>{origenTexto(p.origen)}</span> · {n != null ? `${n} tracks` : 'crate'}{act ? ' · activa' : ''}</span>
               </span>
             </button>
           )

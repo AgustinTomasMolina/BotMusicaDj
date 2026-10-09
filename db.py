@@ -95,6 +95,17 @@ class MiPlaylist(Base):
     nombre: Mapped[str] = mapped_column(String(300))
     activa: Mapped[bool] = mapped_column(Boolean, default=False)  # una sola activa (forzado en código)
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=_ahora)
+    # f53 — de dónde salió: 'musiflix' (armada en la página; NULL en bases viejas = esto),
+    # 'rekordbox' (una playlist del XML) o 'carpeta' (una carpeta de la PC). Columnas agregadas
+    # después: en bases viejas las crea `_migrar`.
+    origen: Mapped[str | None] = mapped_column(String(20), nullable=True, default="musiflix")
+    # Qué playlist/carpeta de ese origen es, SIN rutas absolutas de la PC: la ruta de carpetas
+    # adentro de Rekordbox ("Techno / Peak") o la carpeta relativa a su raíz ("Musica/Techno").
+    # Es la identidad para "ya importada": el nombre del XML no, porque el dueño exporta el XML
+    # con nombres distintos y la misma playlist no tiene que entrar dos veces por eso.
+    origen_ref: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    origen_archivo: Mapped[str | None] = mapped_column(String(200), nullable=True)  # nombre del XML
+    importada_en: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class MiPlaylistItem(Base):
@@ -127,13 +138,37 @@ class MiPlaylistItem(Base):
     # 30 s. Se guarda para que la playlist no ofrezca bajarlo como si fuera el tema (f41).
     # Columna agregada después: en bases viejas la crea `_migrar` (create_all no la agrega).
     solo_preview: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    # f53 — temas importados (de Rekordbox o de una carpeta). El archivo ORIGINAL del dueño va en
+    # `ruta` (el mismo campo que una descarga: así `armar_m3u8` y `_tiene_archivo` lo ven), pero
+    # NO fue bajado por MusiFlix: la pantalla lo dice («En tu PC»), ver `_item_dict`.
+    rb_track_id: Mapped[str | None] = mapped_column(String(40), nullable=True)  # TrackID del XML
+    # Cómo se ubicó el archivo al importar: 'ok', 'ambiguo' (varios archivos DISTINTOS con ese
+    # nombre: no se eligió uno a la suerte) o 'no-encontrado'. NULL = no se importó.
+    resolucion: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    homonimos: Mapped[int | None] = mapped_column(Integer, nullable=True)       # cuántos, si ambiguo
+    # El dueño cambió el género a mano: al actualizar la importación, el del XML no lo pisa.
+    genero_editado: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    # Por qué un tema importado quedó a medias (tags ilegibles, por ejemplo). Sin rutas.
+    import_motivo: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 # Columnas agregadas a tablas que ya existían en bases de usuarios. `create_all` crea tablas
 # nuevas pero NO agrega columnas a una tabla existente, así que cada una se agrega acá con un
 # ALTER TABLE chico e idempotente (si ya está, no se toca). Las filas viejas quedan en NULL,
-# que se lee como "no se sabe" (para solo_preview: False, lo que se suponía hasta ahora).
-_COLUMNAS_NUEVAS = (("mi_playlist_items", "solo_preview", "BOOLEAN"),)
+# que se lee como "no se sabe" (para solo_preview: False, lo que se suponía hasta ahora; para
+# el origen de una playlist: 'musiflix', la única que existía).
+_COLUMNAS_NUEVAS = (
+    ("mi_playlist_items", "solo_preview", "BOOLEAN"),
+    ("mi_playlists", "origen", "VARCHAR(20)"),
+    ("mi_playlists", "origen_ref", "VARCHAR(300)"),
+    ("mi_playlists", "origen_archivo", "VARCHAR(200)"),
+    ("mi_playlists", "importada_en", "DATETIME"),
+    ("mi_playlist_items", "rb_track_id", "VARCHAR(40)"),
+    ("mi_playlist_items", "resolucion", "VARCHAR(20)"),
+    ("mi_playlist_items", "homonimos", "INTEGER"),
+    ("mi_playlist_items", "genero_editado", "BOOLEAN"),
+    ("mi_playlist_items", "import_motivo", "VARCHAR(200)"),
+)
 
 
 def _migrar(eng) -> list[str]:
@@ -297,7 +332,8 @@ def _snapshot(track: dict) -> dict:
         "duracion": int(track["duracion"]) if track.get("duracion") else None,
         "bpm": _bpm_decimal(track.get("bpm")),
         "camelot": track.get("camelot"),
-        "genero": track.get("genero"),
+        # f53: saneado como el que se edita a mano ("Sin género" de la home = sin género).
+        "genero": sanear_genero(track.get("genero")),
         "solo_preview": bool(track.get("solo_preview")),
     }
 
@@ -308,6 +344,24 @@ def _tiene_archivo(it: "MiPlaylistItem") -> bool:
     return bool(it.ruta) and Path(it.ruta).is_file()
 
 
+# Fuentes de un tema que es un archivo PROPIO del dueño, no algo que bajó MusiFlix (f53): de su
+# biblioteca de Rekordbox (la home o una playlist importada) o de una carpeta de la PC.
+FUENTES_LOCALES = ("rekordbox", "carpeta", "biblioteca")
+
+
+def _archivo_estado(it: "MiPlaylistItem") -> str:
+    """Qué pasa con el archivo del tema, en una palabra (f53):
+
+    'ok' está en disco · 'no-existe' tenía archivo y ya no está donde se guardó · 'ambiguo' al
+    importar había varios archivos DISTINTOS con ese nombre y no se eligió uno · 'no-encontrado'
+    al importar no apareció en las carpetas permitidas · 'sin-archivo' nunca tuvo (por bajar)."""
+    if it.ruta:
+        return "ok" if Path(it.ruta).is_file() else "no-existe"
+    if it.resolucion in ("ambiguo", "no-encontrado"):
+        return it.resolucion
+    return "sin-archivo"
+
+
 def _item_dict(it: "MiPlaylistItem") -> dict:
     return {
         "id": it.id, "orden": it.orden, "titulo": it.titulo, "artista": it.artista,
@@ -315,6 +369,15 @@ def _item_dict(it: "MiPlaylistItem") -> dict:
         "bpm": it.bpm, "camelot": it.camelot, "genero": it.genero, "grade": it.grade,
         "color": it.color, "formato": it.formato, "descargado": _tiene_archivo(it),
         "solo_preview": bool(it.solo_preview), "playlist_id": it.playlist_id,
+        # f53. `descargado` sigue queriendo decir "tiene el archivo en disco" (lo usan la descarga
+        # —409 si ya lo tiene— y el .m3u8). Lo que NO dice es quién lo trajo: `local` = es un
+        # archivo propio del dueño (importado o de su biblioteca), y la pantalla lo muestra como
+        # «En tu PC», no como «Descargado». `nombre_archivo` es solo el nombre, nunca la ruta.
+        "archivo_estado": _archivo_estado(it),
+        "local": (it.fuente or "").lower() in FUENTES_LOCALES,
+        "nombre_archivo": it.archivo or (Path(it.ruta).name if it.ruta else None),
+        "homonimos": it.homonimos, "genero_editado": bool(it.genero_editado),
+        "import_motivo": it.import_motivo,
     }
 
 
@@ -328,12 +391,44 @@ def _camelot_num(camelot: str | None) -> int | None:
     return n if 1 <= n <= 12 else None
 
 
+# De dónde sale el BPM de un tema, de más a menos confiable (f53, auditoría): lo medido por el
+# motor (solo lo sabe el server, ver `server._analisis_items`), lo que trae Rekordbox (la home o
+# una playlist importada de Rekordbox) y "otro" (la búsqueda, los tags de una carpeta): sin medir.
+FUENTES_BPM = ("motor", "rekordbox", "otro")
+
+
+def dato_bpm(fuente) -> str:
+    """El origen del BPM guardado en un item, por su fuente (igual que `server._dato_externo`)."""
+    return "rekordbox" if (fuente or "").lower() in ("rekordbox", "biblioteca") else "otro"
+
+
+def metricas_bpm(pares) -> dict:
+    """Promedio y rango de BPM de una playlist SIN MEZCLAR FUENTES: solo con los temas de la
+    fuente más confiable que haya (`FUENTES_BPM`), con un decimal, y cuántos de otras fuentes
+    quedaron afuera. Sin ningún BPM: todo None (la pantalla dice «sin medir», no un número).
+    `pares`: [(bpm, dato)]."""
+    con = []
+    for bpm, dato in pares:
+        try:
+            v = float(bpm)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            con.append((v, dato if dato in ("motor", "rekordbox") else "otro"))
+    for fuente in FUENTES_BPM:
+        vs = [v for v, d in con if d == fuente]
+        if vs:
+            return {"bpm_prom": round(sum(vs) / len(vs), 1), "bpm_min": round(min(vs), 1),
+                    "bpm_max": round(max(vs), 1), "bpm_fuente": fuente, "bpm_n": len(vs),
+                    "bpm_afuera": len(con) - len(vs)}
+    return {"bpm_prom": None, "bpm_min": None, "bpm_max": None, "bpm_fuente": None,
+            "bpm_n": 0, "bpm_afuera": 0}
+
+
 def _metrics(items: list) -> dict:
     total = len(items)
     descargados = sum(1 for it in items if _tiene_archivo(it))
     dur = sum((it.duracion or 0) for it in items)
-    bpms = [it.bpm for it in items if it.bpm]
-    bpm_prom = round(sum(bpms) / len(bpms)) if bpms else None
     keys = [0] * 12                       # histograma por número Camelot (1..12)
     for it in items:
         n = _camelot_num(it.camelot)
@@ -344,8 +439,8 @@ def _metrics(items: list) -> dict:
     if peak is not None:
         vecinos = {peak, (peak + 1) % 12, (peak - 1) % 12}   # ±1 en la rueda + mismo
         compat = sum(1 for it in items if (_camelot_num(it.camelot) or 0) - 1 in vecinos)
-    return {"total": total, "descargados": descargados, "duracion": dur, "bpm_prom": bpm_prom,
-            "bpm_min": min(bpms) if bpms else None, "bpm_max": max(bpms) if bpms else None,
+    return {"total": total, "descargados": descargados, "duracion": dur,
+            **metricas_bpm((it.bpm, dato_bpm(it.fuente)) for it in items),
             "keys": keys, "peak": (peak + 1) if peak is not None else None, "compat_dominante": compat}
 
 
@@ -411,13 +506,22 @@ def listar_playlists() -> list:
             out = []
             for p in s.scalars(select(MiPlaylist).order_by(desc(MiPlaylist.id))):
                 items = list(s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == p.id)))
-                out.append({"id": p.id, "nombre": p.nombre, "activa": p.activa, **_metrics(items)})
+                out.append({"id": p.id, "nombre": p.nombre, "activa": p.activa, **_origen_dict(p),
+                            **_metrics(items)})
             return out
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude listar: {e}"); return []
 
 
-def get_playlist_mia(pid: int) -> dict | None:
+def _origen_dict(p: "MiPlaylist") -> dict:
+    """De dónde salió la playlist (f53). NULL en una base vieja = armada en la página."""
+    return {"origen": p.origen or "musiflix", "origen_ref": p.origen_ref,
+            "origen_archivo": p.origen_archivo, "importada_en": _iso(p.importada_en)}
+
+
+def get_playlist_mia(pid: int, con_ruta: bool = False) -> dict | None:
+    """La playlist con sus items. `con_ruta=True` agrega la `ruta` de cada item: SOLO para uso
+    del server (el análisis y el estado del motor, f53); lo que viaja al navegador no la lleva."""
     try:
         with SessionLocal() as s:
             p = s.get(MiPlaylist, pid)
@@ -425,8 +529,10 @@ def get_playlist_mia(pid: int) -> dict | None:
                 return None
             items = list(s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)
                                    .order_by(MiPlaylistItem.orden, MiPlaylistItem.id)))
-            return {"id": p.id, "nombre": p.nombre, "activa": p.activa,
-                    "metrics": _metrics(items), "items": [_item_dict(it) for it in items]}
+            return {"id": p.id, "nombre": p.nombre, "activa": p.activa, **_origen_dict(p),
+                    "metrics": _metrics(items),
+                    "items": [{**_item_dict(it), "ruta": it.ruta} if con_ruta else _item_dict(it)
+                              for it in items]}
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude leer la playlist {pid}: {e}"); return None
 
@@ -443,20 +549,252 @@ def _buscar_item(s, pid, ident):
     return None
 
 
-def agregar_item(pid: int, track: dict) -> dict | None:
+def _con_archivo(it: "MiPlaylistItem", ruta_local: str) -> None:
+    it.ruta = ruta_local
+    it.archivo = Path(ruta_local).name[:500]
+    it.formato = Path(ruta_local).suffix.lstrip(".").lower()[:10] or None
+
+
+def agregar_item(pid: int, track: dict, ruta_local: str | None = None) -> dict | None:
+    """Agrega un tema a la playlist. `ruta_local` es el archivo del tema YA RESUELTO POR EL
+    SERVER (hoy: el índice de la biblioteca local, `server._lib_audio`, a partir del `lib_id`
+    que manda la home; f53, tomado de f33). Nunca una ruta que haya mandado el cliente:
+    `_snapshot` no lee `ruta` del cuerpo, y cualquier página abierta en el navegador puede
+    pegarle a este endpoint — una ruta suya haría que el motor lea cualquier archivo de la PC.
+
+    Con archivo, el dedupe es por ARCHIVO: dos archivos distintos con el mismo artista y título
+    (el mismo master en dos carpetas) entran los dos. Si el tema ya estaba SIN archivo (la home
+    lo guardaba así antes), se le completa: es la forma de arreglar esos items, agregándolos de
+    nuevo (`archivo_completado`)."""
     try:
         snap = _snapshot(track)
         ident = _ident(snap["fuente"], snap["url"], snap["titulo"], snap["artista"])
         with SessionLocal() as s:
             if not s.get(MiPlaylist, pid):
                 return None
-            if _buscar_item(s, pid, ident):   # dedupe
-                return {"ok": True, "dup": True}
+            previo = _buscar_item(s, pid, ident)
+            if ruta_local:
+                clave = os.path.normcase(ruta_local)
+                mismo = next((it for it in s.scalars(select(MiPlaylistItem).where(
+                    MiPlaylistItem.playlist_id == pid))
+                    if it.ruta and os.path.normcase(it.ruta) == clave), None)
+                if mismo is not None:
+                    return {"ok": True, "dup": True, "id": mismo.id, "archivo_completado": False}
+                if previo is not None and previo.ruta:
+                    previo = None       # mismo nombre, OTRO archivo: es otro item
+            if previo is None and ruta_local and snap["fuente"]:
+                # Un item viejo de la home se guardaba SIN fuente (""): el mismo tema que
+                # llega ahora como "biblioteca" con su archivo lo completa, no se duplica.
+                viejo = _buscar_item(s, pid, _ident("", snap["url"], snap["titulo"], snap["artista"]))
+                if viejo is not None and not viejo.ruta:
+                    previo = viejo
+                    previo.fuente = snap["fuente"]
+            if previo:   # dedupe
+                completado = bool(ruta_local) and not previo.ruta
+                if completado:
+                    _con_archivo(previo, ruta_local)
+                    s.commit()
+                return {"ok": True, "dup": True, "id": previo.id, "archivo_completado": completado}
             it = MiPlaylistItem(playlist_id=pid, orden=_next_orden(s, pid), **snap)
+            if ruta_local:
+                _con_archivo(it, ruta_local)
             s.add(it); s.commit()
             return {"ok": True, "id": it.id}
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude agregar item: {e}"); return None
+
+
+# --------------------------------------------------------------------------
+#  Playlists importadas (f53): de Rekordbox o de una carpeta de la PC
+# --------------------------------------------------------------------------
+# Un tema importado llega como dict con: titulo, artista, genero, bpm, camelot, duracion,
+# ruta (el archivo YA resuelto por el server, o None), archivo (el nombre, para mostrarlo
+# aunque no se haya encontrado), resolucion, homonimos, rb_track_id, import_motivo.
+# El género del tema importado es el que trae el origen (vacío si no trae: no se inventa).
+
+GENERO_MAX = 60
+_SIN_GENERO = {"sin género", "sin genero"}
+
+
+def sanear_genero(valor) -> str | None:
+    """Un género como se guarda: texto corto, sin caracteres de control y con los espacios
+    colapsados. Vacío, "Sin género" (como rotula la home al que no tiene) o algo que no es texto
+    → None: un tema sin género no tiene género, no uno inventado."""
+    if not isinstance(valor, str):
+        return None
+    limpio = re.sub(r"[\x00-\x1f\x7f]+", " ", valor)
+    limpio = re.sub(r"\s+", " ", limpio).strip()[:GENERO_MAX].strip()
+    if not limpio or limpio.casefold() in _SIN_GENERO:
+        return None
+    return limpio
+
+
+def _item_importado(pid: int, orden: int, origen: str, t: dict) -> "MiPlaylistItem":
+    it = MiPlaylistItem(
+        playlist_id=pid, orden=orden, titulo=(t.get("titulo") or "")[:400],
+        artista=(t.get("artista") or "")[:400], fuente=origen, url="",
+        duracion=int(t["duracion"]) if t.get("duracion") else None,
+        bpm=_bpm_decimal(t.get("bpm")), camelot=t.get("camelot") or None,
+        genero=sanear_genero(t.get("genero")), solo_preview=False,
+        rb_track_id=(str(t["rb_track_id"])[:40] if t.get("rb_track_id") else None),
+        resolucion=t.get("resolucion"), homonimos=t.get("homonimos"),
+        import_motivo=(t.get("import_motivo") or None), genero_editado=False)
+    _refrescar_archivo(it, t)
+    return it
+
+
+def _refrescar_archivo(it: "MiPlaylistItem", t: dict) -> None:
+    if t.get("ruta"):
+        _con_archivo(it, t["ruta"])
+    else:
+        it.ruta, it.formato = None, None
+        it.archivo = (t.get("archivo") or "")[:500] or None
+    it.resolucion, it.homonimos = t.get("resolucion"), t.get("homonimos")
+
+
+def buscar_importada(origen: str, origen_ref: str) -> dict | None:
+    """La playlist ya importada de ese origen (`origen_ref`: la ruta de la playlist adentro de
+    Rekordbox o la carpeta relativa), o None."""
+    try:
+        with SessionLocal() as s:
+            p = s.scalars(select(MiPlaylist).where(MiPlaylist.origen == origen,
+                                                   MiPlaylist.origen_ref == origen_ref)
+                          .order_by(MiPlaylist.id)).first()
+            return {"id": p.id, "nombre": p.nombre} if p else None
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude buscar la importada: {e}")
+        return None
+
+
+def crear_importada(nombre: str, origen: str, origen_ref: str, origen_archivo: str | None,
+                    temas: list[dict]) -> dict | None:
+    """Crea la playlist importada con sus temas EN EL ORDEN del origen. Todo en una
+    transacción: si algo falla no queda una playlist a medias."""
+    try:
+        with SessionLocal() as s:
+            p = MiPlaylist(nombre=(nombre or "Playlist")[:300], origen=origen,
+                           origen_ref=(origen_ref or "")[:300] or None,
+                           origen_archivo=(origen_archivo or "")[:200] or None,
+                           importada_en=_ahora())
+            s.add(p)
+            s.flush()
+            for i, t in enumerate(temas, 1):
+                s.add(_item_importado(p.id, i, origen, t))
+            s.commit()
+            return {"id": p.id, "nombre": p.nombre, "temas": len(temas)}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude crear la playlist importada: {e}")
+        return None
+
+
+def _clave_importado(origen: str, t) -> str | None:
+    """Con qué se reconoce el MISMO tema al actualizar: el TrackID de Rekordbox, o el archivo
+    (en una carpeta no hay otro id)."""
+    if isinstance(t, dict):
+        rb, ruta, archivo = t.get("rb_track_id"), t.get("ruta"), t.get("archivo")
+    else:
+        rb, ruta, archivo = t.rb_track_id, t.ruta, t.archivo
+    if origen == "rekordbox":
+        return f"rb:{rb}" if rb else None
+    if ruta:
+        return "ruta:" + os.path.normcase(str(ruta))
+    return f"nombre:{(archivo or '').casefold()}" if archivo else None
+
+
+def actualizar_importada(pid: int, origen: str, temas: list[dict],
+                         origen_archivo: str | None = None) -> dict | None:
+    """Actualiza una playlist ya importada con lo que trae el origen HOY, sin borrar nada:
+
+    - un tema nuevo se agrega al final, en el orden del origen;
+    - uno que ya estaba refresca título, artista, BPM, key y duración del origen, y su archivo
+      si antes no se había encontrado (o si el origen lo ubica en otro lado);
+    - el GÉNERO editado a mano gana: el del origen solo se pone si el dueño no lo tocó;
+    - lo que el dueño quitó, reordenó o agregó a mano no se toca, y un tema que el origen ya no
+      trae tampoco se borra (el dueño decide).
+    Devuelve {agregados, actualizados} o None si la playlist no existe."""
+    try:
+        with SessionLocal() as s:
+            p = s.get(MiPlaylist, pid)
+            if not p or (p.origen or "musiflix") != origen:
+                return None
+            existentes = {}
+            for it in s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)):
+                k = _clave_importado(origen, it)
+                if k and k not in existentes:
+                    existentes[k] = it
+            orden = _next_orden(s, pid)
+            agregados = actualizados = 0
+            for t in temas:
+                k = _clave_importado(origen, t)
+                it = existentes.get(k) if k else None
+                if it is None:
+                    nuevo = _item_importado(pid, orden, origen, t)
+                    s.add(nuevo)
+                    orden += 1
+                    agregados += 1
+                    if k:
+                        existentes[k] = nuevo
+                    continue
+                it.titulo = (t.get("titulo") or it.titulo or "")[:400]
+                it.artista = (t.get("artista") or it.artista or "")[:400]
+                it.bpm = _bpm_decimal(t.get("bpm"))
+                it.camelot = t.get("camelot") or None
+                if t.get("duracion"):
+                    it.duracion = int(t["duracion"])
+                if not it.genero_editado:
+                    it.genero = sanear_genero(t.get("genero"))
+                if t.get("ruta") or not _tiene_archivo(it):
+                    _refrescar_archivo(it, t)
+                it.import_motivo = t.get("import_motivo") or None
+                actualizados += 1
+            if origen_archivo:
+                p.origen_archivo = origen_archivo[:200]
+            p.importada_en = _ahora()
+            s.commit()
+            return {"id": p.id, "nombre": p.nombre, "agregados": agregados,
+                    "actualizados": actualizados}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude actualizar la importada: {e}")
+        return None
+
+
+def editar_genero_item(pid: int, item_id: int, genero) -> dict | None:
+    """Pone el género de UN tema (a mano: queda marcado y una actualización de la importación
+    no lo pisa). `genero` vacío lo deja sin género. None si el item no es de esa playlist."""
+    try:
+        with SessionLocal() as s:
+            it = s.get(MiPlaylistItem, item_id)
+            if not it or it.playlist_id != pid:
+                return None
+            it.genero = sanear_genero(genero)
+            it.genero_editado = True
+            s.commit()
+            return _item_dict(it)
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude editar el item {item_id}: {e}")
+        return None
+
+
+def genero_a_los_sin_genero(pid: int, genero) -> int | None:
+    """Pone `genero` a TODOS los temas de la playlist que no tienen. Los que ya tienen uno no
+    se tocan. Devuelve cuántos cambió, o None si la playlist no existe."""
+    g = sanear_genero(genero)
+    if g is None:
+        return 0
+    try:
+        with SessionLocal() as s:
+            if not s.get(MiPlaylist, pid):
+                return None
+            n = 0
+            for it in s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)):
+                if sanear_genero(it.genero) is None:
+                    it.genero, it.genero_editado = g, True
+                    n += 1
+            s.commit()
+            return n
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude poner el género: {e}")
+        return None
 
 
 def quitar_item(item_id: int) -> bool:

@@ -144,6 +144,105 @@ def pistas_biblioteca(raiz: Path, fantasma: Path, segundos: float = 0.25) -> tup
     return audios, tracks
 
 
+# ------------------------------------------- XML de Rekordbox CON playlists (f53: importar)
+# La MISMA estructura que exporta Rekordbox 7.2.16 (Archivo › Exportar colección en formato
+# xml): PRODUCT, COLLECTION con TRACKs que traen TEMPO y POSITION_MARK, y PLAYLISTS con un nodo
+# ROOT (Type="0") y adentro carpetas (Type="0") y playlists (Type="1"; KeyType="0" = los TRACK
+# se refieren por TrackID, KeyType="1" = por Location). Todo inventado: sin datos del dueño.
+
+def location_rb(ruta) -> str:
+    """Location como la escribe Rekordbox en Windows: 'file://localhost/C:/...' con la unidad
+    tal cual y espacios, '#', '%' y acentos (UTF-8) codificados."""
+    texto = ruta if isinstance(ruta, str) else Path(ruta).as_posix()
+    return "file://localhost/" + quote(texto.replace("\\", "/").lstrip("/"), safe="/:")
+
+
+def xml_rekordbox_playlists(tracks: list[dict], arbol: list) -> str:
+    """`tracks`: dicts con id, name, artist, genre, bpm, ton, dur, loc. `arbol`: lista de
+    ("carpeta", nombre, [hijos]) o ("playlist", nombre, keytype, [keys])."""
+    from xml.sax.saxutils import quoteattr as q
+
+    filas = []
+    for t in tracks:
+        filas.append(
+            f'    <TRACK TrackID={q(str(t["id"]))} Name={q(t["name"])} Artist={q(t["artist"])} '
+            f'Composer="" Album="" Grouping="" Genre={q(t.get("genre", ""))} Kind="WAV File" '
+            f'Size="1234567" TotalTime={q(str(t.get("dur", 0)))} DiscNumber="0" TrackNumber="0" '
+            f'Year="0" AverageBpm={q(str(t.get("bpm", "0.00")))} DateAdded="2026-01-01" '
+            f'BitRate="1411" SampleRate="44100" Comments="" PlayCount="0" Rating="0" '
+            f'Location={q(t["loc"])} Remixer="" Tonality={q(t.get("ton", ""))} Label="" Mix="">\n'
+            f'      <TEMPO Inizio="0.025" Bpm={q(str(t.get("bpm", "0.00")))} Metro="4/4" Battito="1"/>\n'
+            f'      <POSITION_MARK Name="" Type="0" Start="0.025" Num="-1"/>\n'
+            f'    </TRACK>')
+
+    def nodo(n, sangria):
+        pad = "  " * sangria
+        if n[0] == "carpeta":
+            _, nombre, hijos = n
+            dentro = "\n".join(nodo(h, sangria + 1) for h in hijos)
+            return (f'{pad}<NODE Name={q(nombre)} Type="0" Count="{len(hijos)}">\n{dentro}\n'
+                    f'{pad}</NODE>')
+        _, nombre, keytype, keys = n
+        dentro = "".join(f'\n{pad}  <TRACK Key={q(str(k))}/>' for k in keys)
+        return (f'{pad}<NODE Name={q(nombre)} Type="1" KeyType="{keytype}" '
+                f'Entries="{len(keys)}">{dentro}\n{pad}</NODE>')
+
+    raiz = "\n".join(nodo(n, 3) for n in arbol)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n\n<DJ_PLAYLISTS Version="1.0.0">\n'
+            '  <PRODUCT Name="rekordbox" Version="7.2.16" Company="AlphaTheta"/>\n'
+            f'  <COLLECTION Entries="{len(tracks)}">\n' + "\n".join(filas) + '\n  </COLLECTION>\n'
+            f'  <PLAYLISTS>\n    <NODE Type="0" Name="ROOT" Count="{len(arbol)}">\n{raiz}\n'
+            '    </NODE>\n  </PLAYLISTS>\n</DJ_PLAYLISTS>\n')
+
+
+def biblioteca_importable(raiz: Path, otra_pc: str = "C:/Users/otra-pc/Music",
+                          segundos: float = 0.25) -> tuple[str, dict]:
+    """Una colección de Rekordbox para importar, con sus audios en `raiz`:
+
+    - 'Ácido #1 (100%).wav' en 'Techno/Peak Time': su Location es la ruta REAL (con espacios,
+      acento, '#' y '%' codificados) → se encuentra tal cual;
+    - 'reubicado.wav': el XML lo tiene en OTRA PC ('<otra_pc>/Techno/reubicado.wav') y acá
+      está en '<raiz>/Techno/reubicado.wav' → se reubica por la cola de la ruta (hay otro
+      'reubicado.wav' en '<raiz>/Otra': por el nombre solo, sería ambiguo);
+    - 'repetido.wav': hay DOS archivos distintos con ese nombre en la raíz → ambiguo;
+    - 'fantasma.wav': no existe en ningún lado → no encontrado;
+    - un TrackID que la colección no tiene (999) en la playlist → inexistente.
+    Árbol: ROOT › Techno (carpeta) › Peak (KeyType 0) y › Sub › Cierre (KeyType 1); y
+    'Warmup' en la raíz. Devuelve (xml, rutas por nombre corto)."""
+    rutas = {
+        "acido": raiz / "Techno" / "Peak Time" / "Ácido #1 (100%).wav",
+        "reubicado": raiz / "Techno" / "reubicado.wav",
+        # Otro archivo con el mismo nombre en OTRA carpeta: por el nombre solo sería ambiguo;
+        # la cola de la ruta (Techno/reubicado.wav) es la que decide.
+        "reubicado_homonimo": raiz / "Otra" / "reubicado.wav",
+        "repetido_a": raiz / "A" / "repetido.wav",
+        "repetido_b": raiz / "B" / "repetido.wav",
+    }
+    for i, r in enumerate(rutas.values()):
+        wav(r, 220.0 + 55.0 * i, segundos)
+    tracks = [
+        dict(id="1", name="Ácido #1", artist="Artista Uno", genre="Techno", bpm="128.40",
+             ton="Am", dur="361", loc=location_rb(rutas["acido"])),
+        dict(id="2", name="Reubicado", artist="Artista Dos", genre="Hard Techno", bpm="0.00",
+             ton="", dur="300", loc=location_rb(f"{otra_pc}/Techno/reubicado.wav")),
+        dict(id="3", name="Repetido", artist="Artista Tres", genre="", bpm="140.00", ton="Fm",
+             dur="200", loc=location_rb(f"{otra_pc}/Viejo/repetido.wav")),
+        dict(id="4", name="Fantasma", artist="Nadie", genre="Techno", bpm="130.00", ton="8A",
+             dur="250", loc=location_rb(f"{otra_pc}/Viejo/fantasma.wav")),
+    ]
+    arbol = [
+        ("carpeta", "Techno", [
+            ("playlist", "Peak", "0", ["2", "1", "999", "3"]),
+            ("carpeta", "Sub", [
+                ("playlist", "Cierre", "1", [location_rb(rutas["acido"]),
+                                             location_rb(f"{otra_pc}/Viejo/fantasma.wav")]),
+            ]),
+        ]),
+        ("playlist", "Warmup", "0", ["4"]),
+    ]
+    return xml_rekordbox_playlists(tracks, arbol), rutas
+
+
 # La home no mostraba carátulas porque el XML de Rekordbox no trae imágenes. La carátula que
 # existe de verdad es la que viene EMBEBIDA en el archivo: se escribe con mutagen (como lo
 # hace tagger.py al descargar).

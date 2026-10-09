@@ -53,3 +53,43 @@ def test_metricas_con_bpm_decimal(base_vieja):
         db.agregar_item(pid, {"titulo": f"t{i}", "artista": "A", "fuente": "youtube", "url": f"u{i}", "bpm": bpm})
     m = db.get_playlist_mia(pid)["metrics"]
     assert (m["bpm_min"], m["bpm_max"]) == (127.9, 130.2)
+    assert m["bpm_fuente"] == "otro"
+
+
+def test_metricas_promedio_con_un_decimal(base_vieja):
+    """El promedio iba redondeado a entero (`round(x)`): 127.9 y 130.5 daban 129."""
+    pid = db.crear_playlist("Prom")["id"]
+    for i, bpm in enumerate((127.9, 130.5)):
+        db.agregar_item(pid, {"titulo": f"t{i}", "artista": "A", "fuente": "youtube", "url": f"u{i}", "bpm": bpm})
+    m = db.get_playlist_mia(pid)["metrics"]
+    assert m["bpm_prom"] == 129.2, f"el promedio va con un decimal: {m['bpm_prom']}"
+
+
+def test_metricas_no_mezclan_fuentes(base_vieja):
+    """Auditoría f53: la playlist «Techno» (temas de la búsqueda) y una con un tema de Rekordbox:
+    el promedio y el rango salen SOLO de la fuente más confiable, y se dice cuántos quedan afuera."""
+    pid = db.crear_playlist("Techno")["id"]
+    for i, bpm in enumerate((99.0, 172.0)):
+        db.agregar_item(pid, {"titulo": f"yt{i}", "artista": "A", "fuente": "youtube", "url": f"u{i}", "bpm": bpm})
+    m = db.get_playlist_mia(pid)["metrics"]
+    assert (m["bpm_prom"], m["bpm_min"], m["bpm_max"], m["bpm_fuente"], m["bpm_n"], m["bpm_afuera"]) == \
+        (135.5, 99.0, 172.0, "otro", 2, 0)
+    db.agregar_item(pid, {"titulo": "rb", "artista": "B", "fuente": "biblioteca", "bpm": 126.4})
+    m = db.get_playlist_mia(pid)["metrics"]
+    assert (m["bpm_prom"], m["bpm_min"], m["bpm_max"], m["bpm_fuente"], m["bpm_n"], m["bpm_afuera"]) == \
+        (126.4, 126.4, 126.4, "rekordbox", 1, 2), "el rango mezcló los BPM de la búsqueda con el de Rekordbox"
+    lista = {p["id"]: p for p in db.listar_playlists()}[pid]
+    assert (lista["bpm_prom"], lista["bpm_fuente"]) == (126.4, "rekordbox")
+
+
+def test_metricas_sin_bpm_no_inventan_un_numero(base_vieja):
+    pid = db.crear_playlist("Vacía de BPM")["id"]
+    db.agregar_item(pid, {"titulo": "t", "artista": "A", "fuente": "youtube", "url": "u", "bpm": 0})
+    m = db.get_playlist_mia(pid)["metrics"]
+    assert (m["bpm_prom"], m["bpm_min"], m["bpm_max"], m["bpm_fuente"], m["bpm_n"]) == (None, None, None, None, 0)
+
+
+def test_metricas_bpm_prefiere_el_motor():
+    m = db.metricas_bpm([(128.04, "motor"), (140, "rekordbox"), (99, "otro"), (None, "motor"), (0, "otro")])
+    assert (m["bpm_prom"], m["bpm_min"], m["bpm_max"], m["bpm_fuente"], m["bpm_n"], m["bpm_afuera"]) == \
+        (128.0, 128.0, 128.0, "motor", 1, 2)
