@@ -910,8 +910,10 @@ const leerTabla = (page) => page.$$eval('.cue-tabla tbody tr[data-id]', (rows) =
   id: Number(r.dataset.id), tipo: r.dataset.tipo, tag: r.querySelector('.cue-tag')?.textContent ?? null,
   tiempos: [...r.querySelectorAll('.cue-in-t')].map((i) => i.value), nombre: r.querySelector('.cue-in-n')?.value ?? null,
 })))
+// La etiqueta: el pad del hot cue (1..8), M, L, o L + pad en un loop que vive en un pad (f51).
 const esperadoTabla = (marcas) => marcas.map((m) => ({
-  id: m.id, tipo: m.tipo, tag: m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : 'L',
+  id: m.id, tipo: m.tipo,
+  tag: m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : Number.isInteger(m.num) ? `L${m.num + 1}` : 'L',
   tiempos: [m.inicio, ...(m.tipo === 'loop' ? [m.fin] : [])].map(tiempoTabla), nombre: m.nombre || '',
 }))
 
@@ -989,6 +991,31 @@ const CASOS_CUES = [
     await page.reload({ waitUntil: 'domcontentloaded' })
     await abrirEditor(page, ctx, 'Uno', { navegar: false })
     igual(await leerTabla(page), esperadoTabla(await marcasApi(ctx, uno.id)), 'después de recargar la tabla no es la lista de la API')
+  }],
+
+  ['cues (f51): un loop en un pad se lee con su pad, en naranja, y los colores son los de la tabla del motor', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    const loop = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8, num: 2 })).data.marca
+    igual([loop.tipo, loop.num], ['loop', 2], 'la API no creó el hot loop en el pad 3')
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'memory', inicio: 2 })
+    await abrirEditor(page, ctx)
+    const api_ = await marcasApi(ctx, uno.id)
+    igual(api_.map((m) => [m.tipo, m.num]), [['cue', 0], ['loop', 2], ['memory', null]], 'la API no ordena los pads primero')
+    await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)), 'la tabla no es la lista de la API (el hot loop tiene que decir «L3»)')
+    // Los colores pedidos por el dueño (motor/cue_marks.py), escritos acá: pad 1 rojo, el loop
+    // naranja aunque esté en el pad 3 (que sería azul), la memory neutra.
+    const colores = await page.$$eval('.cue-tabla tbody tr[data-id]', (rows) => rows.map((r) => [r.dataset.tipo, getComputedStyle(r.querySelector('.cue-tag')).backgroundColor]))
+    igual(colores, [['cue', 'rgb(255, 77, 90)'], ['loop', 'rgb(255, 154, 46)'], ['memory', 'rgb(242, 243, 248)']], 'los colores de la tabla no son los de la tabla del motor')
+    const bandera = await page.$eval('.cue-mk-loop .cue-flag:not(.is-fin)', (e) => [e.textContent, getComputedStyle(e).backgroundColor])
+    igual(bandera, ['L3', 'rgb(255, 154, 46)'], 'la bandera del hot loop en la onda no dice su pad o no es naranja')
+    // La tecla 3 va al pad 3 aunque lo ocupe un loop; C toma el primer pad LIBRE (el 2), no el del loop.
+    await page.focus('.cue-wave')
+    await page.keyboard.press('3')
+    igual(await page.$eval('.cue-reloj', (e) => e.textContent), '0:04.0', 'la tecla 3 no llevó el cursor a la entrada del hot loop')
+    const cue = await teclaQueGuarda(page, 'c')
+    igual([cue.status, cue.data.marca.tipo, cue.data.marca.num], [201, 'cue', 1], 'C no tomó el primer pad libre (el 2)')
   }],
 
   ['cues: borrar pide confirmación y la marca sale de la base', async (page, ctx) => {

@@ -205,7 +205,9 @@ def test_crear_cambiar_y_borrar_queda_en_la_base(client, biblioteca):
     ({"tipo": "memory", "inicio": 1, "nombre": "\ufeffintro"}, "invisibles"),
     ({"tipo": "cue", "inicio": 1, "num": 8}, "de 0 a 7"),
     ({"tipo": "cue", "inicio": 1, "num": "1"}, "de 0 a 7"),
-    ({"tipo": "memory", "inicio": 1, "num": 2}, "solo un hot cue"),
+    ({"tipo": "memory", "inicio": 1, "num": 2}, "una memory cue no lleva pad"),
+    ({"tipo": "loop", "inicio": 1, "fin": 2, "num": 8}, "de 0 a 7"),
+    ({"tipo": "loop", "inicio": 1, "fin": 2, "num": "2"}, "de 0 a 7"),
     ({"tipo": "memory", "inicio": 1, "fin": 2}, "solo un loop"),
     ({"tipo": "loop", "inicio": 10}, "necesita la salida"),
     ({"tipo": "loop", "inicio": 10, "fin": 9.999}, "después de la entrada"),
@@ -226,8 +228,37 @@ def test_el_noveno_hot_cue_es_400(client, biblioteca):
     for i in range(8):
         assert client.post(_url(biblioteca), json={"tipo": "cue", "inicio": i}).status_code == 201
     r = client.post(_url(biblioteca), json={"tipo": "cue", "inicio": 9})
-    assert r.status_code == 400 and "los 8 hot cues" in r.json()["error"]
+    assert r.status_code == 400 and "los 8 pads ocupados" in r.json()["error"]
     assert sorted(f[2] for f in _en_base(biblioteca)) == list(range(8))
+
+
+def test_un_loop_con_pad_ida_y_vuelta_por_la_api(client, biblioteca):
+    """v6: POST y PATCH aceptan `num` en un loop (hot loop) y las respuestas lo traen. El pad
+    es uno solo entre hot cues y hot loops; un loop lo puede soltar (`num: null`) y una
+    memory no lo puede tomar. Lo esperado sale de la base, no de la API."""
+    url = _url(biblioteca)
+    r = client.post(url, json={"tipo": "loop", "inicio": 64, "fin": 71.5, "num": 2,
+                               "nombre": "Drop"})
+    assert r.status_code == 201, r.text
+    loop = r.json()["marca"]
+    assert (loop["tipo"], loop["num"], loop["inicio"], loop["fin"], loop["nombre"]) == \
+        ("loop", 2, 64.0, 71.5, "Drop"), loop
+    r = client.post(url, json={"tipo": "cue", "inicio": 1, "num": 2})
+    assert r.status_code == 400 and "pad 3 ya lo usa un loop" in r.json()["error"], r.text
+    # El «primer pad libre» de un hot cue saltea el pad del loop.
+    assert [client.post(url, json={"tipo": "cue", "inicio": t}).json()["marca"]["num"]
+            for t in (1, 2, 3)] == [0, 1, 3]
+    mem = client.post(url, json={"tipo": "memory", "inicio": 5}).json()["marca"]
+    r = client.patch(_url(biblioteca, marca=mem["id"]), json={"num": 4})
+    assert r.status_code == 400 and "una memory cue no lleva pad" in r.json()["error"], r.text
+
+    r = client.patch(_url(biblioteca, marca=loop["id"]), json={"num": None})
+    assert r.status_code == 200 and r.json()["marca"]["num"] is None, r.text
+    r = client.patch(_url(biblioteca, marca=loop["id"]), json={"num": 6})
+    assert r.status_code == 200 and r.json()["marca"]["num"] == 6, r.text
+    assert _de_api(r.json()["marcas"]) == _como_api(_en_base(biblioteca))
+    assert [(f[1], f[2]) for f in _en_base(biblioteca)] == \
+        [("cue", 0), ("cue", 1), ("cue", 3), ("loop", 6), ("memory", None)]
 
 
 @pytest.mark.parametrize(("cuerpo", "pista"), [

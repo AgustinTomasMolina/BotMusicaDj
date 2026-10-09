@@ -2908,6 +2908,10 @@ async def radio_sets_descalificar(set_id: int, n: int):
 #
 # Las escrituras devuelven SIEMPRE la lista entera de marcas del track tal como quedó en la
 # base: la pantalla dibuja eso, así su «Guardado» es lo que el servidor confirmó.
+#
+# `num` es el PAD (0..7 = A..H). Desde el esquema v6 lo lleva un hot cue (siempre) y también un
+# loop que vive en un pad (hot loop; sin `num`, memory loop); una memory cue nunca. El pad es
+# único por track entre los dos, y `limites.hot_cues` cuenta los pads (son los mismos 8).
 
 _RE_TRACK_ID = re.compile(r"[0-9a-f]{16}")
 _RE_MARCA_ID = re.compile(r"[0-9]{1,19}")
@@ -3056,8 +3060,9 @@ async def radio_marcas(track_id: str):
 @app.post("/api/radio/tracks/{track_id}/marcas")
 async def radio_marcas_crear(track_id: str, request: Request):
     """Crea una marca. `tipo`: cue | memory | loop. `inicio` (y `fin` en un loop) en segundos.
-    `num` (0..7) solo en un hot cue; sin él toma el primer pad libre. 201 con la marca y la
-    lista entera."""
+    `num` (0..7) es el pad: en un hot cue, sin él toma el primer pad libre; en un loop, con él
+    es un hot loop en ESE pad (libre) y sin él un memory loop; una memory no lo lleva. 201 con
+    la marca y la lista entera."""
     ruta, error = await _marcas_ruta(track_id)
     if error is not None:
         return error
@@ -3082,7 +3087,8 @@ async def radio_marcas_crear(track_id: str, request: Request):
 @app.patch("/api/radio/tracks/{track_id}/marcas/{marca_id}")
 async def radio_marcas_cambiar(track_id: str, marca_id: str, request: Request):
     """Mueve (`inicio`, `fin`), renombra (`nombre`; "" o null = sin nombre) o cambia de pad
-    (`num`) una marca. Lo que no viene no cambia."""
+    (`num`) una marca. Lo que no viene no cambia. Un loop puede tomar un pad libre o soltarlo
+    (`num: null`, vuelve a memory loop); un hot cue no puede quedar sin pad."""
     ruta, error = await _marcas_ruta(track_id)
     if error is not None:
         return error

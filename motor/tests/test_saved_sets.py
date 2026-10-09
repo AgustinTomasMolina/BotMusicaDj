@@ -417,8 +417,9 @@ def test_base_v3_se_migra_y_conserva_la_biblioteca(tmp_path):
         assert [t.path.name for t in store.load_library()] == ["dos.wav", "tres.wav", "uno.wav"]
 
     version, _, _, filas = _foto(db)
-    # Una base v3 abierta hoy pasa por la 4 (sets) y la 5 (marcas, f48) en la misma apertura.
-    assert (version, VERSION_ESQUEMA) == (5, 5)
+    # Una base v3 abierta hoy pasa por la 4 (sets), la 5 (marcas, f48) y la 6 (hot loops, f51)
+    # en la misma apertura.
+    assert (version, VERSION_ESQUEMA) == (6, 6)
     assert filas == filas_antes, "la migración 4 tocó las filas de `tracks`"
     assert {"saved_sets", "saved_set_steps", "saved_set_ratings"} <= _tablas(db)
 
@@ -509,7 +510,7 @@ def test_dos_aperturas_simultaneas_de_una_base_v3_migran_una_vez(tmp_path, monke
 
     assert resultados == {"A": (3, []), "B": (3, [])}, f"aperturas simultáneas: {resultados}"
     assert migraron == ["A"], f"la migración corrió en {migraron}"
-    assert _foto(db)[0] == 5
+    assert _foto(db)[0] == 6
 
 
 def test_dos_procesos_guardando_a_la_vez_no_se_pisan(base):
