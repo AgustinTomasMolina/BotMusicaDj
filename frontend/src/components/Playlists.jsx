@@ -418,24 +418,31 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 </p>
               )}
               <div className="crate-acciones" role="group" aria-label="Qué hacer con esta playlist">
-                <button type="button" className="crate-accion"
-                  onClick={() => (analizados.length ? setCuesDe(analizados[0].analisis.radio_id) : analizar())}
-                  disabled={!analizados.length && !porAnalizar}>
+                <button type="button" className="crate-accion" aria-describedby="acc-cues-d"
+                  onClick={() => { if (analizados.length) setCuesDe(analizados[0].analisis.radio_id); else if (porAnalizar) analizar() }}
+                  aria-disabled={!analizados.length && !porAnalizar ? 'true' : undefined}>
                   <span className="crate-accion-n" aria-hidden="true">1</span>
                   <span className="crate-accion-t">{analizados.length ? 'Marcar cues' : 'Analizar para marcar cues'}</span>
-                  <span className="crate-accion-d">{analizados.length
+                  <span className="crate-accion-d" id="acc-cues-d">{analizados.length
                     ? `${analizados.length} tema${analizados.length === 1 ? '' : 's'} listo${analizados.length === 1 ? '' : 's'} para marcar`
                     : porAnalizar ? 'El motor tiene que medir los temas primero' : 'Ningún tema tiene archivo en la PC'}</span>
                 </button>
-                <button type="button" className="crate-accion" disabled aria-describedby="acc-set-d">
+                {/* 2 y 3 son de las etapas que siguen: deshabilitados con el motivo a la vista.
+                    aria-disabled (no `disabled`) para que el teclado llegue y el lector lea el
+                    motivo; el click no hace nada. */}
+                <button type="button" className="crate-accion" aria-disabled="true" aria-describedby="acc-set-d">
                   <span className="crate-accion-n" aria-hidden="true">2</span>
                   <span className="crate-accion-t">Armar un set</span>
-                  <span className="crate-accion-d" id="acc-set-d">Llega en la próxima etapa</span>
+                  <span className="crate-accion-d" id="acc-set-d">
+                    {`Todavía no: llega en la próxima etapa (la radio desde una playlist).${res && res.sinGenero > 0
+                      ? ` ${res.sinGenero === 1 ? 'El tema sin género no va a entrar' : `Los ${res.sinGenero} temas sin género no van a entrar`}: el set solo junta temas del mismo género.`
+                      : ''}`}
+                  </span>
                 </button>
-                <button type="button" className="crate-accion" disabled aria-describedby="acc-exp-d">
+                <button type="button" className="crate-accion" aria-disabled="true" aria-describedby="acc-exp-d">
                   <span className="crate-accion-n" aria-hidden="true">3</span>
                   <span className="crate-accion-t">Exportar a Rekordbox (con cues)</span>
-                  <span className="crate-accion-d" id="acc-exp-d">Llega en la próxima etapa</span>
+                  <span className="crate-accion-d" id="acc-exp-d">Todavía no: llega en la etapa del XML con cues. Por ahora, «Exportar .m3u8» (sin cues).</span>
                 </button>
               </div>
               {(prog?.corriendo || porAnalizar > 0 || txtProg) && (
