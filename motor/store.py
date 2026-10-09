@@ -29,6 +29,7 @@ por la clave de la ruta (absoluta + `normcase`), no la collation de SQLite ni el
 inserción.
 """
 import contextlib
+import dataclasses
 import os
 import sqlite3
 from collections.abc import Iterable
@@ -42,9 +43,9 @@ from motor.energia import percentil
 from motor.modelos import (
     Track,
     TrackFeatures,
+    declared_text,
     require_acuerdo_key,
     require_finite_bpm,
-    require_text,
 )
 
 # Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
@@ -96,8 +97,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- distinto: el consenso SÍ corrió y el track no daba para comparar tramos.
     key_acuerdo     TEXT,
     key_tramos      TEXT,
-    license         TEXT NOT NULL,      -- obligatorio (spec §5)
-    source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
+    -- Siempre con valor: lo declarado o el literal 'no declarado' (modelos.NO_DECLARADO;
+    -- opcionales desde el 2026-10-09, CLAUDE.md). NOT NULL igual: un vacío no es un valor.
+    license         TEXT NOT NULL,
+    source_url      TEXT NOT NULL,
     analyzed_at     TEXT NOT NULL
 )"""
 
@@ -153,8 +156,8 @@ _DDL_SETS = (
     title_shown   TEXT NOT NULL,
     duration      REAL NOT NULL,
     is_track      INTEGER NOT NULL,
-    license       TEXT NOT NULL,        -- obligatorio (spec §5)
-    source_url    TEXT NOT NULL,        -- obligatorio (spec §5)
+    license       TEXT NOT NULL,        -- lo declarado o 'no declarado', como en `tracks`
+    source_url    TEXT NOT NULL,
     bpm           REAL NOT NULL,
     bpm_shown     TEXT NOT NULL,        -- "128.4", como se mostró
     key           TEXT NOT NULL,
@@ -300,15 +303,16 @@ class Store:
     # -- escritura ----------------------------------------------------------
 
     def upsert(self, path: Path | str, features: TrackFeatures, *, duration: float,
-               license: str, source_url: str, artist: str | None = None,
-               title: str | None = None, mtime: float | None = None) -> None:
+               license: str | None = None, source_url: str | None = None,
+               artist: str | None = None, title: str | None = None,
+               mtime: float | None = None) -> None:
         """Guarda o actualiza el análisis de un track. La ruta es la clave: un segundo
         upsert de la misma ruta ACTUALIZA, no duplica.
 
-        `license` y `source_url` son keyword y obligatorios — la misma regla que impone
-        `Track`, acá en la frontera de la caché, para que no se pueda persistir un track
-        sin procedencia (spec §5). El boceto viejo los pasaba adentro de un dict `tags`
-        suelto, donde faltar era indistinguible de venir vacío.
+        `license` y `source_url` son keyword y opcionales (CLAUDE.md, 2026-10-09): lo que se
+        declare se guarda tal cual, y sin declarar (o vacío) se guarda `NO_DECLARADO` — la
+        misma regla que `Track`, acá en la frontera de la caché, para que la base nunca
+        tenga un vacío ni un valor inventado (`declared_text`).
 
         `mtime`: si no se pasa, sale de `stat()` del archivo. Se guarda tal cual para que
         `needs_analysis` pueda comparar por igualdad exacta.
@@ -321,8 +325,8 @@ class Store:
                 f"el embedding tiene que ser 1-D de largo DIM={DIM}, recibí shape {vec.shape}; "
                 f"mezclar largos rompe la matriz de la biblioteca"
             )
-        require_text(license, "license")
-        require_text(source_url, "source_url")
+        license = declared_text(license, "license")
+        source_url = declared_text(source_url, "source_url")
         require_finite_bpm(features.bpm)
         # La confianza de la key se valida al ESCRIBIR y no al leer: acá el dato lo produce
         # el análisis y tiene que ser coherente; al leer, una fila corrupta se degrada a `?`
@@ -633,8 +637,10 @@ class Store:
 
         Todo en una transacción: un set a medio guardar (la cabecera sin sus pasos) sería
         un set que "se escuchó" sin tracks. Se valida ANTES de escribir, como `upsert`: las
-        posiciones son 1..n sin huecos, cada track trae licencia y origen (§5) y un BPM
-        finito, y solo la posición 1 es la semilla.
+        posiciones son 1..n sin huecos, cada track trae un BPM finito y solo la posición 1
+        es la semilla. Licencia y origen pasan por `declared_text`, como en `upsert`: la foto
+        guarda lo declarado o `NO_DECLARADO`, nunca un vacío (un paso armado desde un
+        `Track` ya los trae así; esto cubre una foto armada a mano).
         """
         from motor.saved_sets import STEP_FIELDS, InvalidSavedSet, clean_name
 
@@ -645,9 +651,10 @@ class Store:
         if posiciones != list(range(1, len(steps) + 1)):
             raise InvalidSavedSet(f"las posiciones tienen que ser 1..{len(steps)} en orden, "
                                   f"recibí {posiciones}")
+        steps = [dataclasses.replace(s, license=declared_text(s.license, "license"),
+                                     source_url=declared_text(s.source_url, "source_url"))
+                 for s in steps]
         for s in steps:
-            require_text(s.license, "license")
-            require_text(s.source_url, "source_url")
             require_finite_bpm(s.bpm)
             if s.is_seed != (s.position == 1):
                 raise InvalidSavedSet(f"la posición {s.position} dice is_seed={s.is_seed}: "

@@ -1626,7 +1626,8 @@ const CASOS_F50 = [
     const { uno } = await semillaUno(ctx)
     await interceptar(page, async (req) => {
       if (req.method() !== 'GET' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
-      // La respuesta real, con licencia y origen vacíos (lo que manda la API cuando no hay).
+      // La respuesta real, sin licencia ni origen. La API de hoy manda el literal «no declarado»
+      // (la base lo guarda así); null prueba que la pantalla no dibuja un vacío si faltara.
       const r = await apiPedir(ctx, rutaMarcas(uno.id))
       const cuerpo = { ...r.data, track: { ...r.data.track, licencia: null, origen: null } }
       await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(cuerpo) })

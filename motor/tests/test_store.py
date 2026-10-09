@@ -315,41 +315,57 @@ def test_energia_se_guarda_cruda_y_sale_en_percentil(tmp_path):
 
 # --- licencia y origen ---------------------------------------------------------------
 
-def test_licencia_y_origen_son_obligatorios(tmp_path):
-    """Spec §5: `licencia` y `origen` son obligatorios en cualquier modelo de track desde
-    el primer día. No alcanza con un comentario: sin ellos no se construye el Track ni se
-    persiste la fila."""
+# El literal que fija CLAUDE.md (decisión del dueño, 2026-10-09) para lo no declarado. Escrito
+# acá y no importado de `motor.modelos`: si alguien cambia la constante, el test lo ve.
+NO_DECLARADO = "no declarado"
+
+
+def test_licencia_y_origen_sin_declarar_valen_no_declarado(tmp_path):
+    """CLAUDE.md (2026-10-09): licencia y origen se guardan siempre pero NO son obligatorios.
+    Lo que este test protege, en el `Track` y en la FILA cruda de la base (la frontera por
+    donde entran los tracks de verdad):
+
+    - lo declarado se guarda TAL CUAL (sin recortar espacios: es un dato del usuario);
+    - lo no declarado —sin pasar, None, "" o solo espacios— queda como el literal
+      "no declarado", nunca un vacío;
+    - lo que no es texto no se convierte en un valor que nadie escribió: ValueError, y la
+      fila no se persiste."""
     base = dict(path=tmp_path / "x.wav", duration=10.0, bpm=128.0, key="8A", energy=0.5,
                 embedding=np.zeros(DIM, dtype=EMB_DTYPE))
 
-    with pytest.raises(TypeError) as e:
-        Track(**base)
-    assert "license" in str(e.value) and "source_url" in str(e.value), \
-        f"faltan los dos y el error no los nombra: {e.value}"
-
+    t = Track(**base)
+    assert (t.license, t.source_url) == (NO_DECLARADO, NO_DECLARADO), (t.license, t.source_url)
+    for vacio in (None, "", "   "):
+        t = Track(**base, license=vacio, source_url=vacio)
+        assert (t.license, t.source_url) == (NO_DECLARADO, NO_DECLARADO), \
+            f"{vacio!r} no quedó como el literal: {(t.license, t.source_url)}"
+    t = Track(**base, license="  CC0-1.0 ", source_url=ORIGEN)
+    assert (t.license, t.source_url) == ("  CC0-1.0 ", ORIGEN), "lo declarado no quedó tal cual"
     for campo in ("license", "source_url"):
-        for vacio in (None, "", "   "):
-            with pytest.raises(ValueError) as e:
-                Track(**base, **{campo: vacio,
-                                 "source_url" if campo == "license" else "license": "ok"})
-            assert campo in str(e.value) and "obligatorio" in str(e.value), \
-                f"{campo}={vacio!r} pasó o falló con otro motivo: {e.value}"
+        with pytest.raises(ValueError, match=campo):
+            Track(**base, **{campo: 123})
 
-    # Y en la frontera de la caché, que es por donde entran los tracks de verdad.
-    ruta = tmp_path / _catalogo()[0]["nombre"]
-    ruta.write_bytes(b"x")
+    # En la base: se mira la fila CRUDA, no el `Track` (que normalizaría al leer y taparía
+    # un vacío guardado).
     store = Store(tmp_path / "db.sqlite")
     feats = _features(_catalogo()[0])
-    with pytest.raises(TypeError):
-        store.upsert(ruta, feats, duration=10.0)
-    with pytest.raises(ValueError) as e:
-        store.upsert(ruta, feats, duration=10.0, license="", source_url=ORIGEN)
-    assert "license" in str(e.value), f"{e.value}"
-    with pytest.raises(ValueError) as e:
-        store.upsert(ruta, feats, duration=10.0, license=LICENCIA, source_url="  ")
-    assert "source_url" in str(e.value), f"{e.value}"
-    assert store.count() == 0, "quedó persistido un track sin licencia u origen"
+    rutas = {n: tmp_path / f"{n}.wav" for n in ("sin_pasar", "vacios", "declarados", "numero")}
+    for ruta in rutas.values():
+        ruta.write_bytes(b"x")
+    store.upsert(rutas["sin_pasar"], feats, duration=10.0)
+    store.upsert(rutas["vacios"], feats, duration=10.0, license="", source_url="   ")
+    store.upsert(rutas["declarados"], feats, duration=10.0, license=LICENCIA, source_url=ORIGEN)
+    for campo in ("license", "source_url"):
+        with pytest.raises(ValueError, match=campo):
+            store.upsert(rutas["numero"], feats, duration=10.0, **{campo: 123})
+    con = sqlite3.connect(str(tmp_path / "db.sqlite"))
+    filas = {Path(p).stem: (lic, url) for p, lic, url in
+             con.execute("SELECT path, license, source_url FROM tracks")}
+    con.close()
     store.close()
+    assert filas == {"sin_pasar": (NO_DECLARADO, NO_DECLARADO),
+                     "vacios": (NO_DECLARADO, NO_DECLARADO),
+                     "declarados": (LICENCIA, ORIGEN)}, filas
 
 
 def test_energy_fuera_de_0_1_no_se_acepta():

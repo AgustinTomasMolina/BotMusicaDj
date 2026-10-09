@@ -119,10 +119,24 @@ def test_formato_sin_extension_es_null_y_no_adivinado(client, biblioteca, monkey
     assert (d["formato"], d["ruta"]) == (None, str(ruta.with_suffix(""))), d
 
 
+def test_licencia_y_origen_no_declarados_llegan_como_el_literal(client, biblioteca):
+    """Licencia y origen son opcionales (decisión del dueño, 2026-10-09): un track analizado
+    sin declararlos queda en la base con el literal «no declarado», y la API lo manda TAL CUAL
+    (ni null, ni vacío, ni un valor inventado). Camino entero: upsert sin declarar → GET."""
+    ruta = biblioteca["rutas"]["uno.wav"]
+    with Store(biblioteca["db"]) as store:
+        t = store.get(ruta)
+        store.upsert(ruta, store.get_features(ruta), duration=t.duration, artist=t.artist,
+                     title=t.title)
+    d = client.get(_url(biblioteca)).json()["track"]
+    assert (d["licencia"], d["origen"]) == ("no declarado", "no declarado"), d
+
+
 @pytest.mark.parametrize("vacio", ["", "   ", None])
-def test_licencia_y_origen_no_declarados_van_null(client, biblioteca, server, vacio):
-    """Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor van null
-    —la pantalla dice «no declarado»—, nunca un texto vacío ni uno inventado."""
+def test_licencia_y_origen_vacios_van_como_el_literal(client, biblioteca, server, vacio):
+    """Si igual llegara un track con licencia u origen vacíos (un objeto armado a mano), la
+    API manda el mismo literal que guarda la base —la pantalla dice «no declarado»—, nunca
+    null, un texto vacío ni uno inventado."""
     with Store(biblioteca["db"]) as store:
         real = store.get(biblioteca["rutas"]["uno.wav"])
     t = type("T", (), {})()
@@ -131,7 +145,7 @@ def test_licencia_y_origen_no_declarados_van_null(client, biblioteca, server, va
     t.license = vacio
     t.source_url = vacio
     d = server._track_editor(t)
-    assert (d["licencia"], d["origen"]) == (None, None), d
+    assert (d["licencia"], d["origen"]) == ("no declarado", "no declarado"), d
 
 
 def test_sin_bpm_medido_es_null_y_no_cero(client, biblioteca):

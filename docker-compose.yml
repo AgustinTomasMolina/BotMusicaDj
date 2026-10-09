@@ -40,7 +40,7 @@ services:
       # WINDOWS, adentro (Linux) esas rutas son `C:\...` y no existen ni se pueden montar,
       # así que el set se arma bien pero NINGÚN preview funciona. No hay traducción de
       # rutas: se re-escanea una vez desde adentro y la base queda con rutas de Linux —
-      #   docker compose exec web python -m motor scan /musica --licencia ... --origen ...
+      #   docker compose exec web python -m motor scan /musica [--licencia ...] [--origen ...]
       # (librosa está en la imagen y /djradio va con escritura, por eso se puede).
       # Escaneando en Linux/WSL no hace falta: se monta en la misma ruta del scan.
       - ${DJRADIO_DB_DIR:-djradio-sin-configurar}:/djradio
