@@ -328,6 +328,19 @@ export const crearMarca = (id, marca) => pedirSets(rutaMarcas(id), 'POST', marca
 export const cambiarMarca = (id, marcaId, cambios) => pedirSets(`${rutaMarcas(id)}/${encodeURIComponent(marcaId)}`, 'PATCH', cambios)
 export const borrarMarca = (id, marcaId) => pedirSets(`${rutaMarcas(id)}/${encodeURIComponent(marcaId)}`, 'DELETE')
 export const getOnda = (id) => pedirSets(`/api/radio/tracks/${encodeURIComponent(id)}/onda`)
+// f52: la onda de 3 bandas (graves, medios, agudos) del tramo [desde, hasta] en segundos,
+// reducida por máximo a `puntos` por banda, con la grilla estimada. Lo que no se pasa (undefined
+// o null) no viaja y el backend usa el tema entero / 1000 puntos; el 0 SÍ viaja. Un NaN viaja
+// tal cual a propósito: el backend contesta 400 con el motivo, en vez de dibujar en silencio
+// el tema entero como si fuera el tramo pedido.
+export const getOnda3 = (id, desde, hasta, puntos) => {
+  const qs = new URLSearchParams()
+  for (const [k, v] of [['desde', desde], ['hasta', hasta], ['puntos', puntos]]) {
+    if (v !== undefined && v !== null) qs.set(k, String(v))
+  }
+  const q = qs.toString()
+  return pedirSets(`/api/radio/tracks/${encodeURIComponent(id)}/onda3${q ? `?${q}` : ''}`)
+}
 export const contarMarcas = (ids) => pedirSets(`/api/radio/marcas/conteo?ids=${encodeURIComponent(ids.join(','))}`)
 
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`
