@@ -238,12 +238,14 @@ export default function ImportarDialog({ onClose, onImportada, toast }) {
       <div className="dialog imp-dialog" ref={ref} role="dialog" aria-modal="true" aria-labelledby="imp-titulo" tabIndex={-1}>
         <div className="cluster" style={{ flexWrap: 'nowrap' }}>
           <div className="dialog-title" id="imp-titulo">Importar playlists</div>
-          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar" onClick={onClose} data-autofocus>✕</button>
+          <button type="button" className="btn btn-icon btn-icon-sm push" aria-label="Cerrar" onClick={onClose}>✕</button>
         </div>
+        {/* El foco arranca en la primera pestaña (no en «Cerrar»): lo primero es elegir de dónde. */}
         <div className="rdet-tabs imp-tabs" role="tablist" aria-label="De dónde importar" ref={tabsRef} onKeyDown={teclaTabs}>
           {PESTANAS.map((p) => (
             <button key={p.k} type="button" role="tab" id={`imp-tab-${p.k}`} className={`rtab${tab === p.k ? ' is-on' : ''}`}
               aria-selected={tab === p.k} aria-controls={`imp-panel-${p.k}`} tabIndex={tab === p.k ? 0 : -1}
+              data-autofocus={p.k === PESTANAS[0].k ? true : undefined}
               onClick={() => setTab(p.k)}>{p.label}</button>
           ))}
         </div>

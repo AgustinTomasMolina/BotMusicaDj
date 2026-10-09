@@ -538,9 +538,11 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     <span className="mb" title={dt.fuente ? `BPM ${dt.fuente}` : 'BPM medido por el motor'}><span className="mb-label">BPM</span><b>{dt.bpm ?? '?'}</b></span>
                     <span className="mb mb-key" title={dt.dudosa ? 'Key dudosa: los tramos del tema no votaron todos lo mismo' : undefined}><span className="mb-label">KEY</span><b>{dt.key ?? '?'}</b></span>
                     {dt.fuente && (dt.bpm || dt.key) && <span className="mb mb-fuente">{dt.fuente}</span>}
+                    {/* El tipo de marca no va solo por color: el texto dice cuántas de cada una. */}
                     {puntos.length > 0 && (
-                      <span className="cue-puntos" role="img" aria-label={`Marcas: ${textoMarcas(it.analisis?.marcas)}`}>
-                        {puntos.map((p, i) => <i key={i} className={p.clase} />)}
+                      <span className="cue-puntos">
+                        <span aria-hidden="true">{puntos.map((p, i) => <i key={i} className={p.clase} />)}</span>
+                        <span className="cue-puntos-txt">{textoMarcas(it.analisis?.marcas)}</span>
                       </span>
                     )}
                     {it.formato && !it.local && <span className="mb"><b>{it.formato.toUpperCase()}</b></span>}

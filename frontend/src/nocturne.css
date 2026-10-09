@@ -1695,8 +1695,9 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .mb-genero:hover{box-shadow:inset 0 0 0 1px var(--color-accent)}
 .mb-genero.is-vacio b{color:var(--color-neutral-300);font-family:var(--font-body)}
 .mb-genero-in{width:120px;min-height:24px;height:24px;padding:0 6px;font-size:12px}
-.cue-puntos{display:inline-flex;align-items:center;gap:3px;padding:0 2px}
-.cue-puntos>i{width:8px;height:8px;border-radius:50%;background:var(--cue-c)}
+.cue-puntos{display:inline-flex;align-items:center;gap:6px;padding:0 2px;font-size:11px;color:var(--color-neutral-300)}
+.cue-puntos>span[aria-hidden]{display:inline-flex;align-items:center;gap:3px}
+.cue-puntos>span>i{width:8px;height:8px;border-radius:50%;background:var(--cue-c)}
 .trk-cues{white-space:nowrap}
 .results-crate .trk-acts .trk-cues{width:auto;padding:0 8px;font-size:12px}
 /* Las filas de una playlist con BPM/KEY/marcas/género: los metadatos pueden ocupar dos renglones. */

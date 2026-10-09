@@ -3774,6 +3774,9 @@ function casosF53() {
       await borrarImportadas(ctx)
       try {
         await abrirImportar(page, ctx)
+        // El foco arranca en la primera pestaña (lo primero es elegir de dónde), no en «Cerrar».
+        await hasta(() => page.evaluate(() => document.activeElement?.textContent ?? null), (v) => v === 'Desde Rekordbox',
+          'el foco inicial del diálogo no está en la primera pestaña «Desde Rekordbox»')
         // Pestañas con rol: la de Rekordbox arranca elegida.
         const tabs = await page.$$eval('.imp-dialog [role="tab"]', (ts) => ts.map((t) => [t.textContent, t.getAttribute('aria-selected')]))
         igual(tabs, [['Desde Rekordbox', 'true'], ['Desde una carpeta de la PC', 'false']], 'las pestañas del diálogo no son las del tablero G')
@@ -3966,6 +3969,26 @@ function casosF53() {
         afirmar(filas.every((r) => /^\d+\.\d$/.test(r.bpm) && r.fuente === null && r.estado === 'En tu PC · Analizado'), `las filas no muestran el BPM medido con un decimal: ${json(filas)}`)
         const acc = await leerAcciones(page)
         igual([acc[0].titulo, acc[0].deshabilitada], ['Marcar cues', false], 'con temas analizados, «Marcar cues» tiene que estar disponible')
+
+        // Las marcas: además de los puntos de color (decorativos), el texto dice cuántas de cada tipo.
+        const uno = items.find((i) => i.titulo === 'Kick Uno')
+        await limpiarMarcas(ctx, uno.analisis.radio_id)
+        for (const m of [{ tipo: 'cue', inicio: 1, num: 0 }, { tipo: 'cue', inicio: 2, num: 1 }, { tipo: 'loop', inicio: 4, fin: 6, num: 2 }]) {
+          const r = await apiPedir(ctx, rutaMarcas(uno.analisis.radio_id), 'POST', m)
+          afirmar(r.status === 201, `no pude crear la marca ${json(m)}: ${json(r)}`)
+        }
+        await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+        await abrirEnRail(page, 'Set')
+        const mApi = (await itemsApi(ctx, pid)).find((i) => i.titulo === 'Kick Uno').analisis.marcas
+        igual([mApi.pads.length, mApi.memory, mApi.loop], [2, 0, 1], 'la API no cuenta las marcas creadas')
+        const marcasFila = await hasta(() => page.evaluate(() => {
+          const r = [...document.querySelectorAll('.results-crate .trk')].find((x) => x.querySelector('.trk-title')?.textContent === 'Kick Uno')
+          const p = r?.querySelector('.cue-puntos')
+          return p ? { txt: p.querySelector('.cue-puntos-txt')?.textContent ?? null, puntos: p.querySelectorAll('i').length,
+            puntosOcultos: [...p.querySelectorAll('i')].every((i) => i.closest('[aria-hidden="true"]')) } : null
+        }), (v) => v, 'la fila de Kick Uno no muestra sus marcas')
+        igual(marcasFila, { txt: '2 hot cues, 1 loop', puntos: 3, puntosOcultos: true }, 'las marcas no dicen en texto cuántas de cada tipo')
+        await limpiarMarcas(ctx, uno.analisis.radio_id)
 
         // Sin género en los tags: no se inventa; se pone a todos con el formulario.
         igual(items.map((i) => i.genero || null), [null, null], 'la carpeta inventó un género que los tags no traen')
