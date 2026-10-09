@@ -76,11 +76,31 @@ const durTotal = (s) => {
   return h ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min`
 }
 
-// El encabezado de la playlist: temas, duración, rango de BPM (los MEDIDOS si hay; si no, los
-// del origen, y se dice) y los géneros más comunes.
+// Rango de BPM por la fuente REAL de cada tema, sin mezclar fuentes: el de la más confiable
+// que haya (motor > Rekordbox > búsqueda) y, si quedan temas de otra fuente, cuántos quedaron
+// afuera. Un BPM de YouTube/SoundCloud nunca se rotula «de Rekordbox» (CLAUDE.md §6).
+const FUENTES_BPM = [
+  { dato: 'motor', rotulo: (n, afuera) => (afuera ? `${n} medido${n === 1 ? '' : 's'} por el motor` : null) },
+  { dato: 'rekordbox', rotulo: () => 'de Rekordbox' },
+  { dato: 'otro', rotulo: () => 'sin medir: de la búsqueda' },
+]
+function rangoBpm(items) {
+  const con = items.map((it) => ({ bpm: Number(it.analisis?.bpm), dato: it.analisis?.dato }))
+    .filter((x) => Number.isFinite(x.bpm) && x.bpm > 0)
+  for (const f of FUENTES_BPM) {
+    const vs = con.filter((x) => (f.dato === 'otro' ? x.dato !== 'motor' && x.dato !== 'rekordbox' : x.dato === f.dato)).map((x) => x.bpm)
+    if (!vs.length) continue
+    const afuera = con.length - vs.length
+    const lo = Math.min(...vs).toFixed(1), hi = Math.max(...vs).toFixed(1)
+    const partes = [f.rotulo(vs.length, afuera), afuera ? `${afuera} sin medir afuera` : null].filter(Boolean)
+    return { bpm: lo === hi ? lo : `${lo}–${hi}`, bpmFuente: partes.length ? partes.join(' · ') : null }
+  }
+  return { bpm: null, bpmFuente: null }
+}
+
+// El encabezado de la playlist: temas, duración, rango de BPM (ver `rangoBpm`) y los géneros
+// más comunes.
 export function resumenPlaylist(items = []) {
-  const bpms = items.map((it) => Number(it.analisis?.bpm)).filter((v) => Number.isFinite(v) && v > 0)
-  const medidos = items.some((it) => it.analisis?.dato === 'motor')
   const generos = new Map()
   for (const it of items) {
     const g = (it.genero || '').trim()
@@ -90,8 +110,7 @@ export function resumenPlaylist(items = []) {
   return {
     temas: items.length,
     duracion: durTotal(items.reduce((s, it) => s + (Number(it.duracion) || 0), 0)),
-    bpm: bpms.length ? `${Math.min(...bpms).toFixed(1)}–${Math.max(...bpms).toFixed(1)}` : null,
-    bpmFuente: bpms.length && !medidos ? 'de Rekordbox' : null,
+    ...rangoBpm(items),
     generos: [...generos.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([g]) => g),
     sinGenero,
     analizados: items.filter((it) => it.analisis?.estado === 'analizado').length,

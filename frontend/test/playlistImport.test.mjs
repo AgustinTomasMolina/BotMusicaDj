@@ -61,12 +61,28 @@ test('resumenPlaylist: duración, rango de BPM y de dónde sale, géneros, sin g
     tema({ duracion: 60, genero: '', analisis: { estado: 'pendiente', bpm: null } }),
     tema({ duracion: 0, genero: 'Acid', analisis: { estado: 'pendiente' } }),
   ]
+  // Con algo medido por el motor, el rango es SOLO el medido (el 140 de Rekordbox no se mezcla)
+  // y se dice cuántos quedaron afuera.
   assert.deepEqual(m.resumenPlaylist(items), {
-    temas: 4, duracion: '1 h 06 min', bpm: '128.4–140.0', bpmFuente: null,
+    temas: 4, duracion: '1 h 06 min', bpm: '128.4', bpmFuente: '1 medido por el motor · 1 sin medir afuera',
     generos: ['Techno', 'Acid'], sinGenero: 1, analizados: 1,
   })
   const soloXml = m.resumenPlaylist([tema({ analisis: { bpm: 130, dato: 'rekordbox' } })])
   assert.equal(soloXml.bpmFuente, 'de Rekordbox', 'un rango solo de Rekordbox se dice')
+  const soloMotor = m.resumenPlaylist([tema({ analisis: { bpm: 130, dato: 'motor' } }), tema({ analisis: { bpm: 131.25, dato: 'motor' } })])
+  assert.deepEqual([soloMotor.bpm, soloMotor.bpmFuente], ['130.0–131.3', null], 'todo medido: sin rótulo')
+})
+
+test('resumenPlaylist: un BPM de la búsqueda (YouTube/SoundCloud) NO se rotula «de Rekordbox»', () => {
+  // La playlist «Techno» del dueño: temas bajados, BPM de la metadata de la búsqueda (dato "otro").
+  const otros = [99, 172].map((bpm) => tema({ analisis: { bpm, dato: 'otro' } }))
+  const r = m.resumenPlaylist(otros)
+  assert.equal(r.bpm, '99.0–172.0')
+  assert.equal(r.bpmFuente, 'sin medir: de la búsqueda')
+  assert.ok(!/Rekordbox/.test(r.bpmFuente), `rotula Rekordbox lo que no es de Rekordbox: ${r.bpmFuente}`)
+  // Mezcla Rekordbox + búsqueda: el rango es el de Rekordbox y se dice cuántos quedan afuera.
+  const mezcla = m.resumenPlaylist([...otros, tema({ analisis: { bpm: 126, dato: 'rekordbox' } })])
+  assert.deepEqual([mezcla.bpm, mezcla.bpmFuente], ['126.0', 'de Rekordbox · 2 sin medir afuera'])
 })
 
 test('textoEncontrados y detalleFaltantes: no se esconde por qué faltan', () => {
