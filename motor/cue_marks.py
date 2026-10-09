@@ -3,7 +3,7 @@
 Son datos del DUEÑO, no del análisis: las pone él a mano en el editor de la pantalla de Radio
 DJ y valen tanto como las calificaciones de los sets guardados. Tres reglas salen de eso:
 
-1. **Nunca se borran en silencio.** La tabla (`cue_marks`, esquema v5 en `motor/store.py`) NO
+1. **Nunca se borran en silencio.** La tabla (`cue_marks`, esquema v6 en `motor/store.py`) NO
    tiene clave foránea a `tracks`: un re-escaneo que reanaliza el archivo (INSERT OR REPLACE
    de su fila) o que lo quita de la base porque hoy no está en disco no se lleva sus marcas.
    Solo las borra un pedido explícito de borrar ESA marca.
@@ -20,14 +20,22 @@ Los tiempos se guardan en MILISEGUNDOS ENTEROS y no en segundos REAL: el editor 
 precisión de milisegundo y un entero no tiene redondeos de punto flotante (12.345 s vuelve
 como 12.345, no 12.344999). La API habla en segundos con tres decimales.
 
-Pensado para exportar después al XML de Rekordbox (`POSITION_MARK`), que todavía no se
-verificó contra un Rekordbox real (rama `f47-prueba-xml-cues`):
+Pensado para exportar al XML de Rekordbox (`POSITION_MARK`). La correspondencia ya está
+VERIFICADA contra Rekordbox 7.2.16 (`pipeline/PRUEBA_CUES.md` §5, 2026-10-08: importó las
+marcas en su lugar y las reexportó idénticas, y las 243 marcas `Type=4` del XML real del dueño
+traen `End` y viven en los pads A-H):
 
-- hot cue  → `Type="0"`, `Num` = `num` (0..7, A..H en Rekordbox), `Start` = start_ms / 1000;
-- memory   → `Type="0"`, `Num="-1"`;
-- loop     → `Type="4"`, `Num="-1"`, `Start` y `End`.
+- hot cue      → `Type="0"`, `Num` = `num` (0..7, pads A..H), `Start` = start_ms / 1000;
+- memory cue   → `Type="0"`, `Num="-1"`;
+- loop         → `Type="4"`, `Start` y `End`; `Num` = `num` si el loop vive en un pad (hot
+  loop, `num` 0..7) o `"-1"` si no (memory loop, `num` None).
 
-`name` → `Name`. El color de un hot cue no se guarda: sale del número, como en la pantalla.
+El PAD es único por track entre hot cues y hot loops: el pad C lo ocupa UNA marca, sea cue o
+loop (un pad dispara una sola cosa). Desde el esquema v6 un loop puede llevar `num`; antes
+(v5) no.
+
+`name` → `Name`. El color no se guarda: sale de `color_de_marca` (la tabla de abajo, la única
+fuente: la pantalla la copia en variables CSS y un test compara las dos).
 """
 from __future__ import annotations
 
@@ -35,13 +43,36 @@ import math
 import unicodedata
 from dataclasses import dataclass
 
-KIND_CUE = "cue"          # hot cue, con número 0..7
-KIND_MEMORY = "memory"    # memory cue, sin número
-KIND_LOOP = "loop"        # loop (memory loop): entrada y salida
+KIND_CUE = "cue"          # hot cue: SIEMPRE en un pad (`num` 0..7)
+KIND_MEMORY = "memory"    # memory cue: sin pad y sin salida
+KIND_LOOP = "loop"        # loop: entrada y salida; con `num` es un hot loop, sin él un memory loop
 KINDS = (KIND_CUE, KIND_MEMORY, KIND_LOOP)
 
 # Los 8 pads de un CDJ / Rekordbox (A..H). `num` va de 0 a 7; la pantalla los muestra 1..8.
 HOT_CUES = 8
+
+# Colores de las marcas (pedido del dueño, 2026-10-09). Es la ÚNICA tabla: la pantalla la copia
+# en variables CSS (`frontend/src/nocturne.css`: --cue-1..8, --cue-mem, --cue-loop) y
+# `tests/test_colores_marcas.py` compara las dos, así no se desincronizan.
+#
+# - Hot cues: un color por pad, A..H.
+# - Loop: SIEMPRE naranja, con o sin pad. Un hot loop en el pad C NO toma el azul del pad C: el
+#   naranja es lo que lo distingue de todo lo demás en la onda y en la tabla.
+# - Memory cue: sin color propio. Al exportar no lleva color (como en la prueba verificada,
+#   PRUEBA_CUES.md §5: se escribió sin color y Rekordbox la mostró con el suyo); en pantalla se
+#   dibuja en un neutro.
+COLORES_HOT_CUE = (
+    (0xFF, 0x4D, 0x5A),   # A rojo      #ff4d5a
+    (0x34, 0xD1, 0x7C),   # B verde     #34d17c
+    (0x4F, 0xA3, 0xFF),   # C azul      #4fa3ff
+    (0xFF, 0xD2, 0x3F),   # D amarillo  #ffd23f
+    (0xB4, 0x8C, 0xFF),   # E violeta   #b48cff
+    (0x2F, 0xD4, 0xCF),   # F turquesa  #2fd4cf
+    (0xFF, 0x7A, 0xB8),   # G rosa      #ff7ab8
+    (0xF2, 0xF3, 0xF8),   # H blanco    #f2f3f8
+)
+COLOR_LOOP = (0xFF, 0x9A, 0x2E)               # naranja #ff9a2e
+COLOR_MEMORY_PANTALLA = (0xF2, 0xF3, 0xF8)    # neutro #f2f3f8, SOLO para dibujar
 
 # Topes por track. No son límites del formato: son que 500 memory cues en un tema no es una
 # preparación, es un bucle que se escapó (o un pedido que no viene de la pantalla).
@@ -83,7 +114,7 @@ class CueMark:
     id: int
     path_key: str
     kind: str
-    num: int | None            # solo hot cues: 0..7
+    num: int | None            # pad 0..7: siempre en un hot cue, opcional en un loop, nunca en memory
     start_ms: int
     end_ms: int | None         # solo loops
     name: str | None
@@ -106,10 +137,45 @@ def require_kind(kind: object) -> str:
 
 
 def require_num(num: object) -> int:
-    """El número de un hot cue: entero 0..7. `True` no es un 1."""
+    """El pad de un hot cue o de un hot loop: entero 0..7 (A..H). `True` no es un 1."""
     if isinstance(num, bool) or not isinstance(num, int) or not 0 <= num < HOT_CUES:
-        raise InvalidCueMark(f"el número de un hot cue va de 0 a {HOT_CUES - 1}; recibí {num!r}")
+        raise InvalidCueMark(f"el número de pad (hot cue o hot loop) va de 0 a {HOT_CUES - 1}; "
+                             f"recibí {num!r}")
     return num
+
+
+def color_de_marca(kind: object, num: object = None) -> tuple[int, int, int] | None:
+    """El color (r, g, b) 0-255 de una marca, el que lleva al exportar (`Red`/`Green`/`Blue`).
+
+    Hot cue → el de su pad; loop → `COLOR_LOOP` con o sin pad; memory cue → None: no tiene
+    color propio y se exporta sin color (la pantalla la dibuja en `COLOR_MEMORY_PANTALLA`).
+    Una combinación que no es una marca (un hot cue sin pad, una memory con pad, un pad fuera
+    de 0..7) es `InvalidCueMark`: devolver un color para eso sería pintar un dato roto.
+    """
+    kind = require_kind(kind)
+    if kind == KIND_MEMORY:
+        if num is not None:
+            raise InvalidCueMark("una memory cue no lleva pad")
+        return None
+    if kind == KIND_LOOP:
+        if num is not None:
+            require_num(num)
+        return COLOR_LOOP
+    if num is None:
+        raise InvalidCueMark("un hot cue siempre tiene pad (0 a 7)")
+    return COLORES_HOT_CUE[require_num(num)]
+
+
+def color_hex(rgb: tuple[int, int, int]) -> str:
+    """(255, 77, 90) → "#ff4d5a": la forma en que lo escribe el CSS."""
+    r, g, b = rgb
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def color_hex_de_marca(kind: object, num: object = None) -> str | None:
+    """`color_de_marca` en hex ("#ff4d5a"), o None para una memory cue (sin color propio)."""
+    rgb = color_de_marca(kind, num)
+    return None if rgb is None else color_hex(rgb)
 
 
 def seconds_to_ms(value: object, campo: str) -> int:

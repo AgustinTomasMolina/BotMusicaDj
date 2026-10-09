@@ -1,6 +1,6 @@
 """CLI del motor: llenar la biblioteca y armar sets desde la terminal.
 
-    python -m motor scan <carpeta> --licencia "..." --origen "..."
+    python -m motor scan <carpeta> [--licencia "..."] [--origen "..."]
     python -m motor list
     python -m motor info <track>
     python -m motor similar <track> [-n 10]
@@ -26,8 +26,11 @@ la suerte hace que el motor trabaje sobre otro track y el resultado se ve igual 
 
 Códigos de salida: 0 hecho · 1 algo no se pudo hacer (archivos que no se analizaron, un
 puente que la biblioteca no tiene) ·
-2 error de uso (falta licencia/origen, base vacía o de un esquema que este código no conoce,
-track inexistente o ambiguo, mutagen sin instalar).
+2 error de uso (base vacía o de un esquema que este código no conoce, track inexistente o
+ambiguo, mutagen sin instalar).
+
+LICENCIA Y ORIGEN son opcionales (decisión del dueño, 2026-10-09, CLAUDE.md): `scan` guarda lo
+que se le pase y, si no se pasa (o se pasa vacío), el literal "no declarado". Nunca inventa uno.
 
 NO modifica los audios: solo los lee (regla del proyecto).
 """
@@ -39,6 +42,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from calidad.tags import EXTS
@@ -48,7 +52,14 @@ from motor.energia import (
     ascending_spearman,
     energy_curve_deviation,
 )
-from motor.modelos import DURACION_MINIMA_TRACK_S, Track, es_track, require_text
+from motor.modelos import (
+    DURACION_MINIMA_TRACK_S,
+    NO_DECLARADO,
+    Track,
+    TrackFeatures,
+    declared_text,
+    es_track,
+)
 from motor.tonalidad import camelot_a_clasica
 
 OK = 0
@@ -228,15 +239,13 @@ def _abrir_existente(db: Path):
     if not db.exists():
         raise ErrorDeUso(
             f"No existe la base {db}.\n"
-            f"  Primero analizá una carpeta: python -m motor --db \"{db}\" scan <carpeta> "
-            f"--licencia ... --origen ...")
+            f"  Primero analizá una carpeta: python -m motor --db \"{db}\" scan <carpeta>")
     store = _abrir_store(db)
     if store.count() == 0:
         store.close()
         raise ErrorDeUso(
             f"La base {db} está vacía.\n"
-            f"  Analizá una carpeta: python -m motor --db \"{db}\" scan <carpeta> "
-            f"--licencia ... --origen ...")
+            f"  Analizá una carpeta: python -m motor --db \"{db}\" scan <carpeta>")
     return store
 
 
@@ -281,8 +290,7 @@ def resolver_track(consulta: str, biblioteca: list[Track], *,
                 return t
         raise ErrorDeUso(
             f"{consulta} existe pero no está en la base.\n"
-            f"  Analizalo con: python -m motor scan <carpeta que lo contiene> "
-            f"--licencia ... --origen ...")
+            f"  Analizalo con: python -m motor scan <carpeta que lo contiene>")
     if not consultar_disco:
         clave = clave_lexica(consulta)
         for t in biblioteca:
@@ -313,18 +321,12 @@ def _fila(t: Track) -> str:
 
 # --- scan ------------------------------------------------------------------------------
 
-_AYUDA_LICENCIA = """\
-Falta {faltan}. `scan` los exige y no los inventa (spec §5: licencia y origen son
-obligatorios en cualquier track desde el primer día). Se aplican a TODO lo que se
-analice en esta corrida, así que escaneá por separado carpetas de procedencia distinta.
-
-  --licencia  con qué derecho tenés el audio: "compra personal", "CC-BY-4.0", "promo del sello"
-  --origen    de dónde salió: una URL, la tienda o "biblioteca personal"
-
-Ejemplo para una biblioteca personal comprada en Beatport:
-
-  python -m motor scan "D:\\Musica\\Techno" --licencia "compra personal" --origen "https://www.beatport.com"
-"""
+# Lo que se imprime cuando la corrida guarda licencia u origen sin declarar: no es un error
+# (son opcionales desde el 2026-10-09), pero el dueño tiene que poder ver QUÉ se guardó.
+_AVISO_NO_DECLARADO = (
+    "  licencia: {licencia} · origen: {origen} — son opcionales; para declararlos: "
+    "--licencia \"compra personal\" --origen \"https://...\" (se aplican a lo que se analice "
+    "en esta corrida)")
 
 
 def _requerir_mutagen() -> None:
@@ -342,14 +344,64 @@ def _requerir_mutagen() -> None:
             "No se tocó la base.") from e
 
 
+@dataclass(frozen=True)
+class AnalisisDeArchivo:
+    """Lo que `scan` mide de UN archivo antes de guardarlo: el análisis, la duración, el
+    mtime de ANTES de analizar, cuánto tardó y el artista/título de los tags."""
+    features: TrackFeatures
+    duracion: float
+    mtime: float
+    segundos: float
+    artista: str | None
+    titulo: str | None
+
+
+def analizar_para_guardar(ruta: str, *, consenso: bool = False) -> AnalisisDeArchivo | str:
+    """Analiza un archivo como lo hace `scan`: el análisis o el MOTIVO por el que falló.
+
+    Vive afuera de `cmd_scan` para que un hilo del server (la radio que analiza en segundo
+    plano los temas de una playlist que el motor todavía no conoce) mida EXACTAMENTE igual
+    que la terminal: dos caminos de análisis darían dos BPM para el mismo archivo según por
+    dónde entró a la base. No abre la base a propósito: el análisis tarda segundos y quien
+    llama decide cuánto la tiene tomada.
+
+    Solo lee el audio (regla del proyecto). Los tags se leen después de un análisis que
+    anduvo, igual que siempre en el scan; si `leer_tags` levanta, levanta (sin mutagen, por
+    ejemplo: `cmd_scan` lo verifica antes con `_requerir_mutagen`).
+    """
+    from calidad.tags import leer_tags
+    from motor.analisis import analizar_archivo
+
+    try:
+        mtime = Path(ruta).stat().st_mtime   # ANTES de analizar: si cambia durante
+        t0 = time.perf_counter()             # el análisis, el próximo scan lo rehace
+        res = analizar_archivo(ruta, consenso=consenso)
+        dt = time.perf_counter() - t0
+    except Exception as e:  # noqa: BLE001 — un archivo raro no frena 10k tracks
+        return f"{type(e).__name__}: {e}"
+    if res is None:
+        return "no se pudo decodificar o dura menos de 1 s"
+    features, duracion = res
+    tags = leer_tags(ruta)
+    return AnalisisDeArchivo(features, duracion, mtime, dt, tags.get("artista") or None,
+                             tags.get("titulo") or None)
+
+
+def guardar_analisis(store, ruta: str, a: AnalisisDeArchivo, *, licencia: str | None = None,
+                     origen: str | None = None) -> None:
+    """El `upsert` del scan, con la licencia y el origen que se le pasen. Sin pasarlos (o en
+    blanco) quedan como `NO_DECLARADO`: lo resuelve `Store.upsert` con `declared_text`, la
+    misma compuerta que usa `cmd_scan`, así que nunca se inventan (CLAUDE.md, 2026-10-09)."""
+    store.upsert(ruta, a.features, duration=a.duracion, license=licencia, source_url=origen,
+                 artist=a.artista, title=a.titulo, mtime=a.mtime)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
-    faltan = [f"--{n}" for n, v in (("licencia", args.licencia), ("origen", args.origen))
-              if v is None or not str(v).strip()]
-    if faltan:
-        # ANTES de abrir la base: `Store(...)` ya crea el archivo y el esquema.
-        raise ErrorDeUso(_AYUDA_LICENCIA.format(faltan=" y ".join(faltan)))
-    require_text(args.licencia, "licencia")
-    require_text(args.origen, "origen")
+    # Opcionales (CLAUDE.md, 2026-10-09): lo que se pase va tal cual; sin pasar, o en blanco,
+    # el literal "no declarado". Se resuelve ANTES de abrir la base (`Store(...)` ya crea el
+    # archivo): un valor que no es texto no llega a tocarla.
+    licencia = declared_text(args.licencia, "licencia")
+    origen = declared_text(args.origen, "origen")
     _requerir_mutagen()
 
     carpeta = Path(args.carpeta)
@@ -358,8 +410,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                          f"No se tocó la base.")
     carpeta = carpeta.resolve()
 
-    from calidad.tags import leer_tags
-    from motor.analisis import analizar_archivo, calentar
+    from motor.analisis import calentar
 
     rutas = sorted({_clave(p) for p in carpeta.rglob("*")
                     if p.is_file() and p.suffix.lower() in EXTS})
@@ -387,6 +438,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         sin_cambios = [r for r in rutas if r not in a_analizar]
         print(f"{len(rutas)} archivos de audio en {carpeta} · "
               f"{len(pendientes)} para analizar · {len(sin_cambios)} sin cambios")
+        if pendientes and NO_DECLARADO in (licencia, origen):
+            print(_AVISO_NO_DECLARADO.format(licencia=licencia, origen=origen))
 
         if pendientes:
             # El JIT de numba compila en la primera llamada: sin esto el primer track tarda
@@ -396,17 +449,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         for i, ruta in enumerate(pendientes, 1):
             nombre = Path(ruta).name
             estaba = os.path.normcase(ruta) in en_base
-            try:
-                mtime = Path(ruta).stat().st_mtime   # ANTES de analizar: si cambia durante
-                t0 = time.perf_counter()             # el análisis, el próximo scan lo rehace
-                res = analizar_archivo(ruta, consenso=args.consenso)
-                dt = time.perf_counter() - t0
-            except Exception as e:  # noqa: BLE001 — un archivo raro no frena 10k tracks
-                res, motivo = None, f"{type(e).__name__}: {e}"
-            else:
-                motivo = "no se pudo decodificar o dura menos de 1 s"
+            res = analizar_para_guardar(ruta, consenso=args.consenso)
 
-            if res is None:
+            if isinstance(res, str):
+                motivo = res
                 fallidos.append((nombre, motivo))
                 if estaba:
                     # El archivo cambió y la versión nueva no se puede analizar: el análisis
@@ -419,11 +465,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} FALLÓ ({motivo})", flush=True)
                 continue
 
-            features, duracion = res
-            tags = leer_tags(ruta)
-            store.upsert(ruta, features, duration=duracion, license=args.licencia,
-                         source_url=args.origen, artist=tags.get("artista") or None,
-                         title=tags.get("titulo") or None, mtime=mtime)
+            guardar_analisis(store, ruta, res, licencia=licencia, origen=origen)
+            features, dt = res.features, res.segundos
             (actualizados if estaba else nuevos).append(nombre)
             print(f"  [{i}/{len(pendientes)}] {nombre[:48]:48} {features.bpm:6.1f} BPM  "
                   f"{features.key:>3} {_clasica(features.key):<3}"
@@ -981,9 +1024,11 @@ def construir_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("scan", parents=[comun], help="Analiza una carpeta y actualiza la biblioteca.")
     p.add_argument("carpeta", type=Path)
     p.add_argument("--licencia", default=None,
-                   help="Obligatorio. Con qué derecho tenés el audio (ej. \"compra personal\").")
+                   help=f"Opcional. Con qué derecho tenés el audio (ej. \"compra personal\"); "
+                        f"sin pasarlo se guarda \"{NO_DECLARADO}\".")
     p.add_argument("--origen", default=None,
-                   help="Obligatorio. De dónde salió (URL, tienda o \"biblioteca personal\").")
+                   help=f"Opcional. De dónde salió (URL, tienda o \"biblioteca personal\"); "
+                        f"sin pasarlo se guarda \"{NO_DECLARADO}\".")
     p.add_argument("--consenso", action="store_true",
                    help="tono_consenso() para la tonalidad. Es el MISMO flag que "
                         "benchmark.analizar y pipeline.revisar: prenderlo solo acá deja la "

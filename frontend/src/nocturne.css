@@ -1205,23 +1205,25 @@ html{scroll-padding-top:var(--space-4)} /* sin barra pegada no hace falta descon
 .rtag-falta{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--radius-pill);font-size:10.5px;letter-spacing:0.03em;color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 34%,transparent)}
 
 /* — editor de cues y loops (f48, opción B del canvas) —
-   Colores de los 8 hot cues: SOLO tokens del sistema (los de las calificaciones, info, la
-   marca y el acento). No dependen únicamente del tono: cada marca lleva su NÚMERO escrito, y
-   la luminosidad cambia de un pad al siguiente (1 medio, 2 claro, 3-4 claros verdes, 5
-   oscuro, 6-7 medios, 8 el más claro), así dos pads vecinos no se confunden aunque no se
-   distinga el color. Todos dan más de 3:1 contra el fondo de la onda (--color-well) y el
-   número va en --cue-ink (el fondo de la app) con más de 4.5:1 sobre cada uno. */
+   Colores de las marcas (f51, pedido del dueño): COPIA de la tabla de `motor/cue_marks.py`
+   (`color_de_marca`), que es la única fuente; `tests/test_colores_marcas.py` compara estas
+   variables con esa tabla, así que se cambian allá y acá a la vez. Hot cues A..H (pads 1..8):
+   rojo, verde, azul, amarillo, violeta, turquesa, rosa, blanco. El loop es SIEMPRE naranja,
+   esté o no en un pad (hot loop): lo distingue de todo lo demás. La memory cue no tiene color
+   propio: en pantalla, un neutro. No dependen solo del tono: cada marca lleva escrito su
+   número (o M / L). Medido: todos dan más de 5:1 contra el fondo de la onda (--color-well) y
+   el número va en --cue-ink (el fondo de la app) con más de 5:1 sobre cada uno. */
 :root{
-  --cue-1:var(--color-grade-f);
-  --cue-2:var(--color-grade-c);
-  --cue-3:var(--color-grade-a);
-  --cue-4:var(--color-info);
-  --cue-5:var(--color-brand-500);
-  --cue-6:var(--color-accent-400);
-  --cue-7:var(--color-grade-d);
-  --cue-8:var(--color-neutral-200);
-  --cue-mem:var(--color-neutral-400);
-  --cue-loop:var(--color-accent);
+  --cue-1:#ff4d5a;
+  --cue-2:#34d17c;
+  --cue-3:#4fa3ff;
+  --cue-4:#ffd23f;
+  --cue-5:#b48cff;
+  --cue-6:#2fd4cf;
+  --cue-7:#ff7ab8;
+  --cue-8:#f2f3f8;
+  --cue-mem:#f2f3f8;
+  --cue-loop:#ff9a2e;
   --cue-ink:var(--color-bg);
   --cue-wave:var(--color-neutral-700);
   --cue-wave-sonado:var(--color-accent-500);

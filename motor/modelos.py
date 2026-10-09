@@ -12,10 +12,12 @@ Son DOS porque hay dos momentos distintos, y la diferencia no es cosmética:
 Quien convierte uno en otro es el store (`motor/store.py`), que es el único que tiene
 la biblioteca entera para comparar.
 
-`licencia` y `origen` (spec §5, "Cosas que no se tocan") son OBLIGATORIOS en `Track`
-y lo impone el código, no un comentario: son campos sin default y además se valida que
-no lleguen vacíos. El boceto viejo los declaraba `str | None = None` dos líneas debajo
-de un comentario que decía que eran obligatorios — o sea que no lo eran.
+`licencia` y `origen` (spec §5) son columnas de todo track y SIEMPRE tienen valor, pero
+desde la decisión del dueño del 2026-10-09 (CLAUDE.md) NO son obligatorios: son datos del
+usuario sobre su propia biblioteca y no hay plataforma que los verifique. Si no se declaran
+valen el literal `NO_DECLARADO` ("no declarado"), nunca uno inventado ni un texto vacío; lo
+impone `declared_text`, la única compuerta, en `Track` y en las escrituras del store. Se
+vuelven a exigir cuando haya una web pública con subida de música.
 """
 import math
 import re
@@ -49,20 +51,35 @@ def es_track(duracion_s: float) -> bool:
     return (duracion_s or 0) >= DURACION_MINIMA_TRACK_S
 
 
-def require_text(value: object, field: str) -> str:
-    """Exige un texto con contenido. Devuelve el valor tal cual (no lo reescribe: recortar
-    espacios por atrás sería modificar en silencio un dato del usuario).
+# Lo que vale `license` / `source_url` cuando el dueño no los declaró (CLAUDE.md, decisión del
+# 2026-10-09). UNA sola definición para todo el repo: la escriben el store y la CLI, y la
+# pantalla la muestra tal cual. Es un literal y no NULL a propósito: la columna sigue siendo
+# NOT NULL, y "no declarado" dice exactamente lo que se sabe (§6) — un vacío no dice nada y
+# un "compra personal" por defecto sería inventar.
+NO_DECLARADO = "no declarado"
 
-    Es la ÚNICA compuerta de `license` / `source_url`: la usan `Track.__post_init__` y
-    `Store.upsert`, para que no se pueda meter un track sin licencia ni por el constructor
-    ni por la caché.
+
+def declared_text(value: object, field: str) -> str:
+    """Licencia u origen tal como se declararon, o `NO_DECLARADO` si no se declararon.
+
+    - `None`, `""` o solo espacios → `NO_DECLARADO`: no declarar es válido (CLAUDE.md,
+      2026-10-09), y un texto vacío guardado se leería como si alguien hubiera declarado
+      "nada".
+    - Un texto con contenido → TAL CUAL, sin recortar espacios: reescribirlo sería modificar
+      en silencio un dato del usuario.
+    - Cualquier otra cosa (un número, una lista) → `ValueError`: no es una declaración, es un
+      error del que llama, y convertirlo con `str()` guardaría un "123" que nadie escribió.
+
+    Es la ÚNICA compuerta de `license` / `source_url`: la usan `Track.__post_init__`,
+    `Store.upsert`, `Store.save_set` y la CLI, para que ningún camino guarde un vacío ni un
+    valor inventado.
     """
-    if not isinstance(value, str) or not value.strip():
+    if value is None:
+        return NO_DECLARADO
+    if not isinstance(value, str):
         raise ValueError(
-            f"`{field}` es obligatorio y no puede venir vacío (spec §5: licencia y origen "
-            f"son obligatorios en cualquier modelo de track desde el primer día); recibí {value!r}"
-        )
-    return value
+            f"`{field}` es un texto (o nada, y entonces vale {NO_DECLARADO!r}); recibí {value!r}")
+    return value if value.strip() else NO_DECLARADO
 
 
 def require_finite_bpm(value: object) -> float:
@@ -82,7 +99,7 @@ def require_finite_bpm(value: object) -> float:
     - negativo no lo produce el análisis (beat_track no da tempos negativos) y la compuerta
       lo trata igual que 0; no se rechaza para no inventar una regla que nada necesita.
 
-    La usan `Track.__post_init__` y `Store.upsert`, como `require_text`: un BPM infinito no
+    La usan `Track.__post_init__` y `Store.upsert`, como `declared_text`: un BPM infinito no
     entra ni por el constructor ni por la caché (si entrara a la caché, cargar la biblioteca
     entera fallaría al armar ese `Track`).
     """
@@ -105,8 +122,8 @@ def require_acuerdo_key(acuerdo: object, tramos: object) -> None:
 
     Por qué existe: un `"3/3"` con los votos vacíos diría "los tres tramos coincidieron" sin
     tener tramos, y un `"4/3"` o un `"abc"` no dicen nada — son datos inventados, y el
-    proyecto no los quiere (spec §6). Es la misma compuerta que `require_text` para la
-    licencia, en el mismo lugar: la frontera de ESCRITURA de la caché (`Store.upsert`).
+    proyecto no los quiere (spec §6). Está en el mismo lugar que `declared_text` para la
+    licencia: la frontera de ESCRITURA de la caché (`Store.upsert`).
 
     Dónde NO se usa, a propósito: al LEER. `Store._features` arma un `TrackFeatures` con lo
     que haya en la fila, y `Track` ni mira el formato. Si una base editada a mano tiene
@@ -160,7 +177,7 @@ class TrackFeatures:
 
     No lleva `license` ni `source_url` a propósito: esto no es un track, es el resultado
     de medir un archivo de audio. La identidad y la procedencia las pone el store en el
-    `upsert`, que sí las exige.
+    `upsert` (lo declarado, o `NO_DECLARADO`).
     """
 
     bpm: float
@@ -223,8 +240,8 @@ class Track:
     `embedding` viene z-scoreado por dimensión y con norma 1 (`embeddings.normalize_matrix`),
     así el producto punto entre dos tracks ES la similitud coseno.
 
-    `license` y `source_url` no tienen default: un `Track` sin licencia ni origen no se
-    puede construir.
+    `license` y `source_url` siempre tienen valor: lo declarado o `NO_DECLARADO` (ver
+    `declared_text`). Nunca `None` ni vacío, así quien los muestra no tiene que adivinar.
     """
 
     path: Path
@@ -234,11 +251,9 @@ class Track:
     energy: float  # percentil 0..1 dentro de la biblioteca
     embedding: np.ndarray  # z-scored por dimensión + L2 por fila
 
-    # Obligatorios (spec §5). Van antes que los opcionales porque un campo sin default no
-    # puede ir después de uno con default: la obligatoriedad está en la firma, no en un
-    # comentario.
-    license: str
-    source_url: str
+    # Opcionales desde el 2026-10-09 (CLAUDE.md): sin declarar valen "no declarado".
+    license: str = NO_DECLARADO
+    source_url: str = NO_DECLARADO
 
     artist: str | None = None
     title: str | None = None
@@ -251,8 +266,8 @@ class Track:
     def __post_init__(self) -> None:
         self.path = Path(self.path)
         self.embedding = _as_vector(self.embedding, "embedding")
-        self.license = require_text(self.license, "license")
-        self.source_url = require_text(self.source_url, "source_url")
+        self.license = declared_text(self.license, "license")
+        self.source_url = declared_text(self.source_url, "source_url")
         self.bpm = require_finite_bpm(self.bpm)
         # 0..1, no 0..100: `energia.percentil` devuelve 0..100 y el store divide. Si acá
         # entra un 80.0 es que alguien salteó esa conversión, y el motor lo trataría como

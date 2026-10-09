@@ -21,14 +21,14 @@ Tres decisiones del esquema que NO son detalles:
    ubicar un vector suelto en la misma escala que la matriz sin recalcular todo.
 
 Migraciones (ver `VERSION_ESQUEMA`): son de ida. Una base que abrió este código no la lee un
-djradio más viejo. Volver de la v5 (marcas del dueño, f48) a la v4 es a mano y borra las
-marcas: `DROP TABLE cue_marks; PRAGMA user_version = 4;` sobre una copia de la base.
+djradio más viejo. Volver atrás es a mano y sobre una copia de la base (ver `VERSION_ESQUEMA`).
 
 Determinismo (spec §5): el orden de todo lo que devuelve el store lo fija Python ordenando
 por la clave de la ruta (absoluta + `normcase`), no la collation de SQLite ni el orden de
 inserción.
 """
 import contextlib
+import dataclasses
 import os
 import sqlite3
 from collections.abc import Iterable
@@ -42,9 +42,9 @@ from motor.energia import percentil
 from motor.modelos import (
     Track,
     TrackFeatures,
+    declared_text,
     require_acuerdo_key,
     require_finite_bpm,
-    require_text,
 )
 
 # Versión del esquema, guardada en `PRAGMA user_version`. Subirla SIEMPRE que cambie la forma
@@ -58,14 +58,20 @@ from motor.modelos import (
 #   3  columnas key_acuerdo / key_tramos (la confianza de la key, tarea 17)
 #   4  tablas saved_sets / saved_set_steps / saved_set_ratings (sets guardados, tarea 16)
 #   5  tabla cue_marks (hot cues, memory cues y loops del dueño, f48)
+#   6  cue_marks: un loop puede vivir en un pad (`num` 0..7, hot loop; f51). Se reconstruye la
+#      tabla con los CHECK nuevos conservando ids, fechas y el contador de ids
 #
 # OJO, la migración es de ida: una base que abrió este código queda en la versión nueva y un
-# djradio más viejo la rechaza con `EsquemaIncompatible` (sin tocarla). Para volver a usar
-# una base v5 con un código v4 hay que bajarla a mano, y eso BORRA las marcas del dueño
-# (copiá la base antes):
-#     sqlite3 biblioteca.sqlite "DROP TABLE cue_marks; PRAGMA user_version = 4;"
-# Ninguna otra tabla cambia de la 4 a la 5, así que el resto queda como estaba.
-VERSION_ESQUEMA = 5
+# djradio más viejo la rechaza con `EsquemaIncompatible` (sin tocarla). Bajarla es a mano y
+# sobre una COPIA de la base:
+#   · de 6 a 5: los hot loops pierden el pad (quedan como memory loops) y el resto queda igual;
+#     los CHECK de la v6 aceptan todo lo que escribe un código v5, así que la tabla sirve tal
+#     cual:
+#         sqlite3 biblioteca.sqlite "UPDATE cue_marks SET num = NULL WHERE kind = 'loop';
+#                                    PRAGMA user_version = 5;"
+#   · de 5 a 4: BORRA las marcas del dueño (ninguna otra tabla cambia de la 4 a la 5):
+#         sqlite3 biblioteca.sqlite "DROP TABLE cue_marks; PRAGMA user_version = 4;"
+VERSION_ESQUEMA = 6
 
 # Cuánto espera una apertura a que OTRO proceso suelte la base (por ejemplo, porque la está
 # migrando) antes de rendirse con `sqlite3.OperationalError: database is locked`. La CLI
@@ -96,8 +102,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- distinto: el consenso SÍ corrió y el track no daba para comparar tramos.
     key_acuerdo     TEXT,
     key_tramos      TEXT,
-    license         TEXT NOT NULL,      -- obligatorio (spec §5)
-    source_url      TEXT NOT NULL,      -- obligatorio (spec §5)
+    -- Siempre con valor: lo declarado o el literal 'no declarado' (modelos.NO_DECLARADO;
+    -- opcionales desde el 2026-10-09, CLAUDE.md). NOT NULL igual: un vacío no es un valor.
+    license         TEXT NOT NULL,
+    source_url      TEXT NOT NULL,
     analyzed_at     TEXT NOT NULL
 )"""
 
@@ -153,8 +161,8 @@ _DDL_SETS = (
     title_shown   TEXT NOT NULL,
     duration      REAL NOT NULL,
     is_track      INTEGER NOT NULL,
-    license       TEXT NOT NULL,        -- obligatorio (spec §5)
-    source_url    TEXT NOT NULL,        -- obligatorio (spec §5)
+    license       TEXT NOT NULL,        -- lo declarado o 'no declarado', como en `tracks`
+    source_url    TEXT NOT NULL,
     bpm           REAL NOT NULL,
     bpm_shown     TEXT NOT NULL,        -- "128.4", como se mostró
     key           TEXT NOT NULL,
@@ -198,7 +206,10 @@ _DDL_SETS = (
 #
 # Los CHECK repiten en la base las reglas de `cue_marks.py` que no dependen del track (la
 # duración sí, y esa se valida al escribir): una fila escrita por fuera tampoco puede tener un
-# hot cue sin número, un loop sin salida o una salida antes de la entrada.
+# hot cue sin pad, una memory cue con pad, un loop sin salida o una salida antes de la entrada.
+# Desde la v6 un loop PUEDE tener pad (hot loop: Rekordbox 7.2.16 los guarda como `Type=4` con
+# `Num` 0..7, ver `cue_marks.py`) y el pad sigue siendo UNO por track entre cues y loops: lo
+# cubre el índice único de abajo, que no mira el tipo.
 # `AUTOINCREMENT`: sin él SQLite reusa el id de la última marca borrada, y una pantalla vieja
 # que manda "borrá la 7" borraría otra.
 _DDL_CUES = (
@@ -212,15 +223,20 @@ _DDL_CUES = (
     name        TEXT,
     created_at  TEXT NOT NULL,          -- ISO 8601 UTC
     updated_at  TEXT NOT NULL,
-    CHECK ((kind = 'cue') = (num IS NOT NULL)),
-    CHECK ((kind = 'loop') = (end_ms IS NOT NULL)),
+    CHECK (kind <> 'cue' OR num IS NOT NULL),                     -- hot cue: pad obligatorio
+    CHECK (kind <> 'memory' OR (num IS NULL AND end_ms IS NULL)), -- memory: sin pad ni salida
+    CHECK ((kind = 'loop') = (end_ms IS NOT NULL)),               -- solo el loop, y siempre
     CHECK (end_ms IS NULL OR end_ms > start_ms)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_cue_marks_path ON cue_marks(path_key)",
-    # Un solo hot cue por número en cada track (el pad 3 es UNO).
+    # Una sola marca por pad en cada track (el pad 3 es UNO), sea hot cue o hot loop.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_cue_marks_hot ON cue_marks(path_key, num) "
     "WHERE num IS NOT NULL",
 )
+
+# Las columnas de `cue_marks`, en el orden del DDL: la migración 6 las copia todas.
+_COLUMNAS_CUES = ("id", "path_key", "kind", "num", "start_ms", "end_ms", "name", "created_at",
+                  "updated_at")
 
 
 def _ahora() -> str:
@@ -300,15 +316,16 @@ class Store:
     # -- escritura ----------------------------------------------------------
 
     def upsert(self, path: Path | str, features: TrackFeatures, *, duration: float,
-               license: str, source_url: str, artist: str | None = None,
-               title: str | None = None, mtime: float | None = None) -> None:
+               license: str | None = None, source_url: str | None = None,
+               artist: str | None = None, title: str | None = None,
+               mtime: float | None = None) -> None:
         """Guarda o actualiza el análisis de un track. La ruta es la clave: un segundo
         upsert de la misma ruta ACTUALIZA, no duplica.
 
-        `license` y `source_url` son keyword y obligatorios — la misma regla que impone
-        `Track`, acá en la frontera de la caché, para que no se pueda persistir un track
-        sin procedencia (spec §5). El boceto viejo los pasaba adentro de un dict `tags`
-        suelto, donde faltar era indistinguible de venir vacío.
+        `license` y `source_url` son keyword y opcionales (CLAUDE.md, 2026-10-09): lo que se
+        declare se guarda tal cual, y sin declarar (o vacío) se guarda `NO_DECLARADO` — la
+        misma regla que `Track`, acá en la frontera de la caché, para que la base nunca
+        tenga un vacío ni un valor inventado (`declared_text`).
 
         `mtime`: si no se pasa, sale de `stat()` del archivo. Se guarda tal cual para que
         `needs_analysis` pueda comparar por igualdad exacta.
@@ -321,8 +338,8 @@ class Store:
                 f"el embedding tiene que ser 1-D de largo DIM={DIM}, recibí shape {vec.shape}; "
                 f"mezclar largos rompe la matriz de la biblioteca"
             )
-        require_text(license, "license")
-        require_text(source_url, "source_url")
+        license = declared_text(license, "license")
+        source_url = declared_text(source_url, "source_url")
         require_finite_bpm(features.bpm)
         # La confianza de la key se valida al ESCRIBIR y no al leer: acá el dato lo produce
         # el análisis y tiene que ser coherente; al leer, una fila corrupta se degrada a `?`
@@ -608,8 +625,54 @@ class Store:
 
     def _migrar_a_5_cues(self) -> None:
         """Crea la tabla de marcas del dueño (f48). No toca `tracks` ni los sets: una base v4
-        sigue igual y arranca sin marcas. `IF NOT EXISTS` por lo mismo que el paso 4."""
+        sigue igual y arranca sin marcas. `IF NOT EXISTS` por lo mismo que el paso 4.
+
+        Con el DDL de HOY (el de la v6): viniendo de una v4 la tabla nace vacía y el paso 6 la
+        reconstruye igual, sin nada que copiar."""
         for ddl in _DDL_CUES:
+            self._con.execute(ddl)
+
+    def _migrar_a_6_hot_loops(self) -> None:
+        """La tabla de marcas acepta loops con pad (hot loops, f51).
+
+        SQLite no tiene `ALTER TABLE ... CHECK`: se reconstruye la tabla con el DDL actual y se
+        copian TODAS las filas tal cual —ids, fechas de creación y de modificación incluidas—
+        dentro de la transacción de `_preparar_esquema` (si algo falla, la base queda en v5
+        como estaba). Las marcas de una v5 cumplen los CHECK nuevos (son un subconjunto: la v5
+        no aceptaba loops con pad), así que la copia no rechaza ninguna.
+
+        El contador de AUTOINCREMENT (`sqlite_sequence`) se copia aparte: la tabla nueva lo
+        arrancaría desde el id más alto que QUEDA, y si las últimas marcas se borraron, la
+        próxima reusaría el id de una borrada (lo que `AUTOINCREMENT` está para impedir: una
+        pantalla vieja que manda "borrá la 7" borraría otra). Medido en SQLite 3.49: el RENAME
+        se lleva el contador con la tabla vieja y el DROP lo borra.
+
+        Idempotente: correrlo sobre una tabla que ya es v6 la deja igual (mismas filas, mismo
+        contador). Sin tabla (no debería pasar: el paso 5 la crea) la crea vacía.
+        """
+        existe = self._con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cue_marks'"
+        ).fetchone()
+        if existe is None:
+            for ddl in _DDL_CUES:
+                self._con.execute(ddl)
+            return
+        fila = self._con.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'cue_marks'").fetchone()
+        contador = 0 if fila is None else int(fila[0])
+        columnas = ", ".join(_COLUMNAS_CUES)
+        self._con.execute("ALTER TABLE cue_marks RENAME TO cue_marks_v5")
+        self._con.execute(_DDL_CUES[0])
+        self._con.execute(f"INSERT INTO cue_marks ({columnas}) "
+                          f"SELECT {columnas} FROM cue_marks_v5 ORDER BY id")
+        self._con.execute("DROP TABLE cue_marks_v5")   # se lleva sus índices: se recrean abajo
+        maximo = int(self._con.execute("SELECT COALESCE(MAX(id), 0) FROM cue_marks").fetchone()[0])
+        contador = max(contador, maximo)
+        self._con.execute("DELETE FROM sqlite_sequence WHERE name = 'cue_marks'")
+        if contador:
+            self._con.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('cue_marks', ?)",
+                              (contador,))
+        for ddl in _DDL_CUES[1:]:
             self._con.execute(ddl)
 
     # -- sets guardados (tarea 16, motor/saved_sets.py) -----------------------
@@ -633,8 +696,10 @@ class Store:
 
         Todo en una transacción: un set a medio guardar (la cabecera sin sus pasos) sería
         un set que "se escuchó" sin tracks. Se valida ANTES de escribir, como `upsert`: las
-        posiciones son 1..n sin huecos, cada track trae licencia y origen (§5) y un BPM
-        finito, y solo la posición 1 es la semilla.
+        posiciones son 1..n sin huecos, cada track trae un BPM finito y solo la posición 1
+        es la semilla. Licencia y origen pasan por `declared_text`, como en `upsert`: la foto
+        guarda lo declarado o `NO_DECLARADO`, nunca un vacío (un paso armado desde un
+        `Track` ya los trae así; esto cubre una foto armada a mano).
         """
         from motor.saved_sets import STEP_FIELDS, InvalidSavedSet, clean_name
 
@@ -645,9 +710,10 @@ class Store:
         if posiciones != list(range(1, len(steps) + 1)):
             raise InvalidSavedSet(f"las posiciones tienen que ser 1..{len(steps)} en orden, "
                                   f"recibí {posiciones}")
+        steps = [dataclasses.replace(s, license=declared_text(s.license, "license"),
+                                     source_url=declared_text(s.source_url, "source_url"))
+                 for s in steps]
         for s in steps:
-            require_text(s.license, "license")
-            require_text(s.source_url, "source_url")
             require_finite_bpm(s.bpm)
             if s.is_seed != (s.position == 1):
                 raise InvalidSavedSet(f"la posición {s.position} dice is_seed={s.is_seed}: "
@@ -814,9 +880,10 @@ class Store:
     # vez no pueden dejar dos hot cues 3 ni pasar el tope entre los dos.
 
     def list_cue_marks(self, path: Path | str) -> list:
-        """Las marcas de un track, en el orden de la tabla de la pantalla: hot cues por número,
-        después memory cues y loops por tiempo. Lista vacía si no tiene (esté o no en la
-        biblioteca: las marcas de un archivo que hoy no está siguen siendo suyas)."""
+        """Las marcas de un track, en el orden de la tabla de la pantalla: lo que está en un pad
+        (hot cues y hot loops) por número, después memory cues y memory loops por tiempo.
+        Lista vacía si no tiene (esté o no en la biblioteca: las marcas de un archivo que hoy
+        no está siguen siendo suyas)."""
         filas = self._con.execute("SELECT * FROM cue_marks WHERE path_key = ?",
                                   (self._key(path),)).fetchall()
         return _ordenar_marcas([_marca(f) for f in filas])
@@ -854,15 +921,20 @@ class Store:
         """Crea una marca en un track de la biblioteca y la devuelve.
 
         - `cue` (hot cue): `num` 0..7; sin `num` toma el primer pad libre. Ocupado o sin pads
-          libres → `InvalidCueMark` (no se pisa un hot cue en silencio).
-        - `memory`: sin número, hasta `MAX_MEMORY` por track.
-        - `loop`: `end_s` obligatorio y después de `start_s`, hasta `MAX_LOOPS`.
+          libres → `InvalidCueMark` (no se pisa un pad en silencio).
+        - `memory`: sin pad, hasta `MAX_MEMORY` por track.
+        - `loop`: `end_s` obligatorio y después de `start_s`, hasta `MAX_LOOPS`. Con `num`
+          0..7 es un hot loop y ocupa ESE pad (libre, como un hot cue); sin `num` es un memory
+          loop y no toma ninguno: un loop no se manda solo a un pad que nadie pidió.
+
+        El pad es único por track entre hot cues y hot loops.
 
         Track que no está en la biblioteca → `CueMarkNotFound`: sin su duración no hay con qué
         validar que la marca caiga adentro."""
         from motor.cue_marks import (
             KIND_CUE,
             KIND_LOOP,
+            KIND_MEMORY,
             InvalidCueMark,
             clean_mark_name,
             require_kind,
@@ -875,8 +947,9 @@ class Store:
         start_ms = seconds_to_ms(start_s, "inicio")
         end_ms = None if end_s is None else seconds_to_ms(end_s, "fin")
         nombre = clean_mark_name(name)
-        if kind != KIND_CUE and num is not None:
-            raise InvalidCueMark("solo un hot cue lleva número")
+        if kind == KIND_MEMORY and num is not None:
+            raise InvalidCueMark("una memory cue no lleva pad: solo los hot cues y los loops "
+                                 "(hot loop)")
         if num is not None:
             num = require_num(num)
         clave = self._key(path)
@@ -887,6 +960,8 @@ class Store:
                 num = self._num_hot_cue(clave, num)
             else:
                 self._dentro_del_tope(clave, kind)
+                if num is not None:                      # hot loop: ESE pad, si está libre
+                    self._num_hot_cue(clave, num)
             cur = self._con.execute(
                 "INSERT INTO cue_marks (path_key, kind, num, start_ms, end_ms, name, created_at, "
                 "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -901,10 +976,14 @@ class Store:
                         end_s=_SIN_CAMBIO, name=_SIN_CAMBIO, num=_SIN_CAMBIO):
         """Mueve, renombra o cambia de pad una marca del track. Lo que no se pasa queda como
         está. El tipo no cambia (un hot cue no se vuelve loop: se borra uno y se crea el otro).
-        La marca resultante se valida entera, como si fuera nueva."""
+        La marca resultante se valida entera, como si fuera nueva.
+
+        `num`: un hot cue cambia de pad (nunca a None); un loop se pasa a un pad libre (hot
+        loop) o lo suelta con None (memory loop); una memory cue no lleva pad."""
         from motor.cue_marks import (
             KIND_CUE,
             KIND_LOOP,
+            KIND_MEMORY,
             InvalidCueMark,
             clean_mark_name,
             require_num,
@@ -927,16 +1006,17 @@ class Store:
         with self._escritura():
             actual = self._marca_por_id(clave, mark_id)
             kind = actual.kind
-            if "num" in cambios and kind != KIND_CUE:
-                raise InvalidCueMark("solo un hot cue lleva número")
-            if "num" in cambios and cambios["num"] is None:
+            if "num" in cambios and kind == KIND_MEMORY:
+                raise InvalidCueMark("una memory cue no lleva pad: solo los hot cues y los "
+                                     "loops (hot loop)")
+            if "num" in cambios and cambios["num"] is None and kind == KIND_CUE:
                 raise InvalidCueMark("un hot cue siempre tiene número (0 a 7)")
             if "end_ms" in cambios and kind != KIND_LOOP:
                 raise InvalidCueMark("solo un loop tiene salida (`fin`)")
             start_ms = cambios.get("start_ms", actual.start_ms)
             end_ms = cambios.get("end_ms", actual.end_ms)
             validate_times(kind, start_ms, end_ms, self._duracion_marcable(clave))
-            if "num" in cambios and cambios["num"] != actual.num:
+            if "num" in cambios and cambios["num"] is not None and cambios["num"] != actual.num:
                 self._num_hot_cue(clave, cambios["num"])     # ocupado → InvalidCueMark
             asignaciones = ", ".join(f"{c} = ?" for c in cambios)
             self._con.execute(
@@ -978,20 +1058,22 @@ class Store:
         return float(fila["duration"])
 
     def _num_hot_cue(self, clave: str, num: int | None) -> int:
-        """`num` si está libre, o el primer pad libre si `num` es None."""
-        from motor.cue_marks import HOT_CUES, InvalidCueMark
+        """`num` si está libre, o el primer pad libre si `num` es None. Un pad lo ocupa un hot
+        cue O un hot loop (v6): los dos viven en los mismos 8 pads."""
+        from motor.cue_marks import HOT_CUES, KIND_LOOP, InvalidCueMark
 
-        usados = {int(f[0]) for f in self._con.execute(
-            "SELECT num FROM cue_marks WHERE path_key = ? AND num IS NOT NULL", (clave,))}
+        usados = {int(f[0]): f[1] for f in self._con.execute(
+            "SELECT num, kind FROM cue_marks WHERE path_key = ? AND num IS NOT NULL", (clave,))}
         if num is None:
             libres = [n for n in range(HOT_CUES) if n not in usados]
             if not libres:
-                raise InvalidCueMark(f"el track ya tiene los {HOT_CUES} hot cues: borrá uno "
-                                     f"o movelo")
+                raise InvalidCueMark(f"el track ya tiene los {HOT_CUES} pads ocupados (hot cues "
+                                     f"y hot loops): borrá uno o movelo")
             return libres[0]
         if num in usados:
-            raise InvalidCueMark(f"el hot cue {num + 1} ya está puesto en este track: borralo o "
-                                 f"movelo antes de poner otro en el mismo pad")
+            quien = "un loop" if usados[num] == KIND_LOOP else "un hot cue"
+            raise InvalidCueMark(f"el pad {num + 1} ya lo usa {quien} en este track: borralo o "
+                                 f"movelo antes de poner otra marca en el mismo pad")
         return num
 
     def _dentro_del_tope(self, clave: str, kind: str) -> None:
@@ -1088,6 +1170,7 @@ _MIGRACIONES = (
     (3, Store._migrar_a_3_acuerdo_key),
     (4, Store._migrar_a_4_sets),
     (5, Store._migrar_a_5_cues),
+    (6, Store._migrar_a_6_hot_loops),
 )
 
 
@@ -1103,9 +1186,10 @@ def _marca(fila: sqlite3.Row):
 
 
 def _ordenar_marcas(marcas: list) -> list:
-    """Hot cues por número; después memory cues y loops mezclados por tiempo (como se leen
-    en la onda). El id desempata: el orden no depende de cómo devuelva SQLite las filas."""
-    return sorted(marcas, key=lambda m: (0, m.num, 0, m.id) if m.kind == "cue"
+    """Primero lo que está en un pad (hot cues y hot loops) por número de pad, como se ven en
+    el CDJ; después memory cues y memory loops mezclados por tiempo (como se leen en la onda).
+    El id desempata: el orden no depende de cómo devuelva SQLite las filas."""
+    return sorted(marcas, key=lambda m: (0, m.num, 0, m.id) if m.num is not None
                   else (1, 0, m.start_ms, m.id))
 
 

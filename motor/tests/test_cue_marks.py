@@ -1,13 +1,15 @@
-"""Tests de las marcas del dueño (f48): hot cues, memory cues y loops en el store (esquema v5).
+"""Tests de las marcas del dueño (f48): hot cues, memory cues y loops en el store (esquema v6).
 
 Biblioteca de `tests/sinteticos.py` (la misma que prueban la API y el E2E). Las duraciones
 salen del CATALOGO (lo que declara la base), no de este archivo: "uno.wav" dura 240 s porque
 así lo escribió `armar_base_radio`.
 
 Lo central:
-- la migración v4 → v5 es atómica y concurrente (como la 4);
+- la migración v4 → v5 es atómica y concurrente (como la 4), y la v5 → v6 (hot loops)
+  reconstruye la tabla sin perder nada: ni filas, ni ids, ni fechas, ni el contador de ids;
 - las validaciones rechazan ANTES de escribir y no dejan nada a medias;
-- el pad de un hot cue es único por track, también con pedidos a la vez;
+- el pad es único por track entre hot cues y hot loops, también con pedidos a la vez;
+- los colores salen de UNA tabla (`cue_marks.color_de_marca`): el loop, siempre naranja;
 - un re-escaneo (reanálisis, archivo que desaparece y vuelve, archivo movido) NO se lleva las
   marcas: se prueba con el `scan` real de la CLI sobre audio sintético.
 """
@@ -98,12 +100,12 @@ def test_pad_libre_y_pad_ocupado(base):
         for n in (0, 1, 3):
             store.add_cue_mark(uno, "cue", 10.0 + n, num=n)
         assert store.add_cue_mark(uno, "cue", 20.0).num == 2, "no tomó el primer pad libre"
-        with pytest.raises(InvalidCueMark, match="hot cue 2 ya está puesto"):
+        with pytest.raises(InvalidCueMark, match="pad 2 ya lo usa un hot cue"):
             store.add_cue_mark(uno, "cue", 30.0, num=1)
         for _ in range(HOT_CUES - 4):
             store.add_cue_mark(uno, "cue", 40.0)
         assert sorted(m.num for m in store.list_cue_marks(uno)) == list(range(HOT_CUES))
-        with pytest.raises(InvalidCueMark, match="ya tiene los 8 hot cues"):
+        with pytest.raises(InvalidCueMark, match="ya tiene los 8 pads ocupados"):
             store.add_cue_mark(uno, "cue", 50.0)
         # El mismo pad en OTRO track sí: la unicidad es por track.
         assert store.add_cue_mark(rutas["dos.wav"], "cue", 5.0, num=1).num == 1
@@ -159,6 +161,128 @@ def test_pedidos_a_la_vez_no_repiten_pad(base):
     assert len(errores) == 2 and all(isinstance(e, InvalidCueMark) for e in errores), errores
 
 
+# --- hot loops (v6): un loop puede vivir en un pad ---------------------------------------
+
+def test_hot_loop_ocupa_su_pad_y_el_pad_es_unico(base):
+    """Rekordbox guarda loops en los pads A-H (`Type=4`, `Num` 0..7: PRUEBA_CUES.md §5). Un
+    loop con `num` ocupa ESE pad; sin `num` es un memory loop y no toma ninguno. El pad es UNO
+    por track entre hot cues y hot loops, y el motivo dice quién lo usa."""
+    db, rutas = base
+    uno = rutas["uno.wav"]
+    with Store(db) as store:
+        hot = store.add_cue_mark(uno, "loop", 30.0, 34.0, num=2, name="Drop loop")
+        assert (hot.kind, hot.num, hot.start_ms, hot.end_ms) == ("loop", 2, 30000, 34000)
+        memoria = store.add_cue_mark(uno, "loop", 50.0, 52.0)
+        assert memoria.num is None, "un loop sin pad pedido se mandó solo a un pad"
+        with pytest.raises(InvalidCueMark, match="pad 3 ya lo usa un loop"):
+            store.add_cue_mark(uno, "cue", 1.0, num=2)
+        with pytest.raises(InvalidCueMark, match="pad 3 ya lo usa un loop"):
+            store.add_cue_mark(uno, "loop", 60.0, 61.0, num=2)
+        store.add_cue_mark(uno, "cue", 5.0, num=0)
+        with pytest.raises(InvalidCueMark, match="pad 1 ya lo usa un hot cue"):
+            store.add_cue_mark(uno, "loop", 60.0, 61.0, num=0)
+        # El «primer pad libre» de un hot cue saltea el pad del hot loop.
+        assert store.add_cue_mark(uno, "cue", 6.0).num == 1
+        assert store.add_cue_mark(uno, "cue", 7.0).num == 3
+        for n in (4, 5, 6):
+            store.add_cue_mark(uno, "cue", 8.0 + n, num=n)
+        store.add_cue_mark(uno, "loop", 70.0, 72.0, num=7)
+        with pytest.raises(InvalidCueMark, match="ya tiene los 8 pads ocupados"):
+            store.add_cue_mark(uno, "cue", 90.0)
+        # El mismo pad en OTRO track sí.
+        assert store.add_cue_mark(rutas["dos.wav"], "loop", 3.0, 4.0, num=2).num == 2
+    with Store(db) as store:                      # otra conexión: es lo que quedó en la base
+        marcas = [(m.kind, m.num, m.start_ms) for m in store.list_cue_marks(uno)]
+    # Orden de la tabla: los 8 pads por número (cues y hot loops), después lo que no tiene pad.
+    assert marcas == [("cue", 0, 5000), ("cue", 1, 6000), ("loop", 2, 30000), ("cue", 3, 7000),
+                      ("cue", 4, 12000), ("cue", 5, 13000), ("cue", 6, 14000),
+                      ("loop", 7, 70000), ("loop", None, 50000)], marcas
+
+
+def test_un_loop_toma_y_suelta_un_pad(base):
+    """PATCH de `num`: un memory loop pasa a un pad libre y vuelve a soltarlo (None); no puede
+    ir a un pad ocupado. Una memory cue no toma pad y un hot cue no lo suelta."""
+    db, rutas = base
+    uno = rutas["uno.wav"]
+    with Store(db) as store:
+        loop = store.add_cue_mark(uno, "loop", 30.0, 34.0)
+        cue = store.add_cue_mark(uno, "cue", 1.0, num=5)
+        mem = store.add_cue_mark(uno, "memory", 2.0)
+        m = store.update_cue_mark(uno, loop.id, num=4)
+        assert (m.num, m.start_ms, m.end_ms, m.created_at) == (4, 30000, 34000, loop.created_at)
+        with pytest.raises(InvalidCueMark, match="pad 5 ya lo usa un loop"):
+            store.update_cue_mark(uno, cue.id, num=4)
+        with pytest.raises(InvalidCueMark, match="pad 6 ya lo usa un hot cue"):
+            store.update_cue_mark(uno, loop.id, num=5)
+        with pytest.raises(InvalidCueMark, match="una memory cue no lleva pad"):
+            store.update_cue_mark(uno, mem.id, num=1)
+        with pytest.raises(InvalidCueMark, match="siempre tiene número"):
+            store.update_cue_mark(uno, cue.id, num=None)
+        assert store.update_cue_mark(uno, loop.id, num=None).num is None
+        # El pad que soltó el loop quedó libre de verdad.
+        assert store.update_cue_mark(uno, cue.id, num=4).num == 4
+        final = [(x.kind, x.num, x.start_ms) for x in store.list_cue_marks(uno)]
+    assert final == [("cue", 4, 1000), ("memory", None, 2000), ("loop", None, 30000)], final
+
+
+def test_la_base_repite_las_reglas_del_pad(base):
+    """Los CHECK de la v6, con filas escritas por fuera del store: un hot cue sin pad, una
+    memory con pad o con salida y un loop sin salida no entran; un loop con pad sí, y su pad
+    choca con el de un hot cue (índice único)."""
+    db, rutas = base
+    with Store(db) as store:
+        store.add_cue_mark(rutas["uno.wav"], "cue", 1.0, num=2)
+        clave = store._key(rutas["uno.wav"])
+    con = sqlite3.connect(str(db))
+    sql = ("INSERT INTO cue_marks (path_key, kind, num, start_ms, end_ms, created_at, "
+           "updated_at) VALUES (?, ?, ?, 5000, ?, 'x', 'x')")
+    try:
+        for kind, num, fin in (("cue", None, None), ("memory", 1, None), ("memory", None, 6000),
+                               ("loop", 3, None), ("loop", None, None), ("cue", 4, 6000)):
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+                con.execute(sql, (clave, kind, num, fin))
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+            con.execute(sql, (clave, "loop", 2, 6000))
+        con.execute(sql, (clave, "loop", 3, 6000))       # hot loop en un pad libre: entra
+        con.execute(sql, (clave, "loop", None, 6000))    # memory loop: entra
+        assert con.execute("SELECT kind, num, end_ms FROM cue_marks WHERE path_key = ? "
+                           "ORDER BY id", (clave,)).fetchall() == \
+            [("cue", 2, None), ("loop", 3, 6000), ("loop", None, 6000)]
+    finally:
+        con.close()
+
+
+# --- colores: UNA tabla para pantalla y export ---------------------------------------------
+
+# Los colores que pidió el dueño (2026-10-09), escritos a mano: si la tabla del motor cambia,
+# este test lo ve.
+COLORES_PEDIDOS = ["#ff4d5a", "#34d17c", "#4fa3ff", "#ffd23f", "#b48cff", "#2fd4cf", "#ff7ab8",
+                   "#f2f3f8"]
+
+
+def test_colores_de_las_marcas():
+    """Hot cues A..H con el color pedido; el loop SIEMPRE naranja, con o sin pad (no toma el
+    color de su pad); la memory cue sin color propio al exportar y neutra en pantalla."""
+    from motor.cue_marks import (
+        COLOR_MEMORY_PANTALLA,
+        color_de_marca,
+        color_hex,
+        color_hex_de_marca,
+    )
+
+    assert [color_hex_de_marca("cue", n) for n in range(HOT_CUES)] == COLORES_PEDIDOS
+    assert color_de_marca("cue", 0) == (255, 77, 90)
+    assert {color_hex_de_marca("loop", n) for n in (None, *range(HOT_CUES))} == {"#ff9a2e"}
+    assert color_de_marca("loop") == (255, 154, 46)
+    assert (color_de_marca("memory"), color_hex_de_marca("memory")) == (None, None)
+    assert color_hex(COLOR_MEMORY_PANTALLA) == "#f2f3f8"
+    for kind, num, pista in (("cue", None, "siempre tiene pad"), ("cue", 8, "de 0 a 7"),
+                             ("memory", 0, "no lleva pad"), ("loop", -1, "de 0 a 7"),
+                             ("loop", True, "de 0 a 7"), ("hot", 0, "tipo de marca")):
+        with pytest.raises(InvalidCueMark, match=pista):
+            color_de_marca(kind, num)
+
+
 # --- validaciones -----------------------------------------------------------------------
 
 @pytest.mark.parametrize(("kind", "start", "end", "num", "name", "pista"), [
@@ -181,7 +305,9 @@ def test_pedidos_a_la_vez_no_repiten_pad(base):
     ("cue", 1.0, None, -1, None, "de 0 a 7"),
     ("cue", 1.0, None, True, None, "de 0 a 7"),
     ("cue", 1.0, None, 1.0, None, "de 0 a 7"),
-    ("memory", 1.0, None, 3, None, "solo un hot cue lleva número"),
+    ("memory", 1.0, None, 3, None, "una memory cue no lleva pad"),
+    ("loop", 1.0, 2.0, 8, None, "de 0 a 7"),
+    ("loop", 1.0, 2.0, True, None, "de 0 a 7"),
     ("memory", 1.0, 2.0, None, None, "solo un loop tiene salida"),
     ("loop", 10.0, None, None, None, "necesita la salida"),
     ("loop", 10.0, 10.0, None, None, "después de la entrada"),
@@ -265,7 +391,7 @@ def test_mover_renombrar_y_cambiar_de_pad(base):
         assert (m.start_ms, m.name, m.num, m.created_at) == (11111, "Intro", 0, cue.created_at)
         assert store.update_cue_mark(uno, cue.id, name="").name is None
         assert store.update_cue_mark(uno, cue.id, num=6).num == 6
-        with pytest.raises(InvalidCueMark, match="hot cue 2 ya está puesto"):
+        with pytest.raises(InvalidCueMark, match="pad 2 ya lo usa un hot cue"):
             store.update_cue_mark(uno, cue.id, num=otro.num)
         m = store.update_cue_mark(uno, loop.id, end_s=36.5)
         assert (m.start_ms, m.end_ms) == (30000, 36500)
@@ -476,7 +602,7 @@ def test_base_v4_se_migra_y_conserva_biblioteca_y_sets(tmp_path):
         assert [s.name for s in store.list_saved_sets()] == ["v4"]
         assert store.add_cue_mark(store.paths()[0], "cue", 1.0).num == 0
     despues = _foto(db)
-    assert (despues[0], VERSION_ESQUEMA) == (5, 5)
+    assert (despues[0], VERSION_ESQUEMA) == (6, 6)
     assert despues[2:] == foto[2:], "la migración 5 tocó `tracks`"
     assert _filas_sets(db) == sets, "la migración 5 tocó los sets guardados"
     assert "cue_marks" in _tablas(db)
@@ -493,7 +619,8 @@ def test_migracion_5_que_falla_deja_la_base_v4_como_estaba(tmp_path, monkeypatch
         raise RuntimeError("falla inyectada al final de la migración 5")
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:4],
-                                                       (5, paso_5_que_falla)))
+                                                       (5, paso_5_que_falla),
+                                                       *modulo_store._MIGRACIONES[5:]))
     with pytest.raises(RuntimeError, match="migración 5"):
         Store(db)
     assert _foto(db) == antes, "la migración 5 fallida dejó la base modificada"
@@ -516,7 +643,8 @@ def test_migracion_5_que_falla_al_escribir_la_version_deja_la_base_v4(tmp_path, 
         self._con = _ConexionQueFalla(self._con, "PRAGMA user_version =")
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:4],
-                                                       (5, paso_5_y_romper_la_version)))
+                                                       (5, paso_5_y_romper_la_version),
+                                                       *modulo_store._MIGRACIONES[5:]))
     with pytest.raises(RuntimeError, match="user_version"):
         Store(db)
     assert _foto(db) == antes, "la falla al escribir la versión dejó la base modificada"
@@ -525,7 +653,7 @@ def test_migracion_5_que_falla_al_escribir_la_version_deja_la_base_v4(tmp_path, 
 
 def test_dos_aperturas_simultaneas_de_una_base_v4_migran_una_vez(tmp_path, monkeypatch):
     """A entra a la migración 5 y se frena; B abre la misma base mientras tanto. Los dos
-    abren bien, la migración corre UNA vez y la base queda en v5."""
+    abren bien, la migración corre UNA vez y la base queda en la versión actual."""
     import motor.store as modulo_store
 
     db = _base_v4(tmp_path)
@@ -540,7 +668,8 @@ def test_dos_aperturas_simultaneas_de_una_base_v4_migran_una_vez(tmp_path, monke
         Store._migrar_a_5_cues(self)
 
     monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:4],
-                                                       (5, paso_5_que_se_frena_en_a)))
+                                                       (5, paso_5_que_se_frena_en_a),
+                                                       *modulo_store._MIGRACIONES[5:]))
     resultados: dict[str, object] = {}
 
     def abrir(nombre):
@@ -564,4 +693,158 @@ def test_dos_aperturas_simultaneas_de_una_base_v4_migran_una_vez(tmp_path, monke
     n = len(CATALOGO)
     assert resultados == {"A": (n, []), "B": (n, [])}, f"aperturas simultáneas: {resultados}"
     assert migraron == ["A"], f"la migración corrió en {migraron}"
-    assert _foto(db)[0] == 5
+    assert _foto(db)[0] == 6
+
+
+# --- migración v5 → v6: hot loops (la tabla se reconstruye) ---------------------------------
+
+# El DDL de `cue_marks` de la v5 (2a0b586), tal cual: lo que tiene hoy la base del dueño.
+_DDL_CUES_V5 = (
+    """CREATE TABLE cue_marks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    path_key    TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('cue', 'memory', 'loop')),
+    num         INTEGER CHECK (num IS NULL OR (num >= 0 AND num <= 7)),
+    start_ms    INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms      INTEGER,
+    name        TEXT,
+    created_at  TEXT NOT NULL,          -- ISO 8601 UTC
+    updated_at  TEXT NOT NULL,
+    CHECK ((kind = 'cue') = (num IS NOT NULL)),
+    CHECK ((kind = 'loop') = (end_ms IS NOT NULL)),
+    CHECK (end_ms IS NULL OR end_ms > start_ms)
+)""",
+    "CREATE INDEX idx_cue_marks_path ON cue_marks(path_key)",
+    "CREATE UNIQUE INDEX idx_cue_marks_hot ON cue_marks(path_key, num) WHERE num IS NOT NULL",
+)
+
+
+def _base_v5(carpeta: Path) -> tuple[Path, dict]:
+    """Una base v5 de verdad: la biblioteca, un set guardado con una calificación y marcas de
+    las TRES clases (hot cues, memory cues y loops, con nombres y fechas distintas), una
+    huérfana (de un archivo que no está en la biblioteca), ids con huecos (marcas que se
+    borraron en el medio: una copia que renumerara se nota) y la última marca BORRADA: el
+    contador de ids (9) queda por encima del id más alto que queda (8)."""
+    db = _base_v4(carpeta)
+    con = sqlite3.connect(str(db))
+    for ddl in _DDL_CUES_V5:
+        con.execute(ddl)
+    uno, dos = (con.execute("SELECT path_key FROM tracks WHERE path LIKE ?", (f"%{n}",))
+                .fetchone()[0] for n in ("uno.wav", "dos.wav"))
+    huerfana = os.path.normcase(str(carpeta / "se_movio.wav"))
+    filas = [
+        (1, uno, "cue", 0, 12345, None, "Drop", "2026-10-01T10:00:00Z", "2026-10-02T11:30:00Z"),
+        (2, uno, "memory", None, 3500, None, None, "2026-10-01T10:01:00Z", "2026-10-01T10:01:00Z"),
+        (3, uno, "loop", None, 64000, 71500, "4 compases", "2026-10-01T10:02:00Z",
+         "2026-10-03T09:00:00Z"),
+        (5, dos, "cue", 7, 1000, None, None, "2026-10-04T08:00:00Z", "2026-10-04T08:00:00Z"),
+        (8, huerfana, "memory", None, 2000, None, "vieja", "2026-09-30T23:59:59Z",
+         "2026-09-30T23:59:59Z"),
+        (9, uno, "memory", None, 9000, None, None, "2026-10-05T12:00:00Z", "2026-10-05T12:00:00Z"),
+    ]
+    con.executemany("INSERT INTO cue_marks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", filas)
+    con.execute("DELETE FROM cue_marks WHERE id = 9")
+    con.execute("PRAGMA user_version = 5")
+    con.commit()
+    con.close()
+    return db, {"uno": uno, "dos": dos, "huerfana": huerfana}
+
+
+def _marcas_crudas(db: Path) -> tuple[list, int | None, list]:
+    """Las filas de `cue_marks` enteras, el contador de AUTOINCREMENT y los índices."""
+    con = sqlite3.connect(str(db))
+    try:
+        filas = con.execute("SELECT * FROM cue_marks ORDER BY id").fetchall()
+        seq = con.execute("SELECT seq FROM sqlite_sequence WHERE name = 'cue_marks'").fetchone()
+        indices = sorted(con.execute("SELECT name FROM sqlite_master WHERE type = 'index' "
+                                     "AND tbl_name = 'cue_marks'").fetchall())
+        return filas, None if seq is None else seq[0], indices
+    finally:
+        con.close()
+
+
+def _ruta_de(store, nombre: str) -> Path:
+    return next(p for p in store.paths() if p.name == nombre)
+
+
+def test_base_v5_se_migra_a_v6_sin_perder_marcas(tmp_path):
+    """v5 → v6: la tabla se reconstruye (SQLite no altera un CHECK) y queda TODO igual —cada
+    fila con su id, nombre y fechas de creación y modificación, el contador de ids y los
+    índices—, la biblioteca y los sets ni se tocan, y recién ahí un loop puede tener pad. El
+    id de la marca borrada (9) NO se reusa."""
+    from motor.store import VERSION_ESQUEMA
+
+    db, claves = _base_v5(tmp_path)
+    foto, sets = _foto(db), _filas_sets(db)
+    filas, seq, indices = _marcas_crudas(db)
+    assert (foto[0], seq, [f[0] for f in filas]) == (5, 9, [1, 2, 3, 5, 8]), (foto[0], seq, filas)
+    con = sqlite3.connect(str(db))
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):   # la v5 no acepta hot loops
+            con.execute("INSERT INTO cue_marks (path_key, kind, num, start_ms, end_ms, "
+                        "created_at, updated_at) VALUES ('x', 'loop', 3, 1, 2, 'x', 'x')")
+    finally:
+        con.close()
+
+    with Store(db) as store:
+        nueva = store.add_cue_mark(_ruta_de(store, "uno.wav"), "loop", 100.0, 104.0, num=3)
+        assert (nueva.id, nueva.num) == (10, 3), "se reusó el id de una marca borrada"
+        assert store.orphan_cue_marks() == [(claves["huerfana"], 1)]
+
+    despues = _foto(db)
+    assert (despues[0], VERSION_ESQUEMA) == (6, 6)
+    assert despues[2:] == foto[2:], "la migración 6 tocó `tracks`"
+    assert _filas_sets(db) == sets, "la migración 6 tocó los sets guardados"
+    filas_despues, seq_despues, indices_despues = _marcas_crudas(db)
+    assert filas_despues[:-1] == filas, "la migración 6 cambió alguna marca"
+    assert filas_despues[-1][:6] == (10, claves["uno"], "loop", 3, 100000, 104000)
+    assert (seq_despues, indices_despues) == (10, indices), (seq_despues, indices_despues)
+
+
+def test_migracion_6_es_idempotente(tmp_path):
+    """Correr el paso 6 otra vez sobre una tabla que ya es v6 la deja igual: mismas filas,
+    mismo contador, mismos índices, y el pad sigue siendo único."""
+    db, claves = _base_v5(tmp_path)
+    with Store(db) as store:
+        uno = _ruta_de(store, "uno.wav")
+        store.add_cue_mark(uno, "loop", 1.0, 2.0, num=6)
+        antes = _marcas_crudas(db)
+        for _ in range(2):
+            with store._escritura():
+                store._migrar_a_6_hot_loops()
+        assert _marcas_crudas(db) == antes
+        with pytest.raises(InvalidCueMark, match="pad 7 ya lo usa un loop"):
+            store.add_cue_mark(uno, "cue", 3.0, num=6)
+    con = sqlite3.connect(str(db))
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+            con.execute("INSERT INTO cue_marks (path_key, kind, num, start_ms, created_at, "
+                        "updated_at) VALUES (?, 'cue', 0, 5, 'x', 'x')", (claves["uno"],))
+    finally:
+        con.close()
+
+
+def test_migracion_6_que_falla_deja_la_base_v5_como_estaba(tmp_path, monkeypatch):
+    """Si el paso 6 falla DESPUÉS de reconstruir la tabla, el ROLLBACK deja la v5 entera: el
+    DDL viejo (con sus CHECK: `_foto` compara el SQL de cada objeto), las filas, el contador
+    y la versión."""
+    import motor.store as modulo_store
+
+    db, _ = _base_v5(tmp_path)
+    antes, marcas = _foto(db), _marcas_crudas(db)
+
+    def paso_6_que_falla(self):
+        Store._migrar_a_6_hot_loops(self)
+        raise RuntimeError("falla inyectada al final de la migración 6")
+
+    monkeypatch.setattr(modulo_store, "_MIGRACIONES", (*modulo_store._MIGRACIONES[:5],
+                                                       (6, paso_6_que_falla)))
+    with pytest.raises(RuntimeError, match="migración 6"):
+        Store(db)
+    assert _foto(db) == antes, "la migración 6 fallida dejó la base modificada"
+    assert _marcas_crudas(db) == marcas
+
+    monkeypatch.undo()
+    with Store(db) as store:
+        assert [m.id for m in store.list_cue_marks(_ruta_de(store, "uno.wav"))] == [1, 2, 3]
+    assert _foto(db)[0] == 6

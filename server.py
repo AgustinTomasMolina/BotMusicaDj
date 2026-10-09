@@ -2133,7 +2133,7 @@ def _usar_store_motor(accion) -> tuple[object, str, str | None]:
     if not db.exists():
         return None, _RADIO_SIN_BASE, (
             f"No hay biblioteca del motor en {db}. Analizá una carpeta con "
-            f"`python -m motor scan <carpeta> --licencia ... --origen ...`, o apuntá "
+            f"`python -m motor scan <carpeta>`, o apuntá "
             f"DJRADIO_DB a la base que ya tengas.")
     try:
         # Espera corta, no la de la CLI: ver `_RADIO_ESPERA_S`.
@@ -2158,7 +2158,7 @@ def _usar_store_motor(accion) -> tuple[object, str, str | None]:
             f"usándola (se esperó {_RADIO_ESPERA_S:g} s). Reintentá en un rato.")
     except (sqlite3.Error, ValueError) as e:
         # sqlite3.Error: la base no es SQLite o está corrupta.
-        # ValueError: una fila sin licencia/origen o con un BPM infinito — `Track` la rechaza
+        # ValueError: una fila con un BPM infinito (o una licencia que no es texto) — `Track` la rechaza
         # al construirla y se lleva puesta la biblioteca entera. Ninguna de las dos es un bug
         # del server, y las dos son arreglables sabiendo qué base se está leyendo.
         logger.warning(f"⚠️ Radio: no pude leer la base del motor {db}: {e}")
@@ -2176,7 +2176,7 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
         db = db_por_defecto()
         return [], _RADIO_VACIA, (
             f"La biblioteca del motor ({db}) no tiene ningún track analizado. Corré "
-            f"`python -m motor scan <carpeta> --licencia ... --origen ...`.")
+            f"`python -m motor scan <carpeta>`.")
     return biblioteca, _RADIO_OK, None
 
 
@@ -2567,8 +2567,8 @@ async def radio_audio(track_id: str):
             {"error": f"el archivo de este track no está en esta máquina: la base lo tiene "
                       f"en {ruta}. Se movió, o la base se escaneó en otro sistema (típico en "
                       f"Docker con una base de Windows): re-escaneá la música desde adentro "
-                      f"con `docker compose exec web python -m motor scan /musica "
-                      f"--licencia ... --origen ...`."}, status_code=404)
+                      f"con `docker compose exec web python -m motor scan /musica`."},
+            status_code=404)
     return FileResponse(ruta)             # FileResponse maneja Range → el <audio> puede buscar
 
 
@@ -2908,6 +2908,10 @@ async def radio_sets_descalificar(set_id: int, n: int):
 #
 # Las escrituras devuelven SIEMPRE la lista entera de marcas del track tal como quedó en la
 # base: la pantalla dibuja eso, así su «Guardado» es lo que el servidor confirmó.
+#
+# `num` es el PAD (0..7 = A..H). Desde el esquema v6 lo lleva un hot cue (siempre) y también un
+# loop que vive en un pad (hot loop; sin `num`, memory loop); una memory cue nunca. El pad es
+# único por track entre los dos, y `limites.hot_cues` cuenta los pads (son los mismos 8).
 
 _RE_TRACK_ID = re.compile(r"[0-9a-f]{16}")
 _RE_MARCA_ID = re.compile(r"[0-9]{1,19}")
@@ -2937,9 +2941,13 @@ def _track_editor(t) -> dict:
     f50: también lo que la pestaña «Información» del detalle muestra del archivo, tal como lo
     tiene la base: la ruta, el formato (la extensión; sin extensión, None y no uno adivinado),
     la licencia y el origen. Licencia y origen son datos OPCIONALES (decisión del dueño,
-    2026-10-09, CLAUDE.md): viajan tal cual están en la base, y vacíos van None; la pantalla
-    dice «no declarado», nunca un valor inventado. La ruta es la del archivo del propio dueño
-    en su máquina: la misma que ya viaja en el .m3u8 del set."""
+    2026-10-09, CLAUDE.md): viajan tal cual están en la base, que sin declarar guarda el
+    literal «no declarado» (`motor.modelos.NO_DECLARADO`); si igual llegara uno vacío (un
+    objeto armado a mano), pasa por la misma compuerta que la base (`declared_text`) y va el
+    literal, nunca null ni un valor inventado. La ruta es la del archivo del propio dueño en su
+    máquina: la misma que ya viaja en el .m3u8 del set."""
+    from motor.modelos import declared_text
+
     d = _radio_track(t)
     bpm = _num(t.bpm)
     d["bpm"] = round(bpm, 1) if bpm is not None and bpm > 0 else None
@@ -2947,8 +2955,8 @@ def _track_editor(t) -> dict:
     ruta = Path(t.path)
     d["ruta"] = str(ruta)
     d["formato"] = ruta.suffix.lstrip(".").lower() or None
-    d["licencia"] = (getattr(t, "license", None) or "").strip() or None
-    d["origen"] = (getattr(t, "source_url", None) or "").strip() or None
+    d["licencia"] = declared_text(getattr(t, "license", None), "license")
+    d["origen"] = declared_text(getattr(t, "source_url", None), "source_url")
     return d
 
 
@@ -3052,8 +3060,9 @@ async def radio_marcas(track_id: str):
 @app.post("/api/radio/tracks/{track_id}/marcas")
 async def radio_marcas_crear(track_id: str, request: Request):
     """Crea una marca. `tipo`: cue | memory | loop. `inicio` (y `fin` en un loop) en segundos.
-    `num` (0..7) solo en un hot cue; sin él toma el primer pad libre. 201 con la marca y la
-    lista entera."""
+    `num` (0..7) es el pad: en un hot cue, sin él toma el primer pad libre; en un loop, con él
+    es un hot loop en ESE pad (libre) y sin él un memory loop; una memory no lo lleva. 201 con
+    la marca y la lista entera."""
     ruta, error = await _marcas_ruta(track_id)
     if error is not None:
         return error
@@ -3078,7 +3087,8 @@ async def radio_marcas_crear(track_id: str, request: Request):
 @app.patch("/api/radio/tracks/{track_id}/marcas/{marca_id}")
 async def radio_marcas_cambiar(track_id: str, marca_id: str, request: Request):
     """Mueve (`inicio`, `fin`), renombra (`nombre`; "" o null = sin nombre) o cambia de pad
-    (`num`) una marca. Lo que no viene no cambia."""
+    (`num`) una marca. Lo que no viene no cambia. Un loop puede tomar un pad libre o soltarlo
+    (`num: null`, vuelve a memory loop); un hot cue no puede quedar sin pad."""
     ruta, error = await _marcas_ruta(track_id)
     if error is not None:
         return error

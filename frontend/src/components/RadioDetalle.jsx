@@ -22,6 +22,8 @@ import { CeldaKey } from './RadioLista'
    ========================================================================== */
 
 // Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor, «no declarado».
+// La API ya manda ese literal (la base lo guarda así, `motor.modelos.NO_DECLARADO`); esto es la
+// defensa para una respuesta sin el dato: nunca se dibuja un vacío ni un valor inventado.
 const declarado = (v) => (typeof v === 'string' && v.trim() ? v : 'no declarado')
 
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))

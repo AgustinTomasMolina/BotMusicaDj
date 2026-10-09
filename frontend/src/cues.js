@@ -63,15 +63,36 @@ export function tiempoDeX(x, ancho, dur) {
   return acotar((x / ancho) * dur, dur)
 }
 
-// El primer pad libre (0..7) o null si están los 8.
+// ¿La marca vive en un pad? Un hot cue siempre; un loop si tiene `num` (hot loop, esquema v6
+// del motor); una memory nunca.
+export const enPad = (m) => Boolean(m) && Number.isInteger(m.num)
+
+// El primer pad libre (0..7) o null si están los 8. Un pad lo ocupa un hot cue O un hot loop:
+// los dos viven en los mismos 8 pads (A..H), así que el servidor rechazaría el pad de un loop.
 export function padLibre(marcas) {
-  const usados = new Set((marcas || []).filter((m) => m.tipo === 'cue').map((m) => m.num))
+  const usados = new Set((marcas || []).filter(enPad).map((m) => m.num))
   for (let n = 0; n < HOT_CUES; n++) if (!usados.has(n)) return n
   return null
 }
 
-// El hot cue de un pad (0..7), o null.
-export const hotCue = (marcas, num) => (marcas || []).find((m) => m.tipo === 'cue' && m.num === num) || null
+// La marca de un pad (0..7): el hot cue o el hot loop que lo ocupa, o null.
+export const marcaDelPad = (marcas, num) => (marcas || []).find((m) => enPad(m) && m.num === num) || null
+
+// Clase de color de una marca (variables --cue-* de nocturne.css, copia de la tabla de
+// motor/cue_marks.py): el hot cue, el de su pad; la memory, neutra; el loop SIEMPRE naranja,
+// con o sin pad (un hot loop en el pad 3 no toma el azul del pad 3).
+export const claseMarca = (m) => (m.tipo === 'cue' ? `cue-c${m.num + 1}` : m.tipo === 'memory' ? 'cue-mem' : 'cue-loop')
+
+// El texto de su etiqueta: el número del pad (1..8), M, L, o L + pad en un hot loop ("L3").
+export const textoMarca = (m) => (m.tipo === 'cue' ? String(m.num + 1)
+  : m.tipo === 'memory' ? 'M' : enPad(m) ? `L${m.num + 1}` : 'L')
+
+// Cómo se llama una marca para un lector de pantalla y para los avisos.
+export function nombreMarca(m) {
+  if (m.tipo === 'cue') return `hot cue ${m.num + 1}`
+  if (m.tipo === 'memory') return `memory cue en ${fmtTiempo(m.inicio)}`
+  return `loop${enPad(m) ? ` del pad ${m.num + 1}` : ''} ${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}`
+}
 
 // Por qué un loop no se puede cerrar, o null si se puede. Mismas reglas que el servidor
 // (motor/cue_marks.validate_times); el servidor igual vuelve a validar.

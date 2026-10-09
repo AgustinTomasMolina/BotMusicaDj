@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getMarcas, crearMarca, cambiarMarca, borrarMarca, radioAudioUrl, radioAudioMotivo } from '../api'
 import {
-  fmtTiempo, parseTiempo, pasoBeat, pctDe, tiempoDeX, padLibre, hotCue, errorLoop, beatsDeLoop,
-  atajo, marcasRegla, fmtRegla, acotar, tramoOnda, avisoDuracion,
+  fmtTiempo, parseTiempo, pasoBeat, pctDe, tiempoDeX, padLibre, marcaDelPad, errorLoop, beatsDeLoop,
+  atajo, marcasRegla, fmtRegla, acotar, tramoOnda, avisoDuracion, claseMarca, textoMarca, nombreMarca,
 } from '../cues'
 import { cargadorOndas } from '../ondas'
 import { usePlayer } from '../player/context'
@@ -50,15 +50,9 @@ function motivo(r) {
   return `El servidor contestó HTTP ${r ? r.status : '?'} sin explicación.`
 }
 
-// Cómo se llama una marca para un lector de pantalla y para los avisos.
-function nombreMarca(m) {
-  if (m.tipo === 'cue') return `hot cue ${m.num + 1}`
-  if (m.tipo === 'memory') return `memory cue en ${fmtTiempo(m.inicio)}`
-  return `loop ${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}`
-}
-
-const claseTag = (m) => (m.tipo === 'cue' ? `cue-c${m.num + 1}` : m.tipo === 'memory' ? 'cue-mem' : 'cue-loop')
-const textoTag = (m) => (m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : 'L')
+// El nombre de la marca, su clase de color y el texto de su etiqueta viven en ../cues.js
+// (nombreMarca, claseMarca, textoMarca): un loop con pad (hot loop) se dibuja naranja como
+// todo loop, con «L» + su pad.
 
 const CONEXION = 'No pude conectar con el servidor. Revisá que esté corriendo y volvé a intentar.'
 
@@ -333,7 +327,7 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
 
   const ponerCue = () => {
     if (!track) return
-    if (padLibre(marcas) === null) { setAviso('Ya están los 8 hot cues: borrá uno o movelo.'); return }
+    if (padLibre(marcas) === null) { setAviso('Ya están ocupados los 8 pads (hot cues y loops): borrá uno o movelo.'); return }
     const t = ms3(posActual())
     setAviso('')
     nueva({ tipo: 'cue', inicio: t }, `Hot cue en ${fmtTiempo(t)}`)
@@ -367,8 +361,8 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
     irA(t)
   }
   const irAPad = (num) => {
-    const m = hotCue(marcas, num)
-    if (!m) { setAviso(`El hot cue ${num + 1} está vacío.`); return }
+    const m = marcaDelPad(marcas, num)     // hot cue o hot loop: ir a su entrada
+    if (!m) { setAviso(`El pad ${num + 1} está vacío.`); return }
     setAviso('')
     irA(m.inicio)
   }
@@ -493,15 +487,15 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
               {marcas.map((m) => (m.tipo === 'loop' ? (
                 <div key={m.id} className="cue-mk-loop" aria-hidden="true"
                   style={{ left: `${pctDe(posDe(m, 'inicio'), dur)}%`, width: `${Math.max(0, pctDe(posDe(m, 'fin'), dur) - pctDe(posDe(m, 'inicio'), dur))}%` }}>
-                  <span className="cue-flag cue-loop" title={`Loop ${fmtTiempo(m.inicio)} → ${fmtTiempo(m.fin)} (arrastrá para mover la entrada)`}
-                    onPointerDown={(e) => empezarArrastre(e, m, 'inicio')} onPointerUp={(e) => soltarArrastre(e, m)} onPointerCancel={() => { arrastreRef.current = null; setArrastre(null) }}>L</span>
+                  <span className="cue-flag cue-loop" title={`Loop ${textoMarca(m)} · ${fmtTiempo(m.inicio)} → ${fmtTiempo(m.fin)} (arrastrá para mover la entrada)`}
+                    onPointerDown={(e) => empezarArrastre(e, m, 'inicio')} onPointerUp={(e) => soltarArrastre(e, m)} onPointerCancel={() => { arrastreRef.current = null; setArrastre(null) }}>{textoMarca(m)}</span>
                   <span className="cue-flag cue-loop is-fin" title="Salida del loop (arrastrá para moverla)"
                     onPointerDown={(e) => empezarArrastre(e, m, 'fin')} onPointerUp={(e) => soltarArrastre(e, m)} onPointerCancel={() => { arrastreRef.current = null; setArrastre(null) }}>⟩</span>
                 </div>
               ) : (
-                <div key={m.id} className={`cue-mk ${claseTag(m)}`} style={{ left: `${pctDe(posDe(m, 'inicio'), dur)}%` }} aria-hidden="true">
-                  <span className={`cue-flag ${claseTag(m)}`} title={`${NOMBRE_TIPO[m.tipo]} ${textoTag(m)} · ${fmtTiempo(m.inicio)} (arrastrá para moverla)`}
-                    onPointerDown={(e) => empezarArrastre(e, m, 'inicio')} onPointerUp={(e) => soltarArrastre(e, m)} onPointerCancel={() => { arrastreRef.current = null; setArrastre(null) }}>{textoTag(m)}</span>
+                <div key={m.id} className={`cue-mk ${claseMarca(m)}`} style={{ left: `${pctDe(posDe(m, 'inicio'), dur)}%` }} aria-hidden="true">
+                  <span className={`cue-flag ${claseMarca(m)}`} title={`${NOMBRE_TIPO[m.tipo]} ${textoMarca(m)} · ${fmtTiempo(m.inicio)} (arrastrá para moverla)`}
+                    onPointerDown={(e) => empezarArrastre(e, m, 'inicio')} onPointerUp={(e) => soltarArrastre(e, m)} onPointerCancel={() => { arrastreRef.current = null; setArrastre(null) }}>{textoMarca(m)}</span>
                 </div>
               )))}
               <i className="cue-cabezal" ref={cabezalRef} aria-hidden="true" />
@@ -532,7 +526,7 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
           <Volumen className="cue-vol" ayudaId="cue-vol-ayuda" />
           <p className="rnota cue-atajos">
             Los atajos actúan con el foco en el editor (elegir un track de la lista con el mouse o con Enter lo trae acá).{' '}
-            <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al hot cue · Espacio reproduce o pausa (con el foco en un botón, Espacio y Enter activan ese botón).
+            <kbd className="cue-kbd">←</kbd> <kbd className="cue-kbd">→</kbd> ±1 beat · <kbd className="cue-kbd">1</kbd>…<kbd className="cue-kbd">8</kbd> ir al pad (hot cue o loop) · Espacio reproduce o pausa (con el foco en un botón, Espacio y Enter activan ese botón).
             {' '}<span id="cue-vol-ayuda"><kbd className="cue-kbd">↑</kbd> <kbd className="cue-kbd">↓</kbd> volumen: uno solo para toda la app, se acuerda la próxima vez.</span>
             {' '}{bpm != null
               ? `El beat sale del BPM medido (${fmtBpm(bpm)}); Rekordbox puede tener otra grilla, así que acá no se ajusta nada a la grilla.`
@@ -579,8 +573,8 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
                 {marcas.map((m) => (
                   <tr key={m.id} data-id={m.id} data-tipo={m.tipo} className={m.fuera_del_track ? 'is-fuera' : ''}>
                     <td className="c-n">
-                      <button type="button" className={`cue-tag ${claseTag(m)}`} onClick={() => irA(m.inicio)}
-                        aria-label={`Ir a ${nombreMarca(m)}`} title={`Ir a ${nombreMarca(m)}`}>{textoTag(m)}</button>
+                      <button type="button" className={`cue-tag ${claseMarca(m)}`} onClick={() => irA(m.inicio)}
+                        aria-label={`Ir a ${nombreMarca(m)}`} title={`Ir a ${nombreMarca(m)}`}>{textoMarca(m)}</button>
                     </td>
                     <td className="c-tipo">{NOMBRE_TIPO[m.tipo]}</td>
                     <td className="c-t"><div className="cue-tiempos">
@@ -615,6 +609,7 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
               </tbody>
             </table>
           </div>
+          <p className="rnota">«L3» es un loop guardado en el pad 3 (hot loop, como los guarda Rekordbox): ocupa ese pad igual que un hot cue; «L» sola, un loop sin pad. Los loops van siempre en naranja.</p>
           <p className="rnota">Las marcas quedan guardadas en la biblioteca del motor, atadas a la ruta del archivo: si lo movés o lo renombrás y re-escaneás, quedan guardadas pero sin tema. Llevarlas a Rekordbox (XML con cues) llega en otra etapa.</p>
         </div>
     </section>

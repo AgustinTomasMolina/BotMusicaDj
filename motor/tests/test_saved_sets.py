@@ -239,7 +239,9 @@ def test_guardar_valida_la_foto(base):
         casos = [
             ([], "al menos un track"),
             ([fotos[1], fotos[0], *fotos[2:]], "posiciones"),
-            ([dataclasses.replace(fotos[0], license="  "), *fotos[1:]], "license"),
+            # Una licencia que no es texto no es una declaración (no se guarda un "123").
+            ([dataclasses.replace(fotos[0], license=123), *fotos[1:]], "license"),
+            ([dataclasses.replace(fotos[0], source_url=["x"]), *fotos[1:]], "source_url"),
             ([fotos[0], dataclasses.replace(fotos[1], is_seed=True), *fotos[2:]], "semilla"),
         ]
         for pasos, pista in casos:
@@ -248,6 +250,25 @@ def test_guardar_valida_la_foto(base):
         with pytest.raises(InvalidSavedSet, match="nombre"):
             store.save_set(fotos, **kw, name=123)
         assert store.list_saved_sets() == [], "una validación fallida dejó un set guardado"
+
+
+def test_la_foto_guarda_lo_no_declarado_como_el_literal(base):
+    """Licencia y origen opcionales (CLAUDE.md, 2026-10-09): una foto con licencia en blanco
+    y sin origen se guarda con el literal "no declarado" —nunca un vacío— y los pasos que sí
+    los declaran quedan TAL CUAL (los del catálogo). Se mira la fila cruda de la base."""
+    db, rutas = base
+    with Store(db) as store:
+        rset, config = _armar(store, rutas)
+        fotos = snapshot_steps(rset)
+        fotos[0] = dataclasses.replace(fotos[0], license="  ", source_url=None)
+        set_id = store.save_set(fotos, config=config_json(config), requested=4, stop=None,
+                                stop_detail="", fragments=0)
+    con = sqlite3.connect(str(db))
+    filas = con.execute("SELECT position, license, source_url FROM saved_set_steps "
+                        "WHERE set_id = ? ORDER BY position", (set_id,)).fetchall()
+    con.close()
+    assert filas == [(1, "no declarado", "no declarado"),
+                     *((n, LICENCIA, ORIGEN) for n in range(2, len(fotos) + 1))], filas
 
 
 def test_guardar_es_todo_o_nada(base):
@@ -396,8 +417,9 @@ def test_base_v3_se_migra_y_conserva_la_biblioteca(tmp_path):
         assert [t.path.name for t in store.load_library()] == ["dos.wav", "tres.wav", "uno.wav"]
 
     version, _, _, filas = _foto(db)
-    # Una base v3 abierta hoy pasa por la 4 (sets) y la 5 (marcas, f48) en la misma apertura.
-    assert (version, VERSION_ESQUEMA) == (5, 5)
+    # Una base v3 abierta hoy pasa por la 4 (sets), la 5 (marcas, f48) y la 6 (hot loops, f51)
+    # en la misma apertura.
+    assert (version, VERSION_ESQUEMA) == (6, 6)
     assert filas == filas_antes, "la migración 4 tocó las filas de `tracks`"
     assert {"saved_sets", "saved_set_steps", "saved_set_ratings"} <= _tablas(db)
 
@@ -488,7 +510,7 @@ def test_dos_aperturas_simultaneas_de_una_base_v3_migran_una_vez(tmp_path, monke
 
     assert resultados == {"A": (3, []), "B": (3, [])}, f"aperturas simultáneas: {resultados}"
     assert migraron == ["A"], f"la migración corrió en {migraron}"
-    assert _foto(db)[0] == 5
+    assert _foto(db)[0] == 6
 
 
 def test_dos_procesos_guardando_a_la_vez_no_se_pisan(base):

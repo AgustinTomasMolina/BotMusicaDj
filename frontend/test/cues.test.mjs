@@ -10,7 +10,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  fmtTiempo, parseTiempo, beatSegundos, pasoBeat, pctDe, tiempoDeX, padLibre, hotCue,
+  fmtTiempo, parseTiempo, beatSegundos, pasoBeat, pctDe, tiempoDeX, padLibre, marcaDelPad,
+  claseMarca, textoMarca, nombreMarca,
   errorLoop, beatsDeLoop, escribiendo, atajo, marcasRegla, fmtRegla, activable, tramoOnda,
   avisoDuracion,
 } from '../src/cues.js'
@@ -65,13 +66,34 @@ test('posiciones en la onda', () => {
   assert.equal(tiempoDeX(1200, 1000, 240), 240)
 })
 
-test('pad libre y hot cue de un pad', () => {
+test('pad libre y la marca de un pad', () => {
   const m = (tipo, num, inicio = 1) => ({ tipo, num, inicio })
   assert.equal(padLibre([]), 0)
   assert.equal(padLibre([m('cue', 0), m('cue', 1), m('cue', 3), m('memory', null)]), 2)
   assert.equal(padLibre([0, 1, 2, 3, 4, 5, 6, 7].map((n) => m('cue', n))), null)
-  assert.deepEqual(hotCue([m('memory', null, 5), m('cue', 2, 9)], 2), m('cue', 2, 9))
-  assert.equal(hotCue([m('cue', 2)], 3), null)
+  assert.deepEqual(marcaDelPad([m('memory', null, 5), m('cue', 2, 9)], 2), m('cue', 2, 9))
+  assert.equal(marcaDelPad([m('cue', 2)], 3), null)
+})
+
+test('un loop en un pad (hot loop, f51) ocupa ese pad; uno sin pad no ocupa ninguno', () => {
+  const m = (tipo, num, inicio = 1, fin = undefined) => ({ tipo, num, inicio, fin })
+  // El pad 2 (num 1) lo tiene un loop: el primer libre es el 3 (num 2), no el del loop.
+  assert.equal(padLibre([m('cue', 0), m('loop', 1, 4, 8), m('loop', null, 9, 12)]), 2)
+  assert.equal(padLibre([0, 1, 2, 3].map((n) => m('cue', n)).concat([4, 5, 6, 7].map((n) => m('loop', n, n, n + 1)))), null)
+  assert.deepEqual(marcaDelPad([m('loop', null, 9, 12), m('loop', 1, 4, 8)], 1), m('loop', 1, 4, 8))
+  assert.equal(marcaDelPad([m('loop', null, 9, 12)], 0), null, 'un loop sin pad no es la marca del pad 1')
+})
+
+test('color, etiqueta y nombre de cada marca: el loop siempre naranja, con su pad escrito', () => {
+  const m = (tipo, num, inicio = 64, fin = 71.5) => ({ tipo, num, inicio, fin })
+  assert.deepEqual([m('cue', 0), m('cue', 7), m('memory', null), m('loop', null), m('loop', 2)].map(claseMarca),
+    ['cue-c1', 'cue-c8', 'cue-mem', 'cue-loop', 'cue-loop'])
+  assert.deepEqual([m('cue', 0), m('cue', 7), m('memory', null), m('loop', null), m('loop', 2)].map(textoMarca),
+    ['1', '8', 'M', 'L', 'L3'])
+  assert.equal(nombreMarca(m('loop', 2)), 'loop del pad 3 1:04.000 a 1:11.500')
+  assert.equal(nombreMarca(m('loop', null)), 'loop 1:04.000 a 1:11.500')
+  assert.equal(nombreMarca(m('cue', 4)), 'hot cue 5')
+  assert.equal(nombreMarca(m('memory', null, 3.5)), 'memory cue en 0:03.500')
 })
 
 test('un loop se cierra solo hacia adelante y dentro del tema', () => {

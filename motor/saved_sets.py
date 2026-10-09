@@ -70,8 +70,8 @@ class StepSnapshot:
     title_shown: str               # `title` o, sin tag, el nombre del archivo: lo que muestra la API
     duration: float
     is_track: bool                 # `modelos.es_track` en el momento de guardar
-    license: str                   # obligatorios en cualquier modelo de track (spec §5)
-    source_url: str
+    license: str                   # lo declarado o "no declarado" (modelos.NO_DECLARADO), como
+    source_url: str                # en `Track`: nunca vacío ni inventado
     bpm: float
     bpm_shown: str                 # "128.4": UN decimal, como la CLI y la API
     key: str                       # Camelot
