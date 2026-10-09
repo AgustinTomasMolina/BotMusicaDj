@@ -184,11 +184,13 @@ def _desde_cache(guardado: object, firma: dict, bins: int) -> Peaks | None:
     return Peaks(np.asarray(picos, dtype=np.float64), float(dur), sr, ch)
 
 
-def _podar(cache_dir: Path, tope: int) -> None:
-    """Si hay más de `tope` archivos, borra los de mtime más viejo hasta quedar en el 90 %.
-    Nunca falla hacia afuera: es limpieza, no puede tirar abajo un pedido."""
+def _podar(cache_dir: Path, tope: int, patron: str = "*.json") -> None:
+    """Si hay más de `tope` archivos `patron`, borra los de mtime más viejo hasta quedar en el
+    90 %. Nunca falla hacia afuera: es limpieza, no puede tirar abajo un pedido. `patron` deja
+    que las bandas de f52 (`motor/bandas.py`) poden lo suyo en la misma carpeta sin tocar los
+    picos, y al revés."""
     try:
-        archivos = [(p.stat().st_mtime_ns, p) for p in cache_dir.glob("*.json")]
+        archivos = [(p.stat().st_mtime_ns, p) for p in cache_dir.glob(patron)]
         if len(archivos) <= tope:
             return
         archivos.sort()

@@ -3198,6 +3198,138 @@ async def radio_onda(track_id: str):
             "canales": picos.channels, "cache": de_cache}
 
 
+# --- Onda de 3 bandas para el editor grande (f52, `motor/bandas.py`) -----------------------
+#
+#   GET /api/radio/tracks/{id}/onda3?desde=<s>&hasta=<s>&puntos=<n>
+#
+# Graves, medios y agudos del audio REAL a 100 cuadros por segundo (cacheados junto a los
+# picos, en `<MUSIFLIX_DATA_DIR>/peaks`), del tramo [desde, hasta] reducido por MÁXIMO a
+# `puntos` por banda (un kick no desaparece al achicar), y la grilla de beats ESTIMADA cuando
+# el track tiene BPM medido en la base. Sin `desde`/`hasta`: el tema entero.
+#
+# Mismo id opaco y mismos errores que /onda: 404 track o archivo que no está (también un id
+# con forma imposible), 422 audio que no decodifica, 409 sin base utilizable (de la base sale
+# el BPM de la grilla). Además 400 con el motivo si el tramo o `puntos` no sirven: un rango
+# afuera del audio NO se recorta en silencio. Nunca 500.
+
+_ONDA3_PUNTOS_MAX = 4000
+_ONDA3_PUNTOS_DEFECTO = 1000
+# `hasta` puede ser la duración que mostró /onda, redondeada a ms (hasta 0,5 ms de más).
+_ONDA3_TOLERANCIA_S = 0.001
+_RE_ONDA3_PUNTOS = re.compile(r"[0-9]{1,6}")
+# 0..255 → 0..1 con 3 decimales (alcanzan: el paso es 0,0039), calculado una vez.
+_ONDA3_VALOR = [round(i / 255, 3) for i in range(256)]
+
+
+def _onda3_segundos(nombre: str, texto: str | None) -> tuple[float | None, str | None]:
+    """`(segundos, None)`, `(None, None)` si no vino, o `(None, motivo)` si no sirve."""
+    if texto is None:
+        return None, None
+    try:
+        v = float(texto)
+    except ValueError:
+        return None, f"`{nombre}` tiene que ser un número de segundos; llegó {texto[:40]!r}"
+    if not math.isfinite(v):
+        return None, f"`{nombre}` tiene que ser un número finito; llegó {texto[:40]!r}"
+    return v, None
+
+
+def _onda3_parametros(desde: str | None, hasta: str | None,
+                      puntos: str | None) -> tuple[tuple | None, str | None]:
+    """Lo que se puede validar sin abrir el audio: la forma de los tres parámetros."""
+    d, motivo = _onda3_segundos("desde", desde)
+    if motivo is None:
+        h, motivo = _onda3_segundos("hasta", hasta)
+    if motivo is not None:
+        return None, motivo
+    if puntos is None:
+        n = _ONDA3_PUNTOS_DEFECTO
+    elif _RE_ONDA3_PUNTOS.fullmatch(puntos) and 1 <= int(puntos) <= _ONDA3_PUNTOS_MAX:
+        n = int(puntos)
+    else:
+        return None, (f"`puntos` tiene que ser un entero de 1 a {_ONDA3_PUNTOS_MAX}; llegó "
+                      f"{puntos[:40]!r}")
+    if d is not None and d < 0:
+        return None, f"`desde` no puede ser negativo; llegó {d:g}"
+    if h is not None and h <= 0:
+        return None, f"`hasta` tiene que ser mayor que 0; llegó {h:g}"
+    if d is not None and h is not None and d >= h:
+        return None, f"`desde` ({d:g} s) tiene que ser menor que `hasta` ({h:g} s)"
+    return (d, h, n), None
+
+
+def _onda3_rango(d: float | None, h: float | None, dur: float) -> tuple[tuple | None, str | None]:
+    """El tramo contra la duración REAL del audio decodificado (la que dibuja la onda)."""
+    d = 0.0 if d is None else d
+    if h is not None and h > dur + _ONDA3_TOLERANCIA_S:
+        return None, f"`hasta` ({h:g} s) está después del final del audio ({dur:.3f} s)"
+    h = dur if h is None else min(h, dur)
+    if d >= h:
+        return None, (f"`desde` ({d:g} s) está en o después del final del audio ({dur:.3f} s)"
+                      if d >= dur else f"`desde` ({d:g} s) tiene que ser menor que `hasta` "
+                                       f"({h:g} s)")
+    return (d, h), None
+
+
+@app.get("/api/radio/tracks/{track_id}/onda3")
+async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None = None,
+                      puntos: str | None = None):
+    """Las 3 bandas del audio real (`motor.bandas`) en el tramo pedido, y la grilla estimada.
+
+    `bandas` trae `puntos` valores por banda en 0..1, RELATIVOS dentro del track (lo dice
+    `normalizacion`). Si el tramo tiene menos cuadros de 10 ms que los puntos pedidos, vienen
+    los cuadros tal cual y `puntos` dice cuántos: no se inventa resolución. `desde`/`hasta` de
+    la respuesta son los bordes REALES de lo que se devolvió (los de los cuadros de 10 ms que
+    cubren el pedido). `grilla` es None si el track no tiene BPM medido."""
+    params, motivo = _onda3_parametros(desde, hasta, puntos)
+    if motivo is not None:
+        return JSONResponse({"error": motivo}, status_code=400)
+    d, h, n = params
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    t, estado, motivo = await asyncio.to_thread(_usar_store_motor, lambda store: store.get(ruta))
+    if estado != _RADIO_OK:
+        return _sets_sin_base(estado, motivo)
+    if t is None:
+        # Estaba en el índice pero ya no en la base (un scan entre medio).
+        return JSONResponse({"error": "track no encontrado en la biblioteca del motor"},
+                            status_code=404)
+    from motor.bandas import (BANDAS, TASA_HZ, UnreadableAudio, cached_bandas, grilla,
+                              normalizacion, tramo)
+
+    try:
+        b, de_cache = await asyncio.to_thread(cached_bandas, ruta, Path(db.DATA_DIR) / "peaks")
+    except FileNotFoundError:
+        return JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
+                                      f"base lo tiene en {ruta}. Se movió, o la base se escaneó "
+                                      f"en otro sistema."}, status_code=404)
+    except UnreadableAudio as e:
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: {e}"},
+                            status_code=422)
+    except OSError as e:
+        return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
+                            status_code=409)
+    except (RuntimeError, ValueError, ArithmeticError) as e:
+        # Cinturón, como en /onda: un decodificador que falla de una forma no prevista.
+        logger.warning(f"⚠️ Onda3: {type(e).__name__} leyendo {ruta}: {e}")
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda "
+                                      f"({type(e).__name__})"}, status_code=422)
+    rango, motivo = _onda3_rango(d, h, b.duration_s)
+    if motivo is not None:
+        return JSONResponse({"error": motivo}, status_code=400)
+    d0, h0, q = tramo(b, rango[0], rango[1], n)
+    bpm = _num(t.bpm)
+    # BPM 0.0 = el análisis no encontró pulso: no es una medición y no hay grilla que estimar.
+    g = await asyncio.to_thread(grilla, b, bpm) if bpm is not None and bpm > 0 else None
+    return {"desde": round(d0, 3), "hasta": round(h0, 3),
+            "duracion_audio": round(b.duration_s, 3), "puntos": int(q.shape[1]),
+            "tasa_hz": TASA_HZ, "normalizacion": normalizacion(b),
+            "bandas": {nombre: [_ONDA3_VALOR[v] for v in q[i].tolist()]
+                       for i, nombre in enumerate(BANDAS)},
+            "grilla": g, "cache": de_cache}
+
+
 @app.get("/api/historial")
 async def historial(limite: int = 20):
     """Historial persistido: búsquedas, playlists (modo lista) y descargas."""
