@@ -84,3 +84,26 @@ def test_el_ancla_gana_sobre_el_homonimo(tmp_path):
     r = resolver("C:/x/Escritorio/GROOOOVE/track.wav", [str(tmp_path)],
                  construir_indice([str(tmp_path)]))
     assert r.estado == OK and r.ruta == str(exacto)
+
+
+def test_un_location_que_es_una_carpeta_no_es_un_audio(tmp_path):
+    """Auditoría f53: `exists` aceptaba una CARPETA como el archivo del tema."""
+    raiz = tmp_path / "musica"
+    carpeta = raiz / "Techno" / "parece.wav"      # una carpeta con nombre de audio
+    carpeta.mkdir(parents=True)
+    r = resolver(str(carpeta), [str(raiz)], confinar=True)
+    assert r.estado != OK and r.ruta is None, f"una carpeta resolvió como audio: {r}"
+    # Por el ancla tampoco: <ancla>/Techno/parece.wav cuelga de la raíz y es una carpeta.
+    r = resolver("C:/Users/x/Escritorio/Techno/parece.wav", [str(raiz)])
+    assert r.estado != OK, f"por el ancla, una carpeta resolvió como audio: {r}"
+
+
+def test_por_cola_no_sigue_dos_puntos(tmp_path):
+    """Auditoría f53 (por separado de `confinar`): una cola con '..' saldría de la raíz."""
+    from ground_truth.resolver import _por_cola
+    afuera = _tocar(tmp_path / "secreto" / "a.wav")
+    raiz = tmp_path / "musica"
+    raiz.mkdir()
+    assert _por_cola("C:/x/../secreto/a.wav", [str(raiz)]) == [], "la cola con '..' salió de la raíz"
+    # La misma cola sin '..' sí se encuentra (el archivo existe y la función anda).
+    assert _por_cola("C:/otra/secreto/a.wav", [str(tmp_path)]) == [str(afuera)]

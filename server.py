@@ -3252,7 +3252,9 @@ async def playlists_activa():
 
 
 @app.post("/api/playlists")
-async def playlists_crear(payload: dict):
+async def playlists_crear(payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     nombre = (payload.get("nombre") or "").strip() or "Nueva playlist"
     p = await asyncio.to_thread(db.crear_playlist, nombre)
     return {"exito": bool(p), "playlist": p}
@@ -3273,7 +3275,9 @@ async def playlists_get(pid: int):
 
 
 @app.patch("/api/playlists/{pid}")
-async def playlists_editar(pid: int, payload: dict):
+async def playlists_editar(pid: int, payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     if "nombre" in payload:
         await asyncio.to_thread(db.renombrar_playlist, pid, payload.get("nombre") or "")
     if payload.get("activar"):
@@ -3282,12 +3286,14 @@ async def playlists_editar(pid: int, payload: dict):
 
 
 @app.delete("/api/playlists/{pid}")
-async def playlists_borrar(pid: int):
+async def playlists_borrar(pid: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.borrar_playlist_mia, pid)}
 
 
 @app.post("/api/playlists/{pid}/items")
-async def playlists_agregar_item(pid: int, payload: dict):
+async def playlists_agregar_item(pid: int, payload: dict, request: Request):
     """Agrega un tema a la playlist.
 
     f53 (tomado de f33): un tema de la biblioteca local (la home) llega con `fuente:
@@ -3297,6 +3303,8 @@ async def playlists_agregar_item(pid: int, payload: dict):
     `formato`) que venga en el cuerpo se IGNORA: este endpoint no tiene CORS y cualquier página
     abierta en el navegador puede pegarle; una ruta suya haría que el motor lea cualquier
     archivo de la PC. `con_archivo` dice si el item quedó con archivo local."""
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     track = payload.get("track") or payload
     if not isinstance(track, dict):
         return JSONResponse({"exito": False, "mensaje": "El tema tiene que ser un objeto."},
@@ -3317,7 +3325,9 @@ async def playlists_agregar_item(pid: int, payload: dict):
 
 
 @app.delete("/api/playlists/{pid}/items/{item_id}")
-async def playlists_quitar_item(pid: int, item_id: int):
+async def playlists_quitar_item(pid: int, item_id: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.quitar_item, item_id)}
 
 
@@ -3551,6 +3561,16 @@ def _origen_ajeno(request: Request) -> str | None:
     return None
 
 
+def _guarda_ajeno(request: Request) -> JSONResponse | None:
+    """403 si el pedido viene de otra página (ver `_origen_ajeno`); None si es de la app. Para
+    los endpoints que escriben y ya leen su cuerpo con FastAPI (las playlists propias, f53)."""
+    ajeno = _origen_ajeno(request)
+    if not ajeno:
+        return None
+    logger.warning(f"🛡️ Rechazado un pedido de otra página ({ajeno}) a {request.url.path}")
+    return JSONResponse(_RECHAZO_AJENO, status_code=403)
+
+
 async def _cuerpo_json_propio(request: Request) -> tuple[dict | None, JSONResponse | None]:
     """El cuerpo JSON de un pedido de la propia app, o la respuesta de rechazo (403/415/400)."""
     ajeno = _origen_ajeno(request)
@@ -3625,12 +3645,16 @@ async def playlists_descargar_item(pid: int, item_id: int, request: Request):
 
 
 @app.post("/api/playlists/{pid}/orden")
-async def playlists_reordenar(pid: int, payload: dict):
+async def playlists_reordenar(pid: int, payload: dict, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     return {"exito": await asyncio.to_thread(db.reordenar, pid, payload.get("orden") or [])}
 
 
 @app.post("/api/playlists/{pid}/export")
-async def playlists_export(pid: int):
+async def playlists_export(pid: int, request: Request):
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     recibo = await asyncio.to_thread(db.armar_m3u8, pid)
     if not recibo:
         return JSONResponse({"exito": False, "mensaje": "No pude exportar la playlist."}, status_code=502)
@@ -4017,8 +4041,19 @@ async def importar_rekordbox_leer(request: Request):
                             status_code=400)
 
 
+# Buscar-y-crear tiene que ser atómico: dos pedidos a la vez (doble clic, dos pestañas) creaban
+# la misma playlist dos veces. Un solo lock alcanza: importar es raro y corre en un hilo.
+_LOCK_IMPORTAR = threading.Lock()
+
+
 def _importar_o_actualizar(origen: str, ref: str, nombre: str, archivo: str | None,
                            temas: list[dict], actualizar: bool) -> dict:
+    with _LOCK_IMPORTAR:
+        return _importar_o_actualizar_sin_lock(origen, ref, nombre, archivo, temas, actualizar)
+
+
+def _importar_o_actualizar_sin_lock(origen: str, ref: str, nombre: str, archivo: str | None,
+                                    temas: list[dict], actualizar: bool) -> dict:
     previa = db.buscar_importada(origen, ref)
     if previa and not actualizar:
         return {"estado": "ya-importada", "id": previa["id"], "nombre": previa["nombre"]}

@@ -481,3 +481,156 @@ def test_home_lib_id_resuelve_el_archivo_en_el_server(client, entorno, server, m
         "ruta": str(secreto)}}).json()
     assert r["con_archivo"] is False
     assert server.db.get_item(pid, r["id"])["ruta"] is None
+
+
+# --- auditoría f53 --------------------------------------------------------------------------------
+
+def test_xml_sin_content_length_igual_tiene_tope(client, entorno, monkeypatch):
+    """El tope se corta leyendo por trozos: un cuerpo chunked (sin Content-Length) no pasa."""
+    import playlist_import
+    monkeypatch.setattr(playlist_import, "XML_MAX_BYTES", 1000)
+    cuerpo = entorno["xml"].encode("utf-8")
+    assert len(cuerpo) > 1000
+
+    def trozos():
+        for i in range(0, len(cuerpo), 200):
+            yield cuerpo[i:i + 200]
+    r = client.post("/api/importar/rekordbox/leer", content=trozos(), headers=XML)
+    assert "content-length" not in {k.lower() for k in r.request.headers}, "el pedido tenía Content-Length"
+    assert r.status_code == 413 and "MB" in r.json()["mensaje"], r.text
+
+
+def test_leer_cuerpo_xml_corta_en_cuanto_se_pasa(server, monkeypatch):
+    """Sin Content-Length, `_leer_cuerpo_xml` deja de leer apenas pasa el tope (no junta un
+    cuerpo enorme en memoria para rechazarlo después): de 100 trozos de 300 bytes con tope
+    1000, lee 4 y corta con 413."""
+    import asyncio
+
+    import playlist_import
+    monkeypatch.setattr(playlist_import, "XML_MAX_BYTES", 1000)
+    leidos = []
+
+    class Pedido:
+        headers = {}
+
+        async def stream(self):
+            for i in range(100):
+                leidos.append(i)
+                yield b"x" * 300
+
+    with pytest.raises(playlist_import.Rechazo) as e:
+        asyncio.run(server._leer_cuerpo_xml(Pedido()))
+    assert e.value.status == 413
+    assert len(leidos) == 4, f"leyó {len(leidos)} trozos: no cortó al pasarse del tope"
+
+
+def test_dos_importaciones_a_la_vez_no_duplican(client, entorno, server, monkeypatch):
+    """Buscar-y-crear es atómico: con los dos pedidos parados adentro de `buscar_importada`
+    (sin lock los dos ven "no está" y crean), queda UNA playlist."""
+    import threading
+    barrera = threading.Barrier(2)
+    real = server.db.buscar_importada
+
+    def lenta(*a, **k):
+        try:
+            barrera.wait(timeout=1.5)    # con lock el segundo nunca llega: se rompe y sigue
+        except threading.BrokenBarrierError:
+            pass
+        return real(*a, **k)
+    monkeypatch.setattr(server.db, "buscar_importada", lenta)
+    res = [None, None]
+
+    def importar(i):
+        res[i] = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": "Techno"}).json()
+    hilos = [threading.Thread(target=importar, args=(i,)) for i in range(2)]
+    for h in hilos:
+        h.start()
+    for h in hilos:
+        h.join(30)
+    assert sorted(r["estado"] for r in res) == ["creada", "ya-importada"], res
+    assert res[0]["id"] == res[1]["id"]
+    assert sum(1 for p in server.db.listar_playlists() if p["origen"] == "carpeta") == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="variantes de nombre que solo Windows abre como la misma carpeta")
+def test_carpeta_con_otra_forma_del_nombre_es_la_misma(client, entorno, server):
+    """El `origen_ref` sale del nombre EN DISCO: techno, TECHNO, 'Techno ' y 'Techno.' son Techno."""
+    d = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": "Techno"}).json()
+    assert (d["estado"], d["ruta"]) == ("creada", "musica/Techno")
+    for variante in ("techno", "TECHNO", "Techno ", "Techno."):
+        r = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": variante})
+        assert r.status_code == 200, r.text
+        assert (r.json()["estado"], r.json()["id"]) == ("ya-importada", d["id"]), variante
+    assert sum(1 for p in server.db.listar_playlists() if p["origen"] == "carpeta") == 1
+    lista = client.get("/api/importar/carpetas", params={"raiz": 0, "ruta": "techno"}).json()
+    assert (lista["ruta"], lista["nombre"]) == ("Techno", "Techno")
+
+
+_ESCRITURAS_PROPIAS = [
+    ("POST", "/api/playlists", {"nombre": "de otra página"}),
+    ("PATCH", "/api/playlists/{pid}", {"nombre": "pisado"}),
+    ("DELETE", "/api/playlists/{pid}", None),
+    ("POST", "/api/playlists/{pid}/items", {"track": {"titulo": "Intruso", "artista": "X"}}),
+    ("DELETE", "/api/playlists/{pid}/items/{iid}", None),
+    ("POST", "/api/playlists/{pid}/orden", {"orden": []}),
+    ("POST", "/api/playlists/{pid}/export", None),
+]
+
+
+@pytest.mark.parametrize(("metodo", "ruta", "cuerpo"), _ESCRITURAS_PROPIAS)
+@pytest.mark.parametrize("ajeno", [{"Origin": "https://malo.example"}, {"Sec-Fetch-Site": "cross-site"}])
+def test_mis_playlists_rechazan_otra_pagina(client, entorno, server, metodo, ruta, cuerpo, ajeno):
+    pid = client.post("/api/playlists", json={"nombre": "Mía"}).json()["playlist"]["id"]
+    iid = client.post(f"/api/playlists/{pid}/items",
+                      json={"track": {"titulo": "Uno", "artista": "A"}}).json()["id"]
+    antes = server.db.get_playlist_mia(pid)
+    n_antes = len(server.db.listar_playlists())
+    r = client.request(metodo, ruta.format(pid=pid, iid=iid), json=cuerpo, headers=ajeno)
+    assert r.status_code == 403 and "MusiFlix" in r.json()["mensaje"], r.text
+    assert server.db.get_playlist_mia(pid) == antes, "la playlist cambió con un pedido de otra página"
+    assert len(server.db.listar_playlists()) == n_antes
+    # Y desde la propia app sí anda (la guarda no rechaza todo).
+    propio = client.request(metodo, ruta.format(pid=pid, iid=iid), json=cuerpo,
+                            headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
+    assert propio.status_code != 403, propio.text
+
+
+def test_db_agregar_item_ignora_la_ruta_del_track(entorno, server, tmp_path):
+    """A nivel `db` (no solo el endpoint): `track["ruta"]` nunca llega al item."""
+    secreto = tmp_path / "secreto.wav"
+    secreto.write_bytes(b"x")
+    pid = server.db.crear_playlist("Directo")["id"]
+    r = server.db.agregar_item(pid, {"titulo": "T", "artista": "A", "ruta": str(secreto),
+                                     "archivo": "secreto.wav", "formato": "exe"})
+    it = server.db.get_playlist_mia(pid, True)["items"][0]
+    assert (it["ruta"], it.get("nombre_archivo"), it.get("formato"), it["archivo_estado"]) ==         (None, None, None, "sin-archivo"), it
+
+
+def test_db_item_viejo_sin_fuente_se_completa_y_no_se_duplica(entorno, server, tmp_path):
+    """La home vieja guardaba el tema con fuente "": agregarlo de nuevo como "biblioteca"
+    con su archivo completa ESE item."""
+    audio = tmp_path / "uno.wav"
+    audio.write_bytes(b"x")
+    pid = server.db.crear_playlist("Home vieja")["id"]
+    viejo = server.db.agregar_item(pid, {"titulo": "Uno", "artista": "Artista A"})
+    r = server.db.agregar_item(pid, {"titulo": "Uno", "artista": "Artista A", "fuente": "biblioteca"},
+                               str(audio))
+    assert (r["dup"], r["id"], r["archivo_completado"]) == (True, viejo["id"], True), r
+    items = server.db.get_playlist_mia(pid, True)["items"]
+    assert len(items) == 1 and os.path.samefile(items[0]["ruta"], audio)
+    assert items[0]["fuente"] == "biblioteca"
+
+
+def test_bpm_con_decimal_no_se_redondea_a_entero(client, entorno, server):
+    """El BPM del motor va con UN decimal: con un clic generado a 127.5 BPM (no entero) un
+    `round(bpm)` daría un entero y se notaría."""
+    _click(entorno["raiz"] / "Medio" / "medio.wav", 127.5, seed=4)
+    pid = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": "Medio"}).json()["id"]
+    assert client.post(f"/api/playlists/{pid}/analizar", json={}).status_code == 200
+    assert entorno["an"].esperar(120)
+    a = _playlist(client, pid)["items"][0]["analisis"]
+    with Store(entorno["db"]) as store:
+        medido = store.get_features(os.path.abspath(entorno["raiz"] / "Medio" / "medio.wav")).bpm
+    assert abs(medido - 127.5) <= 1.0, f"el motor midió {medido} y el generador hizo 127.5"
+    assert abs(round(medido, 1) - round(medido)) >= 0.1, f"{medido} queda pegado a un entero: el test no distingue"
+    assert a["bpm"] == round(medido, 1), f"la API dice {a['bpm']} y el motor midió {medido}"

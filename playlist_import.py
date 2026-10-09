@@ -341,7 +341,10 @@ def carpeta_segura(raices: list[str], raiz_id, ruta) -> tuple[Path, Path, list[s
         raise Rechazo(400, "Esa carpeta está fuera de tus carpetas de música.")
     if not real.is_dir():
         raise Rechazo(404, "No encuentro esa carpeta.")
-    return real, base, partes
+    # Las partes como están EN DISCO, no como las escribió el cliente: en Windows 'techno',
+    # 'Techno ' y 'Techno.' abren la misma carpeta 'Techno', y con las partes del cliente cada
+    # una sería otra playlist importada (`origen_ref`). Auditoría f53.
+    return real, base, list(real.relative_to(base).parts)
 
 
 def _orden_natural(nombre: str) -> list:

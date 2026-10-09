@@ -143,14 +143,15 @@ def resolver(location: str, raices: list[str],
         return not confinar or dentro_de(ruta, raices)
 
     # 1 y 2 son inequívocos: apuntan a UNA ruta concreta que existe.
-    if os.path.exists(location) and vale(location):
+    # isfile y no exists: un Location que es una CARPETA no es un audio (auditoría f53).
+    if os.path.isfile(location) and vale(location):
         return Resolucion(location, OK)
 
     cola = _cola_desde_ancla(location, ancla) if ancla else None
     if cola:
         for raiz in raices:
             cand = os.path.join(raiz, cola.replace("/", os.sep))
-            if os.path.exists(cand) and vale(cand):
+            if os.path.isfile(cand) and vale(cand):
                 return Resolucion(cand, OK)
 
     if por_cola:

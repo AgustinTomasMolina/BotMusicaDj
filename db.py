@@ -550,6 +550,13 @@ def agregar_item(pid: int, track: dict, ruta_local: str | None = None) -> dict |
                     return {"ok": True, "dup": True, "id": mismo.id, "archivo_completado": False}
                 if previo is not None and previo.ruta:
                     previo = None       # mismo nombre, OTRO archivo: es otro item
+            if previo is None and ruta_local and snap["fuente"]:
+                # Un item viejo de la home se guardaba SIN fuente (""): el mismo tema que
+                # llega ahora como "biblioteca" con su archivo lo completa, no se duplica.
+                viejo = _buscar_item(s, pid, _ident("", snap["url"], snap["titulo"], snap["artista"]))
+                if viejo is not None and not viejo.ruta:
+                    previo = viejo
+                    previo.fuente = snap["fuente"]
             if previo:   # dedupe
                 completado = bool(ruta_local) and not previo.ruta
                 if completado:
