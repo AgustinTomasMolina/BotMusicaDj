@@ -183,7 +183,7 @@ def filtros(sr: int):
     from scipy.signal import butter
 
     nyq = sr / 2
-    if CORTE_AGUDOS_HZ >= nyq:
+    if nyq <= CORTE_AGUDOS_HZ:
         # Un archivo a 4 kHz de muestreo no tiene agudos que mostrar: se dice que no se puede.
         raise UnreadableAudio(f"la frecuencia de muestreo ({sr} Hz) es muy baja para separar "
                               f"los agudos (>{CORTE_AGUDOS_HZ:g} Hz)")

@@ -3295,8 +3295,15 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
         # Estaba en el índice pero ya no en la base (un scan entre medio).
         return JSONResponse({"error": "track no encontrado en la biblioteca del motor"},
                             status_code=404)
-    from motor.bandas import (BANDAS, TASA_HZ, UnreadableAudio, cached_bandas, grilla,
-                              normalizacion, tramo)
+    from motor.bandas import (
+        BANDAS,
+        TASA_HZ,
+        UnreadableAudio,
+        cached_bandas,
+        grilla,
+        normalizacion,
+        tramo,
+    )
 
     try:
         b, de_cache = await asyncio.to_thread(cached_bandas, ruta, Path(db.DATA_DIR) / "peaks")
