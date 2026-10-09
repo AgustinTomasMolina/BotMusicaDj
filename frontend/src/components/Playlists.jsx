@@ -14,7 +14,7 @@ import { descargas, faltantes, textoLote } from '../playlistDescarga'
 import { analizarPlaylist, progresoAnalisis, editarGeneroItem, generoALosSinGenero } from '../api'
 import {
   estadoTema, textoArchivo, datosTema, puntosMarcas, textoMarcas, resumenPlaylist, textoProgreso,
-  origenTexto, motivoDe,
+  origenTexto, motivoDe, metricaBpm,
 } from '../playlistImport'
 import CuesDialog from './CuesDialog'
 
@@ -324,6 +324,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   }
 
   const m = crate?.metrics
+  const mb = metricaBpm(m)
   const maxKey = m ? Math.max(1, ...m.keys) : 1
   // Lo que falta y se puede bajar acá; los "sin link" (archivos de la biblioteca) no cuentan.
   const nFaltan = crate ? faltantes(crate.items).length : 0
@@ -355,7 +356,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
               <span style={{ minWidth: 0, flex: 1 }}>
                 {/* La activa se marcaba solo con un punto de color: el texto oculto lo dice. */}
                 <span className="crate-name">{p.nombre}{p.activa && <span className="sr-only"> (activa)</span>}</span>
-                <span className="crate-sub"><span className={`pl-origen o-${p.origen || 'musiflix'}`}>{origenTexto(p.origen)}</span> · {p.total} tema{p.total === 1 ? '' : 's'} · {fmtLong(p.duracion)}{p.bpm_prom ? ` · ${p.bpm_prom} BPM` : ''}</span>
+                <span className="crate-sub"><span className={`pl-origen o-${p.origen || 'musiflix'}`}>{origenTexto(p.origen)}</span> · {p.total} tema{p.total === 1 ? '' : 's'} · {fmtLong(p.duracion)}{p.bpm_prom != null ? ` · ${metricaBpm(p).promedio} BPM (${metricaBpm(p).fuente})` : ''}</span>
               </span>
             </button>
           ))}
@@ -477,8 +478,13 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 <div className="metrics">
                   <div className="metric"><b>{m.total}</b><span>Temas</span></div>
                   <div className="metric"><b>{fmtLong(m.duracion)}</b><span>Duración</span></div>
-                  {m.bpm_prom && <div className="metric"><b>{m.bpm_prom}</b><span>BPM promedio</span></div>}
-                  {m.bpm_min && <div className="metric"><b>{m.bpm_min}–{m.bpm_max}</b><span>Rango BPM</span></div>}
+                  {/* BPM sin mezclar fuentes (server: db.metricas_bpm), con un decimal y su fuente. */}
+                  {mb.promedio !== null
+                    ? <>
+                      <div className="metric metric-bpm"><b>{mb.promedio}</b><span>BPM promedio · {mb.fuente}</span></div>
+                      <div className="metric metric-bpm"><b>{mb.rango}</b><span>Rango BPM · {mb.fuente}</span></div>
+                    </>
+                    : <div className="metric metric-bpm"><b>sin medir</b><span>BPM</span></div>}
                   {m.peak && (
                     <div className="metric" style={{ gap: 6 }}>
                       <span className="keyspread" role="img" aria-label="Distribución de keys">

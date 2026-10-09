@@ -78,7 +78,7 @@ test('resumenPlaylist: un BPM de la búsqueda (YouTube/SoundCloud) NO se rotula 
   const otros = [99, 172].map((bpm) => tema({ analisis: { bpm, dato: 'otro' } }))
   const r = m.resumenPlaylist(otros)
   assert.equal(r.bpm, '99.0–172.0')
-  assert.equal(r.bpmFuente, 'sin medir: de la búsqueda')
+  assert.equal(r.bpmFuente, 'sin medir')
   assert.ok(!/Rekordbox/.test(r.bpmFuente), `rotula Rekordbox lo que no es de Rekordbox: ${r.bpmFuente}`)
   // Mezcla Rekordbox + búsqueda: el rango es el de Rekordbox y se dice cuántos quedan afuera.
   const mezcla = m.resumenPlaylist([...otros, tema({ analisis: { bpm: 126, dato: 'rekordbox' } })])
@@ -107,4 +107,14 @@ test('origenTexto y motivoDe', () => {
   assert.deepEqual(['rekordbox', 'carpeta', 'musiflix', undefined].map(m.origenTexto), ['Rekordbox', 'Carpeta', 'MusiFlix', 'MusiFlix'])
   assert.equal(m.motivoDe({ status: 400, data: { mensaje: 'XML roto' } }), 'XML roto')
   assert.equal(m.motivoDe({ status: 500, data: { error_texto: 'Internal' } }), 'El servidor falló (HTTP 500).')
+})
+
+test('metricaBpm: un decimal, de dónde sale y «sin medir» sin número', () => {
+  assert.deepEqual(m.metricaBpm({ bpm_prom: 129, bpm_min: 127.9, bpm_max: 130.2, bpm_fuente: 'otro', bpm_afuera: 0 }),
+    { promedio: '129.0', rango: '127.9–130.2', fuente: 'sin medir' })
+  assert.deepEqual(m.metricaBpm({ bpm_prom: 126.4, bpm_min: 126.4, bpm_max: 126.4, bpm_fuente: 'rekordbox', bpm_afuera: 2 }),
+    { promedio: '126.4', rango: '126.4', fuente: 'de Rekordbox · 2 de otra fuente afuera' })
+  assert.equal(m.metricaBpm({ bpm_prom: 128.04, bpm_min: 128.04, bpm_max: 128.04, bpm_fuente: 'motor', bpm_afuera: 0 }).fuente, 'medido por el motor')
+  assert.deepEqual(m.metricaBpm({ bpm_prom: null, bpm_min: null, bpm_max: null, bpm_fuente: null }),
+    { promedio: null, rango: null, fuente: 'sin medir' })
 })

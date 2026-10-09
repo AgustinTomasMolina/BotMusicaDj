@@ -82,7 +82,8 @@ const durTotal = (s) => {
 const FUENTES_BPM = [
   { dato: 'motor', rotulo: (n, afuera) => (afuera ? `${n} medido${n === 1 ? '' : 's'} por el motor` : null) },
   { dato: 'rekordbox', rotulo: () => 'de Rekordbox' },
-  { dato: 'otro', rotulo: () => 'sin medir: de la búsqueda' },
+  // "otro": la búsqueda o los tags de una carpeta. No se nombra un origen que no se sabe.
+  { dato: 'otro', rotulo: () => 'sin medir' },
 ]
 function rangoBpm(items) {
   const con = items.map((it) => ({ bpm: Number(it.analisis?.bpm), dato: it.analisis?.dato }))
@@ -143,4 +144,18 @@ export function motivoDe(r) {
   if (typeof d.error === 'string' && d.error.trim()) return d.error
   if (d.error_texto) return `El servidor falló (HTTP ${r.status}).`
   return `El servidor contestó HTTP ${r ? r.status : '?'} sin explicación.`
+}
+
+// Las métricas del crate (server: db.metricas_bpm, ya sin mezclar fuentes): el promedio y el
+// rango con UN decimal y de dónde salen. Sin ningún BPM: «sin medir», no un número.
+const FUENTE_METRICA = { motor: 'medido por el motor', rekordbox: 'de Rekordbox', otro: 'sin medir' }
+export function metricaBpm(m) {
+  if (!m || m.bpm_prom === null || m.bpm_prom === undefined) return { promedio: null, rango: null, fuente: 'sin medir' }
+  const f = (v) => Number(v).toFixed(1)
+  const afuera = m.bpm_afuera ? ` · ${m.bpm_afuera} de otra fuente afuera` : ''
+  return {
+    promedio: f(m.bpm_prom),
+    rango: m.bpm_min === m.bpm_max ? f(m.bpm_min) : `${f(m.bpm_min)}–${f(m.bpm_max)}`,
+    fuente: `${FUENTE_METRICA[m.bpm_fuente] || 'sin medir'}${afuera}`,
+  }
 }

@@ -391,12 +391,44 @@ def _camelot_num(camelot: str | None) -> int | None:
     return n if 1 <= n <= 12 else None
 
 
+# De dónde sale el BPM de un tema, de más a menos confiable (f53, auditoría): lo medido por el
+# motor (solo lo sabe el server, ver `server._analisis_items`), lo que trae Rekordbox (la home o
+# una playlist importada de Rekordbox) y "otro" (la búsqueda, los tags de una carpeta): sin medir.
+FUENTES_BPM = ("motor", "rekordbox", "otro")
+
+
+def dato_bpm(fuente) -> str:
+    """El origen del BPM guardado en un item, por su fuente (igual que `server._dato_externo`)."""
+    return "rekordbox" if (fuente or "").lower() in ("rekordbox", "biblioteca") else "otro"
+
+
+def metricas_bpm(pares) -> dict:
+    """Promedio y rango de BPM de una playlist SIN MEZCLAR FUENTES: solo con los temas de la
+    fuente más confiable que haya (`FUENTES_BPM`), con un decimal, y cuántos de otras fuentes
+    quedaron afuera. Sin ningún BPM: todo None (la pantalla dice «sin medir», no un número).
+    `pares`: [(bpm, dato)]."""
+    con = []
+    for bpm, dato in pares:
+        try:
+            v = float(bpm)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            con.append((v, dato if dato in ("motor", "rekordbox") else "otro"))
+    for fuente in FUENTES_BPM:
+        vs = [v for v, d in con if d == fuente]
+        if vs:
+            return {"bpm_prom": round(sum(vs) / len(vs), 1), "bpm_min": round(min(vs), 1),
+                    "bpm_max": round(max(vs), 1), "bpm_fuente": fuente, "bpm_n": len(vs),
+                    "bpm_afuera": len(con) - len(vs)}
+    return {"bpm_prom": None, "bpm_min": None, "bpm_max": None, "bpm_fuente": None,
+            "bpm_n": 0, "bpm_afuera": 0}
+
+
 def _metrics(items: list) -> dict:
     total = len(items)
     descargados = sum(1 for it in items if _tiene_archivo(it))
     dur = sum((it.duracion or 0) for it in items)
-    bpms = [it.bpm for it in items if it.bpm]
-    bpm_prom = round(sum(bpms) / len(bpms)) if bpms else None
     keys = [0] * 12                       # histograma por número Camelot (1..12)
     for it in items:
         n = _camelot_num(it.camelot)
@@ -407,8 +439,8 @@ def _metrics(items: list) -> dict:
     if peak is not None:
         vecinos = {peak, (peak + 1) % 12, (peak - 1) % 12}   # ±1 en la rueda + mismo
         compat = sum(1 for it in items if (_camelot_num(it.camelot) or 0) - 1 in vecinos)
-    return {"total": total, "descargados": descargados, "duracion": dur, "bpm_prom": bpm_prom,
-            "bpm_min": min(bpms) if bpms else None, "bpm_max": max(bpms) if bpms else None,
+    return {"total": total, "descargados": descargados, "duracion": dur,
+            **metricas_bpm((it.bpm, dato_bpm(it.fuente)) for it in items),
             "keys": keys, "peak": (peak + 1) if peak is not None else None, "compat_dominante": compat}
 
 

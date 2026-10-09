@@ -634,3 +634,28 @@ def test_bpm_con_decimal_no_se_redondea_a_entero(client, entorno, server):
     assert abs(medido - 127.5) <= 1.0, f"el motor midió {medido} y el generador hizo 127.5"
     assert abs(round(medido, 1) - round(medido)) >= 0.1, f"{medido} queda pegado a un entero: el test no distingue"
     assert a["bpm"] == round(medido, 1), f"la API dice {a['bpm']} y el motor midió {medido}"
+
+
+def test_metricas_de_la_playlist_usan_lo_medido_por_el_motor(client, entorno):
+    """Con un tema medido por el motor, las métricas salen SOLO de lo medido (con un decimal);
+    el BPM de Rekordbox del otro tema queda afuera y se cuenta. Antes de medir: el de Rekordbox."""
+    r = _importar(client, entorno["xml"], [0]).json()["resultados"][0]   # Peak
+    pid = r["id"]
+    antes = _playlist(client, pid)
+    m = antes["metrics"]
+    rb = [i["bpm"] for i in antes["items"] if i.get("bpm")]
+    assert (m["bpm_fuente"], m["bpm_n"]) == ("rekordbox", len(rb)), m
+    # Ácido (128.40 en el XML) se mide de verdad: un clic de 127.5 BPM en su lugar.
+    acido = entorno["rutas"]["acido"]
+    _click(acido, 127.5, seed=5)
+    assert client.post(f"/api/playlists/{pid}/analizar", json={}).status_code == 200
+    assert entorno["an"].esperar(120)
+    d = _playlist(client, pid)
+    medidos = [i["analisis"]["bpm"] for i in d["items"] if i["analisis"]["dato"] == "motor" and i["analisis"]["bpm"]]
+    assert medidos, "el motor no midió ningún tema de Peak"
+    m = d["metrics"]
+    assert (m["bpm_fuente"], m["bpm_n"]) == ("motor", len(medidos)), m
+    assert m["bpm_prom"] == round(sum(medidos) / len(medidos), 1)
+    assert (m["bpm_min"], m["bpm_max"]) == (min(medidos), max(medidos))
+    con_bpm = sum(1 for i in d["items"] if i["analisis"].get("bpm"))
+    assert m["bpm_afuera"] == con_bpm - len(medidos)

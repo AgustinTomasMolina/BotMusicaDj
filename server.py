@@ -3268,6 +3268,10 @@ async def playlists_get(pid: int):
     # f53: qué sabe el motor de cada tema (estado del análisis, BPM/key medidos, id de la
     # radio, marcas). Necesita la ruta, que `_item_publico` saca antes de responder.
     data["items"], data["motor"] = await asyncio.to_thread(_analisis_items, data.get("items") or [])
+    # Las métricas de BPM con lo que sabe el motor: si midió algún tema, el promedio y el rango
+    # salen SOLO de lo medido (db.metricas_bpm no mezcla fuentes).
+    data["metrics"] = {**(data.get("metrics") or {}), **db.metricas_bpm(
+        (it["analisis"].get("bpm"), it["analisis"].get("dato")) for it in data["items"])}
     # Cada item dice si se puede bajar desde acá y por qué no (f41): la pantalla muestra el
     # motivo que decide el server en vez de repetir el criterio.
     data["items"] = [_item_publico(it) for it in data.get("items") or []]

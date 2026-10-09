@@ -3768,6 +3768,21 @@ function casosF53() {
     }
   }))
   const dialogos = (page) => page.evaluate(() => document.querySelectorAll('[role="dialog"]').length)
+  // Las métricas de BPM del crate contra las de la API: un decimal, la fuente dicha y nunca
+  // un número sin medición. Los rótulos son el contrato (auditoría f53).
+  const FUENTE_BPM = { motor: 'medido por el motor', rekordbox: 'de Rekordbox', otro: 'sin medir' }
+  const metricasBpm = (page) => page.$$eval('.metric-bpm', (ms) => ms.map((x) => [x.querySelector('b')?.textContent ?? null, x.querySelector('span')?.textContent ?? null]))
+  const esperadasBpm = (m) => {
+    if (m.bpm_prom === null) return [['sin medir', 'BPM']]
+    const f = `${FUENTE_BPM[m.bpm_fuente]}${m.bpm_afuera ? ` · ${m.bpm_afuera} de otra fuente afuera` : ''}`
+    const r = m.bpm_min === m.bpm_max ? m.bpm_min.toFixed(1) : `${m.bpm_min.toFixed(1)}–${m.bpm_max.toFixed(1)}`
+    return [[m.bpm_prom.toFixed(1), `BPM promedio · ${f}`], [r, `Rango BPM · ${f}`]]
+  }
+  const esperarMetricas = async (page, ctx, pid, que) => {
+    const m = (await api(ctx, `/api/playlists/${pid}`)).data.metrics
+    await hasta(() => metricasBpm(page), (v) => json(v) === json(esperadasBpm(m)), `${que}: ${json(esperadasBpm(m))}`)
+    return m
+  }
 
   return [
     ['importar (f53): Rekordbox — «N de M encontrados», el porqué de los que faltan, «No encuentro el archivo» y el XML con DOCTYPE', async (page, ctx) => {
@@ -3834,6 +3849,11 @@ function casosF53() {
         await esperarAnalisisApi(ctx, pidPeak)
         const filasPeak = await esperarFilas(page, ctx, pidPeak, 'las filas de Peak no dicen lo de la API', 15000)
         const itemsPeak = await itemsApi(ctx, pidPeak)
+        const mPeak = await esperarMetricas(page, ctx, pidPeak, 'las métricas de BPM de Peak no son las de la API')
+        // Ácido lo midió el motor (o no): si hay medición, la fuente es el motor y el 140 de
+        // Rekordbox de «Repetido» queda afuera, no promediado con lo medido.
+        const medidosPeak = itemsPeak.filter((i) => i.analisis.dato === 'motor' && i.analisis.bpm)
+        igual(mPeak.bpm_fuente, medidosPeak.length ? 'motor' : 'rekordbox', 'la API no eligió la fuente más confiable')
         igual(itemsPeak.map((i) => [i.titulo, i.archivo_estado]), [['Reubicado', 'ok'], ['Ácido #1', 'ok'], ['Repetido', 'ambiguo']],
           'la API no resolvió Peak como está en disco (el 999 no está en la colección y no entra)')
         afirmar(filasPeak.find((f) => f.titulo === 'Repetido').estado.startsWith('Hay 2 archivos con ese nombre'), 'el homónimo no dice que hay dos archivos')
@@ -3899,6 +3919,29 @@ function casosF53() {
         afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `playlist importada a 400 px: hay contenido fuera del ancho: ${json(d)}`)
       } finally {
         await borrarImportadas(ctx)
+      }
+    }],
+
+    ['métricas (f53): una playlist sin ningún BPM dice «sin medir», no un número; con BPM de la búsqueda lo rotula', async (page, ctx) => {
+      const crear = await apiPedir(ctx, '/api/playlists', 'POST', { nombre: 'E2E sin BPM' })
+      afirmar(crear.status === 200 && crear.data.playlist, `no pude crear la playlist: ${json(crear)}`)
+      const pid = crear.data.playlist.id
+      try {
+        const r = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: { titulo: 'Sin BPM', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-sinbpm' } })
+        afirmar(r.status === 200, `no pude agregar el tema: ${json(r)}`)
+        await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+        await abrirEnRail(page, 'E2E sin BPM')
+        const m = await esperarMetricas(page, ctx, pid, 'las métricas de una playlist sin BPM no dicen «sin medir»')
+        igual(m.bpm_prom, null, 'la API inventó un BPM para una playlist sin BPM')
+        // Con un BPM de la búsqueda: el número con un decimal y «sin medir» como fuente.
+        const r2 = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: { titulo: 'Con BPM', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-conbpm', bpm: 131 } })
+        afirmar(r2.status === 200, `no pude agregar el tema: ${json(r2)}`)
+        await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+        await abrirEnRail(page, 'E2E sin BPM')
+        const m2 = await esperarMetricas(page, ctx, pid, 'las métricas con un BPM de la búsqueda no son las de la API')
+        igual([m2.bpm_prom, m2.bpm_fuente], [131, 'otro'], 'la API no rotula el BPM de la búsqueda como «otro»')
+      } finally {
+        await apiPedir(ctx, `/api/playlists/${pid}`, 'DELETE')
       }
     }],
 
@@ -3969,6 +4012,8 @@ function casosF53() {
         afirmar(filas.every((r) => /^\d+\.\d$/.test(r.bpm) && r.fuente === null && r.estado === 'En tu PC · Analizado'), `las filas no muestran el BPM medido con un decimal: ${json(filas)}`)
         const acc = await leerAcciones(page)
         igual([acc[0].titulo, acc[0].deshabilitada], ['Marcar cues', false], 'con temas analizados, «Marcar cues» tiene que estar disponible')
+        const mSet = await esperarMetricas(page, ctx, pid, 'las métricas de BPM de Set no son las de la API')
+        igual([mSet.bpm_fuente, mSet.bpm_n], ['motor', 2], 'las métricas de Set no salen de lo medido por el motor')
 
         // Las marcas: además de los puntos de color (decorativos), el texto dice cuántas de cada tipo.
         const uno = items.find((i) => i.titulo === 'Kick Uno')
