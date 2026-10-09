@@ -396,3 +396,30 @@ export async function descargarItemPlaylist(pid, itemId, formato) {
   })
   return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
+
+/* ---------- Playlists como centro (f53): importar, género y análisis con el motor ----------
+   Todas devuelven {ok, status, data} con el cuerpo leído por `cuerpoRadio`: un 4xx trae el
+   motivo del server en `data.mensaje` y la pantalla lo muestra tal cual. */
+
+// El XML va CRUDO (sin multipart): el server lo lee con tope y rechaza DTD/entidades. El
+// nombre del archivo viaja aparte, solo para mostrarlo.
+export async function leerXmlRekordbox(file) {
+  const r = await fetch('/api/importar/rekordbox/leer', {
+    method: 'POST', body: file,
+    headers: { 'Content-Type': 'application/xml', 'X-Nombre-Archivo': encodeURIComponent(file.name || 'rekordbox.xml') },
+  })
+  return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
+}
+export const leerXmlConfigurado = () => pedirSets('/api/importar/rekordbox/leer', 'POST', { usar_configurado: true })
+export const importarRekordbox = (token, playlists, actualizar = false) =>
+  pedirSets('/api/importar/rekordbox', 'POST', { token, playlists, actualizar })
+export const listarCarpetas = (raiz, ruta = '') => pedirSets(raiz === undefined || raiz === null
+  ? '/api/importar/carpetas'
+  : `/api/importar/carpetas?raiz=${encodeURIComponent(raiz)}&ruta=${encodeURIComponent(ruta)}`)
+export const importarCarpeta = (raiz, ruta, recursivo = false, actualizar = false) =>
+  pedirSets('/api/importar/carpeta', 'POST', { raiz, ruta, recursivo, actualizar })
+export const analizarPlaylist = (pid) => pedirSets(`/api/playlists/${encodeURIComponent(pid)}/analizar`, 'POST', {})
+export const progresoAnalisis = (pid) => pedirSets(`/api/playlists/${encodeURIComponent(pid)}/analisis`)
+export const editarGeneroItem = (pid, itemId, genero) =>
+  pedirSets(`/api/playlists/${encodeURIComponent(pid)}/items/${encodeURIComponent(itemId)}`, 'PATCH', { genero })
+export const generoALosSinGenero = (pid, genero) => pedirSets(`/api/playlists/${encodeURIComponent(pid)}/genero`, 'POST', { genero })

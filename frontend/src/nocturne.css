@@ -1656,3 +1656,78 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 /* Sin movimiento: el plato no gira y ni la barra, ni el monitor, ni la carátula animan su
    entrada. Al final del archivo a propósito (gana por orden sobre las reglas de arriba). */
 @media (prefers-reduced-motion:reduce){.deck-platter,.deck,.deck-monitor{animation:none}.cover-img{transition:none}}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   f53 — Las playlists como centro (tableros F «Mis playlists» y G «Importar»)
+   Bloque propio, al final: origen de cada playlist, encabezado con las tres acciones, estado
+   de cada tema en texto, puntos de color de las marcas y el diálogo de importar. Los colores
+   son tokens del sistema (contraste ≥ 4,5:1 sobre --color-bg/--color-surface).
+   ══════════════════════════════════════════════════════════════════════════ */
+.pl-origen{font-weight:600;color:var(--color-neutral-300)}
+.pl-origen.o-rekordbox{color:var(--color-brand-300)}
+.pl-origen.o-carpeta{color:var(--color-grade-c)}
+.pl-origen.o-musiflix{color:var(--color-accent-2)}
+.pl-rail-importar{margin:0 6px 6px;min-height:32px;border-radius:8px;border:1px dashed var(--color-divider);background:transparent;color:var(--color-text);font:600 12.5px var(--font-body);cursor:pointer}
+.pl-rail-importar:hover{background:var(--color-well)}
+.crate-origen-ref{text-transform:none;letter-spacing:0;color:var(--color-neutral-400)}
+.crate-resumen{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;font-size:12.5px;color:var(--color-neutral-300)}
+.crate-acciones{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-2)}
+.crate-accion{display:grid;grid-template-columns:auto 1fr;grid-template-areas:'n t' 'n d';align-items:center;gap:2px 10px;min-height:56px;padding:10px 12px;border-radius:var(--radius-md);border:1px solid var(--color-divider);background:var(--color-surface);color:var(--color-text);text-align:left;font:inherit;cursor:pointer}
+.crate-accion:hover:not(:disabled){border-color:var(--color-accent)}
+.crate-accion:disabled{cursor:not-allowed;background:var(--color-well)}
+.crate-accion-n{grid-area:n;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--color-accent);color:var(--color-bg);font:700 13px var(--font-mono)}
+.crate-accion:disabled .crate-accion-n{background:var(--color-raise);color:var(--color-neutral-300)}
+.crate-accion-t{grid-area:t;font-weight:600;font-size:13.5px}
+.crate-accion-d{grid-area:d;font-size:11.5px;color:var(--color-neutral-300)}
+.crate-genero{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2);font-size:12.5px}
+.crate-genero .input{width:min(200px,100%);min-height:32px}
+.trk-estado{margin-top:2px;font-size:11.5px;line-height:1.35;color:var(--color-neutral-300);overflow-wrap:anywhere}
+.trk-estado.t-ok{color:var(--color-ok)}
+.trk-estado.t-info{color:var(--color-info)}
+.trk-estado.t-warn{color:var(--color-warn)}
+.trk-estado.t-error{color:var(--color-danger)}
+.trk-archivo{color:var(--color-neutral-300)}
+.mb-fuente{font-size:10.5px;color:var(--color-neutral-300)}
+.mb-genero{cursor:pointer;font:inherit;border:0}
+.mb-genero:hover{box-shadow:inset 0 0 0 1px var(--color-accent)}
+.mb-genero.is-vacio b{color:var(--color-neutral-300);font-family:var(--font-body)}
+.mb-genero-in{width:120px;min-height:24px;height:24px;padding:0 6px;font-size:12px}
+.cue-puntos{display:inline-flex;align-items:center;gap:3px;padding:0 2px}
+.cue-puntos>i{width:8px;height:8px;border-radius:50%;background:var(--cue-c)}
+.trk-cues{white-space:nowrap}
+.results-crate .trk-acts .trk-cues{width:auto;padding:0 8px;font-size:12px}
+/* Las filas de una playlist con BPM/KEY/marcas/género: los metadatos pueden ocupar dos renglones. */
+.results-crate .trk-meta{flex-wrap:wrap;row-gap:4px;padding:4px 0}
+/* Diálogo «Importar…» */
+.imp-dialog{width:min(640px,100%);max-height:calc(100vh - 2*var(--space-4));overflow:auto}
+.imp-tabs{display:flex;gap:4px;border-bottom:1px solid var(--color-divider);flex-wrap:wrap}
+.imp-panel{display:flex;flex-direction:column;gap:var(--space-3);padding-top:var(--space-3)}
+.imp-ayuda{margin:0;font-size:12.5px;color:var(--color-neutral-300);line-height:1.45}
+.imp-fila{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2)}
+.imp-file{position:relative;cursor:pointer}
+.imp-file input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.imp-file:focus-within{outline:2px solid var(--color-accent);outline-offset:2px}
+.imp-error{margin:0;font-size:12.5px;color:var(--color-warn);overflow-wrap:anywhere}
+.imp-resumen{margin:0;font-size:13px}
+.imp-donde{font-size:12.5px;color:var(--color-neutral-300);overflow-wrap:anywhere}
+.imp-lista{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:320px;overflow:auto}
+.imp-pl{padding:6px 8px;border-radius:8px;background:var(--color-well)}
+.imp-check{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px}
+.imp-check input{width:18px;height:18px;flex:none;accent-color:var(--color-accent)}
+.imp-pl-txt{display:flex;flex-direction:column;min-width:0;flex:1}
+.imp-pl-nombre{font-weight:600;overflow-wrap:anywhere}
+.imp-pl-carpeta{font-size:11.5px;color:var(--color-neutral-300)}
+.imp-pl-n{flex:none;font-size:12px;font-family:var(--font-mono);color:var(--color-ok)}
+.imp-pl-n.is-warn{color:var(--color-warn)}
+.imp-pl-det{display:flex;flex-direction:column;padding-left:28px;font-size:11.5px;color:var(--color-neutral-300)}
+.imp-pl-det:empty{display:none}
+.imp-carpeta{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:40px;padding:6px 10px;border-radius:8px;border:1px solid var(--color-divider);background:var(--color-well);color:var(--color-text);font:inherit;text-align:left;cursor:pointer}
+.imp-carpeta:hover:not(:disabled){border-color:var(--color-accent)}
+.imp-carpeta .imp-pl-n{color:var(--color-neutral-300)}
+.imp-actualizar{font-size:12.5px}
+.imp-resultado{margin:0;padding-left:18px;font-size:12.5px}
+/* Diálogo «Marcar cues» (el editor de la radio, sobre un tema de la playlist) */
+.cues-dialog{width:min(1100px,100%);max-height:calc(100vh - 2*var(--space-4));overflow:auto}
+.cues-dlg-nav{flex-wrap:wrap;gap:var(--space-2)}
+.cues-dlg-sel{flex:1 1 200px;min-width:0}
+.cues-dlg-sel select{width:100%}

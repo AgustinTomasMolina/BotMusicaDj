@@ -12,6 +12,7 @@ import HistorialDrawer from './components/HistorialDrawer'
 import Modal from './components/Modal'
 import Playlists from './components/Playlists'
 import PlaylistsRail from './components/PlaylistsRail'
+import ImportarDialog from './components/ImportarDialog'
 import Radio from './components/Radio'
 import PlayerBar from './components/PlayerBar'
 import { usePlayer } from './player/context'
@@ -33,6 +34,8 @@ export default function App() {
   // Radio DJ (f50): el estado de la biblioteca del motor, para mostrarlo al pie del rail
   // mientras se está en la radio (la columna de la izquierda del canvas). Lo manda la radio.
   const [radioLib, setRadioLib] = useState(null)
+  // f53: el diálogo «Importar…» (Rekordbox o carpeta). Al terminar abre la playlist importada.
+  const [importarOpen, setImportarOpen] = useState(false)
 
   // Estado de descarga por canción (sobrevive a cambios de opción).
   const [dl, setDl] = useState({})
@@ -322,7 +325,7 @@ export default function App() {
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
   else if (view.kind === 'lista') body = <ListResults key={view.data.runId ?? 'lista'} data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
   else if (view.kind === 'radio') body = <Radio onBiblioteca={setRadioLib} />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} onImportar={() => setImportarOpen(true)} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.
@@ -363,7 +366,7 @@ export default function App() {
         <PlaylistsRail playlists={misPlaylists} activa={activePlaylist}
           abierta={view.kind === 'playlists' ? playlistAbierta : null}
           onOpen={openPlaylists} onNueva={nuevaPlaylistDesdeRail}
-          biblioteca={view.kind === 'radio' ? radioLib : null} />
+          biblioteca={view.kind === 'radio' ? radioLib : null} onImportar={() => setImportarOpen(true)} />
 
         <main className="app-main" id="contenido" tabIndex={-1}><div className="app-wrap">{body}</div></main>
       </div>
@@ -372,6 +375,8 @@ export default function App() {
       <HistorialDrawer open={historialOpen} onClose={() => setHistorialOpen(false)} data={historialData}
         onRunSearch={onRunSearch} onOpenPlaylist={onOpenPlaylist} onDeletePlaylist={onDeletePlaylist} onLimpiar={onLimpiar} />
       <Modal modal={modal} onClose={() => setModal(null)} onDownload={onDownload} />
+      {importarOpen && <ImportarDialog toast={toast} onClose={() => setImportarOpen(false)}
+        onImportada={(id) => { setImportarOpen(false); listarPlaylists().then((d) => setMisPlaylists(d.playlists || [])).catch(() => {}); openPlaylists(id) }} />}
       <PlayerBar formato={formato} dl={dl} onDownload={onDownload} onOpenEmbed={openEmbed} />
     </div>
   )

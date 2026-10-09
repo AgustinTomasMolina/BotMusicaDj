@@ -332,7 +332,8 @@ def _snapshot(track: dict) -> dict:
         "duracion": int(track["duracion"]) if track.get("duracion") else None,
         "bpm": _bpm_decimal(track.get("bpm")),
         "camelot": track.get("camelot"),
-        "genero": track.get("genero"),
+        # f53: saneado como el que se edita a mano ("Sin género" de la home = sin género).
+        "genero": sanear_genero(track.get("genero")),
         "solo_preview": bool(track.get("solo_preview")),
     }
 

@@ -7,11 +7,10 @@ nombres del dueño. Lo esperado sale del fixture (qué archivo se escribió dón
 import os
 import sys
 
-import pytest
-from sinteticos import biblioteca_importable, location_rb, wav, xml_rekordbox_playlists
-
 import playlist_import as pi
+import pytest
 from playlist_import import Rechazo
+from sinteticos import biblioteca_importable, location_rb, wav, xml_rekordbox_playlists
 
 
 def _leer(xml: str, raices):

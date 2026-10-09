@@ -31,7 +31,8 @@ export function fromLibrary(t) {
     bpm: n(t.bpm), bpmMedido: t.bpm != null, camelot: n(t.camelot), tonalidad: n(t.tonalidad),
     keyDudosa: false, formato: n(t.formato), grade: null,
     raw: t, descargable: false,
-    paraPlaylist: { titulo: t.titulo, artista: t.artista, bpm: t.bpm, camelot: t.camelot, genero: t.genero },
+    // f53: el server resuelve el archivo por `lib_id` (ver views.jsx, LibCard).
+    paraPlaylist: { titulo: t.titulo, artista: t.artista, bpm: t.bpm, camelot: t.camelot, genero: t.genero, fuente: 'biblioteca', lib_id: t.id },
   }
 }
 
