@@ -280,6 +280,10 @@ def test_un_kick_aislado_sobrevive_al_achicar_el_tema_entero(tmp_path):
     assert (d, h, r.shape) == (0.0, 60.0, (3, 200))
     assert r[0].max() == b.q[0].max() == 255
     assert int(np.argmax(r[0])) == math.floor(t * 100) * 200 // b.cuadros
+    # Y es un PICO, no un manchón: con el p99 de todos los cuadros (casi todos silencio) la
+    # referencia caería al piso y la cola del kick quedaría a tope durante 100 ms.
+    a_tope = int((b.q[0] >= 230).sum())
+    assert a_tope <= 2, f"el kick ocupa {a_tope} cuadros a tope: es un manchón"
 
 
 def test_tramo_bordes_reales_de_los_cuadros(tres_elementos):
@@ -310,6 +314,9 @@ def test_la_grilla_recupera_el_desfase_conocido(tmp_path, bpm, fraccion):
     assert g["primer_beat_s"] is not None, g
     err = _circular(g["primer_beat_s"], ks[0], p)
     assert abs(err) <= 0.010, f"la grilla está {err * 1000:+.1f} ms corrida"
+    # La línea va en el ATAQUE del kick (o apenas antes, por el cuadro de 10 ms), nunca en
+    # su cuerpo: estimada por la energía y no por la subida caía hasta 8 ms después.
+    assert -0.009 <= err <= 0.002, f"la línea cae {err * 1000:+.1f} ms del ataque del kick"
     assert g["confianza"] >= mb.CONFIANZA_MIN and g["bpm_base"] == bpm
     # Y calza en TODO el tema, no solo al principio: cada kick tiene su línea a ±10 ms.
     lineas = g["primer_beat_s"] + g["periodo_s"] * np.round((np.array(ks) - g["primer_beat_s"])
@@ -357,9 +364,11 @@ def test_sin_pulso_claro_no_hay_grilla(tmp_path, caso):
         y = _patron(bpm, 0.1, 60.0, hats=False, stabs=False)[0] \
             + _patron(bpm, 0.1 + 30 / bpm, 60.0, hats=False, stabs=False)[0]
     else:
-        # Los kicks están a 128, la base dice 129: fuera de la ventana de afinado.
+        # Los kicks están a 128, la base dice 128,6: fuera de la ventana de afinado (±0,5).
+        # Es el caso que engaña al margen solo: con 128,1 la grilla se corre apenas más de un
+        # beat en 6 min y el tramo que se pisa dos veces arma un máximo «marcado» (0,49).
         y = _patron(bpm, 0.1, 360.0, hats=False, stabs=False)[0]
-        bpm = 129.0
+        bpm = 128.6
     g = mb.estimar_grilla(_bandas_de(tmp_path, y)[0], bpm)
     assert g["primer_beat_s"] is None and g["confianza"] < mb.CONFIANZA_MIN, g
     assert g["motivo"]
