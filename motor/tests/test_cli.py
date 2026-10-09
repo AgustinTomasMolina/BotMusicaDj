@@ -212,6 +212,70 @@ def test_scan_licencia_y_origen_son_opcionales(tmp_path, capsys, pasados, espera
         f"el aviso de lo no declarado {'falta' if NO_DECLARADO in esperado else 'sobra'}:\n{out}"
 
 
+def _filas_sin_hora(db) -> dict[str, tuple]:
+    """Cada fila de `tracks` entera menos `analyzed_at` (la hora del upsert), por nombre."""
+    con = sqlite3.connect(str(db))
+    cols = [c[1] for c in con.execute("PRAGMA table_info(tracks)") if c[1] != "analyzed_at"]
+    filas = {Path(f[0]).name: f[1:] for f in
+             con.execute(f"SELECT path, {', '.join(cols)} FROM tracks")}
+    con.close()
+    return filas
+
+
+def test_analizar_y_guardar_son_el_mismo_camino_que_scan(tmp_path, capsys):
+    """`analizar_para_guardar` + `guardar_analisis` (lo que va a usar un hilo del server para
+    analizar los temas de una playlist) dejan en la base EXACTAMENTE la fila que deja `scan`
+    —BPM, key, energía, embedding, duración, mtime, tags, licencia y origen—, y fallan con el
+    MISMO motivo que imprime `scan`. Sin declarar licencia ni origen, el literal."""
+    from mutagen.id3 import TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    from motor.cli import analizar_para_guardar, guardar_analisis
+
+    carpeta = tmp_path / "crate"
+    carpeta.mkdir()
+    con_tags = _escribir(carpeta, *CATALOGO[0], dur=4.0, seed=1)
+    w = WAVE(str(con_tags))
+    w.add_tags()
+    w.tags.add(TPE1(encoding=3, text="Artista Uno"))
+    w.tags.add(TIT2(encoding=3, text="Tema Uno"))
+    w.save()
+    _escribir(carpeta, *CATALOGO[3], dur=4.0, seed=2)
+    y, sr = click_track(128.0, dur=0.5, nota="C", modo="maj", seed=3)
+    sf.write(str(carpeta / "corto.wav"), y.astype(np.float32), sr, subtype="FLOAT")
+    (carpeta / "roto.wav").write_bytes(b"esto no es un wav")
+
+    db_scan = tmp_path / "scan.sqlite"
+    codigo, out, _ = _correr(capsys, *_scan(db_scan, carpeta))
+    assert codigo == 1 and _resumen(out) == (2, 0, 0, 0, 2), out
+    motivos_scan = dict(re.findall(r"^  fallido: (\S+) — (.+)$", out, flags=re.M))
+
+    db_fn = tmp_path / "fn.sqlite"
+    db_sin = tmp_path / "sin_declarar.sqlite"
+    motivos_fn = {}
+    with Store(db_fn) as store, Store(db_sin) as sin:
+        for ruta in sorted(carpeta.iterdir()):
+            a = analizar_para_guardar(str(ruta.resolve()))
+            if isinstance(a, str):
+                motivos_fn[ruta.name] = a
+                continue
+            guardar_analisis(store, str(ruta.resolve()), a, licencia=LICENCIA, origen=ORIGEN)
+            guardar_analisis(sin, str(ruta.resolve()), a)
+
+    filas_scan = _filas_sin_hora(db_scan)
+    assert sorted(filas_scan) == [con_tags.name, _nombre(*CATALOGO[3])], filas_scan
+    assert _filas_sin_hora(db_fn) == filas_scan, "el camino compartido no deja la fila del scan"
+    assert motivos_fn == motivos_scan == {
+        "corto.wav": "no se pudo decodificar o dura menos de 1 s",
+        "roto.wav": "no se pudo decodificar o dura menos de 1 s"}, (motivos_fn, motivos_scan)
+    with Store(db_scan) as store:
+        t = store.get(con_tags.resolve())
+        assert (t.artist, t.title, t.license, t.source_url) == \
+            ("Artista Uno", "Tema Uno", LICENCIA, ORIGEN), t
+    assert {n: (f[-2], f[-1]) for n, f in _filas_sin_hora(db_sin).items()} == \
+        {n: (NO_DECLARADO, NO_DECLARADO) for n in filas_scan}
+
+
 # --- list / info -----------------------------------------------------------------------
 
 # El grupo 4 es la MARCA de confianza de la key: "?" si la detección es dudosa, ausente si
