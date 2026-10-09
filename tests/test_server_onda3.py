@@ -105,8 +105,8 @@ def test_forma_exacta_y_las_bandas_son_las_del_archivo(client, biblioteca):
 
 def test_la_grilla_sale_de_los_kicks_y_del_bpm_de_la_base(client, biblioteca):
     g = client.get(_url(biblioteca)).json()["grilla"]
-    assert set(g) == {"estimada", "bpm", "bpm_base", "periodo_s", "primer_beat_s", "confianza",
-                      "motivo", "beats_por_compas", "compas_ref", "compas_confianza",
+    assert set(g) == {"estimada", "bpm", "bpm_base", "bpm_afinado", "periodo_s", "primer_beat_s",
+                      "confianza", "concentracion", "motivo", "beats_por_compas", "compas_ref", "compas_confianza",
                       "compas_motivo"}
     assert (g["estimada"], g["bpm_base"], g["beats_por_compas"]) == (True, BPM_UNO, 4)
     assert g["confianza"] >= mb.CONFIANZA_MIN and g["motivo"] is None

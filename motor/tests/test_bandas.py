@@ -311,23 +311,31 @@ def _circular(a, b, p):
 def test_la_grilla_recupera_el_desfase_conocido(tmp_path, bpm, fraccion):
     """El primer kick en `fraccion` del beat (0 a casi 1: también el que cae pegado al beat
     siguiente). 120 y 125 BPM dan un número ENTERO de cuadros por beat (sin el «dither» que
-    afina la fase entre beats): es el peor caso."""
+    afina la fase entre beats): es el peor caso.
+
+    La línea puede caer hasta UN cuadro (10 ms) antes del kick: el ataque se mide en los medios,
+    y el crossover de fase cero «pre-suena» unos ms antes del golpe; si el kick empieza justo en
+    el borde de un cuadro (fracción 0 a 120 y 125 BPM), ese pre-sonido cae entero en el cuadro
+    anterior. Contra las grillas de Rekordbox de 50 temas reales la línea cae entre −8,7 y
+    −0,8 ms del Inizio (p5–p95; informe de f52-r2): el mismo lado y el mismo orden."""
+    un_cuadro = 1 / mb.TASA_HZ + 1e-6
     p = 60.0 / bpm
     y, ks, _, _ = _patron(bpm, fraccion * p, 40.0)
     v = mb.compute_bandas(_wav(tmp_path / "g.wav", y)).valores()
-    g = mb.estimar_grilla(v[0], bpm)
+    g = mb.estimar_grilla(v, bpm)
     assert g["primer_beat_s"] is not None, g
     err = _circular(g["primer_beat_s"], ks[0], p)
-    assert abs(err) <= 0.010, f"la grilla está {err * 1000:+.1f} ms corrida"
+    assert abs(err) <= un_cuadro, f"la grilla está {err * 1000:+.1f} ms corrida"
     # La línea va en el ATAQUE del kick (o apenas antes, por el cuadro de 10 ms), nunca en
     # su cuerpo: estimada por la energía y no por la subida caía hasta 8 ms después.
-    assert -0.009 <= err <= 0.002, f"la línea cae {err * 1000:+.1f} ms del ataque del kick"
+    assert -un_cuadro <= err <= 0.002, f"la línea cae {err * 1000:+.1f} ms del ataque del kick"
     assert g["confianza"] >= mb.CONFIANZA_MIN and g["bpm_base"] == bpm
+    assert g["concentracion"] >= mb.CONCENTRACION_MIN and g["bpm_afinado"] == g["bpm"]
     # Y calza en TODO el tema, no solo al principio: cada kick tiene su línea a ±10 ms.
     lineas = g["primer_beat_s"] + g["periodo_s"] * np.round((np.array(ks) - g["primer_beat_s"])
                                                             / g["periodo_s"])
     peor = np.abs(lineas - np.array(ks)).max()
-    assert peor <= 0.010, f"con {g['bpm']} BPM la grilla se corre {peor * 1000:.1f} ms"
+    assert peor <= un_cuadro, f"con {g['bpm']} BPM la grilla se corre {peor * 1000:.1f} ms"
 
 
 @pytest.mark.parametrize("error_bpm", [+0.3, -0.12])
@@ -337,7 +345,7 @@ def test_la_grilla_afina_un_bpm_de_la_base_un_poco_corrido(tmp_path, error_bpm):
     bpm = 128.0
     y, ks, _, _ = _patron(bpm, 0.2, 180.0, hats=False)
     v = mb.compute_bandas(_wav(tmp_path / "g.wav", y)).valores()
-    g = mb.estimar_grilla(v[0], bpm + error_bpm)
+    g = mb.estimar_grilla(v, bpm + error_bpm)
     assert g["primer_beat_s"] is not None, g
     assert abs(g["bpm"] - bpm) <= 0.005 and g["bpm_base"] == bpm + error_bpm
     p = g["periodo_s"]
@@ -374,13 +382,56 @@ def test_sin_pulso_claro_no_hay_grilla(tmp_path, caso):
         # beat en 6 min y el tramo que se pisa dos veces arma un máximo «marcado» (0,49).
         y = _patron(bpm, 0.1, 360.0, hats=False, stabs=False)[0]
         bpm = 128.6
-    g = mb.estimar_grilla(_bandas_de(tmp_path, y)[0], bpm)
-    assert g["primer_beat_s"] is None and g["confianza"] < mb.CONFIANZA_MIN, g
+    g = mb.estimar_grilla(_bandas_de(tmp_path, y), bpm)
+    assert g["primer_beat_s"] is None, g
+    assert g["confianza"] < mb.CONFIANZA_MIN or g["concentracion"] < mb.CONCENTRACION_MIN, g
     assert g["motivo"]
+    if caso == "kick_y_contratiempo":
+        # El beat no se distingue, pero el PERÍODO sí es limpio: el BPM afinado viene aparte.
+        assert g["bpm_afinado"] is not None and abs(g["bpm_afinado"] - 128.0) <= 0.005, g
+    else:
+        assert g["bpm_afinado"] is None, f"{caso}: un BPM afinado de algo sin pulso: {g}"
+
+
+def _bajo_con_clic(sr=SR):
+    """Un bajo de 82 Hz con un clic de 1,5 kHz en el ataque: su ataque en los medios es MÁS
+    fuerte que el del kick sintético (que casi no tiene clic)."""
+    t = np.arange(int(0.15 * sr)) / sr
+    clic = np.where(t < 0.005, 0.5 * np.sin(2 * np.pi * 1500 * t), 0.0)
+    return 0.6 * np.sin(2 * np.pi * 82 * t) * np.exp(-t * 15) + clic
+
+
+@pytest.mark.parametrize(("bpm", "desfase"), [(128.0, 0.1), (140.0, 0.23)])
+def test_un_bajo_a_contratiempo_con_mas_ataque_que_el_kick_no_se_lleva_la_grilla(
+        tmp_path, bpm, desfase):
+    """Kick en cada beat; en el contratiempo un bajo con clic y un hat abierto. El ataque más
+    fuerte de los medios es el del bajo: la fase fina cae ahí primero. El desempate (graves +
+    medios − agudos) tiene que reconocer que eso es el contratiempo. La grilla va en los kicks
+    o no va (hoy no va: los ataques grandes están todos en el contratiempo y la concentración
+    en las líneas del kick es baja; conservador, ver el informe de f52-r2), NUNCA en el bajo."""
+    p = 60.0 / bpm
+    y, ks, hs, _ = _patron(bpm, desfase, 60.0, stabs=False)
+    for t in hs:
+        _pegar(y, _bajo_con_clic(), t)
+    g = mb.estimar_grilla(_bandas_de(tmp_path, y), bpm)
+    if g["primer_beat_s"] is not None:
+        err = _circular(g["primer_beat_s"], ks[0], p)
+        assert abs(err) <= 0.0101, f"la grilla quedó {err * 1000:+.1f} ms del kick: en el bajo"
+    # El desempate fue claro (no es un «no sé»): eligió el kick contra el bajo.
+    assert g["confianza"] >= mb.CONFIANZA_MIN, g
+
+
+def test_las_subidas_son_solo_las_positivas():
+    """`_subidas` es la base de todo: un ataque es donde la envolvente CRECE. Una bajada (el
+    final de una nota, un gate que corta seco) no es un ataque. Envolvente armada a mano."""
+    env = np.array([0.0, 0.5, 1.0, 0.2, 0.2, 0.9, 0.3])
+    t, w = mb._subidas(env, 100)
+    np.testing.assert_allclose(t, [0.01, 0.02, 0.05])
+    np.testing.assert_allclose(w, [0.5, 0.5, 0.7])
 
 
 def test_sin_bpm_medido_no_hay_grilla():
-    g = mb.estimar_grilla(np.ones(1000), 0.0)
+    g = mb.estimar_grilla(np.ones((3, 1000)), 0.0)
     assert (g["primer_beat_s"], g["bpm"], g["motivo"]) == (None, None, "el track no tiene BPM medido")
 
 
@@ -464,11 +515,12 @@ def test_el_primer_compas_no_se_compara_contra_un_beat_sin_subida():
 def test_la_grilla_lista_para_json(tres_elementos):
     b = tres_elementos[0]
     g = mb.grilla(b, 128.0)
-    assert set(g) == {"estimada", "bpm", "bpm_base", "periodo_s", "primer_beat_s", "confianza",
-                      "motivo", "beats_por_compas", "compas_ref", "compas_confianza",
+    assert set(g) == {"estimada", "bpm", "bpm_base", "bpm_afinado", "periodo_s", "primer_beat_s",
+                      "confianza", "concentracion", "motivo", "beats_por_compas", "compas_ref", "compas_confianza",
                       "compas_motivo"}
     assert g["estimada"] is True and g["beats_por_compas"] == 4
-    for k in ("bpm", "bpm_base", "periodo_s", "primer_beat_s", "confianza", "compas_confianza"):
+    for k in ("bpm", "bpm_base", "bpm_afinado", "periodo_s", "primer_beat_s", "confianza",
+              "concentracion", "compas_confianza"):
         assert type(g[k]) is float, (k, type(g[k]))
     assert abs(g["periodo_s"] - 60 / g["bpm"]) < 1e-5
 

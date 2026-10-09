@@ -3287,7 +3287,9 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
     `normalizacion`). Si el tramo tiene menos cuadros de 10 ms que los puntos pedidos, vienen
     los cuadros tal cual y `puntos` dice cuántos: no se inventa resolución. `desde`/`hasta` de
     la respuesta son los bordes REALES de lo que se devolvió (los de los cuadros de 10 ms que
-    cubren el pedido). `grilla` es None si el track no tiene BPM medido."""
+    cubren el pedido). `grilla` es None si el track no tiene BPM medido; si lo tiene,
+    `grilla.primer_beat_s` puede ser None (con `motivo`) y aun así venir `grilla.bpm_afinado`
+    (ver `motor.bandas.grilla`)."""
     params, motivo = _onda3_parametros(desde, hasta, puntos)
     if motivo is not None:
         return JSONResponse({"error": motivo}, status_code=400)

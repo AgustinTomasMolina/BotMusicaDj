@@ -2,15 +2,21 @@
 resolución fija de 10 ms, y la grilla de beats ESTIMADA.
 
 El problema que resuelve: en la onda de una banda (`motor/peaks.py`) todo es del mismo color y
-el kick no se distingue del resto. Separando el audio en tres bandas se ve cada golpe: el kick
-en graves, el hi-hat en agudos.
+el kick no se distingue del resto. Separando el audio en tres bandas se ve mejor qué es cada
+golpe: el cuerpo del kick y el bajo en graves, el hi-hat en agudos.
 
 Bandas (filtros Butterworth de orden 4 en SOS, aplicados ida y vuelta: FASE CERO, o sea que un
-golpe queda en su lugar y no corrido unos milisegundos como con un filtro causal):
+golpe queda en su lugar y no corrido unos milisegundos como con un filtro causal; a cambio,
+«pre-suena» unos ms antes de un golpe seco):
 
 - graves  = pasabajos a 150 Hz. La fundamental del kick de techno está entre ~45 y ~100 Hz y el
   sub-bajo debajo; 150 Hz deja entrar el «punch» del kick (~80-120 Hz) sin llegar al cuerpo
-  del clap o el snare (~200 Hz para arriba).
+  del clap o el snare (~200 Hz para arriba). OJO: es el BAJO ENTERO, no «el kick». Ahí entran
+  también la línea de bajo, el sub y los rolling bass a contratiempo. Y en temas reales el
+  kick muchas veces no es un pico angosto sino una JOROBA: su energía grave llega a su máximo
+  30-80 ms después del ataque y en un kick duro (hard techno, hardstyle) dura 100 ms o más
+  (medido en f52-r2 con el perfil promedio por beat de temas de la biblioteca). El ATAQUE del
+  kick se ve mejor en los medios (el clic); por eso la grilla no sale de los graves solos.
 - agudos  = pasaaltos a 2,5 kHz. Hats, rides, platillos y el ruido del clap viven arriba de
   ~3 kHz; desde 2,5 kHz se los agarra enteros sin meter la fundamental de voces y sintes.
 - medios  = la señal MENOS graves MENOS agudos. Con filtros de ida y vuelta, la respuesta del
@@ -23,8 +29,9 @@ golpe queda en su lugar y no corrido unos milisegundos como con un filtro causal
 
 Envolvente: por cada cuadro de 10 ms, el máximo de |banda| en ese tramo (el mismo criterio de
 «pico» que la onda de una banda), sobre la mezcla mono de los canales (`mezcla_mono` dice por
-qué). 100 cuadros por segundo alcanzan para que un kick sea un pico y no un manchón (a 128 BPM
-hay 47 cuadros entre kick y kick).
+qué). 100 cuadros por segundo alcanzan para que un kick SINTÉTICO (o uno corto y seco) sea un
+pico y no un manchón (a 128 BPM hay 47 cuadros entre kick y kick); un kick largo de verdad se
+ve como la joroba que es.
 
 Normalización (relativa DENTRO del track, no volumen absoluto; la respuesta de la API lo dice):
 cada banda se divide por su referencia, el percentil 99 de su envolvente en ESTE track, sobre
@@ -433,8 +440,14 @@ VENTANA_BPM = 0.5                # el BPM de la grilla se busca en ± esto alred
 PASO_BPM_GRUESO = 0.01
 PASO_BPM_FINO = 0.001
 TOLERANCIA_AFINADO = 0.02        # el BPM de la base se mantiene si calza a menos de un 2 %
-CONFIANZA_MIN = 0.3              # debajo, no se dibuja grilla (ver `estimar_grilla`)
 VENTANA_LINEA_S = 0.025          # una subida a ±25 ms de una línea «cae en la grilla»
+# Calibrados contra las grillas de Rekordbox (ver `estimar_grilla` y el informe de f52-r2):
+FRACCION_ATAQUES = 0.10          # la fase sale del 10 % de ataques más grandes
+GRAVES_DESPUES_S = 0.06          # un ataque de kick trae graves en los ~60 ms siguientes
+VENTANA_KICK_S = (-0.010, 0.060)  # dónde se mira el kick alrededor de una línea
+CONFIANZA_MIN = 0.2              # margen contra el contratiempo; debajo, no hay grilla
+CONCENTRACION_MIN = 0.35         # ataques a ±VENTANA_LINEA_S de una línea; debajo, no hay grilla
+PERIODICIDAD_MIN = 0.4           # debajo, `bpm_afinado` va None (ver `estimar_grilla`)
 GRILLA_MAX_S = 20 * 60           # más largo que esto es un mix: no tiene un BPM fijo
 BEATS_MIN = 8
 BEATS_POR_COMPAS = 4
@@ -443,18 +456,43 @@ EVENTO_COMPAS_MIN = 0.05         # una subida de energía por beat menor que est
 EVENTOS_COMPAS_MIN = 2
 
 
-def _subidas(graves: np.ndarray, tasa_hz: int) -> tuple[np.ndarray, np.ndarray]:
-    """`(instantes, pesos)` de las subidas de la envolvente de graves: cuánto creció del cuadro
-    k−1 al k, ubicado en el borde entre los dos (k / tasa). Solo las positivas."""
-    g = np.asarray(graves, dtype=np.float64)
+def _subidas(env: np.ndarray, tasa_hz: int) -> tuple[np.ndarray, np.ndarray]:
+    """`(instantes, pesos)` de las subidas de una envolvente: cuánto creció del cuadro k−1 al k,
+    ubicado en el borde entre los dos (k / tasa). Solo las positivas: una BAJADA (el final de
+    una nota, un gate que corta) no es un ataque."""
+    g = np.asarray(env, dtype=np.float64)
     d = np.diff(g, prepend=g[:1] if g.size else g)
     k = np.flatnonzero(d > 0)
     return k / tasa_hz, d[k]
 
 
+def _mas_grandes(t: np.ndarray, w: np.ndarray, fraccion: float) -> tuple[np.ndarray, np.ndarray]:
+    """Solo la `fraccion` de subidas más grandes (por peso; los empates en el borde entran)."""
+    if not w.size:
+        return t, w
+    s = w >= np.quantile(w, 1.0 - fraccion)
+    return t[s], w[s]
+
+
+def _max_por_linea(x: np.ndarray, fase: float, periodo: float, a: float, b: float,
+                   tasa_hz: int) -> np.ndarray:
+    """El máximo de `x` en [L + a, L + b] (segundos) para cada línea L = fase + j·periodo cuya
+    ventana entra entera en el audio."""
+    n = x.size
+    ancho = int(round((b - a) * tasa_hz)) + 1
+    lineas = fase + periodo * np.arange(int((n / tasa_hz - fase) / periodo) + 1)
+    i0 = np.round((lineas + a) * tasa_hz).astype(np.int64)
+    i0 = i0[(i0 >= 0) & (i0 + ancho <= n)]
+    if not i0.size:
+        return np.zeros(0)
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    return sliding_window_view(x, ancho)[i0].max(axis=1)
+
+
 def _curva_fase(t: np.ndarray, w: np.ndarray, periodo: float, beats: float,
                 tasa_hz: int) -> np.ndarray:
-    """La subida de graves PROMEDIO por beat en cada fase de una grilla de `periodo`, con la
+    """La subida (peso) PROMEDIO por beat en cada fase de una grilla de `periodo`, con la
     fase barrida de a ~1 ms. Es lo mismo que interpolar linealmente la subida en las posiciones
     φ, φ+P, φ+2P… y promediar: cada subida se reparte entre los dos casilleros de fase vecinos
     y después se convoluciona (circular) con un triángulo de un cuadro de semiancho."""
@@ -470,40 +508,59 @@ def _curva_fase(t: np.ndarray, w: np.ndarray, periodo: float, beats: float,
     return np.convolve(ext, tri, mode="valid") / max(beats, 1.0)
 
 
-def estimar_grilla(graves: np.ndarray, bpm: float, tasa_hz: int = TASA_HZ) -> dict:
-    """La grilla de beats que mejor calza con los kicks: `{bpm, bpm_base, periodo_s,
-    primer_beat_s, confianza, motivo}`.
+def estimar_grilla(valores: np.ndarray, bpm: float, tasa_hz: int = TASA_HZ) -> dict:
+    """La grilla de beats que mejor calza con los kicks: `{bpm, bpm_base, bpm_afinado,
+    periodo_s, primer_beat_s, confianza, concentracion, motivo}`. `valores`: las 3 bandas
+    (graves, medios, agudos) en 0..1, como `Bandas.valores()`.
 
-    - La fase: la que maximiza la SUBIDA de energía de graves en las posiciones de una grilla
-      de período 60/bpm (barrido de 1 ms). Subida y no energía: un beat es donde el kick ATACA;
-      la energía del kick llega a su máximo unos ms después (en el kick sintético, 4,5 ms) y
-      la grilla quedaría corrida hacia la cola. Medido en f52: con energía el error era de +0,5
-      a +7,9 ms; con la subida, de −7,1 a 0 ms.
-    - El BPM: el de la base del motor se afina en ±`VENTANA_BPM` (de a 0,01 y después de a
-      0,001). Hace falta: el motor mide con un error p95 de ~0,12 BPM y con 0,1 BPM de error
-      una grilla fija se corre 280 ms en 6 minutos. Afinarlo no cambia el BPM del track: dice
-      con qué período calza la grilla (`bpm`) al lado del medido (`bpm_base`). Si el de la base
-      calza casi igual (a menos de `TOLERANCIA_AFINADO`), queda el de la base.
-    - La confianza: qué tan marcado es el máximo contra el resto, el producto de dos cosas en
-      0..1. (1) El margen contra la MEJOR fase alternativa (a más de un octavo de beat):
-      1 − alternativa / máximo; un bajo a contratiempo tan fuerte como el kick lo deja en ~0.
-      (2) La concentración: qué parte de TODA la subida de graves del tema cae a
-      ±`VENTANA_LINEA_S` de una línea. Hace falta la segunda: con un BPM que no calza, los
-      kicks se corren a lo largo del tema y, si el corrimiento total es apenas más de un beat,
-      el pedazo que se pisa dos veces arma un máximo «marcado» (medido: margen 0,49 con la
-      grilla corriéndose medio segundo en 6 min); la concentración ahí es baja. Un kick limpio
-      da ~1; ruido, silencio o un pad dan ~0. Debajo de `CONFIANZA_MIN`, `primer_beat_s` va
-      None: la pantalla no dibuja una grilla que miente.
+    1. El período: el BPM de la base del motor se afina en ±`VENTANA_BPM` (de a 0,01 y después
+       de a 0,001) buscando el período con el que TODAS las subidas de graves se apilan mejor
+       en una fase. Hace falta: con 0,1 BPM de error una grilla fija se corre 280 ms en 6 min.
+       Si el de la base calza casi igual (a menos de `TOLERANCIA_AFINADO`), queda el de la base.
+       `bpm_afinado` lo expone aunque no haya fase, si es limpio: si hay grilla, o si la
+       PERIODICIDAD (qué parte de las subidas grandes de graves cae a ±`VENTANA_LINEA_S` de una
+       línea o de una media línea; beat o contratiempo da igual para el período) llega a
+       `PERIODICIDAD_MIN`; si no, None. Medido contra el BPM de Rekordbox (en la octava del
+       motor) en los 155 de 181 temas donde se expuso: mediana de error 0,0003 BPM (la del
+       motor en esos mismos, 0,036) y a ±0,02 en 153; las excepciones, dos temas a mitad de
+       tempo (0,08 y 0,12 BPM).
+    2. La fase fina: los ATAQUES de kick. No sale de los graves: ahí está el bajo entero, y el
+       cuerpo del kick llega 15-35 ms tarde (medido contra Rekordbox). Sale de las subidas de
+       los MEDIOS (el clic del ataque), cada una pesada por los graves que llegan en los
+       `GRAVES_DESPUES_S` siguientes (el cuerpo del kick: un stab o un clap sin graves detrás
+       pesan poco), y solo el `FRACCION_ATAQUES` más grande (la suma de TODAS las subidas
+       estaba dominada por miles de subidas chicas que no son golpes). La fase es la que
+       maximiza esos ataques en las líneas (barrido de 1 ms).
+    3. ¿Beat o contratiempo? Se compara la fase con el mejor ataque a ±P/8 del contratiempo.
+       Gana la que tiene más kick: mediana por línea, en `VENTANA_KICK_S`, de graves + medios −
+       agudos (el kick es grave y medio; el hat abierto del contratiempo, agudo).
+    4. Hay grilla solo si (a) `confianza` = (kick − alternativa) / (|kick| + |alternativa|)
+       llega a `CONFIANZA_MIN` (un bajo a contratiempo tan fuerte como el kick la deja en ~0) y
+       (b) la `concentracion` (qué parte de los ataques cae a ±`VENTANA_LINEA_S` de una línea)
+       llega a `CONCENTRACION_MIN` (con un BPM que no calza los ataques se reparten; ruido o un
+       pad no tienen ataques en grilla). Si no, `primer_beat_s` va None con el motivo: la
+       pantalla no dibuja una grilla que miente.
+
+    Calibrado contra las grillas de Rekordbox (Inizio módulo período, ±25 ms en todo el tema)
+    de los temas lossless de la biblioteca, con un SPLIT por hash del nombre: los umbrales se
+    eligieron con 81 temas y se validaron una vez con otros 48 que no se tocaron. Con grilla:
+    50 de 52 bien en calibración (96 %) y 29 de 31 en validación (94 %); 79 de 83 en total. Los
+    4 que fallan están listados en el informe de f52-r2 (en 2, todo en las bandas contradice a
+    la grilla de Rekordbox). MP3 NO se pudo validar: libsndfile y Rekordbox decodifican corridos
+    1 o 2 tramas MP3 (26 ms cada una) según el archivo, así que la fase de Rekordbox no es la de
+    este audio. Antes (concentración de TODAS las subidas de graves) había grilla en 7 de 129.
 
     `primer_beat_s` es la primera línea de la grilla en o después del 0 (la fase, en [0, P))."""
-    res = {"bpm": None, "bpm_base": None, "periodo_s": None, "primer_beat_s": None,
-           "confianza": 0.0, "motivo": None}
+    res = {"bpm": None, "bpm_base": None, "bpm_afinado": None, "periodo_s": None,
+           "primer_beat_s": None, "confianza": 0.0, "concentracion": 0.0, "motivo": None}
     if bpm is None or not math.isfinite(bpm) or bpm <= 0:
         res["motivo"] = "el track no tiene BPM medido"
         return res
     res["bpm_base"] = res["bpm"] = float(bpm)
     res["periodo_s"] = 60.0 / bpm
-    dur = len(graves) / tasa_hz
+    graves, medios, agudos = (np.asarray(x, dtype=np.float64) for x in valores)
+    n = graves.size
+    dur = n / tasa_hz
     if dur > GRILLA_MAX_S:
         res["motivo"] = (f"dura más de {GRILLA_MAX_S // 60} min: un mix no tiene un BPM fijo "
                          f"y una grilla fija mentiría")
@@ -516,6 +573,7 @@ def estimar_grilla(graves: np.ndarray, bpm: float, tasa_hz: int = TASA_HZ) -> di
         res["motivo"] = "no hay golpes en los graves"
         return res
 
+    # 1. El período: el BPM de la base afinado con TODAS las subidas de graves.
     def mejor(cands):
         best = None
         for b in cands:
@@ -540,22 +598,68 @@ def estimar_grilla(graves: np.ndarray, bpm: float, tasa_hz: int = TASA_HZ) -> di
     if smax <= 0:
         res["motivo"] = "no hay golpes en los graves"
         return res
-    nf = curva.size
-    fase = (i * p / nf) % p
-    dist = np.abs((np.arange(nf) - i + nf / 2) % nf - nf / 2) * (p / nf)
-    resto = curva[dist > p / 8]
-    alternativa = float(resto.max()) if resto.size else 0.0
-    margen = max(0.0, 1.0 - alternativa / smax)
-    lejos = np.abs((t - fase + p / 2) % p - p / 2) > VENTANA_LINEA_S
-    concentracion = 1.0 - float(w[lejos].sum() / w.sum())
-    conf = margen * concentracion
-    res["confianza"] = round(conf, 3)
-    if conf < CONFIANZA_MIN:
-        res["motivo"] = ("la fase del beat no se distingue: los golpes de graves no caen "
-                         "marcados en cada beat (ruido, sin kick, un bajo a contratiempo tan "
-                         "fuerte como el kick, o un BPM que no calza en todo el tema)")
+    # Periodicidad: qué parte de las subidas GRANDES de graves cae a ±VENTANA_LINEA_S de una
+    # línea o de una media línea (beat o contratiempo da igual: el período es el mismo).
+    fase_g = (i * p / curva.size) % p
+    tg, wg = _mas_grandes(t, w, FRACCION_ATAQUES)
+    lejos = np.abs((tg - fase_g + p / 4) % (p / 2) - p / 4) > VENTANA_LINEA_S
+    periodicidad = 1.0 - float(wg[lejos].sum() / wg.sum())
+    if periodicidad >= PERIODICIDAD_MIN:
+        res["bpm_afinado"] = b1
+
+    # 2. La fase fina: los ATAQUES de kick. Una subida de medios (el clic del kick) pesa por
+    # los graves que llegan en los GRAVES_DESPUES_S siguientes (el cuerpo del kick): un stab o
+    # un clap sin graves detrás pesan poco. Solo el FRACCION_ATAQUES más grande.
+    tm, wm = _subidas(medios, tasa_hz)
+    if not wm.size:
+        res["motivo"] = "no hay ataques en los medios: no se ve dónde arranca cada kick"
         return res
-    res["bpm"] = b1
+    largo = int(round(GRAVES_DESPUES_S * tasa_hz)) + 1
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    despues = sliding_window_view(np.concatenate([graves, np.zeros(largo - 1)]), largo).max(axis=1)
+    km = np.round(tm * tasa_hz).astype(np.int64)
+    ta, wa = _mas_grandes(tm, wm * despues[km], FRACCION_ATAQUES)
+    if not wa.size or wa.max() <= 0:
+        res["motivo"] = "no hay ataques con graves detrás: no se ve dónde arranca cada kick"
+        return res
+    curva = _curva_fase(ta, wa, p, dur / p, tasa_hz)
+    nf = curva.size
+    i = int(np.argmax(curva))
+    fase = (i * p / nf) % p
+
+    # 3. ¿Beat o contratiempo? El kick tiene graves y medios arriba y no es un hat (agudos).
+    def kick(f):
+        a, b = VENTANA_KICK_S
+        x = [_max_por_linea(y, f, p, a, b, tasa_hz) for y in (graves, medios, agudos)]
+        m = min(len(z) for z in x)
+        return float(np.median(x[0][:m] + x[1][:m] - x[2][:m])) if m else 0.0
+
+    k0 = kick(fase)
+    # El mejor ataque a ±P/8 del contratiempo: si es más kick que el elegido, era el kick.
+    dist = np.abs((np.arange(nf) * (p / nf) - (fase + p / 2) + p / 2) % p - p / 2)
+    i2 = int(np.argmax(np.where(dist <= p / 8, curva, -np.inf)))
+    fase2 = (i2 * p / nf) % p
+    k1 = kick(fase2)
+    if k1 > k0:
+        fase, k0, k1 = fase2, k1, k0
+    margen = (k0 - k1) / max(abs(k0) + abs(k1), 1e-9)
+    lejos = np.abs((ta - fase + p / 2) % p - p / 2) > VENTANA_LINEA_S
+    concentracion = 1.0 - float(wa[lejos].sum() / wa.sum())
+    res["confianza"] = round(margen, 3)
+    res["concentracion"] = round(concentracion, 3)
+    if k0 <= 0 or margen < CONFIANZA_MIN:
+        res["motivo"] = ("no se distingue el beat del contratiempo: lo que suena en la línea y "
+                         "medio beat después se parece demasiado (un bajo a contratiempo tan "
+                         "fuerte como el kick, kicks en cada corchea, o un BPM a la mitad)")
+        return res
+    if concentracion < CONCENTRACION_MIN:
+        res["motivo"] = ("los ataques no caen en una grilla fija: ruido, sin kick, o un BPM que "
+                         "no calza en todo el tema")
+        return res
+    # Con grilla, el BPM afinado es el de la grilla aunque la periodicidad de los graves solos
+    # no llegara: la fase ya probó que ese período calza con los kicks en todo el tema.
+    res["bpm"] = res["bpm_afinado"] = b1
     res["periodo_s"] = p
     res["primer_beat_s"] = fase
     return res
@@ -620,15 +724,21 @@ def _redondo(x: float | None, decimales: int) -> float | None:
 
 
 def grilla(b: Bandas, bpm: float | None) -> dict:
-    """La grilla estimada completa, lista para JSON (floats de Python, tiempos en ms). Ver
-    `estimar_grilla` y `estimar_compas`. `estimada: True` siempre: más adelante una grilla
-    importada de Rekordbox (TEMPO) la reemplaza."""
+    """La grilla estimada completa, lista para JSON (floats de Python, tiempos en segundos con
+    precisión de ms). Ver `estimar_grilla` y `estimar_compas`. `estimada: True` siempre: más
+    adelante una grilla importada de Rekordbox (TEMPO) la reemplaza.
+
+    `bpm` es el de la grilla (el de la base si no hay grilla); `bpm_afinado` es un campo aparte
+    que puede venir aunque `primer_beat_s` sea None (el período se midió limpio pero el beat no
+    se distingue del contratiempo), o None si tampoco el período es limpio."""
     v = b.valores()
-    g = estimar_grilla(v[0], bpm if bpm is not None else float("nan"))
+    g = estimar_grilla(v, bpm if bpm is not None else float("nan"))
     out = {"estimada": True, "bpm": _redondo(g["bpm"], 3), "bpm_base": _redondo(g["bpm_base"], 3),
+           "bpm_afinado": _redondo(g["bpm_afinado"], 3),
            # El período va con 6 decimales: con 3, en 6 minutos la grilla se correría ~0,4 s.
            "periodo_s": _redondo(g["periodo_s"], 6),
            "primer_beat_s": _redondo(g["primer_beat_s"], 3), "confianza": g["confianza"],
+           "concentracion": g["concentracion"],
            "motivo": g["motivo"], "beats_por_compas": BEATS_POR_COMPAS, "compas_ref": None,
            "compas_confianza": 0.0, "compas_motivo": None}
     if g["primer_beat_s"] is not None:
