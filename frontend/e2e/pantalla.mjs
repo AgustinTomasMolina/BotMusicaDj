@@ -40,6 +40,21 @@ async function hasta(leer, ok, que, ms = ESPERA_MS) {
   }
 }
 
+// Un cajón (.drawer) entra deslizándose (transition de transform, nocturne.css): `.is-open`
+// aparece ANTES de que termine, con sus botones todavía fuera de pantalla, y un clic de
+// puppeteer ahí falla con "Node is either not clickable". Espera de estado: sin transform y
+// sin animaciones en curso.
+async function esperarCajon(page, sel) {
+  await page.waitForSelector(sel, { timeout: ESPERA_MS })
+  await hasta(() => page.evaluate((q) => {
+    const d = document.querySelector(q)?.closest('.drawer')
+    if (!d) return 'sin cajón'
+    const t = getComputedStyle(d).transform
+    const anim = d.getAnimations().filter((a) => a.playState === 'running').length
+    return (t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)') && anim === 0 ? 'quieto' : `moviéndose (${t}, ${anim} animaciones)`
+  }, sel), (v) => v === 'quieto', `el cajón de ${sel} no terminó de abrirse`)
+}
+
 const api = async (ctx, ruta) => {
   const r = await fetch(ctx.url + ruta)
   if (!r.ok) throw new Error(`${ruta} contestó ${r.status}`)
@@ -1726,7 +1741,7 @@ const CASOS = [
     await page.waitForNetworkIdle({ idleTime: 500, timeout: ESPERA_MS })
     igual({ sockets, pedidosWs }, { sockets: [], pedidosWs: [] }, 'la app abrió un WebSocket o pidió /ws/*')
     await page.click('button[aria-label="Menú"]')
-    await page.waitForSelector('.drawer-left.is-open', { timeout: ESPERA_MS })
+    await esperarCajon(page, '.drawer-left.is-open')
     const consola = await page.evaluate(() => [...document.querySelectorAll('button, a, [role="dialog"]')]
       .map((e) => `${e.textContent.trim()} | ${e.getAttribute('aria-label') ?? ''} | ${e.getAttribute('title') ?? ''}`)
       .filter((s) => /consola/i.test(s)))
@@ -3002,7 +3017,7 @@ const CASOS = [
 
     // Historial: cada descarga dice "formato · MP3 · cuándo".
     await page.click('button[aria-label="Menú"]')
-    await page.waitForSelector('.drawer-left.is-open', { timeout: ESPERA_MS })
+    await esperarCajon(page, '.drawer-left.is-open')
     afirmar(await page.evaluate(() => { const b = [...document.querySelectorAll('.navitem')].find((x) => x.textContent === 'Historial'); b?.click(); return !!b }),
       'el menú no tiene "Historial"')
     const hist = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.drawer-right.is-open .hist-item')]
@@ -3056,7 +3071,7 @@ const CASOS = [
     // Modo lista.
     const menu = async (item) => {
       await page.click('button[aria-label="Menú"]')
-      await page.waitForSelector('.drawer-left.is-open', { timeout: ESPERA_MS })
+      await esperarCajon(page, '.drawer-left.is-open')
       afirmar(await page.evaluate((t) => { const b = [...document.querySelectorAll('.navitem')].find((x) => x.textContent === t); b?.click(); return !!b }, item),
         `el menú no tiene "${item}"`)
     }
@@ -3071,7 +3086,7 @@ const CASOS = [
 
     // Playlist guardada (desde el historial): se abre como la búsqueda que la armó.
     await menu('Historial')
-    await page.waitForSelector('.drawer-right.is-open .hist-open', { timeout: ESPERA_MS })
+    await esperarCajon(page, '.drawer-right.is-open .hist-open')
     await page.click('.drawer-right.is-open .hist-open')
     await hasta(rotulo, (t) => t === 'Resultados · tema simulado', 'la playlist guardada no se abrió')
     igual(await pastillas(), esperado, 'la playlist guardada tiene que seguir con pastillas y "Versiones"')
