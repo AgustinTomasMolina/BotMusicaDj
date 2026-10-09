@@ -3217,21 +3217,28 @@ _ONDA3_PUNTOS_DEFECTO = 1000
 # `hasta` puede ser la duración que mostró /onda, redondeada a ms (hasta 0,5 ms de más).
 _ONDA3_TOLERANCIA_S = 0.001
 _RE_ONDA3_PUNTOS = re.compile(r"[0-9]{1,6}")
+# Segundos: hasta 6 dígitos enteros (11 días) y hasta 20 decimales (los decimales largos de un
+# `String(x)` de JS o un `str(float)` entran). Sin exponente (tampoco el `1e-7` de JS),
+# espacios, signo más ni nan/inf.
+_RE_ONDA3_SEGUNDOS = re.compile(r"-?[0-9]{1,6}(\.[0-9]{1,20})?")
 # 0..255 → 0..1 con 3 decimales (alcanzan: el paso es 0,0039), calculado una vez.
 _ONDA3_VALOR = [round(i / 255, 3) for i in range(256)]
 
 
 def _onda3_segundos(nombre: str, texto: str | None) -> tuple[float | None, str | None]:
-    """`(segundos, None)`, `(None, None)` si no vino, o `(None, motivo)` si no sirve."""
+    """`(segundos, None)`, `(None, None)` si no vino, o `(None, motivo)` si no sirve.
+
+    Estricto, como `puntos`: dígitos ASCII con punto decimal opcional (y el signo menos, para
+    que un negativo diga «no puede ser negativo»). Con `float()` a secas era laxo: aceptaba
+    espacios, `1_0`, `5e1`, `+5`, `nan`, `infinity` y dígitos de otros alfabetos
+    (`float('١٢')` = 12).
+    Lo que pasa la regex es siempre finito."""
     if texto is None:
         return None, None
-    try:
-        v = float(texto)
-    except ValueError:
-        return None, f"`{nombre}` tiene que ser un número de segundos; llegó {texto[:40]!r}"
-    if not math.isfinite(v):
-        return None, f"`{nombre}` tiene que ser un número finito; llegó {texto[:40]!r}"
-    return v, None
+    if not _RE_ONDA3_SEGUNDOS.fullmatch(texto):
+        return None, (f"`{nombre}` tiene que ser un número de segundos (dígitos y punto "
+                      f"decimal, ej. 12.5); llegó {texto[:40]!r}")
+    return float(texto), None
 
 
 def _onda3_parametros(desde: str | None, hasta: str | None,
