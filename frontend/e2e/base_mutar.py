@@ -7,6 +7,8 @@ de lo que se vio y no un re-armado:
     ocultar <db> <titulo> <respaldo.json>    saca el track de la base (como si se hubiera
                                              borrado el archivo y re-escaneado) y guarda la fila
     restaurar <db> <respaldo.json>           vuelve a poner la fila tal cual estaba
+    editor_alta <db> <json>                  f54: alta de los temas del editor D (editor_d)
+    editor_baja <db> <json>                  f54: los saca de la base
 
 Cada caso que lo usa deja la base como la encontró (en un `finally`): los demás casos arman
 sets contra la misma base. Toca SQLite directo y no `Store.upsert` porque lo que se quiere es
@@ -63,6 +65,54 @@ def restaurar(db: str, respaldo: str) -> dict:
     return {"path": valores["path"]}
 
 
+def _temas_editor(datos: str) -> dict:
+    """Los temas del editor D que armó base_juguete.py (`editor_d`), en JSON."""
+    temas = json.loads(datos)
+    if not isinstance(temas, dict) or not temas:
+        raise SystemExit("editor: esperaba el JSON de base_juguete.editor_d")
+    return temas
+
+
+def editor_alta(db: str, datos: str) -> dict:
+    """f54: da de alta en la base del motor los WAV del editor D con lo que se conoce por
+    construcción (el BPM y la key con que se GENERARON, base_juguete.editor_d): es lo que haría
+    un análisis que acierta, sin esperar a librosa. Por `Store.upsert` (y no SQLite directo):
+    guarda el mtime del archivo, así el tema queda «analizado» y no vuelve a la cola."""
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parents[2]
+    sys.path[:0] = [str(raiz), str(raiz / "tests")]
+    from sinteticos import embedding
+
+    from motor.modelos import TrackFeatures
+    from motor.store import Store
+
+    with Store(Path(db)) as store:
+        for i, (titulo, t) in enumerate(_temas_editor(datos).items()):
+            unanime = t["camelot"] != ""
+            store.upsert(Path(t["ruta"]),
+                         TrackFeatures(bpm=float(t["bpm"]), key=t["camelot"], energy_raw=0.2,
+                                       embedding=embedding(100 + i),
+                                       key_acuerdo="3/3" if unanime else "0/0",
+                                       key_tramos="|".join([t["camelot"]] * 3) if unanime else ""),
+                         duration=float(t["dur"]), artist="Generador", title=titulo)
+    return {"alta": len(_temas_editor(datos))}
+
+
+def editor_baja(db: str, datos: str) -> dict:
+    """Lo inverso de `editor_alta`: deja la base del motor como estaba (los WAV quedan)."""
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parents[2]
+    sys.path[:0] = [str(raiz)]
+    from motor.store import Store
+
+    with Store(Path(db)) as store:
+        n = sum(store.delete(Path(t["ruta"])) for t in _temas_editor(datos).values())
+    return {"baja": n}
+
+
 if __name__ == "__main__":
     comando, *args = sys.argv[1:]
-    print(json.dumps({"bpm": bpm, "ocultar": ocultar, "restaurar": restaurar}[comando](*args)))
+    print(json.dumps({"bpm": bpm, "ocultar": ocultar, "restaurar": restaurar,
+                      "editor_alta": editor_alta, "editor_baja": editor_baja}[comando](*args)))
