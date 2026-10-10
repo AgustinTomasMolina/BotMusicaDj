@@ -464,7 +464,8 @@ class Store:
         elegidas = [i for i, f in enumerate(filas) if f["path_key"] in claves]
         if not elegidas:
             return []
-        norm, _, _, _ = self._normalized(filas)
+        # La misma cuenta que `_normalized`, sin armar 10k `Path` que acá no se usan (~75 ms).
+        norm, _, _ = normalize_matrix(np.vstack([self._embedding(f) for f in filas]).astype(np.float64))
         energias = np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64)
         return [self._track(filas[i], norm[i], energias) for i in elegidas]
 
