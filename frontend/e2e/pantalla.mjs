@@ -4413,8 +4413,10 @@ function casosF54() {
       await conEditor(ctx, async ({ por }) => {
         const t = por['Con grilla']
         await abrirPlaylist(page, ctx)
-        // Desde la acción «Marcar cues» de la playlist: abre el primer tema analizado.
-        await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Marcar cues')).click())
+        // Desde la acción «Marcar cues» de la playlist, con el teclado (foco + Enter, como lo
+        // haría alguien sin mouse): abre el primer tema analizado.
+        await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Marcar cues')).focus())
+        await page.keyboard.press('Enter')
         await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
         await esperarOnda(page, 'desde Marcar cues')
         igual(await page.$eval('#edd-titulo', (h) => h.firstChild.textContent), t.item.titulo, '«Marcar cues» no abrió el primer tema de la playlist')
