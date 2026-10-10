@@ -888,6 +888,14 @@ class Store:
                                   (self._key(path),)).fetchall()
         return _ordenar_marcas([_marca(f) for f in filas])
 
+    def duration(self, path: Path | str) -> float | None:
+        """La duración (s) que midió el análisis, o None si el track no está analizado. Sin
+        armar el `Track` entero (`get` normaliza el embedding): la usa el export a Rekordbox
+        para dejar afuera las marcas que caen fuera del audio (f56)."""
+        fila = self._con.execute("SELECT duration FROM tracks WHERE path_key = ?",
+                                 (self._key(path),)).fetchone()
+        return None if fila is None else float(fila["duration"])
+
     def cue_mark_counts(self, paths: Iterable[Path | str]) -> dict[str, int]:
         """Cuántas marcas tiene cada track, por clave del store (`_key`). Los que no tienen
         no aparecen."""
@@ -1032,6 +1040,76 @@ class Store:
         with self._escritura():
             marca = self._marca_por_id(clave, mark_id)
             self._con.execute("DELETE FROM cue_marks WHERE id = ?", (marca.id,))
+
+    def import_cue_marks(self, path: Path | str, marcas: Iterable[dict], *, pisar: bool = False,
+                         duration_s: float | None = None) -> dict[str, int]:
+        """Trae marcas de AFUERA (los POSITION_MARK de un XML de Rekordbox, f56) a un track.
+
+        `marcas`: dicts con `kind`, `num` (pad o None), `start_ms`, `end_ms` (solo loops) y
+        `name`, ya validados por `rekordbox_cues.marcas_de_track` (tipo, pad, tiempos, nombre).
+
+        A diferencia de `add_cue_mark`, el track NO tiene que estar en la biblioteca: se importa
+        junto con la playlist, antes de que el motor lo analice, y las marcas se atan a la ruta
+        como todas (`motor/cue_marks.py`). Con `duration_s` (la del análisis, o la del archivo)
+        lo que cae fuera del audio no entra; sin ella no se valida contra el largo.
+
+        Reglas (decisión del dueño, f56):
+        - una marca IGUAL a una que ya está (mismo tipo, pad, entrada y salida) no se duplica:
+          importar dos veces lo mismo deja lo mismo (idempotente);
+        - un pad que en la página ya usa OTRA marca: gana la de la página (`conservadas`), salvo
+          `pisar=True`, que la reemplaza por la de afuera (`reemplazadas`). `pisar` no borra
+          nada más: las marcas de la página que afuera no están se quedan;
+        - memory cues y memory loops no ocupan pad: se agregan si no hay una igual, hasta los
+          topes por track (`sin_lugar` si se pasa).
+        Todo en UNA transacción. Devuelve los conteos."""
+        from motor.cue_marks import HOT_CUES, KIND_LOOP, MAX_LOOPS, MAX_MEMORY
+
+        cuenta = {"agregadas": 0, "ya_estaban": 0, "conservadas": 0, "reemplazadas": 0,
+                  "fuera_del_tema": 0, "sin_lugar": 0}
+        clave = self._key(path)
+        dur_ms = None if duration_s is None else int(round(float(duration_s) * 1000))
+        cuando = _ahora()
+        with self._escritura():
+            actuales = [_marca(f) for f in self._con.execute(
+                "SELECT * FROM cue_marks WHERE path_key = ?", (clave,))]
+            for m in marcas:
+                kind, num = m["kind"], m["num"]
+                start_ms, end_ms = int(m["start_ms"]), m["end_ms"]
+                if dur_ms is not None and (start_ms >= dur_ms
+                                           or (end_ms is not None and end_ms > dur_ms)):
+                    cuenta["fuera_del_tema"] += 1
+                    continue
+                igual = next((a for a in actuales if a.kind == kind and a.num == num
+                              and a.start_ms == start_ms and a.end_ms == end_ms), None)
+                if igual is not None:
+                    cuenta["ya_estaban"] += 1
+                    continue
+                if num is not None:
+                    if not 0 <= num < HOT_CUES:
+                        continue                        # lo descartó el parser; por las dudas
+                    ocupa = next((a for a in actuales if a.num == num), None)
+                    if ocupa is not None:
+                        if not pisar:
+                            cuenta["conservadas"] += 1
+                            continue
+                        self._con.execute("DELETE FROM cue_marks WHERE id = ?", (ocupa.id,))
+                        actuales.remove(ocupa)
+                        cuenta["reemplazadas"] += 1
+                    else:
+                        cuenta["agregadas"] += 1
+                else:
+                    tope = MAX_LOOPS if kind == KIND_LOOP else MAX_MEMORY
+                    if sum(1 for a in actuales if a.kind == kind) >= tope:
+                        cuenta["sin_lugar"] += 1
+                        continue
+                    cuenta["agregadas"] += 1
+                cur = self._con.execute(
+                    "INSERT INTO cue_marks (path_key, kind, num, start_ms, end_ms, name, "
+                    "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (clave, kind, num, start_ms, end_ms if kind == KIND_LOOP else None,
+                     m.get("name"), cuando, cuando))
+                actuales.append(self._marca_por_id(clave, int(cur.lastrowid)))
+        return cuenta
 
     def _marca_por_id(self, clave: str, mark_id) -> object:
         """La marca `mark_id` de ESE track. Un id de otro track, inexistente, que no es un
