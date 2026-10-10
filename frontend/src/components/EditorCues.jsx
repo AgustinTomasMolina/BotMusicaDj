@@ -6,7 +6,7 @@ import {
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, cuerpoCrear, diferencia,
-  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD,
+  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso,
 } from '../editorD'
 import { usePlayer } from '../player/context'
 import { useVolumenEn } from '../hooks'
@@ -108,7 +108,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const [snap, setSnap] = useState(false)
   const [historial, setHistorial] = useState(historialVacio)
   const [estado, setEstado] = useState({ fase: 'leido' })
-  const [falla, setFalla] = useState(null)
+  // Lo que el servidor no confirmó: {id, texto, reconciliada}. `reconciliada` = después de la
+  // falla se volvió a leer la lista del servidor y la pantalla muestra esa (auditoría f54: un
+  // éxito posterior ya no borra el aviso de una marca que se perdió).
+  const [fallas, setFallas] = useState([])
   const [aviso, setAviso] = useState('')
   const [loopIn, setLoopIn] = useState(null)
   const [loopBeats, setLoopBeats] = useState(4)
@@ -128,6 +131,9 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const idRef = useRef(id)
   idRef.current = id
   const vuelo = useRef({ n: 0 })
+  const lista = useRef({ seq: 0, aplicada: 0 })   // la lista que llega más tarde no pisa a una más nueva
+  const fallaSeq = useRef(0)
+  const rechazado = useRef(false)                 // la última escritura fallida, ¿la rechazó el servidor?
   const arrastreRef = useRef(null)
   const panRef = useRef(null)
   const ocupado = useRef(false)          // una operación de deshacer/rehacer en curso
@@ -164,7 +170,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
     setHistorial(historialVacio())
     setLoopIn(null)
     setAviso('')
-    setFalla(null)
+    setFallas([])
     setEstado({ fase: 'leido' })
     setAjuste(leerAjuste(storage(), id))
     getMarcas(id)
@@ -230,30 +236,36 @@ export default function EditorCues({ temas, inicial, onClose }) {
     const w = cv.clientWidth
     const h = cv.clientHeight
     if (!(w > 0) || !(h > 0)) return
+    // En PÍXELES FÍSICOS y sin transform: con un DPR fraccionario (Windows al 125 / 150 %, o
+    // el zoom del navegador) una columna de 1 px CSS cae entre píxeles físicos y el navegador
+    // la mezcla con la de al lado: el kick se veía rayado (auditoría f54). Una columna por
+    // píxel físico y alturas enteras: cada píxel es un color puro de una banda.
     const dpr = window.devicePixelRatio || 1
     cv.width = Math.round(w * dpr)
     cv.height = Math.round(h * dpr)
+    const W = cv.width
+    const H = cv.height
     const ctx = cv.getContext('2d')
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, w, h)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, W, H)
     if (!d || d.error || !d.bandas) return
     const css = getComputedStyle(document.documentElement)
     const col = (n) => css.getPropertyValue(n).trim()
     const cA = col('--edd-agudos'), cM = col('--edd-medios'), cG = col('--edd-graves')
-    const cols = columnas(d, vista, Math.round(w))
-    const alto = h - 2
+    const cols = columnas(d, vista, W)
+    const alto = H - 2
     for (let c = 0; c < cols.length; c++) {
       const x = cols[c]
       if (!x) continue
       // Anidadas: afuera lo más alto de las tres (agudos), adentro los graves. El kick se ve
       // como una barra de graves alta en cada beat.
-      const hA = Math.max(x.agudos, x.medios, x.graves) * alto
-      const hM = Math.max(x.medios, x.graves) * alto
-      const hG = x.graves * alto
+      const hA = Math.round(Math.max(x.agudos, x.medios, x.graves) * alto)
+      const hM = Math.round(Math.max(x.medios, x.graves) * alto)
+      const hG = Math.round(x.graves * alto)
       for (const [hh, color] of [[hA, cA], [hM, cM], [hG, cG]]) {
-        if (hh < 0.5) continue
+        if (hh < 1) continue
         ctx.fillStyle = color
-        ctx.fillRect(c, (h - hh) / 2, 1, hh)
+        ctx.fillRect(c, Math.floor((H - hh) / 2), 1, hh)
       }
     }
   }, [])
@@ -353,21 +365,52 @@ export default function EditorCues({ temas, inicial, onClose }) {
   }
 
   /* ---------- escrituras ---------- */
+  // La lista que se dibuja es SIEMPRE una que mandó el servidor (respuesta de una escritura o
+  // relectura). `seq` es el orden en que se PIDIÓ: una respuesta vieja no pisa a una nueva.
+  const ponerLista = (tid, nuevas, seq) => {
+    if (tid !== idRef.current || seq < lista.current.aplicada) return
+    lista.current.aplicada = seq
+    setDatos((d) => (d && d.track && d.track.id === tid ? { ...d, marcas: nuevas } : d))
+  }
+
+  // Vuelve a leer las marcas del servidor. Si sale bien, la pantalla muestra lo que de verdad
+  // quedó guardado y las fallas hasta `hasta` (o todas) quedan reconciliadas.
+  const releer = async (tid, hasta) => {
+    const seq = ++lista.current.seq
+    let r = null
+    try { r = await getMarcas(tid) } catch { r = null }
+    if (!(r && r.ok && Array.isArray(r.data?.marcas))) return false
+    ponerLista(tid, r.data.marcas, seq)
+    if (tid === idRef.current) setFallas((f) => f.map((x) => (hasta === undefined || x.id <= hasta ? { ...x, reconciliada: true } : x)))
+    return true
+  }
+
   const conEstado = async (que, hacer) => {
     const tid = id
+    const seq = ++lista.current.seq
     vuelo.current.n += 1
     setEstado({ fase: 'guardando' })
     let r = null
     try { r = await hacer(tid) } catch { r = null }
     vuelo.current.n -= 1
     if (r && r.ok && Array.isArray(r.data?.marcas)) {
-      if (tid === idRef.current) setDatos((d) => (d && d.track && d.track.id === tid ? { ...d, marcas: r.data.marcas } : d))
+      ponerLista(tid, r.data.marcas, seq)
+      rechazado.current = false
       if (vuelo.current.n === 0) setEstado({ fase: 'guardado', que, hora: new Date() })
-      setFalla(null)
       return r.data
     }
+    // 400 / 404 / 409: el servidor RECHAZÓ el pedido tal cual (una marca que otra pestaña
+    // borró, un pad que otra ocupó, la base ocupada): repetirlo da lo mismo. 5xx o sin red:
+    // puede no haber llegado; el historial no se toca y se puede volver a intentar. En los dos
+    // casos el aviso queda (un éxito posterior no lo borra) y se relee la lista del servidor:
+    // lo que se ve vuelve a ser lo guardado, no lo que se creía guardado.
+    rechazado.current = Boolean(r) && [400, 404, 409].includes(r.status)
+    const fid = ++fallaSeq.current
+    if (tid === idRef.current) {
+      setFallas((f) => [...f, { id: fid, texto: `${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}`, reconciliada: false }].slice(-5))
+    }
+    await releer(tid, fid)
     if (vuelo.current.n === 0) setEstado({ fase: 'leido' })
-    setFalla({ texto: `${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}` })
     return null
   }
 
@@ -447,7 +490,15 @@ export default function EditorCues({ temas, inicial, onClose }) {
     ocupado.current = true
     const r = await aplicar(paso.aplicar, dir < 0 ? 'Deshacer' : 'Rehacer')
     ocupado.current = false
-    if (!r) return
+    if (!r) {
+      // Rechazado: sacarlo del historial (si no, cada Ctrl+Z repetiría el mismo pedido
+      // imposible). Sin red o 5xx: queda donde estaba, para volver a intentar.
+      if (rechazado.current) {
+        setHistorial(descartarPaso(paso.h, dir))
+        setAviso(`${dir < 0 ? 'Deshacer' : 'Rehacer'} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
+      }
+      return
+    }
     let h = paso.h
     for (const [a, b] of r) h = reemplazarId(h, a, b)
     setHistorial(h)
@@ -708,6 +759,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const unidadZoom = eg.hay ? 'compases' : 'segundos'
   const zooms = eg.hay ? ZOOM_COMPASES : ZOOM_SEGUNDOS
   const hora = estado.hora ? estado.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
+  const sinConfirmar = fallas.filter((f) => !f.reconciliada).length
   const cuenta = (tipo) => marcas.filter((m) => m.tipo === tipo).length
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`
@@ -735,7 +787,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const estadoGrillaTxt = !general ? 'Leyendo el audio…'
     : general.error ? ''
       : !eg.hay ? `Sin grilla de beats: ${eg.motivo}. No se dibuja ninguna (una grilla inventada mentiría).`
-        : `Grilla estimada por el motor · confianza ${coma(g.confianza)}${eg.atenuada ? ' (baja: se dibuja atenuada; revisala contra el kick)' : ''} · ${ajuste.oculta ? 'oculta' : textoAjuste(ajuste.offset, g.periodo_s)}`
+        : `Grilla orientativa del motor, verificala sobre un kick · confianza ${coma(g.confianza)}${eg.baja.includes('confianza') ? ' (baja)' : ''} · nitidez ${Number.isFinite(g.concentracion) ? coma(g.concentracion) : '?'}${eg.baja.includes('nitidez') ? ' (baja)' : ''}${eg.atenuada ? ': se dibuja atenuada y puede estar corrida' : ''} · ${ajuste.oculta ? 'oculta' : textoAjuste(ajuste.offset, g.periodo_s)}`
 
   return (
     <div className="edd-fondo">
@@ -797,7 +849,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
           <div className={`edd-onda${grillaVisible && eg.atenuada ? ' is-atenuada' : ''}`} ref={ondaRef} role="slider" tabIndex={0}
             aria-label={`Posición en ${track ? track.titulo : 'el tema'}`}
             aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(cursor)}
-            aria-valuetext={`${fmtTiempo(cursor, 1) ?? '0:00.0'} de ${fmtTiempo(dur, 1) ?? '—'}${compas ? `, compás ${compas.compas} beat ${compas.beat}` : ''}`}
+            aria-valuetext={`${fmtTiempo(cursor, 1) ?? '0:00.0'} de ${fmtTiempo(dur, 1) ?? '—'}${compas ? (compas.compas ? `, compás ${compas.compas} beat ${compas.beat}` : `, beat ${compas.beat} antes del primer compás`) : ''}`}
             data-desde={v.desde.toFixed(3)} data-hasta={v.hasta.toFixed(3)}
             onPointerDown={ondaDown} onPointerMove={ondaMove}
             onPointerUp={async (e) => { if (!(await soltarArrastre())) ondaUp(e) }}
@@ -864,7 +916,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
           <button type="button" className="btn btn-secondary edd-btn" onClick={() => irA(posActual() - FINO_CURSOR_S)} aria-keyshortcuts="Shift+ArrowLeft" aria-label="Correr el cursor 10 milisegundos para atrás">−10 ms <Kbd>Mayús ←</Kbd></button>
           <button type="button" className="btn btn-secondary edd-btn" onClick={() => irA(posActual() + FINO_CURSOR_S)} aria-keyshortcuts="Shift+ArrowRight" aria-label="Correr el cursor 10 milisegundos para adelante">+10 ms <Kbd>Mayús →</Kbd></button>
           <span className="edd-reloj mono" ref={relojRef} aria-hidden="true">0:00.000</span>
-          {compas && <span className="edd-compas mono">compás {compas.compas}.{compas.beat} <small>(estimado)</small></span>}
+          {compas && <span className="edd-compas mono">{compas.compas ? `compás ${compas.compas}.${compas.beat}` : `beat ${compas.beat} (antes del 1)`} <small>(estimado)</small></span>}
           <span className="edd-flex" />
           <div className="edd-zoom" role="group" aria-label={`Zoom: ${unidadZoom} a la vista`}>
             <button type="button" className="chip edd-zbtn" onClick={() => cambiarZoom(1)} disabled={zoom === 0} aria-label="Acercar" aria-keyshortcuts="+">+</button>
@@ -950,17 +1002,23 @@ export default function EditorCues({ temas, inicial, onClose }) {
             </div>
             {loopIn !== null && <p className="edd-nota edd-pend">Entrada del loop: <span className="mono">{fmtTiempo(loopIn)}</span> (falta la salida).</p>}
             <p className="edd-nota edd-aviso" role="status" aria-live="polite">{aviso}</p>
-            <p className={`edd-estado is-${estado.fase}`} role="status" aria-live="polite">
-              {estado.fase === 'guardando' && <><span className="spinner" aria-hidden="true" /> Guardando…</>}
-              {estado.fase === 'guardado' && <>✓ Guardado en la biblioteca {hora && <span className="mono">{hora}</span>} · {resumen}</>}
-              {estado.fase === 'leido' && track && `${marcas.length ? resumen : 'Sin marcas todavía'} · se guardan solas en la biblioteca`}
+            {/* «✓ Guardado» solo con la lista igual a la del servidor y sin fallas sin avisar:
+                una falla no reconciliada (no se pudo releer) manda sobre cualquier éxito. */}
+            <p className={`edd-estado is-${sinConfirmar ? 'desincronizado' : estado.fase}`} role="status" aria-live="polite">
+              {sinConfirmar > 0 && `⚠ ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar y no pude volver a leer el servidor: la lista puede no ser la que quedó guardada.`}
+              {!sinConfirmar && estado.fase === 'guardando' && <><span className="spinner" aria-hidden="true" /> Guardando…</>}
+              {!sinConfirmar && estado.fase === 'guardado' && !fallas.length && <>✓ Guardado en la biblioteca {hora && <span className="mono">{hora}</span>} · {resumen}</>}
+              {!sinConfirmar && estado.fase === 'guardado' && fallas.length > 0 && `Lista igual a la del servidor · ${resumen} · ${fallas.length} cambio${fallas.length === 1 ? '' : 's'} no se guardó${fallas.length === 1 ? '' : 'ron'} (ver el aviso)`}
+              {!sinConfirmar && estado.fase === 'leido' && track && `${marcas.length ? resumen : 'Sin marcas todavía'} · ${fallas.length ? `lista releída del servidor · ${fallas.length} cambio${fallas.length === 1 ? '' : 's'} no se guardó${fallas.length === 1 ? '' : 'ron'} (ver el aviso)` : 'se guardan solas en la biblioteca'}`}
             </p>
-            {falla && (
+            {fallas.length > 0 && (
               <div className="alert alert-warn edd-falla" role="alert">
                 <div>
                   <div className="alert-title">No se guardó</div>
-                  <p>{falla.texto}</p>
-                  <button type="button" className="btn btn-secondary edd-btn" onClick={() => setFalla(null)}>Descartar el aviso</button>
+                  <ul className="edd-fallas">{fallas.map((f) => <li key={f.id}>{f.texto}</li>)}</ul>
+                  {sinConfirmar > 0
+                    ? <button type="button" className="btn btn-secondary edd-btn edd-releer" onClick={() => releer(id)}>Volver a leer del servidor</button>
+                    : <button type="button" className="btn btn-secondary edd-btn edd-descartar" onClick={() => setFallas([])}>Entendido: descartar el aviso</button>}
                 </div>
               </div>
             )}

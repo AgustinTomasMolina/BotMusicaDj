@@ -1741,8 +1741,10 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   --edd-graves:#3b7bff;
   --edd-medios:#f0a43a;
   --edd-agudos:#e6e8f2;
-  --edd-beat:rgba(233,233,237,.30);
-  --edd-compas:rgba(233,233,237,.70);
+  /* Las líneas de la grilla: blancas bastante opacas con un halo oscuro de 1 px, para que se
+     lean sobre los graves azules (auditoría f54) sin tapar el kick (1 px de línea). */
+  --edd-beat:rgba(255,255,255,.62);
+  --edd-compas:rgba(255,255,255,.92);
 }
 .edd-fondo{position:fixed;inset:0;z-index:300;background:var(--color-bg);overflow:auto;overscroll-behavior:contain}
 .edd{box-sizing:border-box;min-height:100%;max-width:1600px;margin:0 auto;padding:16px 24px 24px;display:flex;flex-direction:column;gap:12px;color:var(--color-text)}
@@ -1776,7 +1778,7 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-onda{position:relative;height:230px;background:var(--edd-fondo-onda);border-radius:6px;overflow:hidden;cursor:pointer;touch-action:none}
 .edd-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .edd-grilla{position:absolute;inset:0;pointer-events:none}
-.edd-beat{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--edd-beat)}
+.edd-beat{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:var(--edd-beat);box-shadow:-1px 0 0 rgba(0,0,0,.55),1px 0 0 rgba(0,0,0,.55)}
 .edd-beat.is-compas{width:2px;margin-left:-1px;background:var(--edd-compas)}
 /* Grilla de confianza baja: atenuada y punteada (no se confunde con una grilla firme). */
 .edd-onda.is-atenuada .edd-beat{background:none;border-left:1px dashed rgba(233,233,237,.22)}
@@ -1825,6 +1827,8 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-aviso:empty,.edd-estado:empty{display:none}
 .edd-estado{margin:0;font-size:13px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--color-neutral-300)}
 .edd-estado.is-guardado{color:var(--color-ok)}
+.edd-estado.is-desincronizado{color:var(--color-warn);font-weight:600}
+.edd-fallas{margin:4px 0 8px;padding-left:18px}
 .edd-abajo{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px;align-items:start}
 .edd-pads-box{display:flex;flex-direction:column;gap:10px;min-width:0}
 .edd-sub{margin:0;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--color-neutral-300);line-height:1.8}
