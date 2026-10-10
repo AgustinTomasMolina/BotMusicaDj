@@ -4094,8 +4094,12 @@ function casosF53() {
           const r = await apiPedir(ctx, rutaMarcas(uno.analisis.radio_id), 'POST', m)
           afirmar(r.status === 201, `no pude crear la marca ${json(m)}: ${json(r)}`)
         }
+        // Un tema sin archivo en la PC: queda afuera, y el diálogo lo dice con su motivo.
+        const sinArch = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: { titulo: 'Sin archivo', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-f56' } })
+        afirmar(sinArch.status === 200, `no pude agregar el tema sin archivo: ${json(sinArch)}`)
         const res = (await apiPedir(ctx, `/api/playlists/${pid}/rekordbox`)).data
-        igual([res.incluidos, res.marcas], [2, { hot_cues: 1, memory: 1, loops: 1 }], 'la API no cuenta los temas y las marcas de «Set»')
+        igual([res.incluidos, res.total, res.marcas, res.omitidos.map((o) => o.titulo)], [2, 3, { hot_cues: 1, memory: 1, loops: 1 }, ['Sin archivo']],
+          'la API no cuenta los temas, las marcas y el omitido de «Set»')
 
         await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
         await abrirEnRail(page, 'Set')

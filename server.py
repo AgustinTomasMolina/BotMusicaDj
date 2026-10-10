@@ -4514,8 +4514,10 @@ def _armar_export(pid, incluir_grilla: bool) -> tuple[dict | None, JSONResponse 
         if ae == "ambiguo":
             fila["motivo"] = (f"Hay {it.get('homonimos') or 2} archivos con ese nombre en tus "
                               f"carpetas y no elijo uno a la suerte.")
+        elif ae == "sin-archivo" or ae not in _MOTIVO_ARCHIVO and ae != "ok":
+            fila["motivo"] = "Sin archivo en la PC: bajalo primero (Rekordbox necesita el archivo)."
         elif ae != "ok":
-            fila["motivo"] = _MOTIVO_ARCHIVO.get(ae) or "Sin archivo en la PC."
+            fila["motivo"] = _MOTIVO_ARCHIVO[ae]
         elif v is None:
             fila["motivo"] = ("Todavía no lo analizó el motor: analizalo y exportá de nuevo (sin "
                               "análisis no hay BPM, key ni duración que llevar).")
