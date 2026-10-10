@@ -3159,7 +3159,9 @@ async def radio_marcas_conteo(ids: str = ""):
 
     def contar(store):
         conteos = store.cue_mark_counts(rutas.values())
-        huerfanas = store.orphan_cue_marks()
+        # f56: las marcas importadas de Rekordbox de un archivo que está en disco pero el motor
+        # todavía no analizó NO son huérfanas: el archivo no «ya no está», solo falta medirlo.
+        huerfanas = [(k, n) for k, n in store.orphan_cue_marks() if not os.path.isfile(k)]
         return ({i: conteos.get(os.path.normcase(os.path.abspath(r)), 0)
                  for i, r in rutas.items()}, huerfanas)
 
@@ -4010,6 +4012,10 @@ def _analisis_items(items: list[dict]) -> tuple[list[dict], dict]:
                 a["estado"] = "pendiente"
                 if f is not None:
                     a["motivo"] = "El archivo cambió desde que se analizó: hay que volver a analizarlo."
+            # f56: las marcas son del archivo, no del análisis: las importadas de Rekordbox se
+            # ven (puntos de color) aunque el motor todavía no lo haya medido.
+            if estado == _RADIO_OK:
+                a["marcas"] = marcas.get(_S._key(ruta), {"total": 0, "pads": [], "memory": 0, "loop": 0})
             if vigente and f is not None:
                 from motor.cli import key_dudosa
                 from motor.tonalidad import camelot_a_clasica
@@ -4243,9 +4249,14 @@ def _importar_o_actualizar_sin_lock(origen: str, ref: str, nombre: str, archivo:
 @app.post("/api/importar/rekordbox")
 async def importar_rekordbox(request: Request):
     """Importa las playlists elegidas de un XML ya leído: {token, playlists: [ids],
-    actualizar?: bool}. Una playlist ya importada (misma ruta adentro de Rekordbox) no se crea
-    de nuevo: vuelve "ya-importada", y con `actualizar` agrega lo nuevo y refresca lo que no
-    editó el dueño."""
+    actualizar?: bool, pisar_cues?: bool}. Una playlist ya importada (misma ruta adentro de
+    Rekordbox) no se crea de nuevo: vuelve "ya-importada", y con `actualizar` agrega lo nuevo y
+    refresca lo que no editó el dueño.
+
+    f56: los hot cues, memory cues y loops del DJ (POSITION_MARK) se guardan como marcas de la
+    página en cada tema con archivo (`_importar_cues`). Lo que pasó con ellos va en `cues` de
+    cada resultado; si la base del motor no se puede usar, la playlist se importa igual y
+    `cues.error` dice por qué no entraron."""
     cuerpo, rechazo = await _cuerpo_json_propio(request)
     if rechazo:
         return rechazo
@@ -4263,15 +4274,22 @@ async def importar_rekordbox(request: Request):
         return JSONResponse({"exito": False, "mensaje": "Esa playlist no está en el XML."},
                             status_code=404)
     actualizar = cuerpo.get("actualizar") is True
+    # f56: por defecto los cues de la página ganan (solo se suman los que no están); pisarlos
+    # con los de Rekordbox es un pedido explícito.
+    pisar_cues = cuerpo.get("pisar_cues") is True
 
     def importar():
         out = []
         for i in dict.fromkeys(ids):
             p = por_id[i]
             temas = playlist_import.temas_de_playlist(col, p)
-            out.append({"playlist": i, "ruta": p["ruta"],
-                        **_importar_o_actualizar("rekordbox", p["ruta"], p["nombre"],
-                                                 col.nombre_xml, temas, actualizar)})
+            r = {"playlist": i, "ruta": p["ruta"],
+                 **_importar_o_actualizar("rekordbox", p["ruta"], p["nombre"],
+                                          col.nombre_xml, temas, actualizar)}
+            # Una playlist que ya estaba y no se actualizó no toca nada: tampoco sus cues.
+            if r["estado"] in ("creada", "actualizada"):
+                r["cues"] = _importar_cues(temas, pisar_cues)
+            out.append(r)
         return out
 
     resultados = await asyncio.to_thread(importar)
@@ -4330,6 +4348,333 @@ async def importar_carpeta(request: Request):
              f"importaron los primeros {len(archivos)}.") if pasado else None
     return {"exito": True, **r, "ruta": ref, "aviso": aviso,
             "ilegibles": sum(1 for t in temas if t.get("import_motivo"))}
+
+
+# ============================================================
+#  Rekordbox con cues (f56): exportar una playlist a un XML con sus marcas, e importar las
+#  marcas que el DJ ya tiene en Rekordbox
+# ============================================================
+#   GET   /api/playlists/{pid}/rekordbox    qué se va a exportar: temas, marcas y omitidos con
+#                                           su motivo (sin rutas)
+#   POST  /api/playlists/{pid}/rekordbox    {incluir_grilla?: bool} → el .xml como descarga
+#   (importar: /api/importar/rekordbox guarda los POSITION_MARK, ver `_importar_cues`)
+#
+# La lógica del XML está en `rekordbox_cues.py`. Las rutas de los archivos salen de la base
+# (los items de la playlist), nunca del cliente. Las respuestas JSON no llevan rutas; el .xml
+# SÍ lleva la ruta completa de cada tema: es lo que Rekordbox necesita para encontrarlo (la
+# pantalla lo avisa). Los audios no se tocan: solo se leen (la grilla, si se pide).
+
+import rekordbox_cues  # noqa: E402
+
+# Cuando la base del motor no se puede usar: el motivo SIN la ruta de la base (los de
+# `_usar_store_motor` la llevan, y esto viaja a la pantalla de playlists).
+_BASE_MOTOR_MOTIVO = {
+    _RADIO_SIN_MOTOR: "Esta instalación no incluye el motor (motor/).",
+    _RADIO_SIN_BASE: "Todavía no hay biblioteca del motor: analizá los temas de la playlist.",
+    _RADIO_ESQUEMA: "La base del motor es de otra versión: no la toco.",
+    _RADIO_OCUPADA: "La base del motor está ocupada (un scan u otra instancia): probá en un rato.",
+    _RADIO_ILEGIBLE: "No pude leer la base del motor.",
+}
+
+
+def _motivo_base(estado: str) -> str:
+    return _BASE_MOTOR_MOTIVO.get(estado, "No pude usar la base del motor.")
+
+
+def _duracion_de_archivo(ruta: str) -> float | None:
+    """La duración real del audio (mutagen), o None si no se puede leer. Solo se lee."""
+    try:
+        from mutagen import File as MFile
+        largo = getattr(getattr(MFile(ruta), "info", None), "length", None)
+    except Exception:  # noqa: BLE001 — un archivo raro no frena la importación
+        return None
+    return float(largo) if largo and math.isfinite(largo) and largo > 0 else None
+
+
+# Lo que hay que hacer si los cues no entraron: la playlist sí se importó, así que se vuelve
+# a importar con «Actualizar» (los cues que ya estén no se duplican).
+_REINTENTAR_CUES = "Cuando se pueda, volvé a importar la playlist tildando «Actualizar»."
+
+
+def _importar_cues(temas: list[dict], pisar: bool) -> dict | None:
+    """Guarda las marcas que traen los temas del XML (`rekordbox_cues.marcas_de_track`) como
+    marcas de la página, por la ruta de cada archivo (`Store.import_cue_marks`): idempotente,
+    los pads que la página ya usa ganan salvo `pisar`. None si ningún tema trae marcas.
+
+    Las marcas de un tema sin archivo no tienen dónde guardarse: se cuentan en `sin_archivo`, y
+    las de un tema AMBIGUO (varios archivos con ese nombre; no se elige uno) en `ambiguas`.
+    Importar cues NO exige que el motor haya analizado el tema (exportar sí: ver `_armar_export`).
+    El largo con el que se valida es el del análisis del motor si ya lo midió y, si no, el del
+    archivo. Si la base del motor no existe se crea (como `scan`); si no se puede usar, `error`
+    dice por qué y nada se guarda."""
+    ignoradas: dict[str, int] = {}
+    for t in temas:
+        for k, n in (t.get("marcas_ignoradas") or {}).items():
+            ignoradas[k] = ignoradas.get(k, 0) + n
+    con = [t for t in temas if t.get("marcas")]
+    if not con and not ignoradas:
+        return None
+    res = {"temas": 0, "agregadas": 0, "ya_estaban": 0, "conservadas": 0, "reemplazadas": 0,
+           "fuera_del_tema": 0, "sin_lugar": 0,
+           "sin_archivo": sum(len(t["marcas"]) for t in con
+                              if not t.get("ruta") and t.get("resolucion") != "ambiguo"),
+           "ambiguas": sum(len(t["marcas"]) for t in con
+                           if not t.get("ruta") and t.get("resolucion") == "ambiguo"),
+           "color_distinto": ignoradas.pop("color_distinto", 0),
+           "nombre_descartado": ignoradas.pop("nombre_descartado", 0),
+           "ignoradas": ignoradas, "pisar": pisar, "error": None}
+    con_ruta = [t for t in con if t.get("ruta")]
+    if not con_ruta:
+        return res
+    try:
+        from motor.cli import db_por_defecto
+        from motor.store import Store
+        base = db_por_defecto()
+        if not base.exists():
+            Store(base, espera_bloqueo_s=_RADIO_ESPERA_S).close()
+    except ImportError:
+        res["error"] = f"{_motivo_base(_RADIO_SIN_MOTOR)} Los cues no se guardaron."
+        return res
+    except (sqlite3.Error, OSError):
+        res["error"] = f"No pude crear la base del motor: los cues no se guardaron. {_REINTENTAR_CUES}"
+        return res
+
+    def escribir(store):
+        for t in con_ruta:
+            ruta = os.path.abspath(t["ruta"])
+            dur = store.duration(ruta)
+            if dur is None:
+                dur = _duracion_de_archivo(ruta)
+            c = store.import_cue_marks(ruta, t["marcas"], pisar=pisar, duration_s=dur)
+            for k, n in c.items():
+                res[k] += n
+            res["temas"] += 1
+
+    _, estado, _motivo = _usar_store_motor(escribir)
+    if estado != _RADIO_OK:
+        res["error"] = f"{_motivo_base(estado)} Los cues no se guardaron. {_REINTENTAR_CUES}"
+    return res
+
+
+def _grilla_export(ruta: str, bpm: float) -> dict:
+    """La grilla ESTIMADA del tema (`motor.bandas.grilla`) o {"motivo"} si no se pudo leer el
+    audio. Usa la misma caché que la onda de 3 bandas."""
+    try:
+        from motor.bandas import cached_bandas, grilla
+        b, _ = cached_bandas(ruta, Path(db.DATA_DIR) / "peaks")
+        return grilla(b, bpm)
+    except Exception as e:  # noqa: BLE001 — un audio que no se lee no es un 500
+        logger.warning(f"⚠️ Export Rekordbox: no pude estimar la grilla ({type(e).__name__})")
+        return {"motivo": "no pude leer el audio para estimar la grilla"}
+
+
+def _tempo_export(ruta: str, bpm: float) -> tuple[dict | None, str | None]:
+    """Los atributos del `<TEMPO>` (`rekordbox_cues.tempo_de_grilla`) y, si no va, por qué.
+    Todo adentro de un try: una grilla rara (un valor que no es número) no puede ser un 500.
+
+    Ojo, dicho en el aviso de la pantalla: el `Bpm` del TEMPO es el AFINADO de la grilla, con
+    dos decimales, y `AverageBpm` del TRACK es el que midió el motor, con uno: pueden diferir
+    (128.40 vs 128.4, o 127.99 vs 128.0). Los dos son ESTIMADOS: ni la fase ni el 1 del compás
+    (`estimar_compas`, una heurística sin ground truth de downbeats reales) se verificaron con
+    los temas del dueño."""
+    try:
+        g = _grilla_export(ruta, bpm)
+        tempo = rekordbox_cues.tempo_de_grilla(g)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ Export Rekordbox: grilla inválida ({type(e).__name__})")
+        return None, "la grilla estimada no se pudo usar"
+    if tempo is not None:
+        return tempo, None
+    return None, (g.get("motivo") or g.get("compas_motivo") or "no se sabe cuál beat es el 1")
+
+
+def _sin_marcas() -> dict:
+    return {"hot_cues": 0, "memory": 0, "loops": 0}
+
+
+def _armar_export(pid, incluir_grilla: bool) -> tuple[dict | None, JSONResponse | None]:
+    """Qué va al XML de la playlist `pid` y qué queda afuera (con su motivo).
+
+    Va un tema con archivo en la PC Y analizado por el motor (vigente): de ahí salen el BPM, la
+    key y la duración, y sus marcas. (Importar cues de Rekordbox NO exige análisis —se atan a la
+    ruta—; exportarlas sí, porque sin la duración medida no se sabe si caen adentro del audio.) Lo demás se lista en `omitidos`. La key dudosa (`?`, sin
+    acuerdo entre tramos) NO se escribe: en Rekordbox no hay `?`, y escribirla la mostraría
+    como segura; sin `Tonality`, Rekordbox la analiza él. Una marca que cae fuera del audio
+    (el archivo cambió después de marcarla) no se escribe y se cuenta."""
+    data = db.get_playlist_mia(pid, True) if pid is not None else None
+    if not data:
+        return None, JSONResponse({"exito": False, "mensaje": "Playlist no encontrada."},
+                                  status_code=404)
+    items = data["items"]
+    rutas = list(dict.fromkeys(os.path.abspath(it["ruta"]) for it in items
+                               if it.get("archivo_estado") == "ok" and it.get("ruta")))
+
+    def leer(store):
+        out = {}
+        for r in rutas:
+            f = store.get_features(r)
+            out[r] = None if f is None else {
+                "f": f, "vigente": not store.needs_analysis(r), "dur": store.duration(r),
+                "marcas": store.list_cue_marks(r)}
+        return out
+
+    vistos, estado = {}, _RADIO_OK
+    if rutas:
+        res, estado, _ = _usar_store_motor(leer)
+        if estado == _RADIO_OK:
+            vistos = res
+        elif estado != _RADIO_SIN_BASE:      # sin base = nada analizado todavía: se dice por tema
+            return None, JSONResponse({"exito": False, "mensaje": _motivo_base(estado),
+                                       "estado": estado}, status_code=409)
+
+    try:
+        from motor.cli import key_dudosa
+    except ImportError:              # sin motor no hay nada analizado: no se llega a usarla
+        def key_dudosa(_acuerdo) -> bool:
+            return True
+
+    temas, orden, filas, omitidos = [], [], [], []
+    indice: dict[str, int] = {}
+    for it in items:
+        fila = {"id": it["id"], "titulo": it["titulo"], "artista": it["artista"],
+                "incluido": False, "motivo": None, "marcas": _sin_marcas(), "marcas_fuera": 0,
+                "bpm": None, "camelot": None, "key_omitida": False, "grilla": None}
+        ae = it.get("archivo_estado")
+        ruta = os.path.abspath(it["ruta"]) if ae == "ok" and it.get("ruta") else None
+        v = vistos.get(ruta) if ruta else None
+        if ae == "ambiguo":
+            fila["motivo"] = (f"Hay {it.get('homonimos') or 2} archivos con ese nombre en tus "
+                              f"carpetas y no elijo uno a la suerte.")
+        elif ae == "sin-archivo" or ae not in _MOTIVO_ARCHIVO and ae != "ok":
+            fila["motivo"] = "Sin archivo en la PC: bajalo primero (Rekordbox necesita el archivo)."
+        elif ae != "ok":
+            fila["motivo"] = _MOTIVO_ARCHIVO[ae]
+        elif v is None:
+            fila["motivo"] = ("Todavía no lo analizó el motor: analizalo y exportá de nuevo (sin "
+                              "análisis no hay BPM, key ni duración que llevar).")
+        elif not v["vigente"]:
+            fila["motivo"] = "El archivo cambió desde que se analizó: volvé a analizarlo."
+        if fila["motivo"]:
+            omitidos.append({"id": it["id"], "titulo": it["titulo"], "motivo": fila["motivo"]})
+            filas.append(fila)
+            continue
+        fila["incluido"] = True
+        f, dur = v["f"], v["dur"]
+        bpm = _num(f.bpm)
+        fila["bpm"] = round(bpm, 1) if bpm is not None and bpm > 0 else None
+        if f.key and not key_dudosa(f.key_acuerdo):
+            fila["camelot"] = f.key
+        elif f.key:
+            fila["key_omitida"] = True
+        dur_ms = int(round(dur * 1000)) if dur else None
+        marcas = []
+        for m in v["marcas"]:
+            if dur_ms is not None and (m.start_ms >= dur_ms
+                                       or (m.end_ms is not None and m.end_ms > dur_ms)):
+                fila["marcas_fuera"] += 1
+                continue
+            marcas.append({"kind": m.kind, "num": m.num, "start_ms": m.start_ms,
+                           "end_ms": m.end_ms, "name": m.name})
+            clave = "loops" if m.kind == "loop" else "memory" if m.kind == "memory" else "hot_cues"
+            fila["marcas"][clave] += 1
+        if ruta not in indice:
+            tempo = None
+            if incluir_grilla:
+                if bpm is not None and bpm > 0:
+                    tempo, motivo_grilla = _tempo_export(ruta, bpm)
+                    fila["grilla"] = {"incluida": tempo is not None, "tempo": tempo,
+                                      "motivo": motivo_grilla}
+                else:
+                    fila["grilla"] = {"incluida": False, "motivo": "el tema no tiene BPM medido"}
+            indice[ruta] = len(temas)
+            temas.append({"ruta": ruta, "titulo": it["titulo"], "artista": it["artista"],
+                          "bpm": fila["bpm"], "camelot": fila["camelot"], "duracion_s": dur,
+                          "marcas": marcas, "tempo": tempo})
+        orden.append(indice[ruta])
+        filas.append(fila)
+
+    incluidas = [x for x in filas if x["incluido"]]
+    return {"nombre": data["nombre"], "archivo": rekordbox_cues.nombre_archivo_xml(data["nombre"]),
+            "temas": temas, "orden": orden, "filas": filas, "omitidos": omitidos,
+            "incluidos": len(incluidas),
+            "marcas": {k: sum(x["marcas"][k] for x in incluidas) for k in _sin_marcas()},
+            "marcas_fuera": sum(x["marcas_fuera"] for x in incluidas),
+            "keys_omitidas": sum(1 for x in incluidas if x["key_omitida"]),
+            "grillas": sum(1 for x in incluidas if (x["grilla"] or {}).get("incluida"))}, None
+
+
+_AVISO_RUTAS = ("El archivo lleva la ruta completa de cada tema en tu PC: es lo que Rekordbox "
+                "necesita para encontrarlos. No lo compartas si no querés mostrar tus carpetas.")
+_AVISO_GRILLA = ("La grilla de beats de la página es ESTIMADA: tanto el beat como el 1 del compás "
+                 "los calcula el motor y NO se verificaron con tus temas (el 1 del compás sale de "
+                 "una heurística que nunca se midió contra downbeats reales). Si la exportás, "
+                 "Rekordbox la usa en vez de analizar la suya: un 1 corrido desarma el beat jump, "
+                 "el quantize por compás y las frases, y un beat corrido el sync. Revisala en "
+                 "Rekordbox antes de tocar en vivo. Va solo en los temas donde el motor encontró "
+                 "beat y compás; su BPM es el afinado de la grilla (dos decimales) y puede diferir "
+                 "un poco del BPM medido que va en el tema (un decimal).")
+
+
+def _export_publico(plan: dict) -> dict:
+    return {"exito": True, "nombre": plan["nombre"], "archivo": plan["archivo"],
+            "total": len(plan["filas"]), "incluidos": plan["incluidos"],
+            "marcas": plan["marcas"], "marcas_fuera": plan["marcas_fuera"],
+            "keys_omitidas": plan["keys_omitidas"], "omitidos": plan["omitidos"],
+            "temas": [{k: v for k, v in x.items() if k != "grilla"} for x in plan["filas"]],
+            "aviso_rutas": _AVISO_RUTAS, "aviso_grilla": _AVISO_GRILLA}
+
+
+@app.get("/api/playlists/{pid}/rekordbox")
+async def playlists_rekordbox_resumen(pid: str):
+    """Qué va a llevar el XML de Rekordbox de esta playlist, sin armarlo: cuántos temas y
+    marcas, los que quedan afuera con su motivo y los avisos. Sin rutas."""
+    plan, error = await asyncio.to_thread(_armar_export, _id_url(pid), False)
+    if error is not None:
+        return error
+    return _export_publico(plan)
+
+
+@app.post("/api/playlists/{pid}/rekordbox")
+async def playlists_rekordbox_exportar(pid: str, request: Request):
+    """Arma el XML de Rekordbox de la playlist y lo devuelve como descarga.
+
+    Cuerpo JSON: {"incluir_grilla": true} agrega la grilla ESTIMADA (`TEMPO`) donde se pudo
+    estimar con confianza; sin eso (por defecto) no va ninguna grilla. 403 pedido de otra
+    página · 415 no es JSON · 400 opción inválida · 404 playlist · 409 nada que exportar o base
+    del motor inutilizable (con el motivo). Las cabeceras X-MusiFlix-* dicen cuántos temas,
+    marcas y grillas van."""
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    sobran = sorted(set(cuerpo) - {"incluir_grilla"})
+    grilla_pedida = cuerpo.get("incluir_grilla", False)
+    if sobran or not isinstance(grilla_pedida, bool):
+        return JSONResponse({"exito": False, "mensaje": "La única opción es «incluir_grilla» "
+                             "(true o false)."}, status_code=400)
+    plan, error = await asyncio.to_thread(_armar_export, _id_url(pid), grilla_pedida)
+    if error is not None:
+        return error
+    if not plan["temas"]:
+        return JSONResponse({"exito": False, "mensaje": "Ningún tema de la playlist se puede "
+                             "exportar todavía (el motivo está en cada uno).",
+                             "omitidos": plan["omitidos"]}, status_code=409)
+    try:
+        xml = await asyncio.to_thread(rekordbox_cues.armar_xml_playlist, plan["nombre"],
+                                      plan["temas"], plan["orden"])
+    except Exception as e:  # noqa: BLE001 — nunca un 500
+        logger.warning(f"⚠️ Export Rekordbox: no pude armar el XML ({type(e).__name__}: {e})")
+        return JSONResponse({"exito": False, "mensaje": "No pude armar el XML "
+                             f"({type(e).__name__})."}, status_code=409)
+    m = plan["marcas"]
+    logger.info(f"📤 Rekordbox: {plan['archivo']} ({plan['incluidos']} temas, "
+                f"{sum(m.values())} marcas)")
+    return Response(content=xml, media_type="application/xml",
+                    headers={"Content-Disposition": _content_disposition(plan["archivo"]),
+                             "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+                             "X-MusiFlix-Temas": str(plan["incluidos"]),
+                             "X-MusiFlix-Omitidos": str(len(plan["omitidos"])),
+                             "X-MusiFlix-Marcas": str(sum(m.values())),
+                             "X-MusiFlix-Grillas": str(plan["grillas"])})
 
 
 # ============================================================

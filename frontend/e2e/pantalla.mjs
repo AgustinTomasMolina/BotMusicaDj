@@ -3865,11 +3865,12 @@ function casosF53() {
           'la API no resolvió Peak como está en disco (el 999 no está en la colección y no entra)')
         afirmar(filasPeak.find((f) => f.titulo === 'Repetido').estado.startsWith('Hay 2 archivos con ese nombre'), 'el homónimo no dice que hay dos archivos')
 
-        // Las acciones 2 y 3: deshabilitadas, con el motivo A LA VISTA y alcanzables con el teclado.
+        // La acción 2: deshabilitada, con el motivo A LA VISTA y alcanzable con el teclado. La 3
+        // (f56) ya está disponible.
         const acc = await leerAcciones(page)
-        igual(acc.slice(1).map((a) => [a.titulo, a.deshabilitada, a.enfocable]), [['Armar un set', true, true], ['Exportar a Rekordbox (con cues)', true, true]],
-          'Armar un set / Exportar a Rekordbox tienen que estar deshabilitados (y alcanzables con el teclado)')
-        for (const a of acc.slice(1)) afirmar(a.motivo && /^Todavía no/.test(a.motivo), `«${a.titulo}» no muestra por qué está deshabilitado: ${json(a)}`)
+        igual(acc.slice(1).map((a) => [a.titulo, a.deshabilitada, a.enfocable]), [['Armar un set', true, true], ['Exportar a Rekordbox (con cues)', false, true]],
+          'Armar un set tiene que estar deshabilitado y Exportar a Rekordbox disponible (los dos alcanzables con el teclado)')
+        afirmar(acc[1].motivo && /^Todavía no/.test(acc[1].motivo), `«${acc[1].titulo}» no muestra por qué está deshabilitado: ${json(acc[1])}`)
         const antes = await dialogos(page)
         await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Armar un set')).click())
         igual(await dialogos(page), antes, '«Armar un set» deshabilitado abrió algo')
@@ -3912,6 +3913,22 @@ function casosF53() {
           if (p.ya_importada) afirmar(filas2[k].detalle.some((t) => t.includes(`«${p.ya_importada.nombre}»`)), `${p.ruta}: no dice que ya está importada`)
         })
         igual(relectura.playlists.filter((p) => p.ya_importada).length, tildadas.length, 'la API no marca como importadas las que se importaron')
+        // f56: cada playlist dice cuántos cues y loops trae de Rekordbox (los de la API).
+        relectura.playlists.forEach((p, k) => {
+          const partes = [p.cues ? `${p.cues} cue${p.cues === 1 ? '' : 's'}` : null, p.loops ? `${p.loops} loop${p.loops === 1 ? '' : 's'}` : null].filter(Boolean)
+          const dice = filas2[k].detalle.filter((t) => t.startsWith('Trae '))
+          igual(dice, partes.length ? [`Trae ${partes.join(' · ')} de Rekordbox`] : [], `${p.ruta}: no dice los cues que trae del XML`)
+        })
+        // «Actualizar» ofrece pisar los cues, destildado por defecto (ganan los de la página).
+        igual(await page.$('.imp-pisar'), null, 'la opción de pisar cues aparece sin «Actualizar»')
+        const kYa = relectura.playlists.findIndex((p) => p.ya_importada)
+        await page.evaluate((k) => document.querySelectorAll('.imp-pl input[type="checkbox"]')[k].click(), kYa)
+        await page.waitForSelector('.imp-actualizar input', { timeout: ESPERA_MS })
+        igual(await page.$('.imp-pisar'), null, 'la opción de pisar cues aparece sin tildar «Actualizar»')
+        await page.click('.imp-actualizar input')
+        const pisar = await hasta(() => page.$eval('.imp-pisar input', (i) => i.checked).catch(() => null), (v) => v !== null, 'no aparece la opción de pisar los cues')
+        igual(pisar, false, 'pisar los cues tiene que venir destildado')
+        afirmar((await page.$eval('#imp-pisar-d', (e) => e.textContent)).includes('ganan'), 'no explica que por defecto ganan los cues de la página')
 
         // 400 px: el diálogo y la playlist entran sin cortarse, y el género se sigue pudiendo tocar.
         await page.setViewport({ width: 400, height: 860 })
@@ -4050,6 +4067,111 @@ function casosF53() {
         await hasta(async () => (await itemsApi(ctx, pid)).map((i) => i.genero), (g) => json(g) === json(['Techno', 'Techno']), 'el género no llegó a los dos temas en la API')
         await esperarFilas(page, ctx, pid, 'las filas no muestran el género puesto a todos')
         igual(await page.$('.crate-genero'), null, 'el aviso «sin género» sigue con todos los temas con género')
+      } finally {
+        await borrarImportadas(ctx)
+      }
+    }],
+
+    /* f56: «Exportar a Rekordbox (con cues)». Lo esperado: el resumen de la API (GET
+       /api/playlists/{id}/rekordbox), los bytes del POST y las marcas creadas en el caso. Los
+       atributos de cada POSITION_MARK son los de la prueba verificada en Rekordbox 7.2.16
+       (pipeline/PRUEBA_CUES.md) con los colores del dueño en números: escritos acá, no copiados
+       del front. */
+    ['exportar (f56): el diálogo dice lo de la API y baja el mismo XML, con los cues y sus colores', async (page, ctx) => {
+      await borrarImportadas(ctx)
+      try {
+        const raiz = (await api(ctx, '/api/importar/carpetas')).raices.find((x) => x.nombre === ctx.base.importar_raiz)
+        const imp = await apiPedir(ctx, '/api/importar/carpeta', 'POST', { raiz: raiz.id, ruta: 'Set' })
+        afirmar(imp.status === 200, `no pude importar «Set»: ${json(imp)}`)
+        const pid = imp.data.id
+        afirmar((await apiPedir(ctx, `/api/playlists/${pid}/analizar`, 'POST', {})).status === 200, 'no arrancó el análisis')
+        await esperarAnalisisApi(ctx, pid)
+        const uno = (await itemsApi(ctx, pid)).find((i) => i.titulo === 'Kick Uno')
+        afirmar(uno?.analisis?.radio_id, `«Kick Uno» no quedó analizado: ${json(uno)}`)
+        await limpiarMarcas(ctx, uno.analisis.radio_id)
+        for (const m of [{ tipo: 'cue', inicio: 1, num: 0, nombre: 'Drop' }, { tipo: 'loop', inicio: 4, fin: 6, num: 2 },
+          { tipo: 'memory', inicio: 0.5 }]) {
+          const r = await apiPedir(ctx, rutaMarcas(uno.analisis.radio_id), 'POST', m)
+          afirmar(r.status === 201, `no pude crear la marca ${json(m)}: ${json(r)}`)
+        }
+        // Un tema sin archivo en la PC: queda afuera, y el diálogo lo dice con su motivo.
+        const sinArch = await apiPedir(ctx, `/api/playlists/${pid}/items`, 'POST', { track: { titulo: 'Sin archivo', artista: 'E2E', fuente: 'youtube', url: 'https://www.youtube.com/watch?v=e2e-f56' } })
+        afirmar(sinArch.status === 200, `no pude agregar el tema sin archivo: ${json(sinArch)}`)
+        const res = (await apiPedir(ctx, `/api/playlists/${pid}/rekordbox`)).data
+        igual([res.incluidos, res.total, res.marcas, res.omitidos.map((o) => o.titulo)], [2, 3, { hot_cues: 1, memory: 1, loops: 1 }, ['Sin archivo']],
+          'la API no cuenta los temas, las marcas y el omitido de «Set»')
+
+        await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+        await abrirEnRail(page, 'Set')
+        const acc = await leerAcciones(page)
+        igual([acc[2].titulo, acc[2].deshabilitada, acc[2].enfocable], ['Exportar a Rekordbox (con cues)', false, true], 'la acción 3 no está disponible')
+        // Con el teclado: foco en la acción y Enter.
+        await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Exportar a Rekordbox')).focus())
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.rbx-dialog[role="dialog"]', { timeout: ESPERA_MS })
+        const leer = () => page.evaluate(() => ({
+          temas: document.querySelector('.rbx-temas')?.textContent ?? null,
+          marcas: document.querySelector('.rbx-marcas')?.textContent ?? null,
+          archivo: document.querySelector('.rbx-archivo')?.textContent ?? null,
+          rutas: document.querySelector('.rbx-rutas')?.textContent ?? null,
+          grilla: document.querySelector('.rbx-grilla input')?.checked ?? null,
+          omitidos: [...document.querySelectorAll('.rbx-omitidos li')].map((l) => l.textContent),
+        }))
+        const pl = (n, uno1, varios) => `${n} ${n === 1 ? uno1 : varios}`
+        const esperado = { temas: `${res.incluidos} de ${pl(res.total, 'tema', 'temas')}`, marcas: '1 hot cue, 1 memory cue, 1 loop',
+          archivo: res.archivo, rutas: res.aviso_rutas, grilla: false, omitidos: res.omitidos.map((o) => `${o.titulo}: ${o.motivo}`) }
+        await hasta(leer, (v) => json(v) === json(esperado), `el diálogo no dice lo de la API: ${json(esperado)}`)
+        igual(await chicos(page, '.rbx-dialog button, .rbx-dialog .imp-check'), [], 'hay controles del diálogo de exportar de menos de 44 px')
+        await sinRutas(page, ctx, 'diálogo de exportar')
+
+        // La descarga: los mismos bytes y el mismo nombre que el POST de la API.
+        const r = await fetch(`${ctx.url}/api/playlists/${pid}/rekordbox`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        afirmar(r.ok, `POST /rekordbox contestó ${r.status}`)
+        const esperadoBytes = Buffer.from(await r.arrayBuffer())
+        const nombre = decodeURIComponent((/filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') || '') || [])[1] || '')
+        igual(nombre, res.archivo, 'el nombre del archivo de la API')
+        const dir = fs.mkdtempSync(path.join(ctx.tmp, 'descargas-rbx-'))
+        const cdp = await page.createCDPSession()
+        await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, eventsEnabled: true })
+        const bajadas = []
+        cdp.on('Browser.downloadWillBegin', (e) => bajadas.push({ guid: e.guid, nombre: e.suggestedFilename, estado: 'empezó' }))
+        cdp.on('Browser.downloadProgress', (e) => { const d = bajadas.find((x) => x.guid === e.guid); if (d) d.estado = e.state })
+        await page.click('.rbx-descargar')
+        const [d] = await hasta(async () => bajadas, (ds) => ds.length > 0 && ds.every((x) => x.estado === 'completed' || x.estado === 'canceled'),
+          'tocar «Descargar el XML» no terminó ninguna descarga')
+        igual([bajadas.length, d.estado, d.nombre], [1, 'completed', nombre], 'la descarga del XML')
+        const bajado = fs.readFileSync(path.join(dir, d.nombre))
+        afirmar(Buffer.compare(bajado, esperadoBytes) === 0, `el XML bajado no es el de la API (${bajado.length} vs ${esperadoBytes.length} bytes)`)
+        // Las marcas de «Kick Uno» en el XML: los valores de la prueba verificada.
+        const marcas = await page.evaluate((txt) => {
+          const doc = new DOMParser().parseFromString(txt, 'application/xml')
+          if (doc.querySelector('parsererror')) return 'XML roto'
+          const t = [...doc.querySelectorAll('COLLECTION > TRACK')].find((x) => x.getAttribute('Name') === 'Kick Uno')
+          return t ? [...t.querySelectorAll('POSITION_MARK')].map((p) => Object.fromEntries([...p.attributes].map((a) => [a.name, a.value]))) : null
+        }, bajado.toString('utf8'))
+        igual(marcas, [
+          { Name: 'Drop', Type: '0', Start: '1.000', Num: '0', Red: '255', Green: '77', Blue: '90' },
+          { Name: '', Type: '4', Start: '4.000', End: '6.000', Num: '2', Red: '255', Green: '154', Blue: '46' },
+          { Name: '', Type: '0', Start: '0.500', Num: '-1' },
+        ], 'las marcas del XML no son las creadas (o no tienen los colores del dueño)')
+        afirmar(!bajado.toString('utf8').includes('<TEMPO'), 'sin tildar la grilla, el XML no lleva TEMPO')
+        const hecho = await hasta(() => page.$eval('.rbx-hecho', (e) => e.textContent).catch(() => null), (v) => v, 'no dice que se descargó')
+        afirmar(hecho.includes(nombre) && hecho.includes('rekordbox xml'), `el aviso no nombra el archivo ni cómo importarlo: ${hecho}`)
+
+        // La grilla: tildarla muestra el aviso de que es ESTIMADA (el de la API).
+        await page.click('.rbx-grilla input')
+        igual(await page.$eval('#rbx-grilla-d', (e) => e.textContent), res.aviso_grilla, 'el aviso de la grilla estimada no es el de la API')
+
+        // 400 px sin desborde; Escape cierra y el foco vuelve a la acción.
+        await page.setViewport({ width: 400, height: 860 })
+        await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+        const dsb = await desbordeDe(page)
+        afirmar(dsb.scroll <= dsb.ancho && dsb.fuera.length === 0, `diálogo de exportar a 400 px: hay contenido fuera del ancho: ${json(dsb)}`)
+        await page.keyboard.press('Escape')
+        await hasta(() => page.$('.rbx-dialog'), (v) => !v, 'Escape no cerró el diálogo')
+        await hasta(() => page.evaluate(() => document.activeElement?.querySelector?.('.crate-accion-t')?.textContent ?? null),
+          (v) => v === 'Exportar a Rekordbox (con cues)', 'el foco no volvió a la acción de exportar')
+        await limpiarMarcas(ctx, uno.analisis.radio_id)
       } finally {
         await borrarImportadas(ctx)
       }

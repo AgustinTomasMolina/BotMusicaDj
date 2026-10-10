@@ -17,6 +17,7 @@ import {
   origenTexto, motivoDe, metricaBpm,
 } from '../playlistImport'
 import CuesDialog from './CuesDialog'
+import ExportRekordbox from './ExportRekordbox'
 
 /* Iconos inline (Phosphor-ish) */
 const S = (p, sz = 16) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>
@@ -133,6 +134,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
   const [exportOpen, setExportOpen] = useState(false)
+  const [rekordboxOpen, setRekordboxOpen] = useState(false)   // f56
   // f53: el análisis con el motor (progreso que da el server) y el diálogo de cues.
   const [prog, setProg] = useState(null)
   const [cuesDe, setCuesDe] = useState(undefined)   // undefined = cerrado; el radio_id inicial
@@ -428,7 +430,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     ? `${analizados.length} tema${analizados.length === 1 ? '' : 's'} listo${analizados.length === 1 ? '' : 's'} para marcar`
                     : porAnalizar ? 'El motor tiene que medir los temas primero' : 'Ningún tema tiene archivo en la PC'}</span>
                 </button>
-                {/* 2 y 3 son de las etapas que siguen: deshabilitados con el motivo a la vista.
+                {/* 2 es de la etapa que sigue: deshabilitado con el motivo a la vista.
                     aria-disabled (no `disabled`) para que el teclado llegue y el lector lea el
                     motivo; el click no hace nada. */}
                 <button type="button" className="crate-accion" aria-disabled="true" aria-describedby="acc-set-d">
@@ -440,10 +442,15 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                       : ''}`}
                   </span>
                 </button>
-                <button type="button" className="crate-accion" aria-disabled="true" aria-describedby="acc-exp-d">
+                {/* f56: XML con la playlist y sus cues. Qué va y qué no lo dice el diálogo. */}
+                <button type="button" className="crate-accion" aria-describedby="acc-exp-d"
+                  onClick={() => { if (crate.items?.length) setRekordboxOpen(true) }}
+                  aria-disabled={!crate.items?.length ? 'true' : undefined}>
                   <span className="crate-accion-n" aria-hidden="true">3</span>
                   <span className="crate-accion-t">Exportar a Rekordbox (con cues)</span>
-                  <span className="crate-accion-d" id="acc-exp-d">Todavía no: llega en la etapa del XML con cues. Por ahora, «Exportar .m3u8» (sin cues).</span>
+                  <span className="crate-accion-d" id="acc-exp-d">{crate.items?.length
+                    ? 'XML con la playlist y los cues que marcaste. En Rekordbox: Preferencias › Avanzado › rekordbox xml.'
+                    : 'La playlist está vacía.'}</span>
                 </button>
               </div>
               {(prog?.corriendo || porAnalizar > 0 || txtProg) && (
@@ -608,6 +615,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
       </section>
 
       {exportOpen && crate && <ExportDialog crate={crate} toast={toast} onClose={() => setExportOpen(false)} />}
+      {rekordboxOpen && crate && <ExportRekordbox crate={crate} toast={toast} onClose={() => setRekordboxOpen(false)} />}
       {cuesDe !== undefined && crate && (
         <CuesDialog temas={analizados} inicial={cuesDe}
           onClose={() => { setCuesDe(undefined); cargarCrate(crate.id) }} />

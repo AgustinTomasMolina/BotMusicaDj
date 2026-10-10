@@ -424,8 +424,27 @@ export async function leerXmlRekordbox(file) {
   return { ok: r.ok, status: r.status, data: await cuerpoRadio(r) }
 }
 export const leerXmlConfigurado = () => pedirSets('/api/importar/rekordbox/leer', 'POST', { usar_configurado: true })
-export const importarRekordbox = (token, playlists, actualizar = false) =>
-  pedirSets('/api/importar/rekordbox', 'POST', { token, playlists, actualizar })
+// f56: `pisarCues` = los cues de Rekordbox reemplazan a los de la página en un pad ocupado (por
+// defecto gana la página y solo se suman los que no están).
+export const importarRekordbox = (token, playlists, actualizar = false, pisarCues = false) =>
+  pedirSets('/api/importar/rekordbox', 'POST', { token, playlists, actualizar, pisar_cues: pisarCues })
+
+/* ---------- f56: exportar una playlist a Rekordbox (XML con cues) ----------
+   El resumen (qué va y qué queda afuera, sin rutas) y la descarga. La descarga va con fetch y
+   no con un <a href>: un 409 (nada que exportar, base ocupada) tiene que verse con su motivo,
+   no guardarse en Descargas como si fuera el XML. */
+export const resumenRekordbox = (pid) => pedirSets(`/api/playlists/${encodeURIComponent(pid)}/rekordbox`)
+export async function exportarRekordbox(pid, incluirGrilla = false) {
+  const r = await fetch(`/api/playlists/${encodeURIComponent(pid)}/rekordbox`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ incluir_grilla: !!incluirGrilla }),
+  })
+  const d = await descargaM3u8(r)
+  if (d.ok) {
+    d.cuenta = {}
+    for (const k of ['temas', 'omitidos', 'marcas', 'grillas']) d.cuenta[k] = r.headers.get(`X-MusiFlix-${k[0].toUpperCase()}${k.slice(1)}`)
+  }
+  return d
+}
 export const listarCarpetas = (raiz, ruta = '') => pedirSets(raiz === undefined || raiz === null
   ? '/api/importar/carpetas'
   : `/api/importar/carpetas?raiz=${encodeURIComponent(raiz)}&ruta=${encodeURIComponent(ruta)}`)

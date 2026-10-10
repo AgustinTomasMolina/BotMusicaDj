@@ -100,14 +100,17 @@ def _comentarios(d: dict) -> str:
     return f"{previo}{SEPARADOR_COMENTARIO}{nota}" if previo else nota
 
 
-def _atributos_track(d: dict, i: int, carpeta_itunes: Path) -> dict:
+def _atributos_track(d: dict, i: int, carpeta_itunes: Path | None) -> dict:
     """Los atributos de un <TRACK>. Lo que no se pudo determinar NO se escribe.
 
     Nada de 0 ni de placeholders: acá el que lee es Rekordbox, que no pregunta. Un
     AverageBpm="0" no es "no sé", es "este track va a 0 BPM", y queda en la biblioteca.
+
+    `carpeta_itunes=None` (f56, exportar una playlist): la `Location` es el archivo ORIGINAL
+    del tema, donde está, y no la copia en la carpeta de iTunes.
     """
     archivo = Path(_ruta_de(d)).name
-    final = carpeta_itunes / archivo
+    final = Path(_ruta_de(d)) if carpeta_itunes is None else carpeta_itunes / archivo
     attrs = {
         "TrackID": str(i),
         "Name": d.get("titulo", "") or Path(archivo).stem,
@@ -176,12 +179,19 @@ def escribir_xml_rekordbox(decisiones: list[dict], destino: Path,
     return guardar_xml_rekordbox(root, destino)
 
 
-def armar_xml_rekordbox(decisiones: list[dict],
-                        carpeta_itunes: Path) -> tuple[ET.Element, list[ET.Element]]:
+def armar_xml_rekordbox(decisiones: list[dict], carpeta_itunes: Path | None,
+                        nombre_playlist: str = "MusiFlix",
+                        orden: list[int] | None = None) -> tuple[ET.Element, list[ET.Element]]:
     """El árbol `DJ_PLAYLISTS` / `COLLECTION` / `TRACK` + la playlist, sin escribirlo.
 
     Devuelve la raíz y los `<TRACK>` de la colección en el mismo orden que `decisiones`,
-    para que quien necesite colgarles hijos (la prueba de cues) lo haga sin rearmar nada.
+    para que quien necesite colgarles hijos (la prueba de cues, el export de una playlist) lo
+    haga sin rearmar nada.
+
+    f56: `carpeta_itunes=None` apunta cada `Location` al archivo original (ver
+    `_atributos_track`); `nombre_playlist` es el nombre del nodo de la playlist; `orden` son los
+    índices (0..n-1) de `decisiones` en el orden de la playlist, con repetidos si un tema va dos
+    veces (la colección lo lleva una sola vez). Sin `orden`, la playlist es la colección entera.
     """
     root = ET.Element("DJ_PLAYLISTS", {"Version": "1.0.0"})
     ET.SubElement(root, "PRODUCT", {"Name": "MusiFlix", "Version": "1.0",
@@ -194,9 +204,10 @@ def armar_xml_rekordbox(decisiones: list[dict],
     # Una playlist con todo lo aprobado, para que entre agrupado y no suelto.
     playlists = ET.SubElement(root, "PLAYLISTS")
     nodo = ET.SubElement(playlists, "NODE", {"Type": "0", "Name": "ROOT", "Count": "1"})
-    lista = ET.SubElement(nodo, "NODE", {"Name": "MusiFlix", "Type": "1",
-                                         "KeyType": "0", "Entries": str(len(decisiones))})
-    for i in range(1, len(decisiones) + 1):
+    claves = [i + 1 for i in orden] if orden is not None else range(1, len(decisiones) + 1)
+    lista = ET.SubElement(nodo, "NODE", {"Name": nombre_playlist, "Type": "1",
+                                         "KeyType": "0", "Entries": str(len(claves))})
+    for i in claves:
         ET.SubElement(lista, "TRACK", {"Key": str(i)})
     return root, tracks
 
