@@ -16,7 +16,7 @@ import {
   estadoTema, textoArchivo, datosTema, puntosMarcas, textoMarcas, resumenPlaylist, textoProgreso,
   origenTexto, motivoDe, metricaBpm,
 } from '../playlistImport'
-import CuesDialog from './CuesDialog'
+import EditorCues from './EditorCues'
 
 /* Iconos inline (Phosphor-ish) */
 const S = (p, sz = 16) => <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>
@@ -609,7 +609,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
       {exportOpen && crate && <ExportDialog crate={crate} toast={toast} onClose={() => setExportOpen(false)} />}
       {cuesDe !== undefined && crate && (
-        <CuesDialog temas={analizados} inicial={cuesDe}
+        <EditorCues temas={analizados} inicial={cuesDe}
           onClose={() => { setCuesDe(undefined); cargarCrate(crate.id) }} />
       )}
     </div>
