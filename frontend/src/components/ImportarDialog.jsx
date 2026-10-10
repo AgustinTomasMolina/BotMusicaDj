@@ -5,6 +5,7 @@ import {
   analizarPlaylist, avisarPlaylists,
 } from '../api'
 import { textoEncontrados, detalleFaltantes, motivoDe } from '../playlistImport'
+import { textoCuesImportados, textoCuesXml } from '../exportRekordbox'
 
 /* ============================================================================
    Diálogo «Importar…» (f53, tablero G del canvas): dos pestañas.
@@ -23,6 +24,7 @@ function PestanaRekordbox({ onListo, ocupado, setOcupado }) {
   const [error, setError] = useState(null)
   const [elegidas, setElegidas] = useState(() => new Set())
   const [actualizar, setActualizar] = useState(false)
+  const [pisarCues, setPisarCues] = useState(false)    // f56: por defecto ganan los de la página
   const [resultado, setResultado] = useState(null)
 
   const leer = async (pedido) => {
@@ -42,7 +44,7 @@ function PestanaRekordbox({ onListo, ocupado, setOcupado }) {
   const importar = async () => {
     setOcupado(true); setError(null)
     try {
-      const r = await importarRekordbox(lectura.token, [...elegidas], actualizar)
+      const r = await importarRekordbox(lectura.token, [...elegidas], actualizar, actualizar && pisarCues)
       if (!r.ok) { setError(motivoDe(r)); return }
       setResultado(r.data.resultados)
       const hechas = r.data.resultados.filter((x) => x.estado === 'creada' || x.estado === 'actualizada')
@@ -83,6 +85,7 @@ function PestanaRekordbox({ onListo, ocupado, setOcupado }) {
                     <span className={`imp-pl-n${p.encontrados < p.total ? ' is-warn' : ''}`}>{textoEncontrados(p)}</span>
                   </label>
                   <div id={idDet} className="imp-pl-det">
+                    {textoCuesXml(p) && <span className="imp-pl-cues">Trae {textoCuesXml(p)} de Rekordbox</span>}
                     {faltan.map((t) => <span key={t}>{t}</span>)}
                     {p.ya_importada && <span>Ya importada como «{p.ya_importada.nombre}»</span>}
                   </div>
@@ -96,12 +99,27 @@ function PestanaRekordbox({ onListo, ocupado, setOcupado }) {
               <span>Actualizar las que ya importé (suma los temas nuevos; no borra nada ni pisa el género que cambiaste)</span>
             </label>
           )}
+          {/* f56: «Pisar» solo aparece con «Actualizar» (es «Actualizar desde Rekordbox»). En una
+              importación nueva siempre gana la página: si un tema ya tenía cues marcados acá (por
+              otra playlist), en un pad ocupado queda el de la página y se cuenta como conservado. */}
+          {hayYa && actualizar && (
+            <label className="imp-check imp-actualizar imp-pisar">
+              <input type="checkbox" checked={pisarCues} onChange={(e) => setPisarCues(e.target.checked)} aria-describedby="imp-pisar-d" />
+              <span>Pisar mis cues con los de Rekordbox</span>
+            </label>
+          )}
+          {hayYa && actualizar && (
+            <p className="imp-ayuda" id="imp-pisar-d">{pisarCues
+              ? 'Si un pad tiene un cue distinto en la página y en Rekordbox, queda el de Rekordbox. Las demás marcas de la página no se borran.'
+              : 'Sin tildar, los cues que marcaste en la página ganan: de Rekordbox solo se suman los que no están.'}</p>
+          )}
           {resultado && (
             <ul className="imp-resultado" aria-label="Resultado">
               {resultado.map((x) => (
                 <li key={x.playlist}>{x.ruta}: {x.estado === 'creada' ? `importada (${x.temas} temas)`
                   : x.estado === 'actualizada' ? `actualizada (${x.agregados} nuevos)`
-                    : x.estado === 'ya-importada' ? 'ya estaba importada: tildá «Actualizar» para sumar lo nuevo' : x.mensaje}</li>
+                    : x.estado === 'ya-importada' ? 'ya estaba importada: tildá «Actualizar» para sumar lo nuevo' : x.mensaje}
+                {textoCuesImportados(x.cues) && <span className="imp-cues">{textoCuesImportados(x.cues)}</span>}</li>
               ))}
             </ul>
           )}
@@ -226,10 +244,15 @@ export default function ImportarDialog({ onClose, onImportada, toast }) {
   }
 
   // Después de importar: arranca el análisis de cada una y se abre la primera.
-  const listo = async (ids) => {
+  const listo = async (ids, resultados = []) => {
     avisarPlaylists()
     for (const id of ids) { try { await analizarPlaylist(id) } catch { /* la pantalla lo reintenta */ } }
-    toast?.ok({ title: ids.length === 1 ? 'Playlist importada' : `${ids.length} playlists importadas`, body: 'Ya arrancó el análisis con el motor.' })
+    // f56: lo que pasó con los cues de Rekordbox va en el aviso (el diálogo se cierra).
+    const cues = resultados.map((x) => textoCuesImportados(x.cues) && `${x.ruta}: ${textoCuesImportados(x.cues)}`).filter(Boolean)
+    const conError = resultados.some((x) => x.cues?.error)
+    const t = conError ? toast?.warn : toast?.ok
+    t?.({ title: ids.length === 1 ? 'Playlist importada' : `${ids.length} playlists importadas`,
+      body: ['Ya arrancó el análisis con el motor.', ...cues].join(' ') })
     onImportada?.(ids[0])
   }
 

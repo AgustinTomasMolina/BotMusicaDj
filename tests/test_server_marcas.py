@@ -369,6 +369,13 @@ def test_conteo_y_huerfanas(client, biblioteca):
     # cuentan como huérfanas, con el nombre del archivo y no la ruta.
     with Store(biblioteca["db"]) as store:
         store.delete(biblioteca["rutas"]["uno.wav"])
+    # f56: mientras el archivo siga en disco, sus marcas NO son huérfanas (es un tema que el
+    # motor todavía no analizó, como uno importado de Rekordbox con sus cues).
+    d = client.get("/api/radio/marcas/conteo", params={"ids": ids["dos.wav"]}).json()
+    assert d["huerfanas"] == {"tracks": 0, "marcas": 0, "archivos": []}, \
+        "un archivo que está en disco no «ya no está en la biblioteca»"
+    # Lo que hace un scan de verdad: el archivo ya no está en disco.
+    biblioteca["rutas"]["uno.wav"].unlink()
     d = client.get("/api/radio/marcas/conteo", params={"ids": ids["dos.wav"]}).json()
     assert d["huerfanas"] == {"tracks": 1, "marcas": 3, "archivos": ["uno.wav"]}
 
