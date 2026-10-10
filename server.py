@@ -2173,13 +2173,17 @@ def _leer_biblioteca_motor() -> tuple[list, str, str | None]:
     if estado != _RADIO_OK:
         return [], estado, motivo
     if not biblioteca:
-        from motor.cli import db_por_defecto
-
-        db = db_por_defecto()
-        return [], _RADIO_VACIA, (
-            f"La biblioteca del motor ({db}) no tiene ningún track analizado. Corré "
-            f"`python -m motor scan <carpeta>`.")
+        return [], *_motor_vacio()
     return biblioteca, _RADIO_OK, None
+
+
+def _motor_vacio() -> tuple[str, str]:
+    from motor.cli import db_por_defecto
+
+    return _RADIO_VACIA, (
+        f"La biblioteca del motor ({db_por_defecto()}) no tiene ningún track analizado. "
+        f"Analizá los temas de una playlist (Mis playlists → Analizar) o corré "
+        f"`python -m motor scan <carpeta>`.")
 
 
 def _cargar_radio() -> tuple[list, str, str | None]:
@@ -2329,20 +2333,110 @@ class _SetArmado:
     config: object = None
     elegida: object = None
     rset: object = None
+    # f55: de qué playlist sale y qué entró (ver `_contexto_playlist`).
+    pool: dict | None = None
+    item_de: dict | None = None      # radio_id → item_id del tema de la playlist que entró
+
+
+# --- f55: la radio desde una playlist (`radio_playlist.py`) --------------------------------
+# La radio de la web arma SOLO desde una playlist de Mis playlists y solo con temas del mismo
+# género que la semilla (decisión del dueño). El server arma los `Tema` con lo que ya sabe de
+# cada item (db + `_analisis_items`, el mismo estado que muestra Mis playlists) y los tracks del
+# motor de ESOS temas (`Store.load_tracks`, mismos valores que `load_library`); qué entra lo
+# decide `radio_playlist` y el set, `motor.radio.build_set`, sin tocar el scoring.
+
+import radio_playlist  # noqa: E402
+
+_SIN_PLAYLIST = ("La radio arma el set desde una playlist de Mis playlists: pasá `playlist` "
+                 "con su id (los ids salen de /api/playlists).")
+_SET_CAMBIO = ("El set cambió desde que lo armaste: la playlist o la biblioteca del motor ya no "
+               "son las mismas (¿un tema nuevo, otro género, un análisis que terminó?). Armalo de "
+               "nuevo y {accion} ese.")
+
+
+@dataclass(frozen=True)
+class _ContextoPlaylist:
+    playlist: dict                   # {id, nombre, origen, total}
+    temas: list                      # [radio_playlist.Tema], en el orden de la playlist
+    tracks: dict                     # radio_id → Track del motor (solo los de la playlist)
+    estado: str
+    motivo: str | None
+    motor_total: int | None
+
+
+def _contexto_playlist(pid: int) -> "_ContextoPlaylist | None":
+    """La playlist `pid` como la ve la radio. None si no existe. Nunca levanta por la base del
+    motor: sin base (u ocupada…) los temas quedan sin analizar y `estado`/`motivo` dicen por qué.
+    Todo se resuelve por el id de la playlist: el cliente nunca manda una ruta."""
+    data = db.get_playlist_mia(pid, True)
+    if not data:
+        return None
+    items, _ = _analisis_items(data.get("items") or [])
+    rutas = {it["analisis"]["radio_id"]: os.path.abspath(it["ruta"])
+             for it in items if it["analisis"].get("radio_id") and it.get("ruta")}
+    res, estado, motivo = _usar_store_motor(
+        lambda store: (store.load_tracks(rutas.values()), store.count()))
+    tracks, total = res if res is not None else ([], None)
+    por_id = {_radio_id(t.path): t for t in tracks}
+    for rid, t in por_id.items():
+        _radio_audio.setdefault(rid, str(t.path))     # audio, onda y marcas por el mismo id
+
+    from motor.modelos import es_track
+    temas = []
+    for i, it in enumerate(items, 1):
+        a = it["analisis"]
+        rid = a.get("radio_id")
+        t = por_id.get(rid) if rid else None
+        ok = it.get("archivo_estado") == "ok" and bool(it.get("ruta"))
+        temas.append(radio_playlist.Tema(
+            item_id=it["id"], posicion=i, titulo=it.get("titulo") or "",
+            artista=it.get("artista") or "", genero=it.get("genero"),
+            archivo_ok=ok, archivo_motivo=None if ok else a.get("motivo"),
+            analisis=a.get("estado") or "pendiente",
+            analisis_motivo=a.get("motivo") if a.get("estado") == "fallo" else None,
+            clave_archivo=os.path.normcase(os.path.abspath(it["ruta"])) if ok else None,
+            radio_id=rid if t is not None else None,
+            es_track=es_track(t.duration) if t is not None else None))
+    return _ContextoPlaylist(
+        {"id": data["id"], "nombre": data["nombre"], "origen": data.get("origen"),
+         "total": len(items)}, temas, por_id, estado, motivo, total)
+
+
+def _pool_json(ctx: _ContextoPlaylist, clave: str, decisiones: list) -> dict:
+    """Qué entró al set y qué quedó afuera (con su motivo), para la pantalla."""
+    genero = next((t.genero for t in ctx.temas if radio_playlist.clave_genero(t.genero) == clave), None)
+    return {"genero": genero, **radio_playlist.resumen(decisiones),
+            "afuera": radio_playlist.afuera(decisiones),
+            "analizando": radio_playlist.en_curso(ctx.temas, clave)}
+
+
+def _pid_de(playlist) -> int | None:
+    return _id_url(str(playlist)) if playlist is not None else None
 
 
 async def _armar_set_radio(track: str, largo, curva, artist_gap, mmr_lambda, semilla,
-                           randomness) -> "_SetArmado | JSONResponse":
-    """Arma el set que piden /api/radio/set y /api/radio/set.m3u8, o el 400 que corresponda.
+                           randomness, playlist=None) -> "_SetArmado | JSONResponse":
+    """Arma el set que piden /api/radio/set, /api/radio/set.m3u8 y los dos guardados, o el
+    400/404 que corresponda.
 
-    UNA sola función para los dos endpoints a propósito: el .m3u8 tiene que ser el MISMO
-    set que la pantalla acaba de mostrar, y dos copias de esta lógica (defaults, cómo se
+    UNA sola función para todos a propósito: el .m3u8 (y lo que se guarda) tiene que ser el
+    MISMO set que la pantalla acaba de mostrar, y dos copias de esta lógica (defaults, cómo se
     resuelve la semilla, qué se rechaza) se desincronizan en silencio — el día que una
     cambie, el archivo que se lleva el DJ sería otro set que el que escuchó.
+
+    f55: `playlist` es obligatoria. El pool son los temas de esa playlist del MISMO género que
+    la semilla (`radio_playlist.clasificar`); la semilla tiene que ser uno de ellos.
     """
-    tracks, estado, motivo = await asyncio.to_thread(_cargar_radio)
-    if estado != _RADIO_OK:
-        return _SetArmado(estado, motivo)
+    pid = _pid_de(playlist)
+    if pid is None:
+        return JSONResponse({"error": _SIN_PLAYLIST}, status_code=400)
+    ctx = await asyncio.to_thread(_contexto_playlist, pid)
+    if ctx is None:
+        return JSONResponse({"error": "Esa playlist no existe (¿se borró?)."}, status_code=404)
+    if ctx.estado != _RADIO_OK:
+        return _SetArmado(ctx.estado, ctx.motivo)
+    if not ctx.motor_total:
+        return _SetArmado(*_motor_vacio())
 
     from motor.cli import ErrorDeUso, motivo_semilla_no_track, resolver_track
     from motor.modelos import es_track
@@ -2355,23 +2449,26 @@ async def _armar_set_radio(track: str, largo, curva, artist_gap, mmr_lambda, sem
     except ValueError as e:      # curva inexistente, largo 0, randomness fuera de 0..1...
         return JSONResponse({"error": str(e)}, status_code=400)
 
+    nombre = ctx.playlist["nombre"]
     if not track.strip():
         return JSONResponse(
-            {"error": "Falta la semilla: pasá `track` con el id, la ruta o un fragmento del "
-                      "nombre (los ids salen de /api/radio/biblioteca)."}, status_code=400)
-    por_id = {_radio_id(t.path): t for t in tracks}
-    try:
-        # El id primero: es lo que manda el front. Si no es un id, se resuelve con la MISMA
-        # función que la CLI, que acepta ruta o fragmento y se niega a elegir entre homónimos
-        # — pero con `consultar_disco=False`, porque `track` viene de afuera. Con el default,
-        # `resolver_track` le hace `is_file()` a la cadena del cliente: el endpoint no tiene
-        # CORS y escucha en localhost, así que cualquier página abierta en el navegador podía
-        # usarlo para saber qué archivos existen en la máquina (y, con una ruta UNC, para
-        # provocar un intento SMB saliente). Todo lo que la API mira es la biblioteca que ya
-        # está cargada en memoria.
-        elegida = por_id.get(track) or resolver_track(track, tracks, consultar_disco=False)
-    except ErrorDeUso as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+            {"error": f"Falta la semilla: pasá `track` con el id de un tema de «{nombre}» "
+                      f"(los ids salen de /api/radio/playlists/{pid})."}, status_code=400)
+    tema = next((t for t in ctx.temas if t.radio_id == track), None)
+    if tema is None:
+        try:
+            # Si no es un id, se resuelve con la MISMA función que la CLI (ruta o fragmento,
+            # se niega a elegir entre homónimos) pero SOLO entre los temas de la playlist que
+            # el motor tiene y con `consultar_disco=False`: `track` viene de afuera, y con el
+            # default `resolver_track` le hace `is_file()` a la cadena del cliente (cualquier
+            # página abierta en el navegador podría usarlo para saber qué archivos hay en la PC).
+            elegida = resolver_track(track, list(ctx.tracks.values()), consultar_disco=False)
+        except ErrorDeUso as e:
+            return JSONResponse({"error": f"{e} (la semilla tiene que ser un tema analizado de "
+                                          f"la playlist «{nombre}»)"}, status_code=400)
+        rid = _radio_id(elegida.path)
+        tema = next(t for t in ctx.temas if t.radio_id == rid)
+    elegida = ctx.tracks[tema.radio_id]
 
     # Una semilla que no es un track se rechaza, igual que en la CLI y por el mismo motivo:
     # todo el set se arma contra su BPM y su key, y en 10 s de audio esos dos valores no son
@@ -2379,35 +2476,53 @@ async def _armar_set_radio(track: str, largo, curva, artist_gap, mmr_lambda, sem
     if not es_track(elegida.duration):
         return JSONResponse({"error": motivo_semilla_no_track(elegida),
                              "semilla": _radio_track(elegida)}, status_code=400)
-
-    rset = await asyncio.to_thread(build_set, elegida, tracks, config)
-    return _SetArmado(estado, motivo, config, elegida, rset)
+    clave = radio_playlist.clave_genero(tema.genero)
+    if clave is None:
+        return JSONResponse({"error": f"«{tema.etiqueta}» no tiene género: el set junta solo "
+                                      f"temas del mismo género que la semilla. Ponéselo en Mis "
+                                      f"playlists o elegí otra semilla."}, status_code=400)
+    decisiones = radio_playlist.clasificar(ctx.temas, clave)
+    propia = next(d for d in decisiones if d.tema.item_id == tema.item_id)
+    if not propia.entra:
+        return JSONResponse({"error": f"«{tema.etiqueta}» no puede arrancar el set: "
+                                      f"{propia.texto}."}, status_code=400)
+    entran = [d.tema for d in decisiones if d.entra]
+    pool = [ctx.tracks[t.radio_id] for t in entran]
+    rset = await asyncio.to_thread(build_set, elegida, pool, config)
+    return _SetArmado(_RADIO_OK, None, config, elegida, rset,
+                      pool={"playlist": ctx.playlist, **_pool_json(ctx, clave, decisiones)},
+                      item_de={t.radio_id: t.item_id for t in entran})
 
 
 @app.get("/api/radio/set")
 async def radio_set(track: str = "", largo: int | None = None, curva: str | None = None,
                     artist_gap: int | None = None, mmr_lambda: float | None = None,
-                    semilla: int | None = None, randomness: float | None = None):
-    """Arma un set desde `track` con `motor.radio.build_set`.
+                    semilla: int | None = None, randomness: float | None = None,
+                    playlist: str | None = None):
+    """Arma un set desde `track` con `motor.radio.build_set`, con los temas de `playlist` del
+    mismo género que `track` (f55: sin `playlist`, 400).
 
     OJO con los dos sentidos de "semilla", que son los mismos que en la CLI: `track` es el
-    track semilla (id de /api/radio/biblioteca, ruta o fragmento del nombre) y `semilla` es
+    track semilla (id de /api/radio/playlists/{id}, ruta o fragmento del nombre) y `semilla` es
     la semilla del GENERADOR ALEATORIO (`RadioConfig.seed`), que solo cuenta con
     `randomness > 0`.
 
     Los defaults NO se escriben acá: cada parámetro que no venga se omite y lo pone
     `RadioConfig`. Copiarlos en la firma sería tener dos juegos de defaults que se
     desincronizan en silencio — la request contesta con los que se usaron, en `config`.
+
+    `pool` dice de qué playlist salió, el género, cuántos entraron de cuántos y los que
+    quedaron afuera con su motivo; cada paso trae el `item_id` de su tema en la playlist.
     """
     armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
-                                    randomness)
+                                    randomness, playlist)
     if isinstance(armado, JSONResponse):
         return armado
     estado, motivo = armado.estado, armado.motivo
     if armado.rset is None:
         return {**_radio_envoltura(estado, motivo), "config": None, "semilla": None,
                 "pasos": [], "total": 0, "pedidos": None, "completo": False, "corte": None,
-                "fragmentos": 0, "aviso_fragmentos": None, "leyenda_key": None}
+                "fragmentos": 0, "aviso_fragmentos": None, "leyenda_key": None, "pool": None}
 
     from motor.cli import LEYENDA_KEY, aviso_fragmentos, titular_corte
 
@@ -2419,7 +2534,9 @@ async def radio_set(track: str = "", largo: int | None = None, curva: str | None
         # Lo que efectivamente se usó, leído del propio RadioConfig.
         "config": _radio_config(config),
         "semilla": _radio_track(elegida),
-        "pasos": [_radio_paso(i, p) for i, p in enumerate(rset, 1)],
+        "pasos": [{**_radio_paso(i, p), "item_id": armado.item_de.get(_radio_id(p.track.path))}
+                  for i, p in enumerate(rset, 1)],
+        "pool": armado.pool,
         "total": len(rset),
         "pedidos": config.length,
         "completo": rset.is_complete,
@@ -2441,6 +2558,93 @@ def _huella(rset, config) -> str:
     from motor.saved_sets import set_fingerprint
 
     return set_fingerprint(rset, config)
+
+
+@app.get("/api/radio/playlists/{pid}")
+async def radio_playlist_ver(pid: str):
+    """La playlist como la ve la radio (f55), para elegir la semilla ANTES de armar: los temas
+    que pueden arrancar un set (con los datos del motor y su género), por cada género cuántos
+    entran y cuáles quedan afuera con su motivo, cuántos se están analizando y si alcanza para
+    armar un set (`puede_armar`, con el motivo si no). 404 si la playlist no existe; sin base
+    del motor, 200 con `estado`/`motivo` y nada para elegir (como el resto de la radio)."""
+    p = _id_url(pid)
+    ctx = await asyncio.to_thread(_contexto_playlist, p) if p is not None else None
+    if ctx is None:
+        return JSONResponse({"error": "Esa playlist no existe (¿se borró?)."}, status_code=404)
+    estado, motivo = ctx.estado, ctx.motivo
+    if estado == _RADIO_OK and not ctx.motor_total:
+        estado, motivo = _motor_vacio()
+    ok = estado == _RADIO_OK
+    puede, porque = radio_playlist.puede_armar(ctx.temas) if ok else (False, motivo)
+    return {
+        **_radio_envoltura(estado, motivo),
+        "playlist": ctx.playlist,
+        "motor_total": ctx.motor_total,
+        "opciones": _radio_opciones() if estado != _RADIO_SIN_MOTOR else None,
+        "semillas": [{**_radio_track(ctx.tracks[t.radio_id]), "item_id": t.item_id,
+                      "posicion": t.posicion, "genero": t.genero,
+                      "clave_genero": radio_playlist.clave_genero(t.genero)}
+                     for t in (radio_playlist.semillas(ctx.temas) if ok else [])],
+        "generos": [{**{k: v for k, v in g.items() if k != "entran_ids"},
+                     "analizando": radio_playlist.en_curso(ctx.temas, g["clave"])}
+                    for g in (radio_playlist.generos(ctx.temas) if ok else [])],
+        "temas": radio_playlist.estados(ctx.temas),
+        "analizando": radio_playlist.en_curso(ctx.temas),
+        "puede_armar": puede,
+        "motivo_no_puede": porque,
+    }
+
+
+@app.post("/api/radio/playlists/{pid}/guardar")
+async def radio_playlist_guardar(pid: str, request: Request):
+    """Guarda el set que se ve como una playlist NUEVA de Mis playlists, en el orden del set
+    (f55). Cuerpo JSON: los mismos parámetros que /api/radio/set (`track`, `largo`, `curva`,
+    `artist_gap`, `mmr_lambda`, `semilla`, `randomness`), `esperado` (los ids de los pasos
+    que se ven, en orden: obligatorio) y `nombre` (opcional).
+
+    El set se RE-ARMA con esa config sobre la playlist `pid` y, si no da los mismos ids, 409:
+    nunca se guarda un set que no se vio. Los temas se copian de los items de la playlist de
+    origen (por id, con su archivo y su género): nada sale del cliente salvo ids.
+    403 otra página · 415 no es JSON · 400 pedido inválido · 404 playlist · 409 cambió o sin base.
+    """
+    cuerpo, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    try:
+        track = _campo(cuerpo, "track", str) or ""
+        params = [_campo(cuerpo, "largo", int), _campo(cuerpo, "curva", str),
+                  _campo(cuerpo, "artist_gap", int), _campo(cuerpo, "mmr_lambda", float),
+                  _campo(cuerpo, "semilla", int), _campo(cuerpo, "randomness", float)]
+        nombre = (_campo(cuerpo, "nombre", str) or "").strip()
+        esperado = cuerpo.get("esperado")
+        if not (isinstance(esperado, list) and esperado
+                and all(isinstance(i, str) for i in esperado)):
+            raise ValueError("falta `esperado`: los ids de los pasos que se ven, en orden. Sin "
+                             "eso no hay forma de saber que se guarda lo que se vio.")
+    except ValueError as e:
+        return JSONResponse({"exito": False, "error": str(e), "mensaje": str(e)}, status_code=400)
+
+    armado = await _armar_set_radio(track, *params, pid)
+    if isinstance(armado, JSONResponse):
+        return armado
+    if armado.rset is None:
+        return _sets_sin_base(armado.estado, armado.motivo)
+    ids = [_radio_id(t.path) for t in armado.rset.tracks]
+    if esperado != ids:
+        texto = _SET_CAMBIO.format(accion="guardá")
+        return JSONResponse({"exito": False, "error": texto, "mensaje": texto,
+                             "esperado": esperado, "armado": ids}, status_code=409)
+    origen = armado.pool["playlist"]
+    if not nombre:
+        nombre = (f"{origen['nombre']} · set desde {armado.elegida.title or armado.elegida.path.stem}"
+                  f" ({armado.config.curve})")
+    items = [armado.item_de[i] for i in ids]
+    nueva = await asyncio.to_thread(db.crear_playlist_desde_items, nombre, origen["id"], items)
+    if nueva is None:
+        texto = "No pude crear la playlist (¿la de origen cambió mientras tanto?). Armá el set de nuevo."
+        return JSONResponse({"exito": False, "error": texto, "mensaje": texto}, status_code=409)
+    logger.info(f"📃 Set guardado como playlist «{nueva['nombre']}» ({nueva['total']} temas)")
+    return JSONResponse({"exito": True, "playlist": nueva}, status_code=201)
 
 
 # Caracteres que Windows no acepta en un nombre de archivo, más los de control. El nombre
@@ -2486,7 +2690,7 @@ def _content_disposition(nombre: str) -> str:
 async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str | None = None,
                          artist_gap: int | None = None, mmr_lambda: float | None = None,
                          semilla: int | None = None, randomness: float | None = None,
-                         esperado: str = ""):
+                         esperado: str = "", playlist: str | None = None):
     r"""El set de /api/radio/set como .m3u8, para llevarlo a Rekordbox.
 
     Mismos parámetros y mismo armado (`_armar_set_radio`), y el archivo lo escribe
@@ -2508,7 +2712,7 @@ async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str |
     porque un 200 con JSON el navegador lo guardaría como si fuera el .m3u8.
     """
     armado = await _armar_set_radio(track, largo, curva, artist_gap, mmr_lambda, semilla,
-                                    randomness)
+                                    randomness, playlist)
     if isinstance(armado, JSONResponse):
         return armado
     if armado.rset is None:
@@ -2522,8 +2726,7 @@ async def radio_set_m3u8(track: str = "", largo: int | None = None, curva: str |
     pedidos = [i.strip() for i in esperado.split(",") if i.strip()]
     if pedidos and pedidos != ids:
         return JSONResponse(
-            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
-                      "la misma (¿un scan nuevo?). Armalo de nuevo y exportá ese.",
+            {"error": _SET_CAMBIO.format(accion="exportá"),
              "esperado": pedidos, "armado": ids}, status_code=409)
 
     nombre = _nombre_m3u8(armado.elegida.label, armado.config.curve)
@@ -2710,10 +2913,10 @@ def _campo(payload: dict, nombre: str, tipo):
 
 
 @app.post("/api/radio/sets")
-async def radio_sets_guardar(payload: dict):
+async def radio_sets_guardar(payload: dict, request: Request):
     """Guarda el set que la pantalla está mostrando.
 
-    Cuerpo: los MISMOS parámetros que /api/radio/set (`track`, `largo`, `curva`,
+    Cuerpo: los MISMOS parámetros que /api/radio/set (`playlist`, `track`, `largo`, `curva`,
     `artist_gap`, `mmr_lambda`, `semilla`, `randomness`) más:
 
     - `esperado` (obligatorio): los ids de los pasos que se mostraron, en orden (lista o
@@ -2725,11 +2928,15 @@ async def radio_sets_guardar(payload: dict):
       Falta → 400; no coincide → 409.
     - `nombre` (opcional).
 
-    201 con el set guardado (la misma forma que GET /api/radio/sets/{id}).
+    201 con el set guardado (la misma forma que GET /api/radio/sets/{id}). 403 si el pedido
+    viene de otra página (f55, `_guarda_ajeno`).
     """
+    if (rechazo := _guarda_ajeno(request)):
+        return rechazo
     if not isinstance(payload, dict):
         return JSONResponse({"error": "el cuerpo tiene que ser un objeto JSON"}, status_code=400)
     try:
+        playlist = _campo(payload, "playlist", int)
         track = _campo(payload, "track", str) or ""
         params = [_campo(payload, "largo", int), _campo(payload, "curva", str),
                   _campo(payload, "artist_gap", int), _campo(payload, "mmr_lambda", float),
@@ -2750,7 +2957,7 @@ async def radio_sets_guardar(payload: dict):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    armado = await _armar_set_radio(track, *params)
+    armado = await _armar_set_radio(track, *params, playlist)
     if isinstance(armado, JSONResponse):
         return armado
     if armado.rset is None:
@@ -2761,10 +2968,8 @@ async def radio_sets_guardar(payload: dict):
     rset, config = armado.rset, armado.config
     ids = [_radio_id(t.path) for t in rset.tracks]
     if esperado != ids:
-        return JSONResponse(
-            {"error": "El set cambió desde que lo armaste: la biblioteca del motor ya no es "
-                      "la misma (¿un scan nuevo?). Armalo de nuevo y guardá ese.",
-             "esperado": esperado, "armado": ids}, status_code=409)
+        return JSONResponse({"error": _SET_CAMBIO.format(accion="guardá"),
+                             "esperado": esperado, "armado": ids}, status_code=409)
     fotos = snapshot_steps(rset)
     armada = fingerprint(fotos, shown_header(rset, config))
     if huella != armada:
@@ -3160,14 +3365,21 @@ async def radio_marcas_conteo(ids: str = ""):
     def contar(store):
         conteos = store.cue_mark_counts(rutas.values())
         huerfanas = store.orphan_cue_marks()
+        # f55: de qué tipo es cada una (pads, memory, loops), para los puntos de color de la
+        # lista del set: la MISMA cuenta que los puntos de Mis playlists (`_marcas_por_clase`).
+        clases = _marcas_por_clase(store, [os.path.abspath(r) for r in rutas.values()])
         return ({i: conteos.get(os.path.normcase(os.path.abspath(r)), 0)
-                 for i, r in rutas.items()}, huerfanas)
+                 for i, r in rutas.items()}, huerfanas,
+                {i: clases[k] for i, r in rutas.items()
+                 if (k := os.path.normcase(os.path.abspath(r))) in clases})
 
     res, estado, motivo = await asyncio.to_thread(_usar_store_motor, contar)
     if estado != _RADIO_OK:
-        return {**_radio_envoltura(estado, motivo), "conteos": {}, "huerfanas": None}
-    conteos, huerfanas = res
+        return {**_radio_envoltura(estado, motivo), "conteos": {}, "marcas": {}, "huerfanas": None}
+    conteos, huerfanas, marcas = res
     return {**_radio_envoltura(estado, motivo), "conteos": conteos,
+            # Solo los que tienen marcas; el resto, ver `conteos` (0).
+            "marcas": marcas,
             "huerfanas": {"tracks": len(huerfanas), "marcas": sum(n for _, n in huerfanas),
                           # Solo el nombre del archivo, no la ruta: alcanza para reconocerlo.
                           "archivos": [os.path.basename(k) for k, _ in huerfanas[:20]]}}

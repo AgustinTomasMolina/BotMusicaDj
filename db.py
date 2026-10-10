@@ -455,6 +455,42 @@ def crear_playlist(nombre: str) -> dict | None:
         return None
 
 
+# Lo que NO se copia de un item al pasarlo a otra playlist: su identidad y su lugar.
+_NO_SE_COPIA = {"id", "playlist_id", "orden", "agregado_en"}
+
+
+def crear_playlist_desde_items(nombre: str, pid_origen: int, item_ids: list[int]) -> dict | None:
+    """f55: una playlist NUEVA con copias de los items `item_ids` de la playlist `pid_origen`, en
+    ese orden (el del set que armó la radio). Se copia todo el item —título, archivo, género,
+    datos del origen— salvo su id y su lugar: es el mismo tema en otra lista, y el archivo
+    original no se toca (solo se guarda su ruta, como cualquier item).
+
+    Los ids los resolvió el server (son de los temas que entraron al set). Si alguno ya no está
+    en la playlist de origen no se crea nada (None): guardar un set con huecos sería guardar
+    otro set."""
+    try:
+        with SessionLocal() as s:
+            if not s.get(MiPlaylist, pid_origen):
+                return None
+            fuente = {it.id: it for it in s.scalars(select(MiPlaylistItem).where(
+                MiPlaylistItem.playlist_id == pid_origen))}
+            if not item_ids or any(i not in fuente for i in item_ids):
+                return None
+            p = MiPlaylist(nombre=(nombre or "Set")[:300], origen="musiflix")
+            s.add(p)
+            s.flush()
+            cols = [c.name for c in MiPlaylistItem.__table__.columns if c.name not in _NO_SE_COPIA]
+            for orden, i in enumerate(item_ids, 1):
+                viejo = fuente[i]
+                s.add(MiPlaylistItem(playlist_id=p.id, orden=orden,
+                                     **{c: getattr(viejo, c) for c in cols}))
+            s.commit()
+            return {"id": p.id, "nombre": p.nombre, "total": len(item_ids)}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude guardar el set como playlist: {e}")
+        return None
+
+
 def renombrar_playlist(pid: int, nombre: str) -> bool:
     try:
         with SessionLocal() as s:
