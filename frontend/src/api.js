@@ -308,6 +308,20 @@ export const guardarRadioSet = (params, esperado, huella, nombre) => {
   if (nombre && nombre.trim()) cuerpo.nombre = nombre
   return pedirSets('/api/radio/sets', 'POST', cuerpo)
 }
+// f55: la playlist como la ve la radio (semillas, por género cuántos entran y qué queda afuera,
+// si alcanza para armar). 404 si no existe; sin base, 200 con `estado`/`motivo`.
+export const getRadioPlaylist = (pid) => pedirSets(`/api/radio/playlists/${encodeURIComponent(pid)}`)
+// f55: el set que se ve como playlist NUEVA de Mis playlists, en su orden. Viajan los
+// parámetros que el set usó y los ids de los pasos: si el backend re-arma otra cosa, 409.
+export const guardarSetComoPlaylist = (pid, params, esperado, nombre) => {
+  const cuerpo = { esperado }
+  for (const [k, v] of Object.entries(params || {})) {
+    if (k === 'playlist' || v === undefined || v === null || v === '') continue
+    cuerpo[k] = v
+  }
+  if (nombre && nombre.trim()) cuerpo.nombre = nombre.trim()
+  return pedirSets(`/api/radio/playlists/${encodeURIComponent(pid)}/guardar`, 'POST', cuerpo)
+}
 export const listarRadioSets = () => pedirSets('/api/radio/sets')
 export const getRadioSetGuardado = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`)
 export const renombrarRadioSet = (id, nombre) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`, 'PATCH', { nombre })
