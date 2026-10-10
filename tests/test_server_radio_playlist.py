@@ -279,6 +279,26 @@ def test_sin_dos_temas_del_mismo_genero_no_se_puede_armar(server, client, escena
     assert client.get("/api/radio/playlists/abc").status_code == 404
 
 
+def test_un_analisis_nuevo_se_ve_en_el_proximo_set_aunque_haya_cache(client, escena):
+    """f55: la biblioteca normalizada se cachea entre pedidos (latencia §4), pero un re-análisis
+    (otra conexión a la base, como el análisis en segundo plano o un scan) se ve en el set
+    siguiente: el BPM, la energía y el porqué son los de la base de AHORA."""
+    _set(client, escena)                       # llena la caché
+    with Store(escena["db"]) as store:
+        store.upsert(escena["rutas"]["dos.wav"],
+                     TrackFeatures(bpm=129.1, key="9A", energy_raw=0.9, embedding=embedding(1),
+                                   key_acuerdo="3/3", key_tramos="9A|9A|9A"),
+                     duration=300.0, license=LICENCIA, source_url=ORIGEN, artist="Artista B", title="Dos")
+    d = _set(client, escena, largo=4)
+    t = _motor(escena["db"])
+    pool = [t[n] for n in ("uno.wav", "dos.wav", "tres.wav", "cuatro.wav", "cinco.wav")]
+    esperado = build_set(t["uno.wav"], pool, RadioConfig(length=4))
+    assert [(p["track"]["label"], p["track"]["bpm"], p["track"]["energia"], p["motivo"]) for p in d["pasos"]] == \
+        [(x.label, round(x.bpm, 1), round(x.energy, 3), m) for x, m in zip(esperado.tracks, esperado.reasons(), strict=True)]
+    dos = next(p for p in d["pasos"] if p["track"]["titulo"] == "Dos")
+    assert dos["track"]["bpm"] == 129.1, "el set siguió con el BPM de antes del re-análisis"
+
+
 def test_latencia_de_la_radio_desde_playlist(client, escena):
     """Spec §4: < 200 ms. Acá con la base chica (con 10k tracks se midió aparte: ver el
     informe de f55); lo que protege es que el endpoint no haga trabajo por tema de más."""

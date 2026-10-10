@@ -31,6 +31,7 @@ import contextlib
 import dataclasses
 import os
 import sqlite3
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +271,12 @@ def _opcional(valor: object) -> float | None:
     return None if valor is None else float(valor)
 
 
+# f55: la biblioteca normalizada de `load_tracks`, por base (ruta real) → (firma, datos). Una
+# entrada por base: una firma nueva reemplaza a la vieja. Ver `Store._biblioteca_normalizada`.
+_CACHE_BIBLIOTECA: dict[str, tuple] = {}
+_CACHE_LOCK = threading.Lock()
+
+
 class Store:
     """Caché de análisis + biblioteca en memoria para la búsqueda vectorial."""
 
@@ -458,16 +465,62 @@ class Store:
         necesita construir 10k `Track` para usar 30. Se leen igual todas las filas —la media y
         el desvío del embedding y el universo del percentil son de la biblioteca entera; con
         una muestra serían otros números—, pero solo se arman los pedidos.
+
+        Caché (f55, latencia de la radio §4): la lectura y normalización de la biblioteca
+        entera se guarda en memoria del proceso mientras la base NO cambie (`_firma_contenido`:
+        el contador de cambios que SQLite escribe en la cabecera en cada commit, el tamaño y la
+        cantidad de tracks). Un scan, un análisis o cualquier escritura la invalida; si no se
+        puede saber (WAL, base en memoria, error al leer), no se usa. Los `Track` se arman
+        nuevos en cada llamada (con su embedding copiado): nadie puede modificar la caché.
         """
         claves = {self._key(p) for p in paths}
+        filas, claves_filas, norm, energias = self._biblioteca_normalizada()
+        elegidas = [i for i, k in enumerate(claves_filas) if k in claves]
+        return [self._track(filas[i], norm[i].copy(), energias) for i in elegidas]
+
+    def _biblioteca_normalizada(self):
+        """(filas, path_key de cada fila, embeddings normalizados, energías crudas) de la
+        biblioteca entera, desde la caché si la base no cambió. La firma se toma ANTES de leer:
+        si alguien escribe en el medio, lo leído queda bajo la firma vieja y la próxima vez no
+        coincide (se vuelve a leer) — nunca al revés (datos viejos bajo una firma nueva)."""
+        firma = self._firma_contenido()
+        if firma is not None:
+            with _CACHE_LOCK:
+                guardado = _CACHE_BIBLIOTECA.get(firma[0])
+            if guardado is not None and guardado[0] == firma:
+                return guardado[1]
         filas = self._rows()
-        elegidas = [i for i, f in enumerate(filas) if f["path_key"] in claves]
-        if not elegidas:
-            return []
-        # La misma cuenta que `_normalized`, sin armar 10k `Path` que acá no se usan (~75 ms).
-        norm, _, _ = normalize_matrix(np.vstack([self._embedding(f) for f in filas]).astype(np.float64))
-        energias = np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64)
-        return [self._track(filas[i], norm[i], energias) for i in elegidas]
+        if filas:
+            # La misma cuenta que `_normalized`, sin armar 10k `Path` que acá no se usan.
+            norm, _, _ = normalize_matrix(np.vstack([self._embedding(f) for f in filas]).astype(np.float64))
+        else:
+            norm = np.zeros((0, DIM), dtype=np.float64)
+        datos = (filas, [f["path_key"] for f in filas], norm,
+                 np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64))
+        if firma is not None:
+            with _CACHE_LOCK:
+                _CACHE_BIBLIOTECA[firma[0]] = (firma, datos)
+        return datos
+
+    def _firma_contenido(self) -> tuple | None:
+        """Qué versión del contenido tiene la base, o None si no se puede saber con certeza.
+
+        El "file change counter" de la cabecera SQLite (bytes 24..27) sube en cada commit que
+        modifica la base en modo rollback journal (el de este Store). En WAL no está
+        garantizado: ahí no hay caché. Se suman el tamaño del archivo y la cantidad de tracks
+        como cinturón. La primera posición es la identidad de la base (la clave de la caché)."""
+        try:
+            modo = str(self._con.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if modo in ("wal", "memory", "off") or str(self.db_path) in ("", ":memory:"):
+                return None
+            ruta = os.path.normcase(os.path.realpath(self.db_path))
+            with open(ruta, "rb") as f:
+                cabecera = f.read(100)
+            if len(cabecera) < 100 or not cabecera.startswith(b"SQLite format 3\x00"):
+                return None
+            return (ruta, int.from_bytes(cabecera[24:28], "big"), os.path.getsize(ruta), self.count())
+        except (OSError, sqlite3.Error):
+            return None
 
     def matrix(self) -> tuple[np.ndarray, list[Path]]:
         """La matriz de embeddings normalizados de TODA la biblioteca y el orden de las

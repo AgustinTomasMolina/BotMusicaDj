@@ -1323,3 +1323,70 @@ def test_load_tracks_da_los_mismos_tracks_que_load_library(tmp_path):
     solos = normalize_matrix(np.vstack([_catalogo()[i]["embedding"] for i in (0, 3)])
                              .astype(np.float64))[0]
     assert not np.allclose(solos[0], todos[_catalogo()[0]["nombre"]].embedding)
+
+
+def _iguales_a_load_library(store, rutas) -> None:
+    """`load_tracks` da EXACTAMENTE lo que da `load_library` para esas rutas, ahora."""
+    todos = {t.path.name: t for t in store.load_library()}
+    for t in store.load_tracks(rutas):
+        e = todos[t.path.name]
+        assert (t.energy, t.bpm, t.key, t.duration, t.title, t.license) == \
+            (e.energy, e.bpm, e.key, e.duration, e.title, e.license), t.path.name
+        assert np.array_equal(t.embedding, e.embedding), f"{t.path.name}: otro embedding"
+
+
+def test_load_tracks_cachea_sin_servir_datos_viejos(tmp_path, monkeypatch):
+    """f55 (latencia §4): la biblioteca normalizada queda en caché mientras la base no cambia,
+    y cualquier escritura (otro proceso, un re-análisis con la MISMA cantidad de tracks) la
+    invalida. Con o sin caché, los números son los de `load_library` (los de la CLI)."""
+    import motor.store as ms
+
+    db = tmp_path / "b.sqlite"
+    with Store(db) as store:
+        rutas = _poblar(store, tmp_path, range(4))
+    pedidas = list(rutas.values())[:2]
+    lecturas = []
+    rows_real = Store._rows
+    monkeypatch.setattr(Store, "_rows", lambda self: lecturas.append(1) or rows_real(self))
+
+    with Store(db) as store:
+        _iguales_a_load_library(store, pedidas)
+        antes = len(lecturas)
+        primero = store.load_tracks(pedidas)
+        assert len(lecturas) == antes, "con la base igual tendría que salir de la caché"
+        # Los Track son nuevos en cada llamada: tocarlos no toca la caché.
+        primero[0].embedding[:] = 0.0
+        assert not np.allclose(store.load_tracks(pedidas)[0].embedding, 0.0), "la caché se dejó modificar"
+    with Store(db) as store:                   # otra conexión, misma base: la misma caché
+        _iguales_a_load_library(store, pedidas)
+
+    # Otro proceso re-analiza un track: misma cantidad de tracks, otra energía y otro embedding.
+    c = _catalogo()[3]
+    with Store(db) as otro:
+        otro.upsert(rutas[c["nombre"]], TrackFeatures(bpm=c["bpm"], key=c["key"], energy_raw=99.0,
+                                                      embedding=_vector(40)),
+                    duration=10.0, license=LICENCIA, source_url=ORIGEN, artist="JPH", title="Track 3")
+    with Store(db) as store:
+        antes = len(lecturas)
+        nuevos = {t.path.name: t for t in store.load_tracks(pedidas)}
+        assert len(lecturas) > antes, "la base cambió y load_tracks sirvió la caché vieja"
+        assert {n: t.energy for n, t in nuevos.items()} != {t.path.name: t.energy for t in primero}, \
+            "el re-análisis tenía que mover el percentil de energía de los otros: el test no prueba nada"
+        _iguales_a_load_library(store, pedidas)
+
+    # Una baja también invalida.
+    with Store(db) as otro:
+        assert otro.delete(rutas[_catalogo()[2]["nombre"]])
+    with Store(db) as store:
+        _iguales_a_load_library(store, pedidas)
+
+    # En WAL el contador de la cabecera no está garantizado: sin caché, y los mismos números.
+    with Store(db) as store:
+        store._con.execute("PRAGMA journal_mode=WAL")
+        assert store._firma_contenido() is None
+        antes = len(lecturas)
+        _iguales_a_load_library(store, pedidas)
+        store.load_tracks(pedidas)
+        assert len(lecturas) >= antes + 3, "en WAL se usó la caché"
+        store._con.execute("PRAGMA journal_mode=DELETE")
+    assert ms._CACHE_BIBLIOTECA, "la caché nunca se llenó: el test no probó la caché"
