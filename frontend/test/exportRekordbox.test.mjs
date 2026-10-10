@@ -1,4 +1,4 @@
-﻿// Tests de src/exportRekordbox.js (f56): los textos del diálogo «Exportar a Rekordbox» y lo que
+// Tests de src/exportRekordbox.js (f56): los textos del diálogo «Exportar a Rekordbox» y lo que
 // se dice de los cues que vienen de Rekordbox. Mismo esquema que los otros: `node --test` + el
 // Vite del proyecto. Las respuestas de ejemplo tienen la forma de la API (ver
 // tests/test_server_rekordbox.py).
@@ -55,11 +55,12 @@ test('textoExportado: lo que dicen las cabeceras; la grilla solo si se pidió', 
 
 test('textoCuesImportados: lo que entró, lo que la página conservó y lo que no entra, con números', () => {
   assert.equal(m.textoCuesImportados(null), null)
-  assert.equal(m.textoCuesImportados({ error: 'La base del motor está ocupada.' }), 'Los cues no se guardaron: La base del motor está ocupada.')
+  assert.equal(m.textoCuesImportados({ error: 'La base del motor está ocupada. Los cues no se guardaron.' }),
+    'Cues: La base del motor está ocupada. Los cues no se guardaron.')
   const c = { temas: 2, agregadas: 3, ya_estaban: 1, conservadas: 1, reemplazadas: 0, fuera_del_tema: 1,
-    sin_lugar: 0, sin_archivo: 2, color_distinto: 2, nombre_descartado: 1, ignoradas: { tipo: 1 }, error: null }
+    sin_lugar: 0, sin_archivo: 2, ambiguas: 1, color_distinto: 2, nombre_descartado: 1, ignoradas: { tipo: 1 }, error: null }
   assert.equal(m.textoCuesImportados(c), 'Cues: 3 cues nuevos · 1 ya estaba · 1 pad quedó como en la página (no se pisa) · '
-    + '2 en temas sin archivo no entran · 1 fuera del audio · 1 fade-in, fade-out o load (la página no los tiene) no entra · '
+    + '2 en temas sin archivo no entran · 1 en temas con el nombre repetido en tus carpetas no entra (no elijo un archivo a la suerte) · 1 fuera del audio · 1 fade-in, fade-out o load (la página no los tiene) no entra · '
     + '2 con otro color en Rekordbox: acá toman el de su pad · 1 sin nombre (el de Rekordbox no se puede guardar)')
   assert.equal(m.textoCuesImportados({ agregadas: 0, ya_estaban: 5, reemplazadas: 2, ignoradas: {} }),
     'Cues: 0 cues nuevos · 5 ya estaban · 2 pads se pisaron con Rekordbox')

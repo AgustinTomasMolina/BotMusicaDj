@@ -26,7 +26,11 @@ LO QUE NO VIAJA, DICHO:
 - La GRILLA (`TEMPO`): por defecto NO se exporta. La de la página es ESTIMADA (`motor.bandas`):
   si se escribe, Rekordbox la usa en vez de analizar la suya, y una grilla corrida desfasa el
   quantize y el sync en vivo. Solo con un pedido explícito, y solo en los temas donde la
-  estimación encontró el beat Y el 1 del compás con confianza (`tempo_de_grilla`).
+  estimación dio el beat Y el 1 del compás (`tempo_de_grilla`). Los dos siguen siendo
+  ESTIMADOS: el 1 sale de `motor.bandas.estimar_compas`, una heurística que nunca se midió
+  contra downbeats reales, y un 1 corrido desarma el beat jump, el quantize por compás y las
+  frases. El `Bpm` del TEMPO (afinado, dos decimales) puede diferir del `AverageBpm` (medido,
+  un decimal).
 """
 from __future__ import annotations
 
@@ -193,10 +197,14 @@ def marcas_de_track(track: ET.Element) -> tuple[list[dict], dict[str, int]]:
     return marcas, cuenta
 
 
+_NOMBRE_PROHIBIDO = re.compile('[<>:"/\\\\|?*\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]+')
+
+
 def nombre_archivo_xml(nombre_playlist: str) -> str:
     """El nombre del .xml que baja el navegador: seguro en Windows (nada de `<>:"/\\|?*`,
-    controles ni punto o espacio al final) y nunca vacío ni un nombre reservado: lleva el
-    prefijo fijo «MusiFlix - »."""
-    base = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]+', " ", f"MusiFlix - {nombre_playlist or 'playlist'}")
-    base = re.sub(r"\s+", " ", base).strip()[:120].rstrip(" .")
+    controles C0 y C1, controles de dirección del texto —un U+202E da vuelta lo que se ve— ni
+    punto o espacio al final) y nunca vacío ni un nombre reservado: lleva el prefijo fijo
+    «MusiFlix - ». Si el nombre de la playlist no deja nada, «playlist»."""
+    limpio = re.sub(r"\s+", " ", _NOMBRE_PROHIBIDO.sub(" ", nombre_playlist or "")).strip(" .")
+    base = f"MusiFlix - {limpio or 'playlist'}"[:120].rstrip(" .")
     return f"{base}.xml"

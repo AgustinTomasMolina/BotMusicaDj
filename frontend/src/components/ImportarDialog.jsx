@@ -99,6 +99,9 @@ function PestanaRekordbox({ onListo, ocupado, setOcupado }) {
               <span>Actualizar las que ya importé (suma los temas nuevos; no borra nada ni pisa el género que cambiaste)</span>
             </label>
           )}
+          {/* f56: «Pisar» solo aparece con «Actualizar» (es «Actualizar desde Rekordbox»). En una
+              importación nueva siempre gana la página: si un tema ya tenía cues marcados acá (por
+              otra playlist), en un pad ocupado queda el de la página y se cuenta como conservado. */}
           {hayYa && actualizar && (
             <label className="imp-check imp-actualizar imp-pisar">
               <input type="checkbox" checked={pisarCues} onChange={(e) => setPisarCues(e.target.checked)} aria-describedby="imp-pisar-d" />

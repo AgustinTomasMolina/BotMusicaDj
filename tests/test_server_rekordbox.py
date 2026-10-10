@@ -193,6 +193,50 @@ def test_exportar_no_lleva_marcas_fuera_del_audio(client, entorno):
     assert [m["Start"] for m in _marks(_exportar(client, pid).content)["uno.wav"]] == ["1.500", "0.500"]
 
 
+def test_un_tema_que_cambio_desde_el_analisis_queda_afuera(client, entorno):
+    """Lo medido describe OTRO audio: no se exporta (ni su BPM ni sus marcas) y se dice."""
+    pid = _pid(client)
+    os.utime(entorno["rutas"]["uno"], (1_000_000_000, 1_000_000_000))
+    d = client.get(f"/api/playlists/{pid}/rekordbox").json()
+    assert [(o["titulo"], o["motivo"]) for o in d["omitidos"]] == [
+        ("tres", d["omitidos"][0]["motivo"]),
+        ("uno", "El archivo cambió desde que se analizó: volvé a analizarlo.")]
+    assert d["omitidos"][0]["motivo"].startswith("Todavía no lo analizó el motor")
+    assert (d["incluidos"], d["marcas"]) == (1, {"hot_cues": 1, "memory": 0, "loops": 0})
+    root = ET.fromstring(_exportar(client, pid).content)
+    assert [t.get("Name") for t in root.find("COLLECTION").findall("TRACK")] == ["dos"]
+
+
+def test_temas_de_dos_carpetas_con_el_mismo_nombre_cada_uno_a_su_archivo(client, entorno):
+    """Dos «uno.wav» en carpetas distintas son DOS temas: cada Location es su archivo original
+    (y no uno por nombre, ni la carpeta del otro)."""
+    otro = entorno["raiz"] / "Otra" / "uno.wav"
+    wav(otro, 990.0, 0.25)
+    with Store(entorno["db"]) as st:
+        st.upsert(otro, TrackFeatures(bpm=140.2, key="5A", energy_raw=0.1, embedding=_emb(3),
+                                      key_acuerdo="3/3", key_tramos="5A|5A|5A"), duration=180.0)
+        st.add_cue_mark(otro, "cue", 2.0, num=3, name="Otra")
+    r = client.post("/api/importar/carpeta", json={"raiz": 0, "ruta": "", "recursivo": True})
+    assert r.status_code == 200, r.text
+    root = ET.fromstring(_exportar(client, r.json()["id"]).content)
+    import playlist_import
+    tracks = root.find("COLLECTION").findall("TRACK")
+    por_bpm = {t.get("AverageBpm"): t for t in tracks}
+    assert sorted(por_bpm) == ["128.4", "130.0", "140.2"]
+    assert os.path.samefile(playlist_import.ruta_de_location(por_bpm["140.2"].get("Location")), otro)
+    assert os.path.samefile(playlist_import.ruta_de_location(por_bpm["128.4"].get("Location")),
+                            entorno["rutas"]["uno"])
+    assert [p.get("Name") for p in por_bpm["140.2"].findall("POSITION_MARK")] == ["Otra"]
+    assert [p.get("Name") for p in por_bpm["128.4"].findall("POSITION_MARK")][0] == "Drop"
+
+
+def test_grilla_que_revienta_no_es_500(client, entorno, server, monkeypatch):
+    pid = _pid(client)
+    monkeypatch.setattr(server, "_grilla_export", lambda ruta, bpm: {"primer_beat_s": 0.1, "compas_ref": "x", "bpm": 128.0})
+    r = _exportar(client, pid, incluir_grilla=True)
+    assert r.headers["x-musiflix-grillas"] == "0" and b"<TEMPO" not in r.content
+
+
 def test_grilla_solo_si_se_pide_y_solo_con_compas(client, entorno, server, monkeypatch):
     pid = _pid(client)
     pedidas = []
@@ -352,6 +396,20 @@ def test_importar_cues_del_dj_aun_sin_analizar(client, entorno, server):
         ("pendiente", {"total": 3, "pads": [1], "memory": 1, "loop": 1})
 
 
+def test_cues_de_un_tema_ambiguo_se_cuentan_aparte(client, entorno):
+    raiz = entorno["raiz"]
+    wav(raiz / "A" / "rep.wav", 300.0, 0.25)
+    wav(raiz / "B" / "rep.wav", 400.0, 0.25)
+    tracks = [dict(id="1", name="Rep", artist="DJ", genre="", bpm="0.00", ton="", dur="1",
+                   loc=location_rb("C:/Users/otra-pc/Viejo/rep.wav"))]
+    xml = xml_rekordbox_playlists(tracks, [("playlist", "Amb", "0", ["1"])]).replace(
+        '<POSITION_MARK Name="" Type="0" Start="0.025" Num="-1"/>',
+        '<POSITION_MARK Name="" Type="0" Start="0.025" Num="-1"/><POSITION_MARK Name="" Type="0" Start="0.1" Num="0"/>')
+    _, res, _ = _importar_xml(client, xml.encode("utf-8"))
+    assert (res["cues"]["ambiguas"], res["cues"]["sin_archivo"], res["cues"]["agregadas"]) == (2, 0, 0), \
+        "las marcas de un tema con el nombre repetido no son «sin archivo»"
+
+
 def test_cues_sin_archivo_se_cuentan_y_base_ocupada_no_frena_la_importacion(client, entorno, server, monkeypatch):
     raiz = entorno["raiz"]
     xml = _xml_dj(raiz, {"tres": '<POSITION_MARK Name="" Type="0" Start="0.100" Num="0"/>',
@@ -367,5 +425,7 @@ def test_cues_sin_archivo_se_cuentan_y_base_ocupada_no_frena_la_importacion(clie
         con.close()
     assert res["estado"] == "creada", "la playlist se importa aunque los cues no puedan guardarse"
     assert res["cues"]["sin_archivo"] == 2 and "ocupada" in res["cues"]["error"]
+    assert "volvé a importar la playlist tildando «Actualizar»" in res["cues"]["error"], \
+        "el error no dice qué hacer para traer los cues"
     _sin_rutas(texto, entorno["db"])
     assert _filas(entorno["db"], entorno["rutas"]["tres"]) == []

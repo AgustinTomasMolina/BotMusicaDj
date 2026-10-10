@@ -4391,12 +4391,19 @@ def _duracion_de_archivo(ruta: str) -> float | None:
     return float(largo) if largo and math.isfinite(largo) and largo > 0 else None
 
 
+# Lo que hay que hacer si los cues no entraron: la playlist sí se importó, así que se vuelve
+# a importar con «Actualizar» (los cues que ya estén no se duplican).
+_REINTENTAR_CUES = "Cuando se pueda, volvé a importar la playlist tildando «Actualizar»."
+
+
 def _importar_cues(temas: list[dict], pisar: bool) -> dict | None:
     """Guarda las marcas que traen los temas del XML (`rekordbox_cues.marcas_de_track`) como
     marcas de la página, por la ruta de cada archivo (`Store.import_cue_marks`): idempotente,
     los pads que la página ya usa ganan salvo `pisar`. None si ningún tema trae marcas.
 
-    Las marcas de un tema sin archivo no tienen dónde guardarse (se cuentan en `sin_archivo`).
+    Las marcas de un tema sin archivo no tienen dónde guardarse: se cuentan en `sin_archivo`, y
+    las de un tema AMBIGUO (varios archivos con ese nombre; no se elige uno) en `ambiguas`.
+    Importar cues NO exige que el motor haya analizado el tema (exportar sí: ver `_armar_export`).
     El largo con el que se valida es el del análisis del motor si ya lo midió y, si no, el del
     archivo. Si la base del motor no existe se crea (como `scan`); si no se puede usar, `error`
     dice por qué y nada se guarda."""
@@ -4409,7 +4416,10 @@ def _importar_cues(temas: list[dict], pisar: bool) -> dict | None:
         return None
     res = {"temas": 0, "agregadas": 0, "ya_estaban": 0, "conservadas": 0, "reemplazadas": 0,
            "fuera_del_tema": 0, "sin_lugar": 0,
-           "sin_archivo": sum(len(t["marcas"]) for t in con if not t.get("ruta")),
+           "sin_archivo": sum(len(t["marcas"]) for t in con
+                              if not t.get("ruta") and t.get("resolucion") != "ambiguo"),
+           "ambiguas": sum(len(t["marcas"]) for t in con
+                           if not t.get("ruta") and t.get("resolucion") == "ambiguo"),
            "color_distinto": ignoradas.pop("color_distinto", 0),
            "nombre_descartado": ignoradas.pop("nombre_descartado", 0),
            "ignoradas": ignoradas, "pisar": pisar, "error": None}
@@ -4426,7 +4436,7 @@ def _importar_cues(temas: list[dict], pisar: bool) -> dict | None:
         res["error"] = f"{_motivo_base(_RADIO_SIN_MOTOR)} Los cues no se guardaron."
         return res
     except (sqlite3.Error, OSError):
-        res["error"] = "No pude crear la base del motor: los cues no se guardaron."
+        res["error"] = f"No pude crear la base del motor: los cues no se guardaron. {_REINTENTAR_CUES}"
         return res
 
     def escribir(store):
@@ -4442,7 +4452,7 @@ def _importar_cues(temas: list[dict], pisar: bool) -> dict | None:
 
     _, estado, _motivo = _usar_store_motor(escribir)
     if estado != _RADIO_OK:
-        res["error"] = f"{_motivo_base(estado)} Los cues no se guardaron."
+        res["error"] = f"{_motivo_base(estado)} Los cues no se guardaron. {_REINTENTAR_CUES}"
     return res
 
 
@@ -4458,6 +4468,26 @@ def _grilla_export(ruta: str, bpm: float) -> dict:
         return {"motivo": "no pude leer el audio para estimar la grilla"}
 
 
+def _tempo_export(ruta: str, bpm: float) -> tuple[dict | None, str | None]:
+    """Los atributos del `<TEMPO>` (`rekordbox_cues.tempo_de_grilla`) y, si no va, por qué.
+    Todo adentro de un try: una grilla rara (un valor que no es número) no puede ser un 500.
+
+    Ojo, dicho en el aviso de la pantalla: el `Bpm` del TEMPO es el AFINADO de la grilla, con
+    dos decimales, y `AverageBpm` del TRACK es el que midió el motor, con uno: pueden diferir
+    (128.40 vs 128.4, o 127.99 vs 128.0). Los dos son ESTIMADOS: ni la fase ni el 1 del compás
+    (`estimar_compas`, una heurística sin ground truth de downbeats reales) se verificaron con
+    los temas del dueño."""
+    try:
+        g = _grilla_export(ruta, bpm)
+        tempo = rekordbox_cues.tempo_de_grilla(g)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ Export Rekordbox: grilla inválida ({type(e).__name__})")
+        return None, "la grilla estimada no se pudo usar"
+    if tempo is not None:
+        return tempo, None
+    return None, (g.get("motivo") or g.get("compas_motivo") or "no se sabe cuál beat es el 1")
+
+
 def _sin_marcas() -> dict:
     return {"hot_cues": 0, "memory": 0, "loops": 0}
 
@@ -4466,7 +4496,8 @@ def _armar_export(pid, incluir_grilla: bool) -> tuple[dict | None, JSONResponse 
     """Qué va al XML de la playlist `pid` y qué queda afuera (con su motivo).
 
     Va un tema con archivo en la PC Y analizado por el motor (vigente): de ahí salen el BPM, la
-    key y la duración, y sus marcas. Lo demás se lista en `omitidos`. La key dudosa (`?`, sin
+    key y la duración, y sus marcas. (Importar cues de Rekordbox NO exige análisis —se atan a la
+    ruta—; exportarlas sí, porque sin la duración medida no se sabe si caen adentro del audio.) Lo demás se lista en `omitidos`. La key dudosa (`?`, sin
     acuerdo entre tramos) NO se escribe: en Rekordbox no hay `?`, y escribirla la mostraría
     como segura; sin `Tonality`, Rekordbox la analiza él. Una marca que cae fuera del audio
     (el archivo cambió después de marcarla) no se escribe y se cuenta."""
@@ -4550,11 +4581,9 @@ def _armar_export(pid, incluir_grilla: bool) -> tuple[dict | None, JSONResponse 
             tempo = None
             if incluir_grilla:
                 if bpm is not None and bpm > 0:
-                    g = _grilla_export(ruta, bpm)
-                    tempo = rekordbox_cues.tempo_de_grilla(g)
-                    fila["grilla"] = {"incluida": tempo is not None,
-                                      "motivo": None if tempo else (g.get("motivo") or g.get("compas_motivo")
-                                                                    or "no se sabe cuál beat es el 1")}
+                    tempo, motivo_grilla = _tempo_export(ruta, bpm)
+                    fila["grilla"] = {"incluida": tempo is not None, "tempo": tempo,
+                                      "motivo": motivo_grilla}
                 else:
                     fila["grilla"] = {"incluida": False, "motivo": "el tema no tiene BPM medido"}
             indice[ruta] = len(temas)
@@ -4576,10 +4605,14 @@ def _armar_export(pid, incluir_grilla: bool) -> tuple[dict | None, JSONResponse 
 
 _AVISO_RUTAS = ("El archivo lleva la ruta completa de cada tema en tu PC: es lo que Rekordbox "
                 "necesita para encontrarlos. No lo compartas si no querés mostrar tus carpetas.")
-_AVISO_GRILLA = ("La grilla de beats de la página es ESTIMADA. Si la exportás, Rekordbox la usa "
-                 "en vez de analizar la suya: revisala en Rekordbox antes de tocar en vivo con "
-                 "quantize o sync. Va solo en los temas donde se encontró el beat y el 1 del "
-                 "compás con confianza.")
+_AVISO_GRILLA = ("La grilla de beats de la página es ESTIMADA: tanto el beat como el 1 del compás "
+                 "los calcula el motor y NO se verificaron con tus temas (el 1 del compás sale de "
+                 "una heurística que nunca se midió contra downbeats reales). Si la exportás, "
+                 "Rekordbox la usa en vez de analizar la suya: un 1 corrido desarma el beat jump, "
+                 "el quantize por compás y las frases, y un beat corrido el sync. Revisala en "
+                 "Rekordbox antes de tocar en vivo. Va solo en los temas donde el motor encontró "
+                 "beat y compás; su BPM es el afinado de la grilla (dos decimales) y puede diferir "
+                 "un poco del BPM medido que va en el tema (un decimal).")
 
 
 def _export_publico(plan: dict) -> dict:

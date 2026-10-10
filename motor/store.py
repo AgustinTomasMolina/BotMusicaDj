@@ -1058,7 +1058,9 @@ class Store:
           importar dos veces lo mismo deja lo mismo (idempotente);
         - un pad que en la página ya usa OTRA marca: gana la de la página (`conservadas`), salvo
           `pisar=True`, que la reemplaza por la de afuera (`reemplazadas`). `pisar` no borra
-          nada más: las marcas de la página que afuera no están se quedan;
+          nada más: las marcas de la página que afuera no están se quedan. Ojo: si tipo, pad y
+          tiempos coinciden la marca cuenta como `ya_estaban` y NO se le cambia el nombre,
+          aunque el de afuera sea otro (tampoco con `pisar`);
         - memory cues y memory loops no ocupan pad: se agregan si no hay una igual, hasta los
           topes por track (`sin_lugar` si se pasa).
         Todo en UNA transacción. Devuelve los conteos."""

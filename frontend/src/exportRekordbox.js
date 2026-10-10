@@ -1,4 +1,4 @@
-﻿// Lo puro de «Exportar a Rekordbox (con cues)» y de los cues que vienen de Rekordbox (f56):
+// Lo puro de «Exportar a Rekordbox (con cues)» y de los cues que vienen de Rekordbox (f56):
 // los textos del diálogo de exportar y lo que se dice de los cues al importar. Sin React ni
 // red: lo prueban los tests de unidad (test/exportRekordbox.test.mjs).
 //
@@ -57,13 +57,15 @@ const IGNORADAS = {
 // traía marcas.
 export function textoCuesImportados(c) {
   if (!c) return null
-  if (c.error) return `Los cues no se guardaron: ${c.error}`
+  // El server ya dice que no se guardaron y qué hacer («volvé a importar tildando Actualizar»).
+  if (c.error) return `Cues: ${c.error}`
   const partes = []
   partes.push(`${s(c.agregadas, 'cue nuevo', 'cues nuevos')}`)
   if (c.ya_estaban) partes.push(`${c.ya_estaban} ya estaba${c.ya_estaban === 1 ? '' : 'n'}`)
   if (c.conservadas) partes.push(`${s(c.conservadas, 'pad quedó', 'pads quedaron')} como en la página (no se pisa${c.conservadas === 1 ? '' : 'n'})`)
   if (c.reemplazadas) partes.push(`${s(c.reemplazadas, 'pad se pisó', 'pads se pisaron')} con Rekordbox`)
   if (c.sin_archivo) partes.push(`${c.sin_archivo} en temas sin archivo no entra${c.sin_archivo === 1 ? '' : 'n'}`)
+  if (c.ambiguas) partes.push(`${c.ambiguas} en temas con el nombre repetido en tus carpetas no entra${c.ambiguas === 1 ? '' : 'n'} (no elijo un archivo a la suerte)`)
   if (c.fuera_del_tema) partes.push(`${c.fuera_del_tema} fuera del audio`)
   if (c.sin_lugar) partes.push(`${c.sin_lugar} por encima del tope por tema`)
   for (const [k, n] of Object.entries(c.ignoradas || {})) {

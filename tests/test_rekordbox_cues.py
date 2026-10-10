@@ -95,6 +95,11 @@ def test_tempo_solo_con_grilla_y_compas(grilla, esperado):
     ('a/b\\c:d*e?f"g<h>i|j', "MusiFlix - a b c d e f g h i j.xml"),
     ("", "MusiFlix - playlist.xml"),
     ("Cierre. ", "MusiFlix - Cierre.xml"),
+    # Lo que no deja nada: «playlist», nunca «MusiFlix -.xml».
+    ("///", "MusiFlix - playlist.xml"),
+    ("..", "MusiFlix - playlist.xml"),
+    # Controles C1 y de dirección del texto (U+202E da vuelta lo que se ve) se sacan.
+    ("\x85Peak\u202eTime\u200f\u2066", "MusiFlix - Peak Time.xml"),
 ])
 def test_nombre_del_archivo_seguro_en_windows(nombre, esperado):
     assert rc.nombre_archivo_xml(nombre) == esperado
@@ -131,6 +136,16 @@ def test_marcas_de_track_lee_cada_tipo_y_cuenta_lo_que_no_entra():
     # prueba (no el del dueño): 2 colores distintos. El nombre de 65 caracteres no entra.
     assert cuenta == {"color_distinto": 2, "tipo": 1, "pad": 1, "loop": 2, "tiempo": 2,
                       "nombre_descartado": 1}
+
+
+def test_un_nombre_con_saltos_de_linea_entra_sin_nombre():
+    """Un Name con \\r\\n (escapado en el XML) no se guarda recortado ni «arreglado»: la marca
+    entra sin nombre y se cuenta."""
+    marcas, cuenta = rc.marcas_de_track(_track(
+        '<POSITION_MARK Name="Drop&#13;&#10;2" Type="0" Start="1.000" Num="0"/>'
+        '<POSITION_MARK Name="Bien" Type="0" Start="2.000" Num="1"/>'))
+    assert [(m["num"], m["name"]) for m in marcas] == [(0, None), (1, "Bien")]
+    assert cuenta == {"nombre_descartado": 1}
 
 
 # --- Store.import_cue_marks ---------------------------------------------------------------------
