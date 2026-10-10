@@ -713,18 +713,20 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`
 
   // Etiquetas de la regla: compases (si el motor estimó el 1) o tiempos.
+  // Una etiqueta cada ~80 px como mucho (a 400 px de ancho se pisaban).
+  const etiquetas = Math.max(2, Math.min(8, Math.floor(anchoPx / 80)))
   const regla = (() => {
     if (!(v.hasta > v.desde)) return []
     if (conCompas) {
       const unos = lineas.filter((l) => l.beat === 1)
-      const paso = Math.max(1, Math.ceil(unos.length / 8))
+      const paso = Math.max(1, Math.ceil(unos.length / etiquetas))
       return unos.filter((_, i) => i % paso === 0).map((l) => {
         const c = compasDe(l.t + 1e-4, g, ajuste.offset)
         return { t: l.t, txt: c ? `${c.compas}` : '' }
       })
     }
     const w = v.hasta - v.desde
-    const paso = [0.5, 1, 2, 5, 10, 15, 30].find((p) => w / p <= 8) || 60
+    const paso = [0.5, 1, 2, 5, 10, 15, 30].find((p) => w / p <= etiquetas) || 60
     const out = []
     for (let k = Math.ceil(v.desde / paso - 1e-9); k * paso <= v.hasta + 1e-9; k++) out.push({ t: k * paso, txt: fmtTiempo(k * paso, paso < 1 ? 1 : 0) })
     return out
