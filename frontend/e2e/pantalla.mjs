@@ -4223,7 +4223,9 @@ function casosF54() {
         const g = (await onda3Api(ctx, t.rid)).grilla
         afirmar(g && g.primer_beat_s !== null, `el motor no estimó grilla para el tema generado: ${json(g)}`)
         let o = await leerOnda(page)
-        afirmar(o.estado.startsWith('estimada') && o.estado.includes(`confianza ${coma2(g.confianza)}`), `el estado de la grilla no dice «estimada» y la confianza de la API: ${json(o.estado)}`)
+        afirmar(o.estado.startsWith('estimada') && o.estado.includes(`confianza ${coma2(g.confianza)}`) && o.estado.includes(`nitidez ${coma2(g.concentracion)}`)
+          && o.estado.includes('orientativa') && o.estado.includes('verificala sobre un kick'),
+        `el estado de la grilla no dice «estimada», que es orientativa, y la confianza y la nitidez (concentración) de la API: ${json(o.estado)}`)
         igual(o.unidad, 'compases', 'con grilla el zoom va en compases')
         // Zoom por defecto: 8 compases = 32 beats del período de la API.
         igual(o.zooms.find((z) => z[1] === 'true')[0], '8', 'el zoom no arranca en 8 compases')
@@ -4304,18 +4306,26 @@ function casosF54() {
 
         // Confianza baja (la respuesta de /onda3 con la confianza bajada a 0,25, lo único que
         // cambia): atenuada, dicho, y el snap arranca apagado.
+        let cambio = { confianza: 0.25 }
         await interceptar(page, async (req) => {
           if (!/\/onda3/.test(req.url())) return false
           const u = new URL(req.url())
           const d = await (await fetch(ctx.url + u.pathname + u.search)).json()
-          if (d.grilla && d.grilla.primer_beat_s !== null) d.grilla.confianza = 0.25
+          if (d.grilla && d.grilla.primer_beat_s !== null) Object.assign(d.grilla, cambio)
           await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(d) })
           return true
         })
         await abrirEditorD(page, ctx, t.item.titulo)
         o = await leerOnda(page)
-        afirmar(o.atenuada && o.estadoClase.includes('is-baja') && o.estado.includes('confianza 0,25 (baja'), `con confianza 0,25 la grilla va atenuada y lo dice: ${json(o)}`)
+        afirmar(o.atenuada && o.estadoClase.includes('is-baja') && o.estado.includes('confianza 0,25 (baja)'), `con confianza 0,25 la grilla va atenuada y lo dice: ${json(o)}`)
         afirmar(o.beats.length > 0 && o.snap && !o.snap.on && !o.snap.off, `atenuada se dibuja igual, con el snap apagado (y prendible): ${json(o)}`)
+        // Confianza 1,00 con nitidez 0,37 (el caso del acorde sostenido de la auditoría: fase
+        // corrida 56 ms): la confianza sola no la salva, va atenuada y lo dice.
+        cambio = { confianza: 1, concentracion: 0.37 }
+        await abrirEditorD(page, ctx, t.item.titulo)
+        o = await leerOnda(page)
+        afirmar(o.atenuada && o.estado.includes('confianza 1,00 · nitidez 0,37 (baja)') && o.estado.includes('puede estar corrida') && !o.snap.on,
+          `con nitidez 0,37 la grilla va atenuada aunque la confianza sea 1,00, y lo dice: ${json(o)}`)
       })
     }],
 
@@ -4469,6 +4479,119 @@ function casosF54() {
           return a && a.classList.contains('crate-accion') ? a.querySelector('.crate-accion-t')?.textContent ?? null : `${a?.tagName}.${a?.className}`
         }), 'Marcar cues', 'al cerrar, el foco no volvió a «Marcar cues»')
         igual(await sonando(page), [], 'al cerrar quedó algo sonando')
+      })
+    }],
+
+    ['editor D (f54): con DPR 1,25 (Windows al 125 %) el kick se dibuja en el azul puro de los graves, no rayado', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1.25 })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        igual(await page.evaluate(() => window.devicePixelRatio), 1.25, 'la página no quedó a DPR 1,25')
+        await clicZoom(page, '2')
+        // En los 40 ms después de cada kick generado: de los píxeles «azulados», cuántos son el
+        // azul PURO de los graves (el de la muestra de la leyenda). Una columna que cae entre
+        // píxeles físicos se mezcla con la de al lado y da azules sucios (rayado).
+        const pureza = (ts) => page.evaluate((lista) => {
+          const cv = document.querySelector('.edd-onda canvas')
+          const o = document.querySelector('.edd-onda')
+          const [desde, hasta] = [Number(o.dataset.desde), Number(o.dataset.hasta)]
+          const m = getComputedStyle(document.querySelector('.edd-sw.is-graves')).backgroundColor.match(/\d+/g).map(Number)
+          const c = cv.getContext('2d')
+          return lista.map((t) => {
+            const x0 = Math.floor(((t - desde) / (hasta - desde)) * cv.width)
+            const x1 = Math.ceil(((t + 0.04 - desde) / (hasta - desde)) * cv.width)
+            const d = c.getImageData(x0, 0, Math.max(1, x1 - x0), cv.height).data
+            let azules = 0, puros = 0
+            for (let i = 0; i < d.length; i += 4) {
+              const [r, g, b] = [d[i], d[i + 1], d[i + 2]]
+              if (b > 150 && b - r > 80 && b - g > 40) {
+                azules++
+                if (Math.abs(r - m[0]) <= 3 && Math.abs(g - m[1]) <= 3 && Math.abs(b - m[2]) <= 3) puros++
+              }
+            }
+            return { azules, puros, fraccion: azules ? Math.round((puros / azules) * 1000) / 1000 : 0 }
+          })
+        }, ts)
+        const p = 60 / t.bpm
+        const kicks = [0, 1, 2, 3].map((j) => t.primer_kick_s + j * p)
+        const v = await hasta(() => pureza(kicks), (x) => x.every((k) => k.azules > 200), 'no se dibujaron los graves de los kicks')
+        for (const [k, x] of v.entries()) afirmar(x.fraccion >= 0.9, `kick ${k + 1} a DPR 1,25: solo ${x.fraccion} de los píxeles azules son el azul puro de los graves (rayado): ${json(v)}`)
+      })
+    }],
+
+    ['editor D (f54): fallas del servidor — un éxito no borra el aviso de lo perdido; un rechazo relee la lista y sale del historial', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const estadoTxt = () => page.$eval('.edd-estado', (e) => e.textContent)
+        const avisoTxt = () => page.$eval('.edd-falla', (e) => e.textContent).catch(() => null)
+
+        // (1) La primera M recibe un 500 del servidor; la segunda sale bien.
+        let fallar = 1
+        await interceptar(page, async (req) => {
+          if (fallar > 0 && req.method() === 'POST' && /\/marcas$/.test(new URL(req.url()).pathname)) {
+            fallar -= 1
+            await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada del servidor' }) })
+            return true
+          }
+          return false
+        })
+        await page.focus('.edd-onda')
+        igual((await conTecla(page, ['m'], 'POST')).status, 500, 'la primera M tenía que recibir el 500 simulado')
+        await page.keyboard.press('ArrowRight')
+        const bien = await conTecla(page, ['m'], 'POST')
+        igual(bien.status, 201, 'la segunda M tenía que guardarse')
+        let api_ = await filasComoApi(page, ctx, t.rid, 'después de una M fallida y una buena')
+        igual(api_.map((m) => m.id), [bien.data.marca.id], 'en la base quedó solo la memory que se guardó')
+        let est = await hasta(estadoTxt, (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+        afirmar(!est.startsWith('✓') && est.includes('1 cambio no se guardó'), `con una memory perdida el estado no puede decir «✓ Guardado» a secas: ${json(est)}`)
+        const av = await avisoTxt()
+        afirmar(av && av.includes('Memory cue en') && av.includes('falla simulada del servidor'), `el aviso de la memory perdida (con el motivo del server) se borró con el éxito: ${json(av)}`)
+        await page.click('.edd-descartar')
+        est = await hasta(estadoTxt, (s) => s.startsWith('✓ Guardado'), 'después de descartar el aviso (lista igual al server) tiene que decir «✓ Guardado»')
+
+        // (2) Un hot cue que otra pestaña borra: Ctrl+Z (borrarlo) da 404; la lista se relee, el
+        // paso sale del historial y el próximo Ctrl+Z deshace el paso anterior (la memory).
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const cue = await conTecla(page, ['c'], 'POST')
+        igual(cue.status, 201, 'C no creó el hot cue')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${cue.data.marca.id}`, 'DELETE')).status, 200, 'la «otra pestaña» no pudo borrar el cue')
+        const z1 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual(z1.status, 404, 'deshacer la creación de un cue que ya no existe tiene que dar 404')
+        await filasComoApi(page, ctx, t.rid, 'después del 404 la lista tiene que ser la del servidor')
+        afirmar((await avisoTxt() || '').includes(z1.data.error), `el aviso no dice el motivo del server (${z1.data.error})`)
+        const z2 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const r2 = await z2
+        igual([r2.status(), new URL(r2.url()).pathname], [200, `${rutaMarcas(t.rid)}/${bien.data.marca.id}`],
+          'el segundo Ctrl+Z repitió el pedido imposible en vez de deshacer el paso anterior (la memory)')
+        api_ = await filasComoApi(page, ctx, t.rid, 'después del segundo Ctrl+Z')
+        igual(api_, [], 'la memory se tenía que deshacer')
+
+        // (3) «Al cursor» sobre una marca que otra pestaña borró: 404 y la fila se va.
+        const otra = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 2 })).data.marca
+        await page.click('.edd-pad[data-pad="0"]')            // fija A en el cursor: la lista se refresca con la memory
+        await filasComoApi(page, ctx, t.rid, 'la lista no trajo la memory creada por la otra pestaña')
+        await apiPedir(ctx, `${rutaMarcas(t.rid)}/${otra.id}`, 'DELETE')
+        const patch = page.waitForResponse((r) => r.request().method() === 'PATCH', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${otra.id}"] .edd-alcursor`)
+        const rp = await patch
+        igual(rp.status(), 404, '«Al cursor» sobre una marca borrada tenía que dar 404')
+        await hasta(() => page.$(`.edd-fila[data-id="${otra.id}"]`), (x) => !x, 'la fila de la marca borrada quedó en la lista')
+        await filasComoApi(page, ctx, t.rid, 'después del 404 de «Al cursor»')
+
+        // (4) Un pad que otra pestaña ocupó: la tecla 2 (pad B, vacío en esta pantalla) da 400 y
+        // la lista pasa a mostrar el pad B de la otra pestaña.
+        const ajena = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 5, num: 1 })).data.marca
+        igual(await page.$eval('.edd-pad[data-pad="1"]', (b) => b.classList.contains('is-vacio')), true, 'el pad B tendría que verse vacío antes de releer')
+        await page.focus('.edd-onda')
+        const b = await conTecla(page, ['2'], 'POST')
+        igual(b.status, 400, 'fijar el pad B ocupado por otra pestaña tenía que dar 400')
+        await filasComoApi(page, ctx, t.rid, 'después del 400 la lista tiene que traer el pad B de la otra pestaña')
+        igual(await page.$eval('.edd-pad[data-pad="1"] .edd-pad-tiempo', (e) => e.textContent), tiempoTabla(ajena.inicio), 'el pad B no muestra el cue que puso la otra pestaña')
+        afirmar((await avisoTxt() || '').includes(b.data.error), `el aviso no dice el motivo del 400 (${b.data.error})`)
       })
     }],
   ]
