@@ -445,8 +445,28 @@ class Store:
         if not filas:
             return []
         norm, _, _, _ = self._normalized(filas)
-        energias = [float(f["energy_raw"]) for f in filas]
+        # Un array y no una lista: `percentil` lo usa sin copiarlo (ver su docstring).
+        energias = np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64)
         return [self._track(f, norm[i], energias) for i, f in enumerate(filas)]
+
+    def load_tracks(self, paths: Iterable[Path | str]) -> list[Track]:
+        """Los tracks de `paths` que están en la base, con EXACTAMENTE los valores que les da
+        `load_library` (misma normalización de la biblioteca entera, mismo percentil de
+        energía), en el mismo orden (por clave). Las rutas que no están en la base no vuelven.
+
+        Para la radio desde una playlist (f55): arma el set con los temas de la playlist y no
+        necesita construir 10k `Track` para usar 30. Se leen igual todas las filas —la media y
+        el desvío del embedding y el universo del percentil son de la biblioteca entera; con
+        una muestra serían otros números—, pero solo se arman los pedidos.
+        """
+        claves = {self._key(p) for p in paths}
+        filas = self._rows()
+        elegidas = [i for i, f in enumerate(filas) if f["path_key"] in claves]
+        if not elegidas:
+            return []
+        norm, _, _, _ = self._normalized(filas)
+        energias = np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64)
+        return [self._track(filas[i], norm[i], energias) for i in elegidas]
 
     def matrix(self) -> tuple[np.ndarray, list[Path]]:
         """La matriz de embeddings normalizados de TODA la biblioteca y el orden de las

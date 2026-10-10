@@ -1300,3 +1300,26 @@ def test_leer_una_fila_con_acuerdo_corrupto_no_rompe_la_biblioteca(tmp_path):
     assert {t.path.name: t.key_acuerdo for t in biblio} == \
         {_catalogo()[0]["nombre"]: "abc", _catalogo()[1]["nombre"]: None}, \
         {t.path.name: t.key_acuerdo for t in biblio}
+
+
+def test_load_tracks_da_los_mismos_tracks_que_load_library(tmp_path):
+    """f55: la radio desde una playlist pide solo SUS tracks (`load_tracks`), y tienen que ser
+    exactamente los de `load_library`: la normalización del embedding y el percentil de
+    energía son de la biblioteca ENTERA, no de los pedidos (con una muestra serían otros
+    números y el set cambiaría según la playlist)."""
+    with Store(tmp_path / "b.sqlite") as store:
+        rutas = _poblar(store, tmp_path, range(5))
+        todos = {t.path.name: t for t in store.load_library()}
+        nombres = [_catalogo()[i]["nombre"] for i in (3, 0)]
+        pedidos = store.load_tracks([rutas[n] for n in nombres] + [tmp_path / "no-esta.wav"])
+    # En el orden de la biblioteca (por clave), no en el del pedido; el que no está no vuelve.
+    assert [t.path.name for t in pedidos] == sorted(nombres)
+    for t in pedidos:
+        e = todos[t.path.name]
+        assert (t.energy, t.bpm, t.key, t.duration, t.title) == \
+            (e.energy, e.bpm, e.key, e.duration, e.title), t.path.name
+        assert np.array_equal(t.embedding, e.embedding), f"{t.path.name}: otro embedding"
+    # Con dientes: normalizando solo esos dos, el embedding sería otro.
+    solos = normalize_matrix(np.vstack([_catalogo()[i]["embedding"] for i in (0, 3)])
+                             .astype(np.float64))[0]
+    assert not np.allclose(solos[0], todos[_catalogo()[0]["nombre"]].embedding)

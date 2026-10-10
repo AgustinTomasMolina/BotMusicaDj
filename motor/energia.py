@@ -34,8 +34,13 @@ def energia_rms(y: np.ndarray) -> float:
 
 def percentil(valor: float, valores) -> float:
     """Percentil (0..100) de `valor` dentro de `valores` (la biblioteca).
-    100 = el más energético de la biblioteca; 0 = el más tranquilo."""
-    a = np.asarray(list(valores), dtype=np.float64)
+    100 = el más energético de la biblioteca; 0 = el más tranquilo.
+
+    `valores` puede ser cualquier iterable; si ya es un `np.ndarray` se usa tal cual (f55):
+    `list()` sobre un array de 10k energías costaba ~0.4 ms POR TRACK, y `load_library` lo
+    llama una vez por track — eso solo eran ~4 s con 10k tracks. El número es el mismo."""
+    a = np.asarray(valores if isinstance(valores, np.ndarray) else list(valores),
+                   dtype=np.float64)
     if a.size == 0:
         return 0.0
     return float((a < valor).mean() * 100.0)
