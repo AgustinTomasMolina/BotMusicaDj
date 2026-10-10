@@ -18,6 +18,11 @@ export const ZOOM_COMPASES = [2, 4, 8, 16, 32]
 export const ZOOM_SEGUNDOS = [4, 8, 15, 30, 60]
 export const ZOOM_DEFECTO = 2                 // 8 compases (o 15 s), como el tablero D
 export const CONFIANZA_BAJA = 0.35            // debajo, la grilla va atenuada y sin snap por defecto
+// La «nitidez» es la `concentracion` de f52: qué parte de los ataques cae sobre una línea. La
+// confianza sola engaña (auditoría f54): con un acorde sostenido bajo los kicks la fase quedó
+// 56 ms antes con confianza 1,00 y concentración 0,37. Debajo de esto también va atenuada.
+// Es un umbral de PANTALLA: los de f52 (cuándo hay grilla) no se tocan.
+export const NITIDEZ_BAJA = 0.45
 export const AJUSTE_FINO_S = 0.005            // «fino»: 5 ms
 export const AJUSTE_MAX_BEATS = 4             // el ajuste no se va más de 4 beats para cada lado
 export const PADS = 'ABCDEFGH'
@@ -28,14 +33,18 @@ const finito = (x) => typeof x === 'number' && Number.isFinite(x)
 // ---------------------------------------------------------------------- grilla
 
 // ¿Hay grilla que dibujar? `g` es `grilla` de /onda3 (o null: el track no tiene BPM medido).
-// Devuelve { hay, atenuada, motivo }: `motivo` es por qué NO hay (para decirlo en pantalla).
+// Devuelve { hay, atenuada, baja, motivo }: `motivo` es por qué NO hay (para decirlo en
+// pantalla) y `baja` qué la atenúa: 'confianza', 'nitidez', las dos (array) o [].
 export function estadoGrilla(g) {
-  if (!g) return { hay: false, atenuada: false, motivo: 'el tema no tiene BPM medido' }
+  if (!g) return { hay: false, atenuada: false, baja: [], motivo: 'el tema no tiene BPM medido' }
   if (!finito(g.primer_beat_s) || !finito(g.periodo_s) || !(g.periodo_s > 0)) {
-    return { hay: false, atenuada: false, motivo: g.motivo || 'el motor no pudo estimar dónde cae el beat' }
+    return { hay: false, atenuada: false, baja: [], motivo: g.motivo || 'el motor no pudo estimar dónde cae el beat' }
   }
   const c = finito(g.confianza) ? g.confianza : 0
-  return { hay: true, atenuada: c < CONFIANZA_BAJA, motivo: null }
+  // Sin concentración (una respuesta vieja) no se puede afirmar que es nítida: cuenta como baja.
+  const n = finito(g.concentracion) ? g.concentracion : 0
+  const baja = [...(c < CONFIANZA_BAJA ? ['confianza'] : []), ...(n < NITIDEZ_BAJA ? ['nitidez'] : [])]
+  return { hay: true, atenuada: baja.length > 0, baja, motivo: null }
 }
 
 // El período de un beat para moverse de a un beat: el de la grilla si la hay (afinado contra
@@ -78,7 +87,8 @@ export function snapGrilla(t, g, offset) {
   const p = g.periodo_s
   const fase = g.primer_beat_s + (finito(offset) ? offset : 0)
   const s = fase + Math.round((t - fase) / p) * p
-  return s < 0 ? s + p : Math.round(s * 1000) / 1000
+  // Antes del 0 no hay línea: la primera real es la siguiente. Siempre a ms (lo que guarda la base).
+  return Math.round((s < 0 ? s + p : s) * 1000) / 1000
 }
 
 // Correr la grilla: `delta` en segundos sobre el ajuste actual, acotado a ±AJUSTE_MAX_BEATS.
@@ -379,6 +389,8 @@ export function nombreD(m) {
 
 // El compás y beat de un instante según la grilla («compás 12 · beat 3»), o null si el motor
 // no estimó cuál es el 1 (no se inventa). Los compases se cuentan desde el primero del tema.
+// Antes del primer 1 (la anacrusa) hay beats pero no compás: { compas: null, beat }. Antes de
+// la primera línea de la grilla, null.
 export function compasDe(t, g, offset) {
   if (!estadoGrilla(g).hay || !finito(g.compas_ref) || !finito(t)) return null
   const p = g.periodo_s
@@ -387,6 +399,16 @@ export function compasDe(t, g, offset) {
   // El primer 1 del tema: el ref corrido hacia atrás de a compases mientras siga ≥ 0.
   ref -= Math.floor(ref / (bpc * p)) * bpc * p
   const k = Math.floor((t - ref) / p + 1e-6)
-  if (k < 0) return null
+  if (k < 0) {
+    if (ref + k * p < -1e-6) return null            // antes de la primera línea: no hay beat
+    return { compas: null, beat: (((k % bpc) + bpc) % bpc) + 1 }
+  }
   return { compas: Math.floor(k / bpc) + 1, beat: (k % bpc) + 1 }
+}
+
+// Sacar del historial un paso que el servidor rechazó (la marca ya no existe, el pad está
+// ocupado): `h` es el historial como quedó DESPUÉS de deshacer / rehacer (`paso.h`), con la
+// operación ya movida; se la tira para que el próximo Ctrl+Z no repita el mismo pedido.
+export function descartarPaso(h, dir) {
+  return dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
 }

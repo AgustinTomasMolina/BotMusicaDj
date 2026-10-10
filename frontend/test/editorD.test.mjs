@@ -14,27 +14,43 @@ import {
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, xDeTiempo, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
-  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, CONFIANZA_BAJA,
+  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
-const G = { estimada: true, bpm: 128, periodo_s: 0.46875, primer_beat_s: 0.25, confianza: 0.8,
+const G = { estimada: true, bpm: 128, periodo_s: 0.46875, primer_beat_s: 0.25, confianza: 0.8, concentracion: 0.8,
   beats_por_compas: 4, compas_ref: null, motivo: null }
 
 /* ---------- la grilla: cuándo, cómo ---------- */
 
 test('sin grilla (sin BPM) o sin primer beat no se dibuja nada y se dice por qué', () => {
-  assert.deepEqual(estadoGrilla(null), { hay: false, atenuada: false, motivo: 'el tema no tiene BPM medido' })
+  assert.deepEqual(estadoGrilla(null), { hay: false, atenuada: false, baja: [], motivo: 'el tema no tiene BPM medido' })
   const sin = { ...G, primer_beat_s: null, motivo: 'no se distingue el beat del contratiempo' }
-  assert.deepEqual(estadoGrilla(sin), { hay: false, atenuada: false, motivo: 'no se distingue el beat del contratiempo' })
+  assert.deepEqual(estadoGrilla(sin), { hay: false, atenuada: false, baja: [], motivo: 'no se distingue el beat del contratiempo' })
   assert.deepEqual(lineasGrilla(sin, 0, 0, 10), [])
   assert.equal(snapGrilla(1.234, sin, 0), 1.234, 'sin grilla el snap no mueve nada')
 })
 
 test('con confianza baja la grilla va atenuada; desde el umbral, no', () => {
   assert.equal(CONFIANZA_BAJA, 0.35)
-  assert.deepEqual(estadoGrilla({ ...G, confianza: 0.34 }), { hay: true, atenuada: true, motivo: null })
-  assert.deepEqual(estadoGrilla({ ...G, confianza: 0.35 }), { hay: true, atenuada: false, motivo: null })
+  assert.deepEqual(estadoGrilla({ ...G, confianza: 0.34 }), { hay: true, atenuada: true, baja: ['confianza'], motivo: null })
+  assert.deepEqual(estadoGrilla({ ...G, confianza: 0.35 }), { hay: true, atenuada: false, baja: [], motivo: null })
+})
+
+test('confianza 1,00 no alcanza: con nitidez (concentración) baja también va atenuada', () => {
+  // El caso de la auditoría f54: acorde sostenido bajo los kicks, fase 56 ms corrida.
+  assert.equal(NITIDEZ_BAJA, 0.45)
+  assert.deepEqual(estadoGrilla({ ...G, confianza: 1, concentracion: 0.37 }), { hay: true, atenuada: true, baja: ['nitidez'], motivo: null })
+  assert.deepEqual(estadoGrilla({ ...G, confianza: 1, concentracion: 0.45 }), { hay: true, atenuada: false, baja: [], motivo: null })
+  assert.deepEqual(estadoGrilla({ ...G, confianza: 0.2, concentracion: 0.4 }).baja, ['confianza', 'nitidez'])
+  const { concentracion, ...sinNitidez } = G   // eslint-disable-line no-unused-vars
+  assert.deepEqual(estadoGrilla(sinNitidez).baja, ['nitidez'], 'sin el dato no se afirma que es nítida')
+})
+
+test('con un ajuste negativo no hay líneas ni snap en tiempo negativo', () => {
+  // fase = 0,25 − 0,30 = −0,05: la línea j = 0 caería antes del 0.
+  assert.deepEqual(lineasGrilla(G, -0.3, -1, 1).map((x) => x.t), [0.41875, 0.8875])
+  assert.equal(snapGrilla(0.01, G, -0.3), 0.419, 'el snap no puede dar un tiempo negativo: va a la primera línea real')
 })
 
 test('las líneas caen en primer_beat + j·período, dentro de la ventana', () => {
@@ -50,6 +66,9 @@ test('con compas_ref se numera el beat del compás (el 1 es el de compas_ref)', 
   assert.deepEqual(compasDe(0.72, g, 0), { compas: 1, beat: 1 })
   assert.deepEqual(compasDe(0.71875 + 5 * 0.46875 + 0.01, g, 0), { compas: 2, beat: 2 })
   assert.equal(compasDe(0.72, G, 0), null, 'sin compas_ref no hay compás')
+  // Antes del primer 1 (la anacrusa) hay beat pero no compás; antes de la primera línea, nada.
+  assert.deepEqual(compasDe(0.26, g, 0), { compas: null, beat: 4 })
+  assert.equal(compasDe(0.1, g, 0), null)
 })
 
 test('correr medio beat corre todas las líneas medio período (el contratiempo)', () => {
@@ -145,6 +164,16 @@ test('alcanza: lo traído tiene que cubrir la ventana con resolución suficiente
   assert.equal(alcanza({ desde: 0, hasta: 4, puntos: 400 }, { desde: 0, hasta: 3.75 }, 1400, 4), true, 'todos los cuadros de 10 ms que hay: el backend no da más')
 })
 
+test('alcanza: el borde se tolera un cuadro de 10 ms, no más', () => {
+  // El backend devuelve los bordes de sus cuadros de 10 ms: 15,005 en vez de 15 está bien;
+  // 15,02 (dos cuadros) ya deja sin datos el borde izquierdo de la ventana.
+  const v = { desde: 15, hasta: 30 }
+  assert.equal(alcanza({ desde: 15.005, hasta: 45, puntos: 3000 }, v, 1000, 240), true)
+  assert.equal(alcanza({ desde: 15.02, hasta: 45, puntos: 3000 }, v, 1000, 240), false)
+  assert.equal(alcanza({ desde: 0, hasta: 29.995, puntos: 3000 }, v, 1000, 240), true)
+  assert.equal(alcanza({ desde: 0, hasta: 29.98, puntos: 3000 }, v, 1000, 240), false)
+})
+
 test('columnas: el máximo de cada banda por columna; fuera del audio, nada', () => {
   const d = { desde: 0, hasta: 4, bandas: { graves: [1, 0, 0, 0.2], medios: [0, 0.5, 0, 0], agudos: [0, 0, 0.9, 0] } }
   assert.deepEqual(columnas(d, { desde: 0, hasta: 4 }, 2), [
@@ -193,6 +222,25 @@ test('recrear una marca le da otro id: el historial entero pasa a usar el nuevo'
   assert.deepEqual(h2.pasado.map((o) => (o.marca ? o.marca.id : o.id)), [12, 12])
   assert.equal(h2.futuro[0].marca.id, 12)
   assert.deepEqual(deshacer(h2).aplicar, { tipo: 'cambiar', id: 12, antes: { inicio: 2 }, despues: { inicio: 1.5 } })
+})
+
+test('el historial guarda los últimos 200 pasos: el más viejo se cae', () => {
+  let h = historialVacio()
+  for (let i = 0; i < 205; i++) h = registrar(h, { tipo: 'cambiar', id: 1, antes: { inicio: i }, despues: { inicio: i + 1 } })
+  assert.equal(h.pasado.length, 200)
+  assert.deepEqual(h.pasado[0].antes, { inicio: 5 }, 'se cayeron los 5 primeros, no los últimos')
+  assert.deepEqual(h.pasado[199].antes, { inicio: 204 })
+})
+
+test('un paso que el servidor rechazó sale del historial (no se repite con el próximo Ctrl+Z)', () => {
+  let h = registrar(historialVacio(), { tipo: 'crear', marca: M1 })
+  h = registrar(h, { tipo: 'cambiar', id: 7, antes: { inicio: 1.5 }, despues: { inicio: 2 } })
+  const d = deshacer(h)                        // el cambio: la marca ya no existe (404)
+  const h2 = descartarPaso(d.h, -1)
+  assert.deepEqual(h2, { pasado: [{ tipo: 'crear', marca: M1 }], futuro: [] })
+  assert.deepEqual(deshacer(h2).aplicar, { tipo: 'borrar', marca: M1 }, 'el próximo Ctrl+Z es el paso anterior, no el rechazado')
+  const r = rehacer(d.h)                       // rehacer rechazado: sale del pasado
+  assert.deepEqual(descartarPaso(r.h, 1), { pasado: [{ tipo: 'crear', marca: M1 }], futuro: [] })
 })
 
 test('cuerpoCrear: lo que el POST acepta, sin id ni fechas', () => {
