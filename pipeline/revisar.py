@@ -14,12 +14,13 @@ tarea 5.3 y sostenido acá).
 import argparse
 import datetime
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from benchmark.analizar import analizar_uno as analizar_motor
 from calidad.corte_espectral import EXTS
 from calidad.corte_espectral import analizar_uno as medir_calidad
-from calidad.duplicados import agrupar, cargar_ficha, decidir
+from calidad.duplicados import agrupar, cargar_ficha, decidir, referencias_de_xml
 from calidad.escribir_tags import escribir_en_copia, planificar
 from calidad.normalizar_tags import analizar as parsear_nombres
 from calidad.tags import leer_tags
@@ -29,7 +30,8 @@ from pipeline.reporte import Fila, estado_por_defecto, generar, motivos_pendient
 
 
 def procesar(rutas: list[str], staging: Path, progreso: bool = True,
-             consenso: bool = False) -> list[Fila]:
+             consenso: bool = False,
+             referencias: dict[str, str] | None = None) -> list[Fila]:
     """Corre todo el análisis y escribe las copias. Devuelve las filas del reporte.
 
     `consenso` tiene que arrancar en False, igual que `benchmark.analizar` y
@@ -45,6 +47,10 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
 
     `pipeline/tests/test_pipeline.py::test_pipeline_y_benchmark_dan_la_misma_tonalidad_sobre_el_mismo_audio`
     y `..._el_mismo_acuerdo_...` fallan si las dos rutas se separan.
+
+    `referencias` ({ruta normalizada: origen}, de `calidad.duplicados.referencias_de_xml`)
+    desempata los duplicados de calidad equivalente a favor de la copia que Rekordbox o
+    iTunes ya referencian. Sin ellas el desempate es el de siempre.
     """
     props = {p.ruta: p for p in parsear_nombres(rutas)}
 
@@ -56,13 +62,15 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
     # Qué grupo le toca a cada archivo, y qué se propone hacer con él dentro del grupo.
     grupo_de: dict[str, int] = {}
     accion_dup: dict[str, str] = {}
+    motivo_dup: dict[str, str] = {}
     calidades: dict[int, object] = {}
     for gid, grupo in enumerate(grupos, 1):
         for i in grupo:
             calidades[i] = medir_calidad(fichas[i].ruta)
-        for fila in decidir(grupo, fichas, calidades):
+        for fila in decidir(grupo, fichas, calidades, referencias):
             grupo_de[fila.ruta] = gid
             accion_dup[fila.ruta] = fila.accion
+            motivo_dup[fila.ruta] = fila.motivo
 
     filas: list[Fila] = []
     for i, ruta in enumerate(rutas, 1):
@@ -90,6 +98,7 @@ def procesar(rutas: list[str], staging: Path, progreso: bool = True,
             tramos=motor.tramos if motor else "",
             comentario=valor.get("comentario") or "",
             grupo_id=gid, accion_duplicado=accion_dup.get(ruta, ""),
+            motivo_duplicado=motivo_dup.get(ruta, ""),
             cambios=[(c.campo, c.antes, c.despues, c.motivo)
                      for c in plan if c.accion == "escribir"],
             metodo=motor.metodo if motor else "tono",
@@ -119,7 +128,18 @@ def main(argv=None) -> int:
                          "dudosa se marca con o sin este flag. Es el MISMO flag que "
                          "benchmark.analizar: si se prende acá hay que prenderlo allá, o "
                          "el tag y el benchmark quedan con tonalidades distintas.")
+    ap.add_argument("--rekordbox-xml", type=Path, default=None,
+                    help="XML de Rekordbox: entre duplicados de calidad equivalente se "
+                         "conserva la copia que ya referencia (cues, beatgrid).")
+    ap.add_argument("--itunes-xml", type=Path, default=None,
+                    help="Library.xml de iTunes: mismo desempate para sus pistas.")
     args = ap.parse_args(argv)
+
+    try:
+        referencias = referencias_de_xml(args.rekordbox_xml, args.itunes_xml)
+    except (OSError, ValueError, ET.ParseError) as e:
+        print(f"No pude leer la biblioteca de referencia: {e}")
+        return 2
 
     rutas = sorted(str(p) for p in args.carpeta.rglob("*") if p.suffix.lower() in EXTS)
     if not rutas:
@@ -130,7 +150,7 @@ def main(argv=None) -> int:
     staging.mkdir(parents=True, exist_ok=True)
     print(f"Procesando {len(rutas)} archivos → staging: {staging}")
 
-    filas = procesar(rutas, staging, consenso=args.consenso)
+    filas = procesar(rutas, staging, consenso=args.consenso, referencias=referencias)
     # El reporte va FUERA del staging y con fecha: el staging se pisa en cada corrida, y
     # comparar dos tandas es justo lo que hace falta cuando algo cambió.
     sello = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
