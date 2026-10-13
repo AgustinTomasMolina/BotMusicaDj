@@ -235,15 +235,17 @@ def _cargar_nativo(ruta: str):
     Nativo es innegociable: resamplear a 22050 deja Nyquist en 11 kHz y el corte que se
     quiere medir (16-20 kHz) desaparece.
     """
-    import librosa  # perezoso: --validar es CSV contra CSV y no necesita audio
+    # Perezoso: --validar es CSV contra CSV y no necesita el stack de audio.
+    from motor.decodificar import cargar
 
     # Si el track es más corto que la ventana, se reintenta desde el inicio. Con un offset
-    # más allá del final librosa no devuelve vacío: TIRA NoBackendError. Por eso el except
+    # más allá del final la carga no devuelve vacío: TIRA (NoBackendError con librosa, o
+    # DecodificacionError si hace falta ffmpeg y no está). Por eso el except
     # sigue al próximo intento en vez de abandonar — si no, todo archivo corto (un sample,
     # un loop) quedaba marcado "sin datos" siendo perfectamente legible.
     for desde in (DESDE_S, 0.0):
         try:
-            y, sr = librosa.load(ruta, sr=None, mono=True, offset=desde, duration=DURACION_S)
+            y, sr = cargar(ruta, sr=None, mono=True, offset=desde, duration=DURACION_S)
         except Exception:  # noqa: BLE001
             continue
         if y.size:

@@ -27,6 +27,10 @@ rq>=1.16.0
 # Versiones verificadas en un venv limpio con toda la suite en verde.
 librosa==0.11.0
 numpy==2.0.2            # numba (dep de librosa) aún no soporta numpy 2.1+
+                        # OJO Python 3.13: numpy 2.0.2 NO tiene ruedas para 3.13 (desde 2.1). Verificado con
+                        # Python 3.12. Subir de Python implica subir numpy y volver a medir (§5). El
+                        # fallback de audioread ya no es un bloqueo: el audio que libsndfile no abre
+                        # lo lee ffmpeg (motor/decodificar.py).
 soundfile==0.14.0       # lo trae librosa, pero se escribe audio directo: explícito
 mutagen==1.48.1         # tags ID3/FLAC/MP4
 

@@ -165,15 +165,15 @@ def mismo_audio(a: Ficha, b: Ficha, umbral: float = UMBRAL) -> tuple[bool, float
 
 
 def cargar_ficha(ruta: str) -> Ficha:
-    import librosa  # perezoso, igual que en corte_espectral
+    from motor.decodificar import cargar, duracion  # perezoso, igual que en corte_espectral
 
     try:
-        dur = float(librosa.get_duration(path=ruta))
+        dur = float(duracion(ruta))
     except Exception:  # noqa: BLE001
         return Ficha(ruta, Path(ruta).name, 0.0, None)
     desde = DESDE_S if dur > 100 else 0.0
     try:
-        y, _ = librosa.load(ruta, sr=SR_HUELLA, mono=True, offset=desde, duration=DURACION_S)
+        y, _ = cargar(ruta, sr=SR_HUELLA, mono=True, offset=desde, duration=DURACION_S)
     except Exception:  # noqa: BLE001
         return Ficha(ruta, Path(ruta).name, dur, None)
     return Ficha(ruta, Path(ruta).name, dur, huella(y, SR_HUELLA))

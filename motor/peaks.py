@@ -10,7 +10,7 @@ en float64 son ~420 MB; acá el pico es del orden del bloque (~1 MB), sin import
 Medido: ver el informe de la rama f48 y `motor/tests/test_peaks.py`.
 
 Decodificación: `soundfile` (libsndfile: WAV, AIFF, FLAC, OGG y MP3) en streaming; si no lo
-abre, `audioread` en streaming (los mismos backends que usa `librosa.load` para el análisis:
+abre (M4A/AAC), ffmpeg en streaming (`motor.decodificar`, el mismo camino que usa el análisis:
 lo que el motor pudo analizar, acá se puede dibujar). El archivo se abre SOLO para leer: el
 original nunca se toca.
 
@@ -66,7 +66,7 @@ def _acumular(out: np.ndarray, amp: np.ndarray, pos: int, total: int) -> None:
 
 def _declara_otro_largo(leidos: int, declarados: int) -> bool:
     """¿El decodificador entregó una cantidad de frames distinta de la que declaró? Pasa con
-    audioread (MP3/M4A vía ffmpeg: la duración es una estimación). Los bins se reparten sobre
+    ffmpeg (MP3/M4A: la duración es una estimación). Los bins se reparten sobre
     lo DECLARADO: si falta un pedazo, la cola
     de la onda quedaría en cero y se dibujaría como silencio un audio que no existe. Con más
     de un 0.1 % de diferencia se vuelve a leer repartiendo sobre lo que de verdad hay."""
@@ -99,18 +99,16 @@ def _con_soundfile(path: str, bins: int, block_frames: int) -> Peaks | None:
                                   f"({type(e).__name__}: {e})") from None
     if pos == 0:
         raise UnreadableAudio("el archivo no tiene audio")
-    # Acá no hace falta releer como en `_con_audioread`: libsndfile corrige solo el largo de
+    # Acá no hace falta releer como en `_con_ffmpeg`: libsndfile corrige solo el largo de
     # un WAV truncado y, si un FLAC declara de más, falla al leer (UnreadableAudio, arriba).
     return Peaks(out, pos / sr, sr, ch)
 
 
-def _con_audioread(path: str, bins: int, total_real: int | None = None) -> Peaks:
+def _con_ffmpeg(path: str, bins: int, total_real: int | None = None) -> Peaks:
+    from motor.decodificar import LectorPCM
+
     try:
-        import audioread
-    except ImportError as e:      # pragma: no cover — viene con librosa
-        raise UnreadableAudio(f"no hay con qué decodificar este formato ({e})") from None
-    try:
-        with audioread.audio_open(path) as f:
+        with LectorPCM(path) as f:
             sr, ch = int(f.samplerate), int(f.channels)
             total = total_real or int(round(float(f.duration) * sr))
             if total <= 0 or sr <= 0 or ch <= 0:
@@ -130,12 +128,12 @@ def _con_audioread(path: str, bins: int, total_real: int | None = None) -> Peaks
                 pos += len(amp)
     except UnreadableAudio:
         raise
-    except Exception as e:  # noqa: BLE001 — audioread tira lo que tire su backend
+    except Exception as e:  # noqa: BLE001 — sin ffmpeg, pista rota o lo que tire el pipe
         raise UnreadableAudio(f"no se pudo decodificar el audio ({type(e).__name__}: {e})") from None
     if pos == 0:
         raise UnreadableAudio("el archivo no tiene audio")
     if total_real is None and _declara_otro_largo(pos, total):
-        return _con_audioread(path, bins, total_real=pos)
+        return _con_ffmpeg(path, bins, total_real=pos)
     return Peaks(out, pos / sr, sr, ch)
 
 
@@ -147,7 +145,7 @@ def compute_peaks(path: Path | str, bins: int = PEAK_BINS,
     if not os.path.isfile(ruta):
         raise FileNotFoundError(ruta)
     res = _con_soundfile(ruta, bins, block_frames)
-    res = res if res is not None else _con_audioread(ruta, bins)
+    res = res if res is not None else _con_ffmpeg(ruta, bins)
     # Un WAV en float puede traer NaN o infinitos: no son audio, y en el JSON de la API
     # serían un 500 (NaN no es JSON válido). Se dice que el archivo está dañado.
     if not np.all(np.isfinite(res.peaks)):

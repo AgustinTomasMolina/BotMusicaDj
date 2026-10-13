@@ -650,10 +650,10 @@ def test_muestreo_demasiado_bajo_para_los_agudos(tmp_path):
         mb.compute_bandas(ruta)
 
 
-def test_audioread_por_bloques_da_lo_mismo(corto, monkeypatch):
-    """Por el camino de audioread (MP3/M4A vía ffmpeg) llegan pedazos de PCM que no caen en
-    un frame. Un decodificador falso con los datos del WAV: mismas bandas que soundfile."""
-    import audioread
+def test_ffmpeg_por_bloques_da_lo_mismo(corto, monkeypatch):
+    """Por el camino de ffmpeg (MP3/M4A) llegan pedazos de PCM que no caen en un frame. Un
+    decodificador falso con los datos del WAV: mismas bandas que soundfile."""
+    import motor.decodificar as dec
 
     y, sr = sf.read(str(corto), dtype="int16", always_2d=True)
 
@@ -675,7 +675,7 @@ def test_audioread_por_bloques_da_lo_mismo(corto, monkeypatch):
                 yield datos[i:i + 4097]
 
     esperado = mb.compute_bandas(corto)
-    monkeypatch.setattr(audioread, "audio_open", lambda _ruta: Falso())
+    monkeypatch.setattr(dec, "LectorPCM", lambda _ruta: Falso())
     import soundfile
 
     def no_abre(*a, **k):
