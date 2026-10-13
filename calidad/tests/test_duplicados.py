@@ -11,24 +11,29 @@ from urllib.parse import quote
 import numpy as np
 import pytest
 
+import motor.decodificar as dec
 from calidad.corte_espectral import FilaCalidad
 from calidad.duplicados import (
     CONSERVAR,
     DESCARTAR,
+    N_TRAMOS,
     Ficha,
     _puntaje_calidad,
     agrupar,
+    cargar_ficha,
     decidir,
     duracion_compatible,
     huella,
     main,
     mismo_audio,
+    muestra_para_huella,
     normalizar_ruta,
     referencias_de_xml,
     referencias_itunes,
     referencias_rekordbox,
     similitud,
     unir_referencias,
+    ventanas_huella,
 )
 
 SR = 22050
@@ -106,6 +111,145 @@ def test_silencio_no_tiene_huella():
 
 def test_similitud_tolera_none():
     assert similitud(None, huella(_senal(1))) == 0.0
+
+
+# --- Dónde mira la huella (tarea 5.27) -------------------------------------------------------
+
+
+def test_los_tramos_se_reparten_por_todo_el_track():
+    """346 s: desde 30 s (intro salteada) hasta el final, cada 13 s. Los valores salen de
+    la cuenta a mano: (346 - 30) / 24 = 13.17 -> 13.0 (múltiplo de 0.5 hacia abajo)."""
+    v = ventanas_huella(346.0)
+    assert len(v) == 24
+    assert v[0] == (30.0, 2.5)
+    assert v[1] == (43.0, 2.5)
+    assert v[-1] == (329.0, 2.5), "el último tramo no llega cerca del final del track"
+    assert all(largo == 2.5 for _, largo in v)
+
+
+def test_el_ultimo_tramo_siempre_entra_en_el_track():
+    for dur in (100.5, 110.0, 130.0, 200.0, 346.0, 600.0, 1800.0):
+        off, largo = ventanas_huella(dur)[-1]
+        assert off + largo <= dur, f"el último tramo se sale de un track de {dur} s"
+
+
+def test_la_huella_cubre_casi_todo_el_track_util():
+    """La cola sin mirar es, como mucho, un paso entre tramos más 12 s (N_TRAMOS x 0.5 s del
+    redondeo hacia abajo del paso): menos de ~2 porciones de 24, nunca un bloque grande."""
+    for dur in (130.0, 200.0, 346.0, 600.0, 1800.0):
+        v = ventanas_huella(dur)
+        paso = v[1][0] - v[0][0]
+        cola = dur - (v[-1][0] + v[-1][1])
+        assert cola < paso + 12.0, f"{dur} s: quedan {cola:.1f} s sin mirar (paso {paso} s)"
+        assert v[-1][0] > 0.9 * dur - 30, f"{dur} s: el último tramo está muy lejos del final"
+
+
+def test_un_track_corto_se_analiza_entero_en_una_ventana():
+    assert ventanas_huella(50.0) == [(0.0, 50.0)]
+
+
+def test_se_saltea_la_intro_solo_en_tracks_largos():
+    assert ventanas_huella(100.0)[0][0] == 0.0      # justo en el borde: no se saltea
+    assert ventanas_huella(100.5)[0][0] == 30.0
+
+
+def test_duracion_cero_o_negativa_no_tiene_ventanas():
+    assert ventanas_huella(0.0) == []
+    assert ventanas_huella(-3.0) == []
+
+
+def test_dos_copias_que_difieren_decimas_de_segundo_miran_los_mismos_tramos():
+    """Medido con audio real: dos MP3 del mismo tema de 253.16 s y 253.50 s. Con tramos
+    proporcionales a la duración exacta la similitud caía de 0.998 a 0.65; con el paso
+    cuantizado miran EXACTAMENTE lo mismo."""
+    assert ventanas_huella(253.16) == ventanas_huella(253.50)
+    assert ventanas_huella(122.48) == ventanas_huella(122.49)
+
+
+def test_la_muestra_son_los_tramos_pegados_y_miden_siempre_lo_mismo():
+    """`huella` parte la muestra en N_TRAMOS iguales: la muestra tiene que ser N_TRAMOS
+    tramos de largo exacto, y cada uno tiene que ser el que dice `ventanas_huella`."""
+    y = np.arange(SR * 200, dtype=np.float32)
+    m = muestra_para_huella(y, SR)
+    largo = int(2.5 * SR)
+    assert m.size == N_TRAMOS * largo
+    for k, (off, _) in enumerate(ventanas_huella(200.0)):
+        assert m[k * largo] == int(round(off * SR)), f"el tramo {k} no sale de {off} s"
+
+
+def _wav(tmp_path, y, nombre="t.wav"):
+    import soundfile as sf
+
+    ruta = tmp_path / nombre
+    sf.write(str(ruta), y, SR, subtype="PCM_16")
+    return str(ruta)
+
+
+def test_cargar_ficha_lee_solo_los_tramos_y_da_la_misma_huella_que_en_memoria(
+        tmp_path, monkeypatch):
+    """Lee 24 tramos buscando cada uno en el archivo (no decodifica el track entero) y el
+    resultado es el de la muestra en memoria."""
+    y = _senal(11, dur=200.0)
+    ruta = _wav(tmp_path, y)
+    llamadas = []
+    real = dec.cargar
+
+    def espia(r, sr, mono=True, offset=0.0, duration=None):
+        llamadas.append((offset, duration))
+        return real(r, sr=sr, mono=mono, offset=offset, duration=duration)
+
+    monkeypatch.setattr(dec, "cargar", espia)
+    f = cargar_ficha(ruta)
+    assert llamadas == ventanas_huella(f.duracion_s), "no leyó los tramos de ventanas_huella"
+    decodificado, _ = real(ruta, sr=SR, mono=True)
+    en_memoria = huella(muestra_para_huella(decodificado, SR))
+    assert similitud(f.huella, en_memoria) > 0.999
+
+
+@pytest.mark.parametrize("declarada,real", [
+    (260.0, 200.0),   # el último tramo cae PASADO el final: buscar ahí tira error
+    (210.0, 204.0),   # el último tramo (202.5-205 s) cae a medias: viene corto (1.5 s de 2.5)
+])
+def test_si_la_duracion_declarada_no_coincide_con_el_audio_se_decodifica_entero(
+        tmp_path, monkeypatch, declarada, real):
+    """Un VBR sin cabecera puede declarar más duración de la que tiene. Los últimos tramos
+    vendrían vacíos o a medias: en vez de una huella con ceros, se decodifica entero y se
+    mide sobre lo que realmente hay."""
+    y = _senal(12, dur=real)
+    ruta = _wav(tmp_path, y)
+    monkeypatch.setattr(dec, "duracion", lambda r: declarada)   # miente
+    f = cargar_ficha(ruta)
+    decodificado, _ = dec.cargar(ruta, sr=SR, mono=True)
+    esperado = huella(muestra_para_huella(decodificado, SR))
+    assert f.huella is not None
+    assert similitud(f.huella, esperado) > 0.999, "no midió sobre el audio real"
+
+
+def test_un_ultimo_tramo_apenas_corto_se_completa_con_silencio_sin_correr_los_demas(
+        tmp_path, monkeypatch):
+    """Si al último tramo le faltan unas décimas (la duración declarada pasa en 0.1 s el audio
+    real), se completa con silencio hasta su largo exacto: `huella` parte la muestra en
+    N_TRAMOS iguales, y un tramo corto correría todos los límites."""
+    y = _senal(13, dur=204.9)
+    ruta = _wav(tmp_path, y)
+    monkeypatch.setattr(dec, "duracion", lambda r: 210.0)   # último tramo 202.5-205 s
+    f = cargar_ficha(ruta)
+    n = int(2.5 * SR)
+    partes = []
+    for off, _ in ventanas_huella(210.0):
+        i = int(round(off * SR))
+        t = y[i:i + n]
+        partes.append(np.pad(t, (0, n - t.size)))
+    assert partes[-1].size == n and y.size < int(round(202.5 * SR)) + n   # el caso es real
+    assert similitud(f.huella, huella(np.concatenate(partes))) > 0.999
+
+
+def test_cargar_ficha_de_archivo_ilegible_no_tiene_huella(tmp_path):
+    from calidad.duplicados import cargar_ficha
+
+    ruta = tmp_path / "roto.wav"
+    ruta.write_bytes(b"esto no es audio")
+    assert cargar_ficha(str(ruta)).huella is None
 
 
 # --- Las dos compuertas juntas -------------------------------------------------------------

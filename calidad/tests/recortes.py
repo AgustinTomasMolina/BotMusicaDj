@@ -6,8 +6,8 @@ la huella los va a ver igualísimos — la única defensa es la compuerta de dur
 umbral hay que validarlo con números.
 
 Se recorta DEL MEDIO, no del final, a propósito: sacar del final cambia menos la huella
-(que se calcula sobre una ventana fija cerca del principio) y daría un resultado
-optimista. Un edit real suele acortar justamente el desarrollo del medio.
+(los tramos se ubican desde el principio, con un paso fijo para una duración dada) y daría
+un resultado optimista. Un edit real suele acortar justamente el desarrollo del medio.
 
 Como fixture:
 
@@ -132,8 +132,7 @@ def main(argv=None) -> int:
                     help="Dónde dejar los recortes (default: carpeta temporal del sistema).")
     ap.add_argument("--cortes", type=float, nargs="+", default=list(CORTES_S))
     ap.add_argument("--posicion", type=float, default=0.5,
-                    help="Dónde se corta, 0..1 (0.5 = la mitad). Bajarlo mete el corte "
-                         "DENTRO de la ventana que mira la huella, para aislar su efecto.")
+                    help="Dónde se corta, 0..1 (0.5 = la mitad).")
     args = ap.parse_args(argv)
 
     destino = args.out
