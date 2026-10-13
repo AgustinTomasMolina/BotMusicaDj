@@ -43,9 +43,18 @@ import numpy as np
 
 BLOQUE_BYTES = 1 << 16
 TIMEOUT_SONDEO_S = 60
+# Tope de lo que se acepta leer del pipe de ffmpeg, para que uno que no termina nunca no llene la
+# memoria o el disco: FACTOR_TOPE veces el PCM que declara el archivo (una duración estimada de
+# un MP3/M4A se equivoca por poco, no por 4x) más una holgura; sin duración declarada, un tope
+# absoluto (~3 h de estéreo a 44,1 kHz). NO cubre un ffmpeg que se cuelga SIN escribir nada:
+# eso pediría un hilo lector con timeout y queda dicho en vez de hecho a medias.
+FACTOR_TOPE = 4
+HOLGURA_TOPE_BYTES = 1 << 20
+TOPE_SIN_DURACION_BYTES = 2 << 30
 
-MSG_SIN_FFMPEG = ("no se encontró ffmpeg/ffprobe: instalalo o definí FFMPEG_BIN y FFPROBE_BIN "
-                  "(o FFMPEG_DIR con la carpeta que los tiene)")
+MSG_INSTALAR = ("instalalo o definí FFMPEG_BIN y FFPROBE_BIN "
+                "(o FFMPEG_DIR con la carpeta que los tiene)")
+MSG_SIN_FFMPEG = "no se encontró ffmpeg/ffprobe: " + MSG_INSTALAR
 
 
 class DecodificacionError(Exception):
@@ -112,13 +121,21 @@ class LectorPCM:
 
     def __init__(self, ruta: str | os.PathLike):
         info = sondear(ruta)
-        if info["duration"] is None:
-            raise DecodificacionError("ffprobe no informa la duración del archivo")
         self.samplerate: int = info["samplerate"]
         self.channels: int = info["channels"]
-        self.duration: float = info["duration"]
+        # `None` si el contenedor no la declara: leer no la necesita, solo quien reparte el
+        # audio en bins sobre el total (`motor.peaks`), que en ese caso mide leyendo.
+        self.duration: float | None = info["duration"]
+        self._tope = (TOPE_SIN_DURACION_BYTES if self.duration is None else
+                      int(self.duration * self.samplerate * self.channels * 2 * FACTOR_TOPE)
+                      + HOLGURA_TOPE_BYTES)
+        self._leidos = 0
+        # `-ac`/`-ar` con lo que SONDEÓ ffprobe: la salida tiene por construcción los canales
+        # y la frecuencia con que el llamador interpreta el PCM, aunque el decodificador
+        # entregue otros.
         cmd = [_binario("ffmpeg"), "-hide_banner", "-nostats", "-nostdin", "-v", "error",
                "-i", _entrada(ruta), "-map", "0:a:0", "-vn", "-sn", "-dn",
+               "-ac", str(self.channels), "-ar", str(self.samplerate),
                "-f", "s16le", "-acodec", "pcm_s16le", "-"]
         self._err = tempfile.TemporaryFile()  # noqa: SIM115 — se cierra en `close`
         try:
@@ -133,6 +150,11 @@ class LectorPCM:
             buf = self._proc.stdout.read(BLOQUE_BYTES)
             if not buf:
                 break
+            self._leidos += len(buf)
+            if self._leidos > self._tope:
+                self._proc.kill()
+                raise DecodificacionError(
+                    f"ffmpeg entregó mucho más audio que el declarado (más de {self._tope} bytes)")
             yield buf
         # Se llegó al final: si ffmpeg no terminó bien, lo que se leyó no es todo el audio.
         if self._proc.wait() != 0:
@@ -168,8 +190,8 @@ def _a_float(pcm: bytes, canales: int) -> np.ndarray:
 
 
 def _leer_soundfile(ruta: str, offset: float, duration: float | None):
-    """`(y, sr_nativo)` por libsndfile, o `None` si no lo abre o falla al leerlo. Es
-    `librosa.core.audio.__soundfile_load` (no es público, por eso la copia)."""
+    """`((y, sr_nativo), None)` por libsndfile, o `(None, motivo)` si no lo abre o falla al
+    leerlo. Es `librosa.core.audio.__soundfile_load` (no es público, por eso la copia)."""
     import soundfile as sf
 
     try:
@@ -179,9 +201,18 @@ def _leer_soundfile(ruta: str, offset: float, duration: float | None):
                 f.seek(int(offset * sr))
             frames = int(duration * sr) if duration is not None else -1
             y = f.read(frames=frames, dtype="float32", always_2d=False).T
-    except RuntimeError:        # LibsndfileError es un RuntimeError
-        return None
-    return y, sr
+    except RuntimeError as e:   # LibsndfileError es un RuntimeError
+        return None, str(e)
+    return (y, sr), None
+
+
+def _sin_ffmpeg_o_fallo(motivo: str, e: DecodificacionError) -> DecodificacionError:
+    """El error final cuando libsndfile no abrió el archivo Y ffmpeg tampoco pudo: lleva el
+    motivo de libsndfile. Un WAV dañado o un offset fuera del archivo no es «instalá ffmpeg»."""
+    if str(e) == MSG_SIN_FFMPEG:
+        return DecodificacionError(f"libsndfile no lo abre ({motivo}) y no hay ffmpeg para "
+                                   f"intentarlo: {MSG_INSTALAR}")
+    return DecodificacionError(f"libsndfile no lo abre ({motivo}) y ffmpeg tampoco: {e}")
 
 
 def _leer_ffmpeg(ruta: str, offset: float, duration: float | None):
@@ -219,8 +250,13 @@ def cargar(ruta: str | os.PathLike, sr: int | None, mono: bool = True, offset: f
     import librosa
 
     ruta = os.fspath(ruta)
-    leido = _leer_soundfile(ruta, offset, duration)
-    y, sr_nativo = leido if leido is not None else _leer_ffmpeg(ruta, offset, duration)
+    leido, motivo = _leer_soundfile(ruta, offset, duration)
+    if leido is None:
+        try:
+            leido = _leer_ffmpeg(ruta, offset, duration)
+        except DecodificacionError as e:
+            raise _sin_ffmpeg_o_fallo(motivo, e) from None
+    y, sr_nativo = leido
     if mono:
         y = librosa.to_mono(y)
     if sr is None:
@@ -235,8 +271,11 @@ def duracion(ruta: str | os.PathLike) -> float:
     ruta = os.fspath(ruta)
     try:
         return float(sf.info(ruta).duration)
-    except RuntimeError:
-        d = sondear(ruta)["duration"]
+    except RuntimeError as e_sf:
+        try:
+            d = sondear(ruta)["duration"]
+        except DecodificacionError as e:
+            raise _sin_ffmpeg_o_fallo(str(e_sf), e) from None
         if d is None:
             raise DecodificacionError("ffprobe no informa la duración del archivo") from None
         return float(d)

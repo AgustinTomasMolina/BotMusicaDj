@@ -53,12 +53,17 @@ if "-of" in args:                                   # es ffprobe
         print(json.dumps({"streams": [], "format": {}}))
     else:
         dur = "%.6f" % (len(y) / sr)
+        sin = modo == "sin_duracion_total"
         print(json.dumps({"streams": [{"sample_rate": str(sr), "channels": y.shape[1],
-                                       "duration": "N/A" if modo == "sin_duracion" else dur}],
-                          "format": {"duration": dur}}))
+                                       "duration": "N/A" if modo in ("sin_duracion", "sin_duracion_total") else dur}],
+                          "format": {"duration": "N/A" if sin else dur}}))
     sys.exit(0)
 assert args[args.index("-f") + 1] == "s16le", args  # es ffmpeg: pide PCM 16 bit
 datos = y.astype("<i2").tobytes()
+if modo == "infinito":                              # un ffmpeg que no termina (con un tope propio)
+    for _ in range(100 * 1024 * 1024 // len(datos)):
+        sys.stdout.buffer.write(datos)
+    sys.exit(0)
 if modo == "falla":
     sys.stderr.write("Invalid data found when processing input\n")
     sys.stdout.buffer.write(datos[:1000])
@@ -170,6 +175,9 @@ def test_ffmpeg_se_llama_con_file_y_sin_tocar_el_original(falso):
     entrada = args[args.index("-i") + 1]
     assert entrada == "file:" + os.path.abspath(falso.m4a)
     assert args[-1] == "-" and args[args.index("-f") + 1] == "s16le"   # a un pipe, nunca a un archivo
+    # La salida es la que sondeó ffprobe (2 canales a 44,1 kHz), de la pista de audio 0.
+    assert args[args.index("-map") + 1] == "0:a:0"
+    assert args[args.index("-ac") + 1] == "2" and args[args.index("-ar") + 1] == str(SR_NATIVO)
     assert falso.m4a.read_bytes() == antes
 
 
@@ -214,7 +222,43 @@ def test_el_motor_dice_por_que_no_pudo_cargar(falso, tmp_path, monkeypatch, capl
     with caplog.at_level("WARNING", logger="motor.analisis"):
         assert cargar_motor(falso.m4a) is None
     (registro,) = caplog.records
-    assert registro.getMessage().startswith("no se pudo decodificar tema.m4a: no se encontró ffmpeg")
+    msg = registro.getMessage()
+    assert msg.startswith("no se pudo decodificar tema.m4a: libsndfile no lo abre (")
+    assert "Format not recognised" in msg and "no hay ffmpeg para intentarlo" in msg
+
+
+def _motivo_de_soundfile(ruta, seek_s=0.0):
+    """El error que da libsndfile por su cuenta: el valor esperado sale de soundfile, no del
+    código bajo prueba."""
+    try:
+        with sf.SoundFile(str(ruta)) as f:
+            if seek_s:
+                f.seek(int(seek_s * f.samplerate))
+    except RuntimeError as e:
+        return str(e)
+    raise AssertionError("soundfile habría podido leerlo")
+
+
+@pytest.mark.parametrize("como", ["archivo dañado", "offset fuera del archivo"])
+def test_sin_ffmpeg_el_error_trae_el_motivo_de_libsndfile(falso, tmp_path, monkeypatch, como):
+    """Un WAV con el encabezado roto o un offset más allá del final NO es «instalá ffmpeg»: el
+    mensaje dice qué dijo libsndfile y además que no hay con qué reintentar."""
+    monkeypatch.setattr(dec, "_binario", lambda nombre: str(tmp_path / "no-existe" / nombre))
+    if como == "archivo dañado":
+        ruta = tmp_path / "roto.wav"
+        ruta.write_bytes(b"RIFF\x00\x00\x00\x00WAVEjunk" * 4)
+        kw, motivo = {}, _motivo_de_soundfile(ruta)
+    else:
+        ruta, kw = falso.wav, dict(offset=60.0, duration=30.0)
+        motivo = _motivo_de_soundfile(ruta, seek_s=60.0)
+    with pytest.raises(dec.DecodificacionError) as e:
+        dec.cargar(ruta, sr=22050, **kw)
+    assert motivo in str(e.value)
+    assert str(e.value).startswith("libsndfile no lo abre (") and "FFMPEG_BIN" in str(e.value)
+    if como == "archivo dañado":
+        with pytest.raises(dec.DecodificacionError) as e:
+            dec.duracion(ruta)
+        assert motivo in str(e.value) and "FFMPEG_BIN" in str(e.value)
 
 
 def test_ffmpeg_que_falla_a_mitad_no_entrega_audio_parcial(falso):
@@ -238,19 +282,86 @@ def test_duracion_n_a_del_stream_se_lee_del_contenedor(falso):
     assert dec.sondear(falso.m4a)["duration"] == pytest.approx(6.0, abs=1e-6)
 
 
+def test_sin_duracion_declarada_igual_se_carga_y_se_dibuja(falso):
+    """ffprobe no informa la duración (ni en el stream ni en el contenedor): leer no la necesita.
+    Los picos se reparten sobre el largo que se mide leyendo, no sobre uno inventado."""
+    falso.modo("sin_duracion_total")
+    with dec.LectorPCM(falso.m4a) as f:
+        assert f.duration is None and f.channels == 2
+    y, sr = dec.cargar(falso.m4a, sr=None, mono=False)
+    esperado, _ = librosa.load(str(falso.wav), sr=None, mono=False)
+    assert sr == SR_NATIVO
+    np.testing.assert_allclose(y, esperado, atol=1e-6)
+    p, p_wav = compute_peaks(falso.m4a, bins=300), compute_peaks(falso.wav, bins=300)
+    np.testing.assert_allclose(p.peaks, p_wav.peaks, atol=1e-6)
+    assert p.duration_s == 6.0
+    with pytest.raises(dec.DecodificacionError, match="duración"):
+        dec.duracion(falso.m4a)                     # preguntar la duración SÍ la exige
+
+
+def test_un_ffmpeg_que_no_termina_se_corta_por_tope(falso):
+    """El falso escribe ~100 MB para un tema de 6 s (1 MB de PCM): el tope es 4x lo declarado
+    más 1 MB, así que se corta con un error, sin llenar la memoria."""
+    falso.modo("infinito")
+    with (pytest.raises(dec.DecodificacionError, match="mucho más audio"),
+          dec.LectorPCM(falso.m4a) as f):
+        sum(len(b) for b in f)
+    with pytest.raises(dec.DecodificacionError, match="mucho más audio"):
+        dec.cargar(falso.m4a, sr=22050)
+    with pytest.raises(UnreadableAudio, match="mucho más audio"):
+        compute_peaks(falso.m4a)
+
+
 # --- ningún código de producción depende de audioread --------------------------------------
 
 _SALTAR_DIRS = {".venv", "venv", "node_modules", "__pycache__", "tests", "staging"}
 
 
+_LIBROSA = ("librosa", "librosa.core", "librosa.core.audio")
+_CARGAS = {f"{m}.load" for m in _LIBROSA}
+_DURACIONES = {f"{m}.get_duration" for m in _LIBROSA}
+
+
+def _alias(arbol):
+    """`{nombre local: nombre completo}` de los imports del módulo, para ver a través de
+    `import librosa as lr`, `from librosa.core import load as l`, etc."""
+    nombres = {}
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.asname:
+                    nombres[a.asname] = a.name
+                else:
+                    nombres[a.name.split(".")[0]] = a.name.split(".")[0]
+        elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            for a in n.names:
+                nombres[a.asname or a.name] = f"{n.module}.{a.name}"
+    return nombres
+
+
+def _completo(nodo, nombres):
+    """El nombre con puntos de `lr.core.load` → `librosa.core.load`, o None si no es una
+    cadena de atributos que arranca en un nombre."""
+    partes = []
+    while isinstance(nodo, ast.Attribute):
+        partes.append(nodo.attr)
+        nodo = nodo.value
+    if not isinstance(nodo, ast.Name):
+        return None
+    partes.append(nombres.get(nodo.id, nodo.id))
+    return ".".join(reversed(partes))
+
+
 def _usos_prohibidos(ruta):
-    """Líneas que usan `audioread`, `librosa.load` o `librosa.get_duration(path=)`: los tres
-    caminos que terminan en el fallback de audioread."""
+    """`(línea, qué)` de lo que lee audio por un camino que termina en el fallback de audioread:
+    importar `audioread`, `audio_open`, `librosa.load` y `librosa.get_duration(path=)`, también
+    con alias (`import librosa as lr`, `from librosa.core import load`, `librosa.core.load`)."""
     try:
         with open(ruta, encoding="utf-8") as f:
             arbol = ast.parse(f.read())
     except (SyntaxError, UnicodeDecodeError):
         return []
+    nombres = _alias(arbol)
     malos = []
     for n in ast.walk(arbol):
         if isinstance(n, ast.Import) and any(a.name.split(".")[0] == "audioread" for a in n.names):
@@ -258,17 +369,16 @@ def _usos_prohibidos(ruta):
         elif isinstance(n, ast.ImportFrom):
             if (n.module or "").split(".")[0] == "audioread":
                 malos.append((n.lineno, "from audioread"))
-            elif n.module == "librosa" and any(a.name in ("load", "get_duration") for a in n.names):
+            elif n.module in _LIBROSA and any(a.name in ("load", "get_duration") for a in n.names):
                 malos.append((n.lineno, "from librosa import load/get_duration"))
-        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-              and isinstance(n.func.value, ast.Name)):
-            if n.func.value.id == "librosa" and n.func.attr == "load":
+        elif isinstance(n, ast.Call):
+            nombre = _completo(n.func, nombres)
+            if nombre in _CARGAS:
                 malos.append((n.lineno, "librosa.load"))
-            elif n.func.value.id == "librosa" and n.func.attr == "get_duration" \
-                    and any(k.arg in ("path", "filename") for k in n.keywords):
+            elif nombre in _DURACIONES and any(k.arg in ("path", "filename") for k in n.keywords):
                 malos.append((n.lineno, "librosa.get_duration(path=)"))
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "audio_open":
-            malos.append((n.lineno, "audio_open"))
+            elif isinstance(n.func, ast.Attribute) and n.func.attr == "audio_open":
+                malos.append((n.lineno, "audio_open"))
     return malos
 
 
@@ -280,17 +390,44 @@ def _archivos_de_produccion():
                 yield os.path.join(dirpath, f)
 
 
-def test_el_detector_de_audioread_detecta(tmp_path):
-    """El detector de abajo tiene que ver cada uno de los caminos (si no, un `assert not malos`
-    pasa sobre un detector ciego)."""
+@pytest.mark.parametrize("codigo, esperado", [
+    ("import audioread", "import audioread"),
+    ("import audioread as ar", "import audioread"),
+    ("from audioread import ffdec", "from audioread"),
+    ("import audioread\naudioread.audio_open('a')", "audio_open"),
+    ("import librosa\nlibrosa.load('a.wav')", "librosa.load"),
+    ("import librosa as lr\nlr.load('a.wav')", "librosa.load"),
+    ("import librosa.core as c\nc.load('a.wav')", "librosa.load"),
+    ("import librosa\nlibrosa.core.load('a.wav')", "librosa.load"),
+    ("import librosa\nlibrosa.core.audio.load('a.wav')", "librosa.load"),
+    ("from librosa import load\nload('a.wav')", "librosa.load"),
+    ("from librosa import load as cargar\ncargar('a.wav')", "librosa.load"),
+    ("from librosa.core import load", "from librosa import load/get_duration"),
+    ("from librosa.core.audio import load", "from librosa import load/get_duration"),
+    ("from librosa.core import load\nload('a.wav')", "librosa.load"),
+    ("import librosa\nlibrosa.get_duration(path='a.wav')", "librosa.get_duration(path=)"),
+    ("import librosa as lr\nlr.get_duration(filename='a.wav')", "librosa.get_duration(path=)"),
+    ("import librosa\nlibrosa.core.get_duration(path='a.wav')", "librosa.get_duration(path=)"),
+])
+def test_el_detector_de_audioread_detecta(tmp_path, codigo, esperado):
+    """El detector de abajo tiene que ver cada camino, también con alias (si no, un
+    `assert malos == {}` pasa sobre un detector ciego)."""
     f = tmp_path / "mala.py"
-    f.write_text("import audioread\nimport librosa\n"
-                 "y = librosa.load('a.wav')\nd = librosa.get_duration(path='a.wav')\n"
-                 "d2 = librosa.get_duration(y=y, sr=1)\nr = audioread.audio_open('a')\n"
-                 "from librosa import load\n", encoding="utf-8")
-    assert sorted(_usos_prohibidos(str(f))) == [
-        (1, "import audioread"), (3, "librosa.load"), (4, "librosa.get_duration(path=)"),
-        (6, "audio_open"), (7, "from librosa import load/get_duration")]
+    f.write_text(codigo + "\n", encoding="utf-8")
+    assert esperado in [que for _, que in _usos_prohibidos(str(f))], codigo
+
+
+@pytest.mark.parametrize("codigo", [
+    "import librosa\nlibrosa.get_duration(y=[0], sr=1)",
+    "import numpy as np\nnp.load('a.npy')",
+    "import librosa as lr\nlr.resample([0.0], orig_sr=2, target_sr=1)",
+    "import soundfile as sf\nsf.read('a.wav')",
+    "from motor.decodificar import cargar\ncargar('a.wav', sr=None)",
+])
+def test_el_detector_no_acusa_lo_que_esta_bien(tmp_path, codigo):
+    f = tmp_path / "buena.py"
+    f.write_text(codigo + "\n", encoding="utf-8")
+    assert _usos_prohibidos(str(f)) == [], codigo
 
 
 def test_ningun_codigo_depende_de_audioread():

@@ -110,7 +110,10 @@ def _con_ffmpeg(path: str, bins: int, total_real: int | None = None) -> Peaks:
     try:
         with LectorPCM(path) as f:
             sr, ch = int(f.samplerate), int(f.channels)
-            total = total_real or int(round(float(f.duration) * sr))
+            # Sin duración declarada (ffprobe no la informa) el total es provisorio (1): lo
+            # leído no coincide, y `_declara_otro_largo` manda a releer repartiendo sobre el
+            # largo real (abajo). El primer pase solo sirve para medirlo.
+            total = total_real or (int(round(float(f.duration) * sr)) if f.duration else 1)
             if total <= 0 or sr <= 0 or ch <= 0:
                 raise UnreadableAudio("el archivo no tiene audio")
             out = np.zeros(bins, dtype=np.float32)
