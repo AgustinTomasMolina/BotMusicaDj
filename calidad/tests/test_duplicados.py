@@ -3,8 +3,10 @@
 Las compuertas y el ranking son lógica pura. La huella se prueba con señales sintéticas
 construidas, no con afirmaciones sobre archivos reales (spec §5).
 """
+import os
 import plistlib
 from pathlib import Path
+from urllib.parse import quote
 
 import numpy as np
 import pytest
@@ -289,8 +291,89 @@ def test_la_ruta_se_compara_normalizada(tmp_path):
     assert normalizar_ruta(str(ruta)) != normalizar_ruta(str(ruta.with_name("otro.wav")))
 
 
+def _location(ruta) -> str:
+    """El Location como lo escriben Rekordbox e iTunes: 'file://localhost/C:/Mi%20carpeta/x.wav'
+    (en macOS/Linux 'file://localhost/Users/..'), con los espacios y acentos codificados."""
+    p = Path(ruta).as_posix()
+    return "file://localhost" + ("" if p.startswith("/") else "/") + quote(p, safe="/:")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="normcase solo cambia mayúsculas/separadores en Windows")
+def test_la_ruta_ignora_mayusculas_y_separadores_en_windows():
+    """'C:/Users/X/a.wav' (XML) y 'c:\\users\\x\\A.WAV' (el SO) son el mismo archivo."""
+    assert normalizar_ruta("C:/Users/X/a.wav") == normalizar_ruta("c:\\users\\x\\A.WAV")
+
+
+def test_una_carpeta_relativa_coincide_con_la_ruta_absoluta_del_xml(tmp_path, monkeypatch):
+    """`--carpeta descargas` da fichas relativas y el XML trae rutas absolutas: sin absolutizar
+    nunca coinciden y el desempate queda apagado sin avisar."""
+    (tmp_path / "descargas").mkdir()
+    monkeypatch.chdir(tmp_path)
+    fichas = [Ficha(os.path.join("descargas", n), n, 200.0, None) for n in ("a.wav", "b.wav")]
+    _, calidades = _par_equivalente()
+    xml = _xml_rekordbox(tmp_path / "rb.xml", [tmp_path / "descargas" / "b.wav"])
+    refs = referencias_de_xml(rekordbox_xml=xml)
+    por = {f.archivo: f.accion for f in decidir([0, 1], fichas, calidades, refs)}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}, "el desempate no se aplicó"
+
+
+def test_la_raiz_posix_del_xml_se_repone(tmp_path):
+    """`_ruta_local` hace lstrip('/') y '/home/dj/b.wav' llegaría como 'home/dj/b.wav'."""
+    xml = tmp_path / "rb.xml"
+    xml.write_text('<DJ_PLAYLISTS><COLLECTION Entries="1"><TRACK TrackID="1" '
+                   'Location="file://localhost/home/dj/b.wav"/></COLLECTION></DJ_PLAYLISTS>',
+                   encoding="utf-8")
+    fichas = [Ficha("/home/dj/a.wav", "a.wav", 200.0, None),
+              Ficha("/home/dj/b.wav", "b.wav", 200.0, None)]
+    _, calidades = _par_equivalente()
+    por = {f.archivo: f.accion for f in
+           decidir([0, 1], fichas, calidades, referencias_de_xml(rekordbox_xml=xml))}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}
+
+
+def test_el_borde_del_redondeo_no_es_empate_y_el_motivo_no_dice_equivalente():
+    """20.04 y 20.06 kHz caen a lados distintos del redondeo a 0.1: NO empatan. Gana el de
+    mejor puntaje aunque el otro esté referenciado, y el motivo no puede decir 'equivalente'
+    ni insinuar que la referencia decidió."""
+    fichas = [_ficha("referenciada.wav", 200.0, None), _ficha("mejor.wav", 200.0, None)]
+    calidades = {0: _cal(20.04, 2.0, "si", 1411), 1: _cal(20.06, 2.0, "si", 1411)}
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades, _ref(fichas[0], "Rekordbox"))}
+    assert por["mejor.wav"].accion == CONSERVAR
+    assert por["referenciada.wav"].accion == DESCARTAR
+    perdedora = por["referenciada.wav"].motivo
+    assert "equivalente" not in perdedora, perdedora
+    assert "no es un empate" in perdedora and "OJO" in perdedora
+    assert "referenciada" not in por["mejor.wav"].motivo
+
+
+def test_las_filas_conservan_el_orden_de_siempre_y_la_referencia_solo_elige_ganador():
+    """Un perdedor referenciado no sube de lugar: el orden de los perdedores es el de sin
+    referencias (el de main). Ganador 0 (referenciado, 20 kHz); 1 y 2 miden 18 y el 2 está
+    referenciado: sin referencias [0, 1, 2], y con referencias tiene que seguir igual."""
+    fichas = [_ficha(f"f{i}.wav", 200.0, None) for i in range(3)]
+    calidades = {0: _cal(20.0, 2.0, "si", 1411), 1: _cal(18.0, 2.0, "si", 1411),
+                 2: _cal(18.0, 2.0, "si", 1411)}
+    sin = [f.archivo for f in decidir([0, 1, 2], fichas, calidades)]
+    refs = {**_ref(fichas[0], "Rekordbox"), **_ref(fichas[2], "iTunes")}
+    con = decidir([0, 1, 2], fichas, calidades, refs)
+    assert sin == ["f0.wav", "f1.wav", "f2.wav"]
+    assert [f.archivo for f in con] == sin, "la referencia reordenó a los perdedores"
+    assert [f.accion for f in con] == [CONSERVAR, DESCARTAR, DESCARTAR]
+
+
+def test_xml_con_estructura_ajena_falla_con_value_error_y_exit_2(tmp_path):
+    """Un plist válido pero que no es un Library.xml no puede dar AttributeError."""
+    for i, contenido in enumerate(({"Tracks": [1, 2]}, {"Tracks": {"1": 5}},
+                                   {"Tracks": {"1": {"Location": 7}}})):
+        lib = tmp_path / f"ajeno{i}.xml"
+        lib.write_bytes(plistlib.dumps(contenido))
+        with pytest.raises(ValueError, match="Library.xml"):
+            referencias_itunes(lib)
+        assert main(["--audio", str(tmp_path), "--itunes-xml", str(lib)]) == 2
+
+
 def _xml_rekordbox(destino, rutas):
-    pistas = "".join(f'<TRACK TrackID="{i}" Name="t" Location="{Path(r).as_uri()}"/>'
+    pistas = "".join(f'<TRACK TrackID="{i}" Name="t" Location="{_location(r)}"/>'
                      for i, r in enumerate(rutas, 1))
     destino.write_text(f'<DJ_PLAYLISTS><COLLECTION Entries="{len(rutas)}">{pistas}'
                        "</COLLECTION></DJ_PLAYLISTS>", encoding="utf-8")
@@ -309,10 +392,8 @@ def test_el_xml_de_rekordbox_desempata_con_rutas_reales(tmp_path):
 def test_la_biblioteca_de_itunes_desempata_con_rutas_reales(tmp_path):
     a, b = tmp_path / "descarga" / "a.wav", tmp_path / "iTunes Media" / "b.wav"
     lib = tmp_path / "Library.xml"
-    # iTunes escribe 'file://localhost/C:/...'; as_uri() da 'file:///C:/...'.
-    ubicacion = "file://localhost" + b.as_uri()[len("file://"):]
     lib.write_bytes(plistlib.dumps({"Tracks": {
-        "101": {"Track ID": 101, "Location": ubicacion},
+        "101": {"Track ID": 101, "Location": _location(b)},
         "102": {"Track ID": 102}}}))                      # una pista sin Location no rompe
     fichas = [Ficha(str(a), "a.wav", 200.0, None), Ficha(str(b), "b.wav", 200.0, None)]
     _, calidades = _par_equivalente()

@@ -48,6 +48,7 @@ import csv
 import datetime
 import os
 import plistlib
+import re
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, fields
@@ -239,13 +240,30 @@ def _puntaje_calidad(cal) -> tuple:
 
 
 def normalizar_ruta(ruta: str) -> str:
-    """Clave para comparar rutas entre fuentes: misma separación, mayúsculas del SO y sin
-    barra inicial (el parser de Rekordbox devuelve 'C:/x.wav'; en POSIX perdería la '/')."""
-    return os.path.normcase(os.path.normpath(ruta)).lstrip("/\\")
+    """Clave para comparar rutas entre fuentes, SIN tocar el disco: absoluta (una relativa
+    se cuelga del directorio de trabajo, igual que `motor.cli.clave_lexica`), normalizada y
+    con las mayúsculas del SO. Sin lo primero, `--carpeta descargas` nunca coincidiría con
+    las `Location` absolutas del XML y el desempate quedaría apagado sin avisar.
+
+    Límites conocidos (no se resuelven acá): rutas UNC, NFC/NFD, symlinks, nombres 8.3.
+    """
+    return os.path.normcase(os.path.normpath(os.path.join(os.getcwd(), str(ruta))))
+
+
+def _ruta_de_xml(ruta: str) -> str:
+    """La ruta que devuelven los parsers de Location, con su '/' inicial repuesta en POSIX.
+
+    `ground_truth.rekordbox._ruta_local` hace `lstrip("/")` y así 'file://localhost/C:/x'
+    queda bien, pero '/Users/x' (macOS/Linux) pierde la raíz y se leería como relativa.
+    Una ruta con unidad ('C:/x') no se toca.
+    """
+    if ruta and not re.match(r"^[A-Za-z]:", ruta) and not ruta.startswith(("/", "\\")):
+        return "/" + ruta
+    return ruta
 
 
 def _referencias_de_ubicaciones(ubicaciones, origen: str) -> dict[str, str]:
-    return {normalizar_ruta(u): origen for u in ubicaciones if u}
+    return {normalizar_ruta(_ruta_de_xml(u)): origen for u in ubicaciones if u}
 
 
 def referencias_rekordbox(xml_path: Path) -> dict[str, str]:
@@ -275,8 +293,12 @@ def referencias_itunes(xml_path: Path) -> dict[str, str]:
     pistas = biblioteca.get("Tracks") if isinstance(biblioteca, dict) else None
     if pistas is None:
         raise ValueError("No encontré 'Tracks' — ¿es el Library.xml de iTunes?")
-    return _referencias_de_ubicaciones(
-        (_ruta_local(p.get("Location", "")) for p in pistas.values()), "iTunes")
+    try:
+        ubicaciones = [_ruta_local(p.get("Location", "")) for p in pistas.values()]
+    except (AttributeError, TypeError) as e:
+        raise ValueError("'Tracks' no tiene la forma de un Library.xml de iTunes "
+                         "(se esperaba un diccionario de pistas con 'Location').") from e
+    return _referencias_de_ubicaciones(ubicaciones, "iTunes")
 
 
 def unir_referencias(*fuentes: dict[str, str]) -> dict[str, str]:
@@ -312,19 +334,26 @@ def decidir(grupo: list[int], fichas: list[Ficha], calidades: dict,
     gana la que ya está referenciada, porque descartarla rompe sus cues, su beatgrid y su
     play count, y la otra copia no tiene nada de eso. Nunca compensa una diferencia de
     calidad. Sin `referencias` el comportamiento es el de siempre.
+
+    "Equivalente" es la misma tupla de `_puntaje_calidad`: corte medido REDONDEADO a 0.1 kHz,
+    sin muro y lossless. Dos cortes que caen a un lado y otro de un redondeo (20.04 y 20.06)
+    NO empatan aunque difieran 0.02 kHz: gana el de mejor puntaje y la referencia no entra.
     """
     refs = referencias or {}
 
     def origen(i: int) -> str:
         return refs.get(normalizar_ruta(fichas[i].ruta), "")
 
-    # La ordenación es estable: si dos copias empatan en calidad y las dos (o ninguna) están
-    # referenciadas, queda el orden del grupo, como antes de esta tarea.
-    ordenados = sorted(grupo, key=lambda i: (_puntaje_calidad(calidades[i]), bool(origen(i))),
-                       reverse=True)
-    ganador = ordenados[0]
+    # El orden es el de siempre (estable: los empatados quedan en el orden del grupo). La
+    # referencia SOLO elige el ganador entre los empatados en el mejor puntaje; el resto de
+    # las filas sigue en el orden que tenían.
+    por_calidad = sorted(grupo, key=lambda i: _puntaje_calidad(calidades[i]), reverse=True)
+    mejor_puntaje = _puntaje_calidad(calidades[por_calidad[0]])
+    cabeza = [i for i in por_calidad if _puntaje_calidad(calidades[i]) == mejor_puntaje]
+    ganador = next((i for i in cabeza if origen(i)), cabeza[0])
+    ordenados = [ganador] + [i for i in por_calidad if i != ganador]
     cal_g = calidades[ganador]
-    puntaje_g = _puntaje_calidad(cal_g)
+    puntaje_g = mejor_puntaje
     empatados = [i for i in grupo
                  if i != ganador and _puntaje_calidad(calidades[i]) == puntaje_g]
     desempata_la_referencia = bool(origen(ganador)) and any(not origen(i) for i in empatados)
@@ -355,6 +384,12 @@ def decidir(grupo: list[int], fichas: list[Ficha], calidades: dict,
                 motivo = "mismo corte pero con muro de codec; el conservado es natural"
             elif cal.lossless == "no" and cal_g.lossless == "si":
                 motivo = "misma calidad medida; se conserva el sin pérdida"
+            elif origen(i) and not empata:
+                # Pierde por calidad (aunque sea por el borde del redondeo): no es un empate
+                # y la referencia no desempató, así que no se puede decir "equivalente".
+                motivo = (f"calidad medida algo menor que la del que se conserva "
+                          f"({cal.corte_medido_khz:.2f} vs {cal_g.corte_medido_khz:.2f} kHz): "
+                          f"no es un empate, la referencia no desempata")
             else:
                 motivo = "copia equivalente del mismo audio"
             if origen(i):

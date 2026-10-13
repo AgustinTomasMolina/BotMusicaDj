@@ -152,6 +152,15 @@ def test_el_reporte_dice_el_motivo_del_duplicado(tmp_path):
     assert motivo in h
 
 
+def test_el_motivo_del_duplicado_se_escapa_en_el_html(tmp_path):
+    """El motivo lleva nombres y texto libre: un '<script>' no puede llegar crudo al reporte."""
+    motivo = '<script>alert("x")</script> & \'q\''
+    f = _fila(archivo="a.wav", grupo_id=1, accion_duplicado="descartar", motivo_duplicado=motivo)
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert '<script>alert("x")</script>' not in h
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#x27;q&#x27;" in h
+
+
 def test_el_aviso_de_los_cues_esta_en_el_reporte(tmp_path):
     """Que no se busque después por qué 'se perdieron los cues'."""
     h = generar([_fila()], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
