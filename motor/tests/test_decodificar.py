@@ -52,7 +52,7 @@ if "-of" in args:                                   # es ffprobe
     if modo == "sin_audio":
         print(json.dumps({"streams": [], "format": {}}))
     else:
-        dur = "%.6f" % (len(y) / sr)
+        dur = os.environ.get("FAKE_DUR") or "%.6f" % (len(y) / sr)   # lo que DECLARA el archivo
         sin = modo == "sin_duracion_total"
         print(json.dumps({"streams": [{"sample_rate": str(sr), "channels": y.shape[1],
                                        "duration": "N/A" if modo in ("sin_duracion", "sin_duracion_total") else dur}],
@@ -68,7 +68,8 @@ if modo == "falla":
     sys.stderr.write("Invalid data found when processing input\n")
     sys.stdout.buffer.write(datos[:1000])
     sys.exit(1)
-sys.stdout.buffer.write(datos)
+for _ in range(int(os.environ.get("FAKE_REPETIR", "1"))):   # entrega más (o menos) de lo declarado
+    sys.stdout.buffer.write(datos)
 '''
 
 
@@ -103,6 +104,13 @@ class Falso:
 
     def modo(self, m):
         self._mp.setenv("FAKE_MODO", m)
+
+    def entrega(self, veces=1, declara=None):
+        """Entrega `veces` el audio del WAV (6 s) y declara `declara` segundos (por defecto, los
+        6 s reales)."""
+        self._mp.setenv("FAKE_REPETIR", str(veces))
+        if declara is not None:
+            self._mp.setenv("FAKE_DUR", str(declara))
 
     def llamadas(self):
         if not self.log_ruta.exists():
@@ -299,9 +307,11 @@ def test_sin_duracion_declarada_igual_se_carga_y_se_dibuja(falso):
         dec.duracion(falso.m4a)                     # preguntar la duración SÍ la exige
 
 
-def test_un_ffmpeg_que_no_termina_se_corta_por_tope(falso):
+def test_un_ffmpeg_que_no_termina_se_corta_por_tope(falso, monkeypatch):
     """El falso escribe ~100 MB para un tema de 6 s (1 MB de PCM): el tope es 4x lo declarado
-    más 1 MB, así que se corta con un error, sin llenar la memoria."""
+    más 1 MB, así que se corta con un error, sin llenar la memoria. Sin el piso de 512 MiB
+    (en producción sí corta, pero recién a los 512 MiB): acá se prueba el tope proporcional."""
+    monkeypatch.setattr(dec, "PISO_TOPE_BYTES", 0)
     falso.modo("infinito")
     with (pytest.raises(dec.DecodificacionError, match="mucho más audio"),
           dec.LectorPCM(falso.m4a) as f):
@@ -310,6 +320,49 @@ def test_un_ffmpeg_que_no_termina_se_corta_por_tope(falso):
         dec.cargar(falso.m4a, sr=22050)
     with pytest.raises(UnreadableAudio, match="mucho más audio"):
         compute_peaks(falso.m4a)
+
+
+def test_un_archivo_que_declara_de_menos_pero_es_legitimo_no_se_corta(falso, monkeypatch):
+    """Un MP3 de 12 s cuya duración declarada es 1 s (concatenados, Xing ajeno) se leía entero
+    con audioread: el piso del tope lo deja pasar. Sin el piso, ese mismo caso se corta."""
+    falso.entrega(veces=2, declara=1)               # declara 1 s, entrega 12 s
+    pcm = 12 * SR_NATIVO * 2 * 2
+    with dec.LectorPCM(falso.m4a) as f:
+        assert f.duration == 1.0
+        assert sum(len(b) for b in f) == pcm
+    y, _ = dec.cargar(falso.m4a, sr=None, mono=False)
+    assert y.shape == (2, 12 * SR_NATIVO)
+    monkeypatch.setattr(dec, "PISO_TOPE_BYTES", 0)
+    with (pytest.raises(dec.DecodificacionError, match="mucho más audio"),
+          dec.LectorPCM(falso.m4a) as f):
+        sum(len(b) for b in f)
+
+
+def test_el_tope_en_bytes_con_y_sin_piso(falso, monkeypatch):
+    """Los números a mano para estéreo, 44,1 kHz, PCM de 2 bytes y FACTOR 4 + 1 MiB."""
+    with dec.LectorPCM(falso.m4a) as f:             # declara 6 s: la fórmula da 5.282.176
+        assert f._tope == 512 << 20                 # ... y el piso gana
+    monkeypatch.setattr(dec, "PISO_TOPE_BYTES", 0)
+    with dec.LectorPCM(falso.m4a) as f:
+        assert f._tope == 4 * (6 * 44100 * 2 * 2) + (1 << 20) == 5_282_176
+    falso.entrega(declara=3600)                     # 1 h declarada: la fórmula supera al piso
+    monkeypatch.setattr(dec, "PISO_TOPE_BYTES", 512 << 20)
+    with dec.LectorPCM(falso.m4a) as f:
+        assert f._tope == 4 * (3600 * 44100 * 2 * 2) + (1 << 20) == 2_541_208_576
+
+
+@pytest.mark.parametrize("veces, se_corta", [(3, False), (4, False), (5, True)])
+def test_umbral_del_tope_sobre_lo_declarado(falso, monkeypatch, veces, se_corta):
+    """Con el piso apartado y un declarado de 6 s: entregar 3x o 4x lo declarado pasa y 5x corta."""
+    monkeypatch.setattr(dec, "PISO_TOPE_BYTES", 0)
+    falso.entrega(veces=veces)
+    declarado = 6 * 44100 * 2 * 2
+    with dec.LectorPCM(falso.m4a) as f:
+        if se_corta:
+            with pytest.raises(dec.DecodificacionError, match="mucho más audio"):
+                sum(len(b) for b in f)
+        else:
+            assert sum(len(b) for b in f) == veces * declarado
 
 
 # --- ningún código de producción depende de audioread --------------------------------------

@@ -44,12 +44,16 @@ import numpy as np
 BLOQUE_BYTES = 1 << 16
 TIMEOUT_SONDEO_S = 60
 # Tope de lo que se acepta leer del pipe de ffmpeg, para que uno que no termina nunca no llene la
-# memoria o el disco: FACTOR_TOPE veces el PCM que declara el archivo (una duración estimada de
-# un MP3/M4A se equivoca por poco, no por 4x) más una holgura; sin duración declarada, un tope
-# absoluto (~3 h de estéreo a 44,1 kHz). NO cubre un ffmpeg que se cuelga SIN escribir nada:
-# eso pediría un hilo lector con timeout y queda dicho en vez de hecho a medias.
+# memoria o el disco. La política:
+#   tope = max(FACTOR_TOPE x el PCM que declara el archivo + HOLGURA_TOPE_BYTES, PISO_TOPE_BYTES)
+# El piso (512 MiB, ~50 min de estéreo a 44,1 kHz) existe porque la duración declarada puede
+# quedarse MUY corta de lo real (MP3 concatenados, un Xing ajeno) y ese audio es legítimo: antes
+# se leía entero. Sin duración declarada, un tope absoluto (TOPE_SIN_DURACION_BYTES, ~3 h de
+# estéreo a 44,1 kHz). NO cubre un ffmpeg que se cuelga SIN escribir nada: eso pediría un hilo
+# lector con timeout y queda dicho en vez de hecho a medias.
 FACTOR_TOPE = 4
 HOLGURA_TOPE_BYTES = 1 << 20
+PISO_TOPE_BYTES = 512 << 20
 TOPE_SIN_DURACION_BYTES = 2 << 30
 
 MSG_INSTALAR = ("instalalo o definí FFMPEG_BIN y FFPROBE_BIN "
@@ -127,8 +131,8 @@ class LectorPCM:
         # audio en bins sobre el total (`motor.peaks`), que en ese caso mide leyendo.
         self.duration: float | None = info["duration"]
         self._tope = (TOPE_SIN_DURACION_BYTES if self.duration is None else
-                      int(self.duration * self.samplerate * self.channels * 2 * FACTOR_TOPE)
-                      + HOLGURA_TOPE_BYTES)
+                      max(int(self.duration * self.samplerate * self.channels * 2 * FACTOR_TOPE)
+                          + HOLGURA_TOPE_BYTES, PISO_TOPE_BYTES))
         self._leidos = 0
         # `-ac`/`-ar` con lo que SONDEÓ ffprobe: la salida tiene por construcción los canales
         # y la frecuencia con que el llamador interpreta el PCM, aunque el decodificador
