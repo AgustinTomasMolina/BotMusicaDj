@@ -4,6 +4,12 @@ Agrupa archivos que contienen EL MISMO AUDIO aunque se llamen distinto, y propon
 conservar según la calidad REALMENTE MEDIDA. No borra ni mueve nada: propone.
 
     python -m calidad.duplicados --audio <carpeta>
+        [--rekordbox-xml <colección.xml>] [--itunes-xml <Library.xml>]
+
+Con esos XML (tarea 5.26), entre dos copias de calidad medida equivalente se conserva la
+que Rekordbox o iTunes ya referencian: descartarla rompería sus cues, su beatgrid y su play
+count, y la otra copia no tiene nada de eso. Es SOLO un desempate: nunca compensa una peor
+calidad, y el motivo de cada fila dice cuándo decidió la referencia.
 
 Qué es y qué NO es un duplicado
 -------------------------------
@@ -40,7 +46,11 @@ Las dos claves fueron:
 import argparse
 import csv
 import datetime
+import os
+import plistlib
+import re
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -226,30 +236,168 @@ def _puntaje_calidad(cal) -> tuple:
     return (round(cal.corte_medido_khz, 1), sin_muro, es_lossless)
 
 
-def decidir(grupo: list[int], fichas: list[Ficha], calidades: dict) -> list[FilaDuplicado]:
-    """Elige cuál conservar dentro de un grupo y arma las filas del CSV."""
-    ordenados = sorted(grupo, key=lambda i: _puntaje_calidad(calidades[i]), reverse=True)
-    ganador = ordenados[0]
+# --- Copias ya referenciadas por Rekordbox / iTunes (tarea 5.26) -----------------------------
+
+
+def normalizar_ruta(ruta: str) -> str:
+    """Clave para comparar rutas entre fuentes, SIN tocar el disco: absoluta (una relativa
+    se cuelga del directorio de trabajo, igual que `motor.cli.clave_lexica`), normalizada y
+    con las mayúsculas del SO. Sin lo primero, `--carpeta descargas` nunca coincidiría con
+    las `Location` absolutas del XML y el desempate quedaría apagado sin avisar.
+
+    Límites conocidos (no se resuelven acá): rutas UNC, NFC/NFD, symlinks, nombres 8.3.
+    """
+    return os.path.normcase(os.path.normpath(os.path.join(os.getcwd(), str(ruta))))
+
+
+def _ruta_de_xml(ruta: str) -> str:
+    """La ruta que devuelven los parsers de Location, con su '/' inicial repuesta en POSIX.
+
+    `ground_truth.rekordbox._ruta_local` hace `lstrip("/")` y así 'file://localhost/C:/x'
+    queda bien, pero '/Users/x' (macOS/Linux) pierde la raíz y se leería como relativa.
+    Una ruta con unidad ('C:/x') no se toca.
+    """
+    if ruta and not re.match(r"^[A-Za-z]:", ruta) and not ruta.startswith(("/", "\\")):
+        return "/" + ruta
+    return ruta
+
+
+def _referencias_de_ubicaciones(ubicaciones, origen: str) -> dict[str, str]:
+    return {normalizar_ruta(_ruta_de_xml(u)): origen for u in ubicaciones if u}
+
+
+def referencias_rekordbox(xml_path: Path) -> dict[str, str]:
+    """Rutas que el XML de Rekordbox ya referencia (cues, beatgrid, play count).
+
+    Devuelve {ruta normalizada: "Rekordbox"}. Falla si el XML no es de Rekordbox: ignorar
+    el error propondría descartar justo la copia que tiene el trabajo encima.
+    """
+    from ground_truth.rekordbox import parsear  # perezoso: calidad no depende de ground_truth
+
+    return _referencias_de_ubicaciones((t["location"] for t in parsear(Path(xml_path))),
+                                       "Rekordbox")
+
+
+def referencias_itunes(xml_path: Path) -> dict[str, str]:
+    """Rutas que la biblioteca de iTunes ya referencia (el 'Library.xml' exportado, un plist).
+
+    Devuelve {ruta normalizada: "iTunes"}. Falla si no es una biblioteca de iTunes.
+    """
+    from ground_truth.rekordbox import _ruta_local  # mismo 'file://localhost/C:/...'
+
+    with Path(xml_path).open("rb") as fh:
+        try:
+            biblioteca = plistlib.load(fh)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"No pude leer {xml_path} como biblioteca de iTunes: {e}") from e
+    pistas = biblioteca.get("Tracks") if isinstance(biblioteca, dict) else None
+    if pistas is None:
+        raise ValueError("No encontré 'Tracks' — ¿es el Library.xml de iTunes?")
+    try:
+        ubicaciones = [_ruta_local(p.get("Location", "")) for p in pistas.values()]
+    except (AttributeError, TypeError) as e:
+        raise ValueError("'Tracks' no tiene la forma de un Library.xml de iTunes "
+                         "(se esperaba un diccionario de pistas con 'Location').") from e
+    return _referencias_de_ubicaciones(ubicaciones, "iTunes")
+
+
+def unir_referencias(*fuentes: dict[str, str]) -> dict[str, str]:
+    """Junta fuentes. Una ruta que está en las dos queda como 'Rekordbox e iTunes'."""
+    out: dict[str, str] = {}
+    for fuente in fuentes:
+        for ruta, origen in fuente.items():
+            previo = out.get(ruta)
+            if not previo:
+                out[ruta] = origen
+            elif origen not in previo.split(" e "):
+                out[ruta] = f"{previo} e {origen}"
+    return out
+
+
+def referencias_de_xml(rekordbox_xml: Path | None = None,
+                       itunes_xml: Path | None = None) -> dict[str, str]:
+    """Las referencias de las fuentes que se hayan pasado; {} si no se pasó ninguna."""
+    fuentes = []
+    if rekordbox_xml:
+        fuentes.append(referencias_rekordbox(rekordbox_xml))
+    if itunes_xml:
+        fuentes.append(referencias_itunes(itunes_xml))
+    return unir_referencias(*fuentes)
+
+
+def decidir(grupo: list[int], fichas: list[Ficha], calidades: dict,
+            referencias: dict[str, str] | None = None) -> list[FilaDuplicado]:
+    """Elige cuál conservar dentro de un grupo y arma las filas del CSV.
+
+    `referencias` ({ruta normalizada: origen}, ver `referencias_rekordbox` / `_itunes`) es
+    SOLO un desempate: entre copias de calidad medida equivalente (mismo `_puntaje_calidad`)
+    gana la que ya está referenciada, porque descartarla rompe sus cues, su beatgrid y su
+    play count, y la otra copia no tiene nada de eso. Nunca compensa una diferencia de
+    calidad. Sin `referencias` el comportamiento es el de siempre.
+
+    "Equivalente" es la misma tupla de `_puntaje_calidad`: corte medido REDONDEADO a 0.1 kHz,
+    sin muro y lossless. Dos cortes que caen a un lado y otro de un redondeo (20.04 y 20.06)
+    NO empatan aunque difieran 0.02 kHz: gana el de mejor puntaje y la referencia no entra.
+    """
+    refs = referencias or {}
+
+    def origen(i: int) -> str:
+        return refs.get(normalizar_ruta(fichas[i].ruta), "")
+
+    # El orden es el de siempre (estable: los empatados quedan en el orden del grupo). La
+    # referencia SOLO elige el ganador entre los empatados en el mejor puntaje; el resto de
+    # las filas sigue en el orden que tenían.
+    por_calidad = sorted(grupo, key=lambda i: _puntaje_calidad(calidades[i]), reverse=True)
+    mejor_puntaje = _puntaje_calidad(calidades[por_calidad[0]])
+    cabeza = [i for i in por_calidad if _puntaje_calidad(calidades[i]) == mejor_puntaje]
+    ganador = next((i for i in cabeza if origen(i)), cabeza[0])
+    ordenados = [ganador] + [i for i in por_calidad if i != ganador]
     cal_g = calidades[ganador]
+    puntaje_g = mejor_puntaje
+    empatados = [i for i in grupo
+                 if i != ganador and _puntaje_calidad(calidades[i]) == puntaje_g]
+    desempata_la_referencia = bool(origen(ganador)) and any(not origen(i) for i in empatados)
 
     filas = []
     for i in ordenados:
         cal = calidades[i]
         if i == ganador:
-            motivo = (f"mejor calidad medida del grupo: corte {cal.corte_medido_khz:.1f} kHz"
-                      + (" sin muro" if cal.es_muro == "no" else " con muro"))
+            mejor = (f"corte {cal.corte_medido_khz:.1f} kHz"
+                     + (" sin muro" if cal.es_muro == "no" else " con muro"))
+            if desempata_la_referencia:
+                motivo = (f"calidad equivalente a la de otra copia; se conserva esta porque ya "
+                          f"está referenciada por {origen(i)} (descartarla rompe sus cues y "
+                          f"su beatgrid): {mejor}")
+            else:
+                motivo = f"mejor calidad medida del grupo: {mejor}"
             accion = CONSERVAR
         else:
             dif = cal_g.corte_medido_khz - cal.corte_medido_khz
-            if dif > 0.05:
+            empata = _puntaje_calidad(cal) == puntaje_g
+            if empata and origen(ganador) and not origen(i):
+                motivo = (f"copia equivalente del mismo audio; se conserva la que ya está "
+                          f"referenciada por {origen(ganador)} y esta no")
+            elif dif > 0.05:
                 motivo = (f"corta {dif:.1f} kHz más abajo que el que se conserva "
                           f"({cal.corte_medido_khz:.1f} vs {cal_g.corte_medido_khz:.1f})")
             elif cal.es_muro == "si" and cal_g.es_muro == "no":
                 motivo = "mismo corte pero con muro de codec; el conservado es natural"
             elif cal.lossless == "no" and cal_g.lossless == "si":
                 motivo = "misma calidad medida; se conserva el sin pérdida"
+            elif origen(i) and not empata:
+                # Pierde por calidad (aunque sea por el borde del redondeo): no es un empate
+                # y la referencia no desempató, así que no se puede decir "equivalente".
+                motivo = (f"calidad medida algo menor que la del que se conserva "
+                          f"({cal.corte_medido_khz:.2f} vs {cal_g.corte_medido_khz:.2f} kHz): "
+                          f"no es un empate, la referencia no desempata")
             else:
                 motivo = "copia equivalente del mismo audio"
+            if origen(i):
+                # Descartar una copia referenciada rompe lo que su biblioteca guarda de ella
+                # (pasa si pierde por calidad, o si las dos lo están y el empate no se puede
+                # resolver con este criterio): que quien revisa lo vea en el motivo.
+                motivo += (f". OJO: esta copia está referenciada por {origen(i)}; "
+                           f"descartarla rompe sus cues, su beatgrid y su play count")
             accion = DESCARTAR
 
         # grupo_id y similitud_con_grupo los completa el llamador, que es el que conoce
@@ -333,7 +481,18 @@ def main(argv=None) -> int:
     ap.add_argument("--umbral", type=float, default=UMBRAL,
                     help=f"Similitud mínima para considerar duplicado (default {UMBRAL}).")
     ap.add_argument("--out", type=Path, default=Path("calidad/out"))
+    ap.add_argument("--rekordbox-xml", type=Path, default=None,
+                    help="XML de Rekordbox: entre copias equivalentes se conserva la que "
+                         "ya referencia (cues, beatgrid).")
+    ap.add_argument("--itunes-xml", type=Path, default=None,
+                    help="Library.xml de iTunes: mismo desempate para sus pistas.")
     args = ap.parse_args(argv)
+
+    try:
+        referencias = referencias_de_xml(args.rekordbox_xml, args.itunes_xml)
+    except (OSError, ValueError, ET.ParseError) as e:
+        print(f"No pude leer la biblioteca de referencia: {e}")
+        return 2
 
     rutas = rutas_de(args.audio)
     if not rutas:
@@ -365,7 +524,7 @@ def main(argv=None) -> int:
 
     filas: list[FilaDuplicado] = []
     for gid, g in enumerate(grupos, 1):
-        del_grupo = decidir(g, fichas, calidades)
+        del_grupo = decidir(g, fichas, calidades, referencias)
         propias = [s for (a, b), s in sims.items() if a in g and b in g]
         peor = min(propias) if propias else 0.0
         for fila in del_grupo:

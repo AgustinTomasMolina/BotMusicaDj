@@ -3,6 +3,11 @@
 Las compuertas y el ranking son lógica pura. La huella se prueba con señales sintéticas
 construidas, no con afirmaciones sobre archivos reales (spec §5).
 """
+import os
+import plistlib
+from pathlib import Path
+from urllib.parse import quote
+
 import numpy as np
 import pytest
 
@@ -16,8 +21,14 @@ from calidad.duplicados import (
     decidir,
     duracion_compatible,
     huella,
+    main,
     mismo_audio,
+    normalizar_ruta,
+    referencias_de_xml,
+    referencias_itunes,
+    referencias_rekordbox,
     similitud,
+    unir_referencias,
 )
 
 SR = 22050
@@ -196,3 +207,219 @@ def test_siempre_se_conserva_exactamente_uno():
     filas = decidir([0, 1, 2, 3], fichas, calidades)
     assert sum(1 for f in filas if f.accion == CONSERVAR) == 1
     assert sum(1 for f in filas if f.accion == DESCARTAR) == 3
+
+
+# --- Desempate: preferir la copia ya referenciada (tarea 5.26) ---------------------------------
+
+
+def _par_equivalente():
+    """Dos copias que miden IDÉNTICO: sin referencias, el orden del grupo decide."""
+    fichas = [_ficha("primera.wav", 200.0, None), _ficha("segunda.wav", 200.0, None)]
+    calidades = {0: _cal(20.0, 2.0, "si", 1411), 1: _cal(20.0, 2.0, "si", 1411)}
+    return fichas, calidades
+
+
+def _ref(ficha, origen):
+    return {normalizar_ruta(ficha.ruta): origen}
+
+
+def test_sin_referencias_el_empate_lo_resuelve_el_orden_del_grupo():
+    """La línea base: sin la fuente nueva, nada cambia (y el motivo sigue sin inventar razón)."""
+    fichas, calidades = _par_equivalente()
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades)}
+    assert por["primera.wav"].accion == CONSERVAR
+    assert por["segunda.wav"].motivo == "copia equivalente del mismo audio"
+
+
+def test_entre_copias_equivalentes_gana_la_referenciada_por_rekordbox():
+    fichas, calidades = _par_equivalente()
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades,
+                                         _ref(fichas[1], "Rekordbox"))}
+    assert por["segunda.wav"].accion == CONSERVAR, "ganó la que NO está referenciada"
+    assert por["primera.wav"].accion == DESCARTAR
+    assert "ya está referenciada por Rekordbox" in por["segunda.wav"].motivo
+    assert por["primera.wav"].motivo == (
+        "copia equivalente del mismo audio; se conserva la que ya está referenciada "
+        "por Rekordbox y esta no")
+
+
+def test_el_desempate_vale_tambien_para_itunes():
+    fichas, calidades = _par_equivalente()
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades, _ref(fichas[1], "iTunes"))}
+    assert por["segunda.wav"].accion == CONSERVAR
+    assert "referenciada por iTunes" in por["segunda.wav"].motivo
+
+
+def test_en_un_grupo_de_tres_gana_la_unica_referenciada():
+    fichas = [_ficha(f"f{i}.wav", 200.0, None) for i in range(3)]
+    calidades = {i: _cal(20.0, 2.0, "si", 1411) for i in range(3)}
+    filas = decidir([0, 1, 2], fichas, calidades, _ref(fichas[2], "Rekordbox"))
+    assert [f.archivo for f in filas if f.accion == CONSERVAR] == ["f2.wav"]
+
+
+def test_la_referencia_nunca_compensa_una_peor_calidad():
+    """Desempate, no preferencia: la copia referenciada que corta en 15 kHz pierde igual.
+
+    Y como se la propone descartar, el motivo avisa que rompe lo que Rekordbox guarda de ella.
+    """
+    fichas = [_ficha("referenciada.wav", 200.0, None), _ficha("mejor.wav", 200.0, None)]
+    calidades = {0: _cal(15.0, 60.0, "si", 1411), 1: _cal(20.0, 2.0, "si", 1411)}
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades,
+                                         _ref(fichas[0], "Rekordbox"))}
+    assert por["mejor.wav"].accion == CONSERVAR
+    assert por["referenciada.wav"].accion == DESCARTAR
+    assert "más abajo" in por["referenciada.wav"].motivo
+    assert "OJO: esta copia está referenciada por Rekordbox" in por["referenciada.wav"].motivo
+    assert "referenciada" not in por["mejor.wav"].motivo, "no hubo desempate por referencia"
+
+
+def test_si_las_dos_estan_referenciadas_el_criterio_no_desempata_y_avisa():
+    """El caso sin criterio de producto: queda el orden del grupo, pero el motivo lo grita."""
+    fichas, calidades = _par_equivalente()
+    refs = {**_ref(fichas[0], "Rekordbox"), **_ref(fichas[1], "iTunes")}
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades, refs)}
+    assert por["primera.wav"].accion == CONSERVAR
+    assert "ya está referenciada" not in por["primera.wav"].motivo, \
+        "dijo que desempató por la referencia cuando las dos la tienen"
+    assert "OJO: esta copia está referenciada por iTunes" in por["segunda.wav"].motivo
+
+
+def test_la_ruta_se_compara_normalizada(tmp_path):
+    """El XML trae 'file:///C:/x/..' y el pipeline una ruta del SO: tienen que ser la misma."""
+    ruta = tmp_path / "carpeta con espacios" / "tema.wav"
+    assert normalizar_ruta(str(ruta)) == normalizar_ruta(ruta.as_posix())
+    assert normalizar_ruta(str(ruta)) != normalizar_ruta(str(ruta.with_name("otro.wav")))
+
+
+def _location(ruta) -> str:
+    """El Location como lo escriben Rekordbox e iTunes: 'file://localhost/C:/Mi%20carpeta/x.wav'
+    (en macOS/Linux 'file://localhost/Users/..'), con los espacios y acentos codificados."""
+    p = Path(ruta).as_posix()
+    return "file://localhost" + ("" if p.startswith("/") else "/") + quote(p, safe="/:")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="normcase solo cambia mayúsculas/separadores en Windows")
+def test_la_ruta_ignora_mayusculas_y_separadores_en_windows():
+    """'C:/Users/X/a.wav' (XML) y 'c:\\users\\x\\A.WAV' (el SO) son el mismo archivo."""
+    assert normalizar_ruta("C:/Users/X/a.wav") == normalizar_ruta("c:\\users\\x\\A.WAV")
+
+
+def test_una_carpeta_relativa_coincide_con_la_ruta_absoluta_del_xml(tmp_path, monkeypatch):
+    """`--carpeta descargas` da fichas relativas y el XML trae rutas absolutas: sin absolutizar
+    nunca coinciden y el desempate queda apagado sin avisar."""
+    (tmp_path / "descargas").mkdir()
+    monkeypatch.chdir(tmp_path)
+    fichas = [Ficha(os.path.join("descargas", n), n, 200.0, None) for n in ("a.wav", "b.wav")]
+    _, calidades = _par_equivalente()
+    xml = _xml_rekordbox(tmp_path / "rb.xml", [tmp_path / "descargas" / "b.wav"])
+    refs = referencias_de_xml(rekordbox_xml=xml)
+    por = {f.archivo: f.accion for f in decidir([0, 1], fichas, calidades, refs)}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}, "el desempate no se aplicó"
+
+
+def test_la_raiz_posix_del_xml_se_repone(tmp_path):
+    """`_ruta_local` hace lstrip('/') y '/home/dj/b.wav' llegaría como 'home/dj/b.wav'."""
+    xml = tmp_path / "rb.xml"
+    xml.write_text('<DJ_PLAYLISTS><COLLECTION Entries="1"><TRACK TrackID="1" '
+                   'Location="file://localhost/home/dj/b.wav"/></COLLECTION></DJ_PLAYLISTS>',
+                   encoding="utf-8")
+    fichas = [Ficha("/home/dj/a.wav", "a.wav", 200.0, None),
+              Ficha("/home/dj/b.wav", "b.wav", 200.0, None)]
+    _, calidades = _par_equivalente()
+    por = {f.archivo: f.accion for f in
+           decidir([0, 1], fichas, calidades, referencias_de_xml(rekordbox_xml=xml))}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}
+
+
+def test_el_borde_del_redondeo_no_es_empate_y_el_motivo_no_dice_equivalente():
+    """20.04 y 20.06 kHz caen a lados distintos del redondeo a 0.1: NO empatan. Gana el de
+    mejor puntaje aunque el otro esté referenciado, y el motivo no puede decir 'equivalente'
+    ni insinuar que la referencia decidió."""
+    fichas = [_ficha("referenciada.wav", 200.0, None), _ficha("mejor.wav", 200.0, None)]
+    calidades = {0: _cal(20.04, 2.0, "si", 1411), 1: _cal(20.06, 2.0, "si", 1411)}
+    por = {f.archivo: f for f in decidir([0, 1], fichas, calidades, _ref(fichas[0], "Rekordbox"))}
+    assert por["mejor.wav"].accion == CONSERVAR
+    assert por["referenciada.wav"].accion == DESCARTAR
+    perdedora = por["referenciada.wav"].motivo
+    assert "equivalente" not in perdedora, perdedora
+    assert "no es un empate" in perdedora and "OJO" in perdedora
+    assert "referenciada" not in por["mejor.wav"].motivo
+
+
+def test_las_filas_conservan_el_orden_de_siempre_y_la_referencia_solo_elige_ganador():
+    """Un perdedor referenciado no sube de lugar: el orden de los perdedores es el de sin
+    referencias (el de main). Ganador 0 (referenciado, 20 kHz); 1 y 2 miden 18 y el 2 está
+    referenciado: sin referencias [0, 1, 2], y con referencias tiene que seguir igual."""
+    fichas = [_ficha(f"f{i}.wav", 200.0, None) for i in range(3)]
+    calidades = {0: _cal(20.0, 2.0, "si", 1411), 1: _cal(18.0, 2.0, "si", 1411),
+                 2: _cal(18.0, 2.0, "si", 1411)}
+    sin = [f.archivo for f in decidir([0, 1, 2], fichas, calidades)]
+    refs = {**_ref(fichas[0], "Rekordbox"), **_ref(fichas[2], "iTunes")}
+    con = decidir([0, 1, 2], fichas, calidades, refs)
+    assert sin == ["f0.wav", "f1.wav", "f2.wav"]
+    assert [f.archivo for f in con] == sin, "la referencia reordenó a los perdedores"
+    assert [f.accion for f in con] == [CONSERVAR, DESCARTAR, DESCARTAR]
+
+
+def test_xml_con_estructura_ajena_falla_con_value_error_y_exit_2(tmp_path):
+    """Un plist válido pero que no es un Library.xml no puede dar AttributeError."""
+    for i, contenido in enumerate(({"Tracks": [1, 2]}, {"Tracks": {"1": 5}},
+                                   {"Tracks": {"1": {"Location": 7}}})):
+        lib = tmp_path / f"ajeno{i}.xml"
+        lib.write_bytes(plistlib.dumps(contenido))
+        with pytest.raises(ValueError, match="Library.xml"):
+            referencias_itunes(lib)
+        assert main(["--audio", str(tmp_path), "--itunes-xml", str(lib)]) == 2
+
+
+def _xml_rekordbox(destino, rutas):
+    pistas = "".join(f'<TRACK TrackID="{i}" Name="t" Location="{_location(r)}"/>'
+                     for i, r in enumerate(rutas, 1))
+    destino.write_text(f'<DJ_PLAYLISTS><COLLECTION Entries="{len(rutas)}">{pistas}'
+                       "</COLLECTION></DJ_PLAYLISTS>", encoding="utf-8")
+    return destino
+
+
+def test_el_xml_de_rekordbox_desempata_con_rutas_reales(tmp_path):
+    a, b = tmp_path / "descarga uno" / "a.wav", tmp_path / "biblioteca" / "b.wav"
+    fichas = [Ficha(str(a), "a.wav", 200.0, None), Ficha(str(b), "b.wav", 200.0, None)]
+    _, calidades = _par_equivalente()
+    refs = referencias_de_xml(rekordbox_xml=_xml_rekordbox(tmp_path / "rb.xml", [b]))
+    por = {f.archivo: f.accion for f in decidir([0, 1], fichas, calidades, refs)}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}
+
+
+def test_la_biblioteca_de_itunes_desempata_con_rutas_reales(tmp_path):
+    a, b = tmp_path / "descarga" / "a.wav", tmp_path / "iTunes Media" / "b.wav"
+    lib = tmp_path / "Library.xml"
+    lib.write_bytes(plistlib.dumps({"Tracks": {
+        "101": {"Track ID": 101, "Location": _location(b)},
+        "102": {"Track ID": 102}}}))                      # una pista sin Location no rompe
+    fichas = [Ficha(str(a), "a.wav", 200.0, None), Ficha(str(b), "b.wav", 200.0, None)]
+    _, calidades = _par_equivalente()
+    refs = referencias_de_xml(itunes_xml=lib)
+    assert set(refs.values()) == {"iTunes"}
+    por = {f.archivo: f.accion for f in decidir([0, 1], fichas, calidades, refs)}
+    assert por == {"a.wav": DESCARTAR, "b.wav": CONSERVAR}
+
+
+def test_una_ruta_en_las_dos_bibliotecas_dice_las_dos():
+    a, b = {"c:/x.wav": "Rekordbox"}, {"c:/x.wav": "iTunes", "c:/y.wav": "iTunes"}
+    assert unir_referencias(a, b) == {"c:/x.wav": "Rekordbox e iTunes", "c:/y.wav": "iTunes"}
+    assert unir_referencias(a, a) == a
+
+
+def test_un_xml_que_no_es_de_la_biblioteca_falla_en_vez_de_ignorarse(tmp_path):
+    """Ignorarlo propondría descartar justo la copia con el trabajo encima."""
+    otro = tmp_path / "otro.xml"
+    otro.write_text("<algo/>", encoding="utf-8")
+    with pytest.raises(ValueError):
+        referencias_rekordbox(otro)
+    with pytest.raises(ValueError):
+        referencias_itunes(otro)
+    sin_pistas = tmp_path / "plist_sin_pistas.xml"
+    sin_pistas.write_bytes(plistlib.dumps({"Major Version": 1}))   # plist válido, pero sin 'Tracks'
+    with pytest.raises(ValueError, match="Tracks"):
+        referencias_itunes(sin_pistas)
+    assert main(["--audio", str(tmp_path), "--rekordbox-xml", str(otro)]) == 2
+    assert main(["--audio", str(tmp_path), "--itunes-xml", str(otro)]) == 2
