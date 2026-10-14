@@ -33,16 +33,22 @@ Por eso hay dos compuertas y tienen que pasar las dos:
      el par en 18 de 24 casos con 10 s distintos, 12 de 24 con 20 s y 10 de 24 con 30 s
      (la ventana contigua vieja: 21, 20 y 20 de 24). Y un reemplazo de 20 s que caía entre
      los 40 y los 60 s, que la ventana vieja detectaba (medición de la auditoría), hoy puede
-     pasar. Lo que
-     mejora: cualquier diferencia fuera de los 30-90 s, que antes no se veía de ningún
-     modo. Más cobertura exigiría más tramos (más decodificación) o un umbral distinto: es
-     decisión de producto, no está hecha.
+     pasar. Lo que mejora: cualquier diferencia fuera de los 30-90 s, que antes no se veía
+     de ningún modo. Más cobertura exigiría más tramos (más decodificación) o un umbral
+     distinto: es decisión de producto, no está hecha.
 
      La grilla de tramos sale de la duración que da el archivo mismo (libsndfile: frames /
-     samplerate). Si ese dato no coincide con el audio (VBR sin cabecera), el último tramo
-     viene corto o no existe y se lee en una pasada secuencial con la duración real. Una
-     discrepancia chica que deje al último tramo entero (< ~0,25 s de audio faltante) no se
-     detecta: la grilla queda corrida esa fracción.
+     samplerate). Si ese dato no coincide con el audio (cabecera que declara de más), el
+     último tramo viene corto o no existe y se lee en una pasada secuencial con la duración
+     real. Una discrepancia chica que deje al último tramo casi entero (< ~0,25 s de audio
+     faltante) no se detecta: los tramos igual se leen en sus offsets correctos, lo que puede
+     diferir es la identidad de la grilla frente a la de una copia de duración exacta, y eso
+     lo cubre el recálculo sobre la grilla común (`mismo_audio`).
+
+     LÍMITE CONOCIDO, NO RESUELTO: un MP3 VBR sin cabecera Xing/Info abierto por libsndfile
+     declara de MENOS y trunca la lectura (medido en main: 130 s -> 58,7 s). Eso ya pasaba
+     antes de la 5.27; la huella y la duración de esos archivos salen sobre el audio
+     truncado, y la compuerta de duración los separa de su copia en otro formato.
 
 Por qué esta huella y no chromaprint
 ------------------------------------
@@ -265,7 +271,10 @@ def ventanas_huella(duracion_s: float) -> list[tuple[float, float]]:
     N_TRAMOS x PASO_CUANTO_S = 12 s más lo que sobre de la última porción), que es donde
     dos copias del mismo tema más suelen diferir (silencio final, fade).
     Un track muy corto (menos de DURACION_S analizables) devuelve UNA ventana con todo lo
-    que hay: ya queda cubierto entero y `huella` lo parte en N_TRAMOS."""
+    que hay: ya queda cubierto entero y `huella` lo parte en N_TRAMOS.
+    LÍMITE: en esos clips la ventana ES la duración exacta, así que casi todo par de clips
+    de duración compatible pero no idéntica tiene grillas distintas y `mismo_audio` recalcula
+    (coste cuadrático en una carpeta de muchos clips cortos). Sin tocar: decisión del dueño."""
     desde = DESDE_S if duracion_s > MIN_PARA_SALTEAR_INTRO_S else 0.0
     util = duracion_s - desde
     if util <= 0:

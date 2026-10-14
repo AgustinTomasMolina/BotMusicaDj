@@ -106,7 +106,7 @@ def test_si_el_archivo_declara_de_mas_la_grilla_se_rehace_con_la_duracion_real(f
     Al contar los frames reales se hace una segunda pasada con la grilla de 6 s."""
     falso.entrega(declara=10.0)
     dur, ventanas, tramos = dec.cargar_tramos_en_streaming(falso.m4a, 22050, _grilla)
-    assert dur == pytest.approx(10.0), "devuelve la duración que declara el archivo"
+    assert dur == pytest.approx(6.0, abs=1e-6), "devuelve la duración REAL, no la declarada"
     assert ventanas == _grilla(6.0), "la grilla no es la del audio real"
     for t, e in zip(tramos, _esperado(falso.wav, ventanas), strict=True):
         assert t.size > 0

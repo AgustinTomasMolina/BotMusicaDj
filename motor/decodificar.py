@@ -286,13 +286,15 @@ def cargar_tramos(ruta: str | os.PathLike, sr: int | None, ventanas_de,
 
     `ventanas_de(duracion_s)` devuelve `[(offset_s, duracion_s)]` a leer; la duración es la
     del propio archivo abierto (frames / samplerate, la misma que da `duracion`). Devuelve
-    `(duracion_s, ventanas, [tramo, ...])`; cada tramo es EXACTAMENTE lo que daría
+    `(duracion_s, ventanas, [tramo, ...])`; cada tramo es lo que daría
     `cargar(ruta, sr, mono, offset, duration)`: mismo seek, mismo `to_mono`, mismo
-    `resample`. Abrir una vez y no una por tramo importa en MP3, donde cada apertura
+    `resample`, bit a bit salvo en OGG Vorbis: un seek tras una lectura grande puede dejar
+    ~438 muestras viejas (bug de libsndfile; similitud de la huella 0,999999, no cambia
+    ninguna decisión). Abrir una vez y no una por tramo importa en MP3, donde cada apertura
     escanea el archivo entero.
 
     Lanza `RuntimeError` si libsndfile no lo abre o un seek cae pasado el final. NO usa
-    ffmpeg: para eso está `cargar_tramos_ffmpeg`."""
+    ffmpeg: para eso está `cargar_tramos_en_streaming`."""
     import soundfile as sf
 
     ruta = os.fspath(ruta)
@@ -385,7 +387,9 @@ def _tramos_en_pasadas(abrir, ruta: str, sr: int | None, ventanas_de, mono: bool
         # La duración declarada no era la real (VBR sin cabecera, ffprobe de más o de menos):
         # la grilla se arma con lo que de verdad vino.
         _, _, _, ventanas, trozos = _pasada(abrir, ruta, lambda _d: correctas)
-    return (declarada or real), ventanas, [_tramo_mono(y, sr_nat, sr, mono) for y in trozos]
+    # La duración REAL (los frames que vinieron), no la declarada: Ficha.duracion_s y la elección de
+    # la copia larga en mismo_audio no pueden mentir con un contenedor que declara de más.
+    return real, ventanas, [_tramo_mono(y, sr_nat, sr, mono) for y in trozos]
 
 
 def cargar_tramos_en_streaming(ruta: str | os.PathLike, sr: int | None, ventanas_de,
@@ -399,7 +403,7 @@ def cargar_tramos_en_streaming(ruta: str | os.PathLike, sr: int | None, ventanas
     duración que DECLARA el archivo; al terminar se cuentan los frames que de verdad vinieron
     y, si con esa duración real la grilla sería otra, se hace una segunda pasada con la
     correcta. Sin duración declarada, la primera pasada solo cuenta. Devuelve la duración
-    declarada (la real si no declara).
+    REAL (los frames que de verdad vinieron), no la declarada.
 
     Primero por libsndfile (sin ffmpeg); si no lo abre, por ffmpeg, con el tope de bytes de
     `LectorPCM` (si entrega mucho más de lo declarado, `DecodificacionError`). Nunca un audio

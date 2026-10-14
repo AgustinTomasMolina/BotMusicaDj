@@ -384,6 +384,43 @@ def test_un_track_corto_de_una_sola_ventana_se_compara_sobre_la_mas_corta(tmp_pa
         assert agrupa and s > 0.99, f"no agrupó dos copias cortas (similitud {s:.3f})"
 
 
+def test_dos_grillas_cortas_distintas_contra_el_mismo_original_no_comparten_cache(tmp_path):
+    """El original (50,8 s) se recalcula DOS veces, una por cada grilla corta (50,0 s y 50,4 s):
+    la caché de `agrupar` tiene que distinguir la grilla, no solo la ruta. Con la clave
+    `(ruta,)` la segunda comparación reusaba la huella de la grilla equivocada."""
+    y = _senal_densa(29, dur=50.8)
+    larga = cargar_ficha(_wav(tmp_path, y, "larga.wav"))
+    c1 = cargar_ficha(_wav(tmp_path, _sin_cola(y, 0.8), "c1.wav"))
+    c2 = cargar_ficha(_wav(tmp_path, _sin_cola(y, 0.4), "c2.wav"))
+    assert len({larga.grilla, c1.grilla, c2.grilla}) == 3
+    grupos, sims = agrupar([larga, c1, c2])
+    assert grupos == [[0, 1, 2]]
+    for par in ((0, 1), (0, 2), (1, 2)):
+        assert sims[par] > 0.999, f"el par {par} se comparó sobre grillas distintas ({sims[par]:.4f})"
+
+
+def test_un_contenedor_que_declara_de_mas_se_compara_por_su_duracion_real(tmp_path, monkeypatch):
+    """Un M4A (ffmpeg falso) que declara 8 s y trae 6 s contra un WAV de 6,5 s con el mismo
+    audio y 0,5 s de silencio. Si la ficha del M4A conservara los 8 s declarados pasaría por
+    'la larga' y se recalcularía sobre una grilla que no tiene (6,5 s): no agruparía."""
+    import soundfile as sf
+
+    from motor.tests.test_decodificar import Falso
+
+    falso = Falso(tmp_path, monkeypatch)
+    falso.entrega(declara=8.0)
+    audio, sr = sf.read(str(falso.wav), dtype="float32", always_2d=True)
+    con_silencio = np.concatenate([audio, np.zeros((sr // 2, audio.shape[1]), np.float32)])
+    wav = tmp_path / "seis_y_medio.wav"
+    sf.write(str(wav), con_silencio, sr, subtype="PCM_16")
+    m4a, w = cargar_ficha(str(falso.m4a)), cargar_ficha(str(wav))
+    assert m4a.duracion_s == pytest.approx(6.0, abs=1e-3), "conservó la duración declarada"
+    assert w.duracion_s == pytest.approx(6.5, abs=1e-3) and m4a.grilla != w.grilla
+    for x, z in ((m4a, w), (w, m4a)):
+        agrupa, s = mismo_audio(x, z)
+        assert agrupa and s > 0.99, f"no agrupó (similitud {s:.3f})"
+
+
 def test_con_la_misma_grilla_no_se_recalcula_nada(tmp_path, monkeypatch):
     """Lo normal (duraciones a milisegundos): el resultado es el de siempre, sin leer
     ningún archivo de más."""
