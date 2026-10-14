@@ -19,7 +19,36 @@ Por eso hay dos compuertas y tienen que pasar las dos:
 
   1. DURACIÓN parecida. Si difieren más que la tolerancia, es otra versión y ni se
      compara la huella. Barato y corta de entrada la mayoría de los falsos positivos.
-  2. HUELLA de audio muy parecida.
+  2. HUELLA de audio muy parecida. Mira 24 tramos de 2,5 s (60 s en total) repartidos por el
+     track desde la intro salteada (30 s) hasta cerca del final, no un bloque contiguo
+     (tarea 5.27; `ventanas_huella` dice dónde mira).
+
+     LÍMITE REAL (medido): entre un tramo y el siguiente queda un hueco SIN MIRAR de
+     `paso - 2,5 s` (≈ 4,5 s en un track de 200 s, ≈ 10,5 s en uno de 346 s, y crece con la
+     duración). Una diferencia de contenido más corta que ~2 pasos (≈ 14-30 s en tracks de
+     200-350 s) puede caer entera en esos huecos o tocar un solo tramo, y el par se agrupa
+     si la duración es compatible. Reemplazar 4 s de un track de 200 s justo entre dos
+     tramos da similitud > 0,999 (lo fija un test). Sobre 8 tracks reales de 200-480 s,
+     pegando a la MISMA duración audio de otro tema en el medio, la huella siguió agrupando
+     el par en 18 de 24 casos con 10 s distintos, 12 de 24 con 20 s y 10 de 24 con 30 s
+     (la ventana contigua vieja: 21, 20 y 20 de 24). Y un reemplazo de 20 s que caía entre
+     los 40 y los 60 s, que la ventana vieja detectaba (medición de la auditoría), hoy puede
+     pasar. Lo que mejora: cualquier diferencia fuera de los 30-90 s, que antes no se veía
+     de ningún modo. Más cobertura exigiría más tramos (más decodificación) o un umbral
+     distinto: es decisión de producto, no está hecha.
+
+     La grilla de tramos sale de la duración que da el archivo mismo (libsndfile: frames /
+     samplerate). Si ese dato no coincide con el audio (cabecera que declara de más), el
+     último tramo viene corto o no existe y se lee en una pasada secuencial con la duración
+     real. Una discrepancia chica que deje al último tramo casi entero (< ~0,25 s de audio
+     faltante) no se detecta: los tramos igual se leen en sus offsets correctos, lo que puede
+     diferir es la identidad de la grilla frente a la de una copia de duración exacta, y eso
+     lo cubre el recálculo sobre la grilla común (`mismo_audio`).
+
+     LÍMITE CONOCIDO, NO RESUELTO: un MP3 VBR sin cabecera Xing/Info abierto por libsndfile
+     declara de MENOS y trunca la lectura (medido en main: 130 s -> 58,7 s). Eso ya pasaba
+     antes de la 5.27; la huella y la duración de esos archivos salen sobre el audio
+     truncado, y la compuerta de duración los separa de su copia en otro formato.
 
 Por qué esta huella y no chromaprint
 ------------------------------------
@@ -46,6 +75,8 @@ Las dos claves fueron:
 import argparse
 import csv
 import datetime
+import logging
+import math
 import os
 import plistlib
 import re
@@ -60,15 +91,33 @@ from analizar_calidad import _espectro_db
 from calidad.corte_espectral import EXTS
 from calidad.corte_espectral import analizar_uno as medir_calidad
 
+log = logging.getLogger(__name__)
+
 # Sample rate de la huella. Fijo y BAJO a propósito: por debajo del corte de cualquier
 # codec, así el mismo audio en MP3 y en WAV produce la misma huella.
 SR_HUELLA = 22050
 F_MIN, F_MAX = 60.0, 6000.0
 N_TRAMOS, N_BANDAS = 24, 24
 
-# Ventana analizada. Desde 30 s para saltear la intro; absoluta (no proporcional) para que
-# dos archivos del mismo audio queden alineados aunque uno tenga cola de más.
+# Audio analizado (tarea 5.27): DURACION_S segundos en total, repartidos en N_TRAMOS tramos
+# de DURACION_S / N_TRAMOS a lo largo de TODO el track (desde DESDE_S para saltear la intro).
+# Antes era un bloque contiguo de 60 s (30-90 s): en un track de 346 s la huella era ciega al
+# 83% y dos archivos de duración casi igual y distinto contenido en el medio quedaban
+# agrupados. El costo de decodificación es el mismo (60 s), y la huella sigue siendo
+# N_TRAMOS x N_BANDAS: lo que cambia es DÓNDE se mira.
+# Ubicación de los tramos: el primero en DESDE_S y los demás cada `paso` segundos, con `paso`
+# CUANTIZADO a PASO_CUANTO_S (ver `ventanas_huella`). NO proporcional a la duración exacta:
+# medido sobre audio real, dos MP3 del mismo tema que difieren 0.34 s de duración daban
+# similitud 0.9978 con la ventana absoluta de antes y 0.65 con tramos proporcionales,
+# porque la huella es muy sensible a que el tramo se corra una fracción de segundo.
+# Cuantizar el paso hace que dos copias del mismo audio (milisegundos de diferencia) tengan
+# EXACTAMENTE los mismos tramos, salvo que su duración cruce un múltiplo de N_TRAMOS x
+# PASO_CUANTO_S (12 s): en ese caso la grilla difiere, y `mismo_audio` las compara sobre la
+# grilla de la más corta (`_huellas_comparables`) en vez de contra tramos desalineados.
 DESDE_S, DURACION_S = 30.0, 60.0
+PASO_CUANTO_S = 0.5
+# Un track de más de esto se analiza desde DESDE_S; uno más corto, desde 0.
+MIN_PARA_SALTEAR_INTRO_S = 100.0
 
 # Umbral de similitud. Medido: duplicados ≥ 0.9348, distintos ≤ 0.7874. Se elige 0.90,
 # más cerca del piso de los duplicados que del techo de los distintos: agrupar de más
@@ -97,6 +146,10 @@ class Ficha:
     archivo: str
     duracion_s: float
     huella: np.ndarray | None
+    # Los tramos con que se calculó la huella (`ventanas_huella`): dos copias compatibles por
+    # duración pero con tramos distintos se comparan sobre los mismos (`mismo_audio`).
+    # `None` = no se sabe (una ficha armada a mano): se compara la huella tal cual.
+    grilla: tuple[tuple[float, float], ...] | None = None
 
 
 @dataclass
@@ -166,27 +219,146 @@ def duracion_compatible(d1: float, d2: float, tol_s: float = TOL_DURACION_S,
     return abs(d1 - d2) <= max(tol_s, tol_rel * min(d1, d2))
 
 
-def mismo_audio(a: Ficha, b: Ficha, umbral: float = UMBRAL) -> tuple[bool, float]:
+def _huellas_comparables(a: Ficha, b: Ficha, cache: dict | None) -> tuple:
+    """Las dos huellas SOBRE LOS MISMOS TRAMOS.
+
+    Si las grillas coinciden (lo normal: la grilla cambia solo si la duración cruza un
+    múltiplo de N_TRAMOS x PASO_CUANTO_S = 12 s) son las huellas de cada ficha, sin tocar
+    nada. Si difieren, miran cosas distintas y la similitud cae a ~0 aunque sea el mismo
+    audio (95 s vs 96 s, o la cola recortada 5 s en 346 s). Entonces la ficha MÁS LARGA se
+    recalcula sobre la grilla de la más corta: sus tramos entran seguro en las dos, y el
+    resultado no depende del orden en que se pasan (desempata la ruta si duran igual).
+    ~60 s de decodificación por par afectado; con `cache` no se repite para el mismo archivo.
+    Si no se puede recalcular, se avisa y se compara tal cual."""
+    if (a.huella is None or b.huella is None or a.grilla is None or b.grilla is None
+            or a.grilla == b.grilla):
+        return a.huella, b.huella
+    larga, corta = (a, b) if (a.duracion_s, a.ruta) > (b.duracion_s, b.ruta) else (b, a)
+    clave = (larga.ruta, corta.grilla)
+    if cache is not None and clave in cache:
+        h = cache[clave]
+    else:
+        try:
+            h = huella_en_grilla(larga.ruta, corta.grilla)
+        except Exception as e:  # noqa: BLE001
+            log.warning("huella: no se pudo comparar %s con %s sobre los mismos tramos: %s",
+                        larga.archivo, corta.archivo, e)
+            h = None
+        if cache is not None:
+            cache[clave] = h
+    if h is None:
+        return a.huella, b.huella
+    return (h, b.huella) if larga is a else (a.huella, h)
+
+
+def mismo_audio(a: Ficha, b: Ficha, umbral: float = UMBRAL,
+                cache: dict | None = None) -> tuple[bool, float]:
     """Las dos compuertas. Devuelve (es_duplicado, similitud)."""
     if not duracion_compatible(a.duracion_s, b.duracion_s):
         return False, 0.0
-    s = similitud(a.huella, b.huella)
+    s = similitud(*_huellas_comparables(a, b, cache))
     return s >= umbral, s
 
 
-def cargar_ficha(ruta: str) -> Ficha:
-    from motor.decodificar import cargar, duracion  # perezoso, igual que en corte_espectral
+def ventanas_huella(duracion_s: float) -> list[tuple[float, float]]:
+    """Dónde mira la huella: `[(offset_s, duracion_s)]` en orden, un tramo por elemento.
+
+    Con espacio de sobra (≥ DURACION_S desde DESDE_S): N_TRAMOS tramos de
+    DURACION_S / N_TRAMOS, el primero en `desde` y los demás cada `paso`, donde `paso` es
+    la porción que le toca a cada tramo (lo analizable / N_TRAMOS) REDONDEADA PARA ABAJO a
+    un múltiplo de PASO_CUANTO_S, y nunca menos que el largo del tramo. Redondear para
+    abajo asegura que el último tramo entra; queda sin mirar la cola (como mucho
+    N_TRAMOS x PASO_CUANTO_S = 12 s más lo que sobre de la última porción), que es donde
+    dos copias del mismo tema más suelen diferir (silencio final, fade).
+    Un track muy corto (menos de DURACION_S analizables) devuelve UNA ventana con todo lo
+    que hay: ya queda cubierto entero y `huella` lo parte en N_TRAMOS.
+    LÍMITE: en esos clips la ventana ES la duración exacta, así que casi todo par de clips
+    de duración compatible pero no idéntica tiene grillas distintas y `mismo_audio` recalcula
+    (coste cuadrático en una carpeta de muchos clips cortos). Sin tocar: decisión del dueño."""
+    desde = DESDE_S if duracion_s > MIN_PARA_SALTEAR_INTRO_S else 0.0
+    util = duracion_s - desde
+    if util <= 0:
+        return []
+    if util < DURACION_S:
+        return [(desde, util)]
+    largo = DURACION_S / N_TRAMOS
+    paso = max(largo, math.floor(util / N_TRAMOS / PASO_CUANTO_S) * PASO_CUANTO_S)
+    return [(desde + k * paso, largo) for k in range(N_TRAMOS)]
+
+
+def muestra_para_huella(y: np.ndarray, sr: int = SR_HUELLA) -> np.ndarray:
+    """Las muestras que mira la huella, sacadas de un track ya decodificado ENTERO: los
+    tramos de `ventanas_huella` pegados uno tras otro. `huella(muestra_para_huella(y))` es
+    la huella del track completo; `cargar_ficha` lee lo mismo sin decodificar todo."""
+    partes = []
+    for off, dur in ventanas_huella(y.size / sr):
+        i = int(round(off * sr))
+        partes.append(y[i:i + int(round(dur * sr))])
+    return np.concatenate(partes) if partes else y[:0]
+
+
+def _muestra_de_tramos(tramos: list[np.ndarray], ventanas: list[tuple[float, float]]
+                       ) -> np.ndarray | None:
+    """Los tramos pegados, cada uno con su largo EXACTO: `huella` parte la muestra en
+    N_TRAMOS iguales, y un tramo de una muestra de más o de menos (el resample no siempre
+    cierra justo) correría todos los siguientes. Un tramo apenas corto (< 0,25 s) se completa
+    con silencio; uno más corto (o ausente) devuelve `None`: la duración declarada no
+    coincide con el audio y la grilla no sirve."""
+    partes = []
+    for y, (_, largo) in zip(tramos, ventanas, strict=True):
+        n = int(round(largo * SR_HUELLA))
+        if y.size < n - SR_HUELLA // 4:
+            return None
+        partes.append(np.pad(y[:n], (0, max(0, n - y.size))))
+    return np.concatenate(partes) if partes else None
+
+
+def _leer_muestra(ruta: str, ventanas_de) -> tuple[float, list[tuple[float, float]], np.ndarray]:
+    """`(duración, ventanas, muestra)` de un archivo, leyendo SOLO los tramos.
+
+    Camino normal: UNA apertura con libsndfile y un seek por tramo. Si libsndfile no lo abre,
+    o algún tramo no está (la duración declarada no coincide con el audio real, típico de un
+    VBR sin cabecera), una pasada secuencial que se queda con los tramos y arma la grilla con
+    la duración REAL (`cargar_tramos_en_streaming`: memoria acotada, ffmpeg si hace falta).
+    Lanza si no se pudo leer."""
+    from motor import decodificar as dec  # perezoso, igual que en corte_espectral
 
     try:
-        dur = float(duracion(ruta))
-    except Exception:  # noqa: BLE001
-        return Ficha(ruta, Path(ruta).name, 0.0, None)
-    desde = DESDE_S if dur > 100 else 0.0
+        dur, ventanas, tramos = dec.cargar_tramos(ruta, SR_HUELLA, ventanas_de)
+        muestra = _muestra_de_tramos(tramos, ventanas)
+        if muestra is not None:
+            return dur, ventanas, muestra
+    except Exception:  # noqa: BLE001  # libsndfile no lo abre, o buscar pasado el final
+        pass
+    dur, ventanas, tramos = dec.cargar_tramos_en_streaming(ruta, SR_HUELLA, ventanas_de)
+    muestra = _muestra_de_tramos(tramos, ventanas)
+    if muestra is None:
+        raise ValueError("el archivo trae menos audio del que hace falta para la huella")
+    return dur, ventanas, muestra
+
+
+def cargar_ficha(ruta: str) -> Ficha:
+    nombre = Path(ruta).name
     try:
-        y, _ = cargar(ruta, sr=SR_HUELLA, mono=True, offset=desde, duration=DURACION_S)
-    except Exception:  # noqa: BLE001
-        return Ficha(ruta, Path(ruta).name, dur, None)
-    return Ficha(ruta, Path(ruta).name, dur, huella(y, SR_HUELLA))
+        dur, ventanas, muestra = _leer_muestra(ruta, ventanas_huella)
+    except Exception as e:  # noqa: BLE001
+        # Sin huella el archivo queda afuera del agrupamiento: que al menos diga por qué.
+        log.warning("huella: %s queda sin huella: %s", nombre, e)
+        try:
+            from motor.decodificar import duracion
+
+            return Ficha(ruta, nombre, float(duracion(ruta)), None)
+        except Exception:  # noqa: BLE001
+            return Ficha(ruta, nombre, 0.0, None)
+    return Ficha(ruta, nombre, dur, huella(muestra, SR_HUELLA), tuple(ventanas))
+
+
+def huella_en_grilla(ruta: str, grilla) -> np.ndarray | None:
+    """La huella de `ruta` mirando EXACTAMENTE los tramos de `grilla` (ver `Ficha.grilla`).
+    Lanza si no se pudo leer. ~60 s de decodificación."""
+    ventanas = list(grilla)
+    _, _, muestra = _leer_muestra(ruta, lambda _d: ventanas)
+    return huella(muestra, SR_HUELLA)
 
 
 def agrupar(fichas: list[Ficha], umbral: float = UMBRAL) -> tuple[list[list[int]], dict]:
@@ -203,13 +375,14 @@ def agrupar(fichas: list[Ficha], umbral: float = UMBRAL) -> tuple[list[list[int]
         return i
 
     sims: dict[tuple[int, int], float] = {}
+    recalculadas: dict = {}         # huellas sobre la grilla de otro, para no repetir la lectura
     for i in range(len(fichas)):
         if fichas[i].huella is None:
             continue
         for j in range(i + 1, len(fichas)):
             if fichas[j].huella is None:
                 continue
-            es_dup, s = mismo_audio(fichas[i], fichas[j], umbral)
+            es_dup, s = mismo_audio(fichas[i], fichas[j], umbral, recalculadas)
             if es_dup:
                 sims[(i, j)] = s
                 ri, rj = raiz(i), raiz(j)

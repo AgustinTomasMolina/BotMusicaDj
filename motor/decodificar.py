@@ -33,6 +33,7 @@ NO modifica el archivo: ffmpeg lo abre solo para leer y escribe a un pipe.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -266,6 +267,155 @@ def cargar(ruta: str | os.PathLike, sr: int | None, mono: bool = True, offset: f
     if sr is None:
         return y, sr_nativo
     return librosa.resample(y, orig_sr=sr_nativo, target_sr=sr), sr
+
+
+def _tramo_mono(y: np.ndarray, sr_nativo: int, sr: int | None, mono: bool) -> np.ndarray:
+    """Lo que `cargar` hace con lo leído: a mono y al `sr` pedido (`None` = el nativo)."""
+    import librosa
+
+    if y.shape[-1] == 0:                        # un tramo pasado del final: vacío, no inventado
+        return np.empty(0, dtype=np.float32)
+    if mono:
+        y = librosa.to_mono(y)
+    return y if sr is None else librosa.resample(y, orig_sr=sr_nativo, target_sr=sr)
+
+
+def cargar_tramos(ruta: str | os.PathLike, sr: int | None, ventanas_de,
+                  mono: bool = True) -> tuple[float, list[tuple[float, float]], list[np.ndarray]]:
+    """Varios tramos del mismo archivo con UNA sola apertura (libsndfile, seek + read).
+
+    `ventanas_de(duracion_s)` devuelve `[(offset_s, duracion_s)]` a leer; la duración es la
+    del propio archivo abierto (frames / samplerate, la misma que da `duracion`). Devuelve
+    `(duracion_s, ventanas, [tramo, ...])`; cada tramo es lo que daría
+    `cargar(ruta, sr, mono, offset, duration)`: mismo seek, mismo `to_mono`, mismo
+    `resample`, bit a bit salvo en OGG Vorbis: un seek tras una lectura grande puede dejar
+    ~438 muestras viejas (bug de libsndfile; similitud de la huella 0,999999, no cambia
+    ninguna decisión). Abrir una vez y no una por tramo importa en MP3, donde cada apertura
+    escanea el archivo entero.
+
+    Lanza `RuntimeError` si libsndfile no lo abre o un seek cae pasado el final. NO usa
+    ffmpeg: para eso está `cargar_tramos_en_streaming`."""
+    import soundfile as sf
+
+    ruta = os.fspath(ruta)
+    with sf.SoundFile(ruta) as f:
+        sr_nativo = f.samplerate
+        dur = f.frames / sr_nativo
+        ventanas = list(ventanas_de(dur))
+        tramos = []
+        for offset, largo in ventanas:
+            f.seek(int(offset * sr_nativo))
+            y = f.read(frames=int(largo * sr_nativo), dtype="float32", always_2d=False).T
+            tramos.append(_tramo_mono(y, sr_nativo, sr, mono))
+    return dur, ventanas, tramos
+
+
+def _bloques_soundfile(f, bloque: int = 1 << 15):
+    """Bloques de `bloque` frames float32 de un `SoundFile` abierto, como `(canales, n)`
+    (o `(n,)` si es mono): el mismo layout que `_a_float`."""
+    while True:
+        y = f.read(frames=bloque, dtype="float32", always_2d=False).T
+        if y.shape[-1] == 0:
+            return
+        yield y
+
+
+def _bloques_ffmpeg(lector: LectorPCM):
+    """Bloques de PCM de `LectorPCM` como float32 `(canales, n)`. Un frame partido entre dos
+    bloques se junta con el siguiente."""
+    ancho = 2 * lector.channels
+    resto = b""
+    for buf in lector:
+        datos = resto + buf
+        n = len(datos) // ancho
+        resto = datos[n * ancho:]
+        if n:
+            yield _a_float(datos[:n * ancho], lector.channels)
+
+
+@contextlib.contextmanager
+def _abrir_soundfile(ruta: str):
+    """`(samplerate, duración declarada o None, bloques)` por libsndfile. `RuntimeError` al
+    entrar si no lo abre."""
+    import soundfile as sf
+
+    with sf.SoundFile(ruta) as f:
+        yield f.samplerate, (f.frames / f.samplerate) or None, _bloques_soundfile(f)
+
+
+@contextlib.contextmanager
+def _abrir_ffmpeg(ruta: str):
+    """Lo mismo por `LectorPCM` (con su tope de bytes). `DecodificacionError` si no se puede."""
+    with LectorPCM(ruta) as lector:
+        yield lector.samplerate, lector.duration, _bloques_ffmpeg(lector)
+
+
+def _pasada(abrir, ruta: str, planear):
+    """Una pasada secuencial que guarda SOLO los trozos pedidos.
+
+    `planear(duración declarada | None)` devuelve las ventanas `[(offset_s, duración_s)]` a
+    guardar (`[]` = solo contar). Devuelve `(declarada, samplerate, frames_totales, ventanas,
+    [trozo por ventana])`. Memoria: los trozos pedidos más un bloque, no el audio entero."""
+    with abrir(ruta) as (sr, declarada, bloques):
+        ventanas = list(planear(declarada))
+        rangos = [(int(sr * off), int(sr * off) + int(sr * largo)) for off, largo in ventanas]
+        trozos: list[list[np.ndarray]] = [[] for _ in ventanas]
+        pos = 0                                 # frames ya vistos
+        for y in bloques:
+            n = y.shape[-1]
+            for i, (ini, fin) in enumerate(rangos):
+                a, b = max(ini, pos), min(fin, pos + n)
+                if a < b:
+                    trozos[i].append(y[..., a - pos:b - pos])
+            pos += n
+    juntos = [np.concatenate(t, axis=-1) if t else np.empty(0, dtype=np.float32)
+              for t in trozos]
+    return declarada, sr, pos, ventanas, juntos
+
+
+def _tramos_en_pasadas(abrir, ruta: str, sr: int | None, ventanas_de, mono: bool):
+    usadas: list[tuple[float, float]] = []
+
+    def planear(declarada):
+        usadas[:] = ventanas_de(declarada) if declarada else []
+        return usadas
+
+    declarada, sr_nat, frames, ventanas, trozos = _pasada(abrir, ruta, planear)
+    real = frames / sr_nat
+    correctas = list(ventanas_de(real))
+    if correctas != ventanas:
+        # La duración declarada no era la real (VBR sin cabecera, ffprobe de más o de menos):
+        # la grilla se arma con lo que de verdad vino.
+        _, _, _, ventanas, trozos = _pasada(abrir, ruta, lambda _d: correctas)
+    # La duración REAL (los frames que vinieron), no la declarada: Ficha.duracion_s y la elección de
+    # la copia larga en mismo_audio no pueden mentir con un contenedor que declara de más.
+    return real, ventanas, [_tramo_mono(y, sr_nat, sr, mono) for y in trozos]
+
+
+def cargar_tramos_en_streaming(ruta: str | os.PathLike, sr: int | None, ventanas_de,
+                               mono: bool = True
+                               ) -> tuple[float, list[tuple[float, float]], list[np.ndarray]]:
+    """`cargar_tramos` para cuando el seek no sirve: lo que libsndfile no abre (M4A, WMA…, por
+    ffmpeg) o un archivo cuya duración declarada no coincide con su audio.
+
+    UNA pasada secuencial que conserva solo los tramos: memoria del orden de los tramos (60 s
+    de audio) más un bloque, sin importar cuánto dure el archivo. La grilla sale de la
+    duración que DECLARA el archivo; al terminar se cuentan los frames que de verdad vinieron
+    y, si con esa duración real la grilla sería otra, se hace una segunda pasada con la
+    correcta. Sin duración declarada, la primera pasada solo cuenta. Devuelve la duración
+    REAL (los frames que de verdad vinieron), no la declarada.
+
+    Primero por libsndfile (sin ffmpeg); si no lo abre, por ffmpeg, con el tope de bytes de
+    `LectorPCM` (si entrega mucho más de lo declarado, `DecodificacionError`). Nunca un audio
+    inventado: si no se puede leer, lanza."""
+    ruta = os.fspath(ruta)
+    try:
+        return _tramos_en_pasadas(_abrir_soundfile, ruta, sr, ventanas_de, mono)
+    except RuntimeError as e_sf:
+        try:
+            return _tramos_en_pasadas(_abrir_ffmpeg, ruta, sr, ventanas_de, mono)
+        except DecodificacionError as e:
+            raise _sin_ffmpeg_o_fallo(str(e_sf), e) from None
 
 
 def duracion(ruta: str | os.PathLike) -> float:
