@@ -80,6 +80,22 @@ def _senal(seed: int, dur: float = 70.0, sr: int = SR) -> np.ndarray:
     return (y / (np.abs(y).max() + 1e-9)).astype(np.float32)
 
 
+def _senal_densa(seed: int, dur: float = 70.0, sr: int = SR) -> np.ndarray:
+    """Señal DENSA: piso de ruido y ~4 eventos por segundo (cada uno un tono con envolvente de
+    0,1 a 1,5 s en cualquier banda). Con la `_senal` rala (6 tonos en total) casi cualquier
+    tramo se parece a cualquier otro y un test de huella pasa por casualidad."""
+    rng = np.random.default_rng(seed)
+    n = int(dur * sr)
+    y = 0.02 * rng.standard_normal(n)
+    for _ in range(int(dur * 4)):
+        ini = rng.uniform(0, max(0.01, dur - 1.6))
+        a = int(ini * sr)
+        b = min(n, a + int(rng.uniform(0.1, 1.5) * sr))
+        t = np.arange(b - a) / sr
+        y[a:b] += rng.uniform(0.2, 1.0) * np.hanning(b - a) * np.sin(
+            2 * np.pi * rng.uniform(80, 5000) * t)
+    return (y / (np.abs(y).max() + 1e-9)).astype(np.float32)
+
 def test_la_misma_senal_da_huella_identica():
     y = _senal(1)
     assert similitud(huella(y), huella(y.copy())) == pytest.approx(1.0)
@@ -177,79 +193,277 @@ def test_la_muestra_son_los_tramos_pegados_y_miden_siempre_lo_mismo():
         assert m[k * largo] == int(round(off * SR)), f"el tramo {k} no sale de {off} s"
 
 
-def _wav(tmp_path, y, nombre="t.wav"):
+def _wav(tmp_path, y, nombre="t.wav", sr=SR):
     import soundfile as sf
 
     ruta = tmp_path / nombre
-    sf.write(str(ruta), y, SR, subtype="PCM_16")
+    sf.write(str(ruta), y, sr, subtype="PCM_16")
     return str(ruta)
 
 
-def test_cargar_ficha_lee_solo_los_tramos_y_da_la_misma_huella_que_en_memoria(
+def _con_duracion_declarada(monkeypatch, declarada):
+    """`cargar_tramos` armando la grilla con una duración que MIENTE (la declarada) en vez de
+    la del archivo: un VBR sin cabecera. La pasada secuencial de respaldo no se toca."""
+    real = dec.cargar_tramos
+
+    def miente(ruta, sr, ventanas_de, mono=True):
+        return real(ruta, sr, lambda _d: ventanas_de(declarada), mono)
+
+    monkeypatch.setattr(dec, "cargar_tramos", miente)
+
+
+def _referencia_con_una_apertura_por_tramo(ruta):
+    """La huella como la calculaba la versión que abría el archivo 24 veces (`cargar` por
+    tramo): la referencia bit a bit de la que lee con UNA apertura."""
+    muestra = []
+    for off, largo in ventanas_huella(dec.duracion(ruta)):
+        y, _ = dec.cargar(ruta, sr=SR, mono=True, offset=off, duration=largo)
+        muestra.append(y[:int(round(largo * SR))])
+    return huella(np.concatenate(muestra), SR)
+
+
+def test_cargar_ficha_abre_el_archivo_una_sola_vez_y_da_la_huella_de_siempre(
         tmp_path, monkeypatch):
-    """Lee 24 tramos buscando cada uno en el archivo (no decodifica el track entero) y el
-    resultado es el de la muestra en memoria."""
-    y = _senal(11, dur=200.0)
-    ruta = _wav(tmp_path, y)
-    llamadas = []
-    real = dec.cargar
+    """Una apertura y 24 seeks (antes: 26 aperturas, que en MP3 escanean el archivo cada una),
+    con LA MISMA huella bit a bit que la de abrir por tramo."""
+    import soundfile as sf
 
-    def espia(r, sr, mono=True, offset=0.0, duration=None):
-        llamadas.append((offset, duration))
-        return real(r, sr=sr, mono=mono, offset=offset, duration=duration)
+    y = _senal_densa(11, dur=200.0, sr=44100)
+    ruta = _wav(tmp_path, y, sr=44100)          # 44,1 kHz nativo: hay resample por tramo
+    aperturas = []
+    real = sf.SoundFile
 
-    monkeypatch.setattr(dec, "cargar", espia)
+    class Espia(real):
+        def __init__(self, *a, **k):
+            aperturas.append(a[0])
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(sf, "SoundFile", Espia)
     f = cargar_ficha(ruta)
-    assert llamadas == ventanas_huella(f.duracion_s), "no leyó los tramos de ventanas_huella"
-    decodificado, _ = real(ruta, sr=SR, mono=True)
+    monkeypatch.setattr(sf, "SoundFile", real)
+    assert len(aperturas) == 1, f"abrió el archivo {len(aperturas)} veces"
+    assert f.grilla == tuple(ventanas_huella(f.duracion_s))
+    referencia = _referencia_con_una_apertura_por_tramo(ruta)
+    assert np.array_equal(f.huella, referencia), "no es la huella de abrir por tramo"
+
+
+def test_cargar_ficha_en_memoria_y_en_disco_coinciden(tmp_path):
+    """La muestra en memoria (`muestra_para_huella`) y la leída del archivo son el mismo
+    audio: lo único que cambia es el redondeo de PCM de 16 bit."""
+    y = _senal_densa(12, dur=200.0)
+    ruta = _wav(tmp_path, y)
+    decodificado, _ = dec.cargar(ruta, sr=SR, mono=True)
     en_memoria = huella(muestra_para_huella(decodificado, SR))
-    assert similitud(f.huella, en_memoria) > 0.999
+    assert similitud(cargar_ficha(ruta).huella, en_memoria) > 0.9999
 
 
 @pytest.mark.parametrize("declarada,real", [
     (260.0, 200.0),   # el último tramo cae PASADO el final: buscar ahí tira error
     (210.0, 204.0),   # el último tramo (202.5-205 s) cae a medias: viene corto (1.5 s de 2.5)
 ])
-def test_si_la_duracion_declarada_no_coincide_con_el_audio_se_decodifica_entero(
+def test_si_la_duracion_declarada_no_coincide_con_el_audio_se_lee_con_la_real(
         tmp_path, monkeypatch, declarada, real):
     """Un VBR sin cabecera puede declarar más duración de la que tiene. Los últimos tramos
-    vendrían vacíos o a medias: en vez de una huella con ceros, se decodifica entero y se
-    mide sobre lo que realmente hay."""
-    y = _senal(12, dur=real)
+    vendrían vacíos o a medias: en vez de una huella con ceros, una pasada secuencial arma
+    la grilla con lo que realmente hay."""
+    y = _senal_densa(12, dur=real)
     ruta = _wav(tmp_path, y)
-    monkeypatch.setattr(dec, "duracion", lambda r: declarada)   # miente
+    _con_duracion_declarada(monkeypatch, declarada)
     f = cargar_ficha(ruta)
+    assert f.grilla == tuple(ventanas_huella(real)), "la grilla no es la del audio real"
     decodificado, _ = dec.cargar(ruta, sr=SR, mono=True)
     esperado = huella(muestra_para_huella(decodificado, SR))
     assert f.huella is not None
-    assert similitud(f.huella, esperado) > 0.999, "no midió sobre el audio real"
+    assert similitud(f.huella, esperado) > 0.9999, "no midió sobre el audio real"
 
 
 def test_un_ultimo_tramo_apenas_corto_se_completa_con_silencio_sin_correr_los_demas(
-        tmp_path, monkeypatch):
-    """Si al último tramo le faltan unas décimas (la duración declarada pasa en 0.1 s el audio
-    real), se completa con silencio hasta su largo exacto: `huella` parte la muestra en
-    N_TRAMOS iguales, y un tramo corto correría todos los límites."""
-    y = _senal(13, dur=204.9)
-    ruta = _wav(tmp_path, y)
-    monkeypatch.setattr(dec, "duracion", lambda r: 210.0)   # último tramo 202.5-205 s
-    f = cargar_ficha(ruta)
+        tmp_path):
+    """Si al último tramo le faltan unas décimas, se completa con silencio hasta su largo
+    exacto: `huella` parte la muestra en N_TRAMOS iguales, y un tramo corto correría todos
+    los límites. (Función pura: `_muestra_de_tramos`.)"""
+    from calidad.duplicados import _muestra_de_tramos
+
     n = int(2.5 * SR)
-    partes = []
-    for off, _ in ventanas_huella(210.0):
-        i = int(round(off * SR))
-        t = y[i:i + n]
-        partes.append(np.pad(t, (0, n - t.size)))
-    assert partes[-1].size == n and y.size < int(round(202.5 * SR)) + n   # el caso es real
-    assert similitud(f.huella, huella(np.concatenate(partes))) > 0.999
+    ventanas = [(0.0, 2.5), (10.0, 2.5)]
+    tramos = [np.ones(n, dtype=np.float32), np.ones(n - 2205, dtype=np.float32)]   # falta 0,1 s
+    m = _muestra_de_tramos(tramos, ventanas)
+    assert m.size == 2 * n
+    assert m[n - 1] == 1.0 and m[2 * n - 2205 - 1] == 1.0 and m[2 * n - 1] == 0.0
+    assert _muestra_de_tramos([tramos[0], tramos[1][:n // 2]], ventanas) is None, \
+        "un tramo a la mitad no es 'apenas corto': la grilla no sirve"
 
 
-def test_cargar_ficha_de_archivo_ilegible_no_tiene_huella(tmp_path):
-    from calidad.duplicados import cargar_ficha
-
+def test_cargar_ficha_de_archivo_ilegible_no_tiene_huella_y_dice_por_que(tmp_path, caplog):
     ruta = tmp_path / "roto.wav"
     ruta.write_bytes(b"esto no es audio")
-    assert cargar_ficha(str(ruta)).huella is None
+    with caplog.at_level("WARNING", logger="calidad.duplicados"):
+        f = cargar_ficha(str(ruta))
+    assert f.huella is None
+    assert any("roto.wav" in r.getMessage() and "sin huella" in r.getMessage()
+               for r in caplog.records), "no avisó por qué quedó sin huella"
+
+
+# --- Copias que cruzan el múltiplo de 12 s: se comparan sobre los mismos tramos -------------
+
+
+def _con_cola_de_silencio(y, seg, sr=SR):
+    return np.concatenate([y, np.zeros(int(round(seg * sr)), dtype=np.float32)])
+
+
+def _sin_cola(y, seg, sr=SR):
+    return y[:y.size - int(round(seg * sr))].copy()
+
+
+def _reemplazar(y, otra, desde_s, hasta_s):
+    """Copia de `y` con [desde_s, hasta_s) tomado de `otra`: misma duración, otro contenido."""
+    z = y.copy()
+    a, b = int(desde_s * SR), int(hasta_s * SR)
+    z[a:b] = otra[a:b]
+    return z
+
+def _comparar_con_variantes(tmp_path, y, variantes):
+    """Ficha del original contra cada variante (escrita a disco y borrada). Devuelve
+    `[(variante, similitud, ¿agrupa?, ¿las grillas difieren?)]`."""
+    base = cargar_ficha(_wav(tmp_path, y, "base.wav"))
+    filas = []
+    for etiqueta, z in variantes:
+        ruta = _wav(tmp_path, z, "variante.wav")
+        otra = cargar_ficha(ruta)
+        agrupa, s = mismo_audio(base, otra)
+        filas.append((etiqueta, s, agrupa, base.grilla != otra.grilla))
+        os.unlink(ruta)
+    return filas
+
+
+@pytest.mark.parametrize("generar", [_senal, _senal_densa], ids=["ralo", "denso"])
+def test_95_vs_96_s_agrupan_en_todo_el_barrido_de_cola(tmp_path, generar):
+    """95 s -> 96 s cruza el múltiplo de 12 s de la grilla (paso 3,5 s -> 4,0 s): sin
+    compararlas sobre los mismos tramos, la similitud caía a ~0 en 4 de 10 pares. Con 1 s de
+    silencio de cola, y con cada décima de cola hasta el borde de la tolerancia de 2 s."""
+    y = generar(21, dur=95.0)
+    colas = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    filas = _comparar_con_variantes(tmp_path, y, [(c, _con_cola_de_silencio(y, c))
+                                                  for c in colas])
+    assert any(difieren for *_, difieren in filas), "el barrido no cruza ninguna grilla"
+    malas = [(c, round(s, 3)) for c, s, agrupa, _ in filas if not agrupa]
+    assert not malas, f"copias del mismo audio que NO agrupan (cola, similitud): {malas}"
+
+
+@pytest.mark.parametrize("generar", [_senal, _senal_densa], ids=["ralo", "denso"])
+def test_346_s_con_la_cola_recortada_agrupa_en_todo_el_barrido(tmp_path, generar):
+    """346 s con la cola recortada: de 0,5 a 6,5 s (la tolerancia de duración es 2 % = 6,8 s).
+    Cruza el múltiplo de 12 s (342 s): antes caía hasta ~0 sobre grillas distintas."""
+    y = generar(22, dur=346.0)
+    cortes = [0.5, 1.0, 2.0, 3.0, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5]
+    filas = _comparar_con_variantes(tmp_path, y, [(c, _sin_cola(y, c)) for c in cortes])
+    assert any(difieren for *_, difieren in filas), "el barrido no cruza ninguna grilla"
+    malas = [(c, round(s, 3)) for c, s, agrupa, _ in filas if not agrupa]
+    assert not malas, f"copias del mismo audio que NO agrupan (corte, similitud): {malas}"
+
+
+def test_la_similitud_no_depende_del_orden_de_los_argumentos(tmp_path):
+    y = _senal_densa(23, dur=95.0)
+    a = cargar_ficha(_wav(tmp_path, y, "a.wav"))
+    b = cargar_ficha(_wav(tmp_path, _con_cola_de_silencio(y, 1.0), "b.wav"))
+    assert a.grilla != b.grilla
+    assert mismo_audio(a, b) == mismo_audio(b, a)
+    assert mismo_audio(a, b)[1] > 0.99
+
+
+def test_un_track_corto_de_una_sola_ventana_se_compara_sobre_la_mas_corta(tmp_path):
+    """50,0 s vs 50,8 s: la ventana es el track entero y mide distinto en cada uno. Se
+    recalcula la LARGA sobre la ventana de la corta (al revés, la corta no tiene esos 0,8 s
+    y no habría con qué comparar), en cualquier orden de los argumentos."""
+    y = _senal_densa(28, dur=50.0)
+    a = cargar_ficha(_wav(tmp_path, y, "a.wav"))
+    b = cargar_ficha(_wav(tmp_path, _con_cola_de_silencio(y, 0.8), "b.wav"))
+    assert len(a.grilla) == len(b.grilla) == 1 and a.grilla != b.grilla
+    for x, z in ((a, b), (b, a)):
+        agrupa, s = mismo_audio(x, z)
+        assert agrupa and s > 0.99, f"no agrupó dos copias cortas (similitud {s:.3f})"
+
+
+def test_con_la_misma_grilla_no_se_recalcula_nada(tmp_path, monkeypatch):
+    """Lo normal (duraciones a milisegundos): el resultado es el de siempre, sin leer
+    ningún archivo de más."""
+    import calidad.duplicados as d
+
+    y = _senal_densa(24, dur=95.0)
+    a = cargar_ficha(_wav(tmp_path, y, "a.wav"))
+    b = cargar_ficha(_wav(tmp_path, _con_cola_de_silencio(y, 0.05), "b.wav"))
+    assert a.grilla == b.grilla
+    monkeypatch.setattr(d, "huella_en_grilla", lambda *a_, **k: pytest.fail("recalculó"))
+    agrupa, s = mismo_audio(a, b)
+    assert agrupa and s == pytest.approx(similitud(a.huella, b.huella))
+
+
+def test_agrupar_recalcula_una_vez_por_archivo_y_grilla(tmp_path, monkeypatch):
+    """Original de 346 s y dos recortes de cola con la MISMA grilla entre sí: el original se
+    recalcula una sola vez (la segunda comparación sale de la caché) y los tres agrupan."""
+    import calidad.duplicados as d
+
+    y = _senal_densa(25, dur=346.0)
+    fichas = [cargar_ficha(_wav(tmp_path, y, "o.wav")),
+              cargar_ficha(_wav(tmp_path, _sin_cola(y, 5.0), "c5.wav")),
+              cargar_ficha(_wav(tmp_path, _sin_cola(y, 5.5), "c55.wav"))]
+    assert fichas[1].grilla == fichas[2].grilla != fichas[0].grilla
+    llamadas = []
+    real = d.huella_en_grilla
+    monkeypatch.setattr(d, "huella_en_grilla", lambda r, g: (llamadas.append(r), real(r, g))[1])
+    grupos, _ = agrupar(fichas)
+    assert grupos == [[0, 1, 2]]
+    assert len(llamadas) == 1, f"leyó el original {len(llamadas)} veces"
+
+
+def test_si_no_se_puede_recalcular_avisa_y_compara_tal_cual(tmp_path, monkeypatch, caplog):
+    import calidad.duplicados as d
+
+    y = _senal_densa(26, dur=95.0)
+    a = cargar_ficha(_wav(tmp_path, y, "a.wav"))
+    b = cargar_ficha(_wav(tmp_path, _con_cola_de_silencio(y, 1.0), "b.wav"))
+    def falla(*a_, **k):
+        raise OSError("x")
+
+    monkeypatch.setattr(d, "huella_en_grilla", falla)
+    with caplog.at_level("WARNING", logger="calidad.duplicados"):
+        agrupa, s = mismo_audio(a, b)
+    assert s == pytest.approx(similitud(a.huella, b.huella))
+    assert any("mismos tramos" in r.getMessage() for r in caplog.records)
+
+
+# --- Límite de la cobertura: lo que la huella NO ve (documentado en el docstring) -----------
+
+
+def test_una_diferencia_entre_dos_tramos_pasa_sin_ser_vista(tmp_path):
+    """FIJA LA LIMITACIÓN REAL (como el test de la 5.25 fijaba la de la ventana contigua):
+    la huella mira 2,5 s de cada `paso`, así que 4 s distintos que caen justo en el hueco
+    entre dos tramos NO se ven y el par se agrupa. Si este test empieza a fallar es porque
+    la huella pasó a ver más (más tramos o tramos más largos): sacar la advertencia del
+    docstring de `calidad/duplicados.py`."""
+    y = _senal_densa(27, dur=200.0)
+    v = ventanas_huella(200.0)
+    fin_k = v[14][0] + v[14][1]
+    ini_sig = v[15][0]
+    desde, hasta = fin_k + 0.25, fin_k + 0.25 + 4.0
+    assert hasta < ini_sig, "el hueco entre tramos es menor que el reemplazo del test"
+    z = _reemplazar(y, _senal_densa(127, dur=200.0), desde, hasta)
+    a = Ficha("a", "a", 200.0, huella(muestra_para_huella(y)), tuple(v))
+    b = Ficha("b", "b", 200.0, huella(muestra_para_huella(z)), tuple(v))
+    agrupa, s = mismo_audio(a, b)
+    assert agrupa and s > 0.999, f"la huella vio los 4 s del hueco (similitud {s:.4f})"
+
+
+def test_la_misma_diferencia_sobre_un_tramo_si_se_nota(tmp_path):
+    """Control del anterior: los mismos 4 s cayendo SOBRE un tramo bajan la similitud, o sea
+    que el test del hueco prueba el hueco y no una señal que no cambia."""
+    y = _senal_densa(27, dur=200.0)
+    v = ventanas_huella(200.0)
+    desde, hasta = v[14][0] - 0.75, v[14][0] - 0.75 + 4.0       # cubre el tramo 14 entero
+    z = _reemplazar(y, _senal_densa(127, dur=200.0), desde, hasta)
+    a = Ficha("a", "a", 200.0, huella(muestra_para_huella(y)), tuple(v))
+    b = Ficha("b", "b", 200.0, huella(muestra_para_huella(z)), tuple(v))
+    assert mismo_audio(a, b)[1] < 0.99
 
 
 # --- Las dos compuertas juntas -------------------------------------------------------------
