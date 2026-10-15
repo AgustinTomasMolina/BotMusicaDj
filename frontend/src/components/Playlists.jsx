@@ -16,7 +16,7 @@ import {
   estadoTema, textoArchivo, datosTema, puntosMarcas, textoMarcas, resumenPlaylist, textoProgreso,
   origenTexto, motivoDe, metricaBpm,
 } from '../playlistImport'
-import CuesDialog from './CuesDialog'
+import EditorCues from './EditorCues'
 import ExportRekordbox from './ExportRekordbox'
 
 /* Iconos inline (Phosphor-ish) */
@@ -640,7 +640,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
       {exportOpen && crate && <ExportDialog crate={crate} toast={toast} onClose={() => setExportOpen(false)} />}
       {rekordboxOpen && crate && <ExportRekordbox crate={crate} toast={toast} onClose={() => setRekordboxOpen(false)} />}
       {cuesDe !== undefined && crate && (
-        <CuesDialog temas={analizados} inicial={cuesDe}
+        <EditorCues temas={analizados} inicial={cuesDe}
           onClose={() => { setCuesDe(undefined); cargarCrate(crate.id) }} />
       )}
     </div>

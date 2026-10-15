@@ -3504,6 +3504,9 @@ const CASOS = [
   // de la radio de arriba comparan contra esa base.
   // (una función y no una constante: está declarada al final del archivo y se iza).
   ...casosF53(),
+  // ---------------------------------------------------------------------- f54: editor D
+  // También al final: da de alta (y de baja al terminar) los temas generados del editor.
+  ...casosF54(),
 ]
 
 // Nombre visible de cada plataforma. Contrato de f38 (pedido del dueño): los MP3 dicen solo
@@ -4382,6 +4385,849 @@ function casosF53() {
       } finally {
         await borrarImportadas(ctx)
       }
+    }],
+  ]
+}
+
+/* ============================================================================
+   f54 — el editor grande de cues (opción D) desde «Mis playlists».
+
+   Los temas son los WAV generados de base_juguete.editor_d (BPM, key y dónde cae cada kick
+   conocidos por construcción); cada caso los da de alta en la base del motor, los importa como
+   la carpeta «Editor» y al final deshace todo. Lo esperado sale de la API (/marcas, /onda3) o
+   del generador (dónde suena cada kick); nada del código del front.
+   ========================================================================== */
+function casosF54() {
+  const tituloDe = (t) => t.archivo.replace(/\.wav$/i, '')
+  const coma2 = (x) => Number(x).toFixed(2).replace('.', ',')
+
+  const preparar = async (ctx) => {
+    mutarBase(ctx, 'editor_alta', json(ctx.base.editor_d))
+    const raices = (await api(ctx, '/api/importar/carpetas')).raices
+    const raiz = raices.findIndex((r) => r.nombre === ctx.base.importar_raiz)
+    afirmar(raiz >= 0, `la API no lista la raíz «${ctx.base.importar_raiz}»`)
+    const r = await apiPedir(ctx, '/api/importar/carpeta', 'POST', { raiz: String(raiz), ruta: ctx.base.editor_carpeta })
+    afirmar(r.status === 200 && r.data.exito, `no pude importar la carpeta del editor: ${json(r)}`)
+    const items = (await api(ctx, `/api/playlists/${r.data.id}`)).data.items
+    const por = {}
+    for (const [k, t] of Object.entries(ctx.base.editor_d)) {
+      const item = items.find((i) => i.titulo === tituloDe(t))
+      afirmar(item && item.analisis.estado === 'analizado' && item.analisis.radio_id, `«${k}» no quedó analizado en la playlist: ${json(item)}`)
+      await limpiarMarcas(ctx, item.analisis.radio_id)
+      por[k] = { ...t, item, rid: item.analisis.radio_id }
+    }
+    return { pid: r.data.id, items, por }
+  }
+  const desarmar = async (ctx, p) => {
+    if (p) {
+      for (const x of Object.values(p.por)) await limpiarMarcas(ctx, x.rid).catch(() => {})
+      await apiPedir(ctx, `/api/playlists/${p.pid}`, 'DELETE')
+    }
+    mutarBase(ctx, 'editor_baja', json(ctx.base.editor_d))
+  }
+  const conEditor = async (ctx, fn) => {
+    let p = null
+    try { p = await preparar(ctx); await fn(p) } finally { await desarmar(ctx, p) }
+  }
+
+  const abrirPlaylist = async (page, ctx) => {
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await hasta(() => page.evaluate(() => [...document.querySelectorAll('.pl-item')].some((b) => b.querySelector('.pl-item-name')?.textContent === 'Editor')),
+      (v) => v, 'la playlist «Editor» no aparece en el rail')
+    await page.evaluate(() => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === 'Editor').click())
+    await hasta(() => page.$eval('.crate-head .name-edit', (i) => i.value).catch(() => null), (v) => v === 'Editor', 'no se abrió la playlist «Editor»')
+  }
+  // Al pasar de tema (AvPág/RePág) la onda vieja NO se borra en el mismo render que el título:
+  // la borra el efecto «cambiar de tema» de EditorCues, que corre después. Entre los dos hay
+  // renders con el título nuevo y la grilla del tema anterior (medido: ~15 ms), y esperar solo
+  // «no dice Leyendo» los toma por la onda cargada. `pasarTema` aprieta la tecla con un
+  // observador ya puesto que anota cuándo aparece «Leyendo el audio…» (el render del efecto,
+  // siempre antes de que llegue la onda nueva); con `trasCambio`, `esperarOnda` exige haberlo
+  // visto: la onda que se ve después es la del tema nuevo, nunca la anterior.
+  const pasarTema = async (page, tecla) => {
+    await page.evaluate(() => {
+      window.__eddLeyendo = false
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')) { window.__eddLeyendo = true; obs.disconnect() }
+      })
+      obs.observe(document.querySelector('.edd'), { subtree: true, childList: true, characterData: true })
+    })
+    await page.keyboard.press(tecla)
+  }
+  const esperarOnda = (page, que, trasCambio = false) => hasta(() => page.evaluate(() => ({
+    msg: document.querySelector('.edd-msg')?.textContent ?? null,
+    estado: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
+    leyendo: window.__eddLeyendo === true,
+  })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo') && (!trasCambio || v.leyendo),
+  `${que}: la onda no terminó de cargar`, 20000)
+  // Abre el editor desde el botón «Cues» de la fila del tema (el visible).
+  const abrirEditorD = async (page, ctx, titulo) => {
+    await abrirPlaylist(page, ctx)
+    const etiqueta = `Marcar cues de «${titulo}»`
+    await hasta(() => page.evaluate((l) => [...document.querySelectorAll('button')].some((b) => b.getAttribute('aria-label') === l && window.__visible(b)), etiqueta),
+      (v) => v, `no está el botón «${etiqueta}»`)
+    await page.evaluate((l) => [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === l && window.__visible(b)).click(), etiqueta)
+    await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+    await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent).catch(() => null), (v) => v && v.startsWith(titulo), `el editor no abrió «${titulo}»`)
+    await esperarOnda(page, titulo)
+  }
+  const onda3Api = async (ctx, rid) => (await apiPedir(ctx, `/api/radio/tracks/${rid}/onda3?puntos=10`)).data
+  const leerOnda = (page) => page.evaluate(() => {
+    const o = document.querySelector('.edd-onda')
+    return {
+      desde: Number(o.dataset.desde), hasta: Number(o.dataset.hasta),
+      beats: [...document.querySelectorAll('.edd-beat')].map((b) => ({ t: Number(b.dataset.t), left: parseFloat(b.style.left), compas: b.classList.contains('is-compas') })),
+      atenuada: o.classList.contains('is-atenuada'),
+      zooms: [...document.querySelectorAll('.edd-zoom button[aria-pressed]')].map((b) => [b.textContent, b.getAttribute('aria-pressed')]),
+      unidad: document.querySelector('.edd-zoom-u')?.textContent ?? null,
+      estado: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
+      estadoClase: document.querySelector('.edd-grilla-estado')?.className ?? null,
+      snap: document.querySelector('.edd-grilla-ctrl input[type=checkbox]') ? { on: document.querySelector('.edd-grilla-ctrl input[type=checkbox]').checked, off: document.querySelector('.edd-grilla-ctrl input[type=checkbox]').disabled } : null,
+    }
+  })
+  // Las líneas que tiene que haber en [desde, hasta]: primer beat (+ ajuste) + j·período, de la API.
+  const lineasEsperadas = (g, off, desde, hasta) => {
+    const f = g.primer_beat_s + off
+    const out = []
+    for (let j = Math.ceil((desde - f) / g.periodo_s - 1e-9); f + j * g.periodo_s <= hasta + 1e-9; j++) {
+      const t = f + j * g.periodo_s
+      if (t >= 0) out.push(t)
+    }
+    return out
+  }
+  const mismasLineas = (real, esp, v, que) => {
+    igual(real.length, esp.length, `${que}: cantidad de líneas (pantalla ${json(real.map((b) => b.t))}, API ${json(esp)})`)
+    real.forEach((b, k) => {
+      afirmar(Math.abs(b.t - esp[k]) < 1e-5, `${que}: la línea ${k} está en ${b.t} y la API dice ${esp[k]}`)
+      const pct = ((esp[k] - v.desde) / (v.hasta - v.desde)) * 100
+      afirmar(Math.abs(b.left - pct) < 0.01, `${que}: la línea ${k} está dibujada en ${b.left}% y le toca ${pct}%`)
+    })
+  }
+  const clicZoom = async (page, txt) => {
+    await page.evaluate((t) => [...document.querySelectorAll('.edd-zoom button[aria-pressed]')].find((b) => b.textContent === t).click(), txt)
+  }
+  const reloj = (page) => page.$eval('.edd-reloj', (e) => e.textContent)
+  // Aprieta (con modificadores) y espera la escritura de marcas que tiene que disparar.
+  const conTecla = async (page, teclas, metodo) => {
+    const r = page.waitForResponse((x) => x.request().method() === metodo && /\/api\/radio\/tracks\/[0-9a-f]{16}\/marcas/.test(new URL(x.url()).pathname), { timeout: ESPERA_MS })
+    const [mods, k] = [teclas.slice(0, -1), teclas[teclas.length - 1]]
+    for (const m of mods) await page.keyboard.down(m)
+    await page.keyboard.press(k)
+    for (const m of [...mods].reverse()) await page.keyboard.up(m)
+    const res = await r
+    return { status: res.status(), data: await res.json() }
+  }
+  // Las filas de la lista como se ven, y como tienen que verse según la API.
+  const leerFilas = (page) => page.$$eval('.edd-fila[data-id]', (rs) => rs.map((r) => ({
+    id: Number(r.dataset.id), tipo: r.dataset.tipo, rotulo: r.querySelector('.edd-tag')?.textContent ?? null,
+    tiempos: [...r.querySelectorAll('.edd-in-t')].map((i) => i.value), nombre: r.querySelector('.edd-in-n')?.value ?? null,
+  })))
+  const PADS = 'ABCDEFGH'
+  const filasEsperadas = (marcas) => marcas.map((m) => ({
+    id: m.id, tipo: m.tipo,
+    rotulo: m.tipo === 'cue' ? PADS[m.num] : m.tipo === 'memory' ? 'M' : Number.isInteger(m.num) ? `Loop ${PADS[m.num]}` : 'Loop',
+    tiempos: [m.inicio, ...(m.tipo === 'loop' ? [m.fin] : [])].map(tiempoTabla), nombre: m.nombre || '',
+  }))
+  // La API se relee en cada vuelta: una acción de la pantalla (el clic en un pad, una tecla)
+  // escribe con un POST que puede llegar DESPUÉS de una foto de la API tomada enseguida, y
+  // contra esa foto vieja la lista correcta no coincidiría nunca.
+  const filasComoApi = async (page, ctx, rid, que) => {
+    const v = await hasta(async () => {
+      const api_ = await marcasApi(ctx, rid)
+      return { pantalla: await leerFilas(page), api: filasEsperadas(api_), api_ }
+    }, (x) => json(x.pantalla) === json(x.api), `${que}: la lista no es la de la API`)
+    return v.api_
+  }
+  const chicos = (page, sel) => page.$$eval(sel, (els) => els.filter((e) => window.__visible(e)).map((e) => {
+    const r = e.getBoundingClientRect()
+    return { el: `${e.tagName.toLowerCase()}.${String(e.className).split(' ')[0]} «${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}»`, w: Math.round(r.width), h: Math.round(r.height) }
+  }).filter((x) => x.w < 44 || x.h < 44))
+  // Qué fracción de la altura de la onda ocupa el color de los GRAVES (el de su muestra en la
+  // leyenda) en la columna de cada tiempo.
+  const alturaGraves = (page, tiempos) => page.evaluate((ts) => {
+    const cv = document.querySelector('.edd-onda canvas')
+    const o = document.querySelector('.edd-onda')
+    const [desde, hasta] = [Number(o.dataset.desde), Number(o.dataset.hasta)]
+    const m = getComputedStyle(document.querySelector('.edd-sw.is-graves')).backgroundColor.match(/\d+/g).map(Number)
+    const c = cv.getContext('2d')
+    return ts.map((t) => {
+      const col = Math.round(((t - desde) / (hasta - desde)) * cv.width)
+      const d = c.getImageData(col, 0, 1, cv.height).data
+      let n = 0
+      for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - m[0]) < 8 && Math.abs(d[i + 1] - m[1]) < 8 && Math.abs(d[i + 2] - m[2]) < 8) n++
+      return n / cv.height
+    })
+  }, tiempos)
+
+  return [
+    ['editor D (f54): desde la playlist, BPM/key de la API, onda de 3 bandas con el kick en los graves, grilla de la API y zoom → rango', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const dlg = await page.$eval('.edd', (d) => [d.getAttribute('role'), d.getAttribute('aria-modal'), document.getElementById(d.getAttribute('aria-labelledby'))?.id])
+        igual(dlg, ['dialog', 'true', 'edd-titulo'], 'el editor no es un diálogo modal con título')
+        // Cabecera: lo medido, de la API, con un decimal y las dos notaciones de la key.
+        const tr = (await apiPedir(ctx, rutaMarcas(t.rid))).data.track
+        igual(tr.bpm, t.bpm, 'la base no tiene el BPM con que se generó el tema')
+        const chips = await page.$$eval('.edd-chip', (cs) => cs.map((c) => c.textContent))
+        igual(chips.slice(0, 2), [`${bpm1(tr.bpm)} BPM`, `${tr.camelot} · ${tr.tonalidad}`], 'la cabecera no dice el BPM (1 decimal) y la key (Camelot · clásica) de la API')
+
+        // La grilla: la de la API, con el rótulo «estimada» y su confianza.
+        const g = (await onda3Api(ctx, t.rid)).grilla
+        afirmar(g && g.primer_beat_s !== null, `el motor no estimó grilla para el tema generado: ${json(g)}`)
+        let o = await leerOnda(page)
+        afirmar(o.estado.startsWith('estimada') && o.estado.includes(`confianza ${coma2(g.confianza)}`) && o.estado.includes(`nitidez ${coma2(g.concentracion)}`)
+          && o.estado.includes('orientativa') && o.estado.includes('verificala sobre un kick'),
+        `el estado de la grilla no dice «estimada», que es orientativa, y la confianza y la nitidez (concentración) de la API: ${json(o.estado)}`)
+        igual(o.unidad, 'compases', 'con grilla el zoom va en compases')
+        // Zoom por defecto: 8 compases = 32 beats del período de la API.
+        igual(o.zooms.find((z) => z[1] === 'true')[0], '8', 'el zoom no arranca en 8 compases')
+        afirmar(Math.abs((o.hasta - o.desde) - 32 * g.periodo_s) < 0.002, `8 compases tendrían que ser ${32 * g.periodo_s} s y la onda muestra ${o.hasta - o.desde}`)
+        mismasLineas(o.beats, lineasEsperadas(g, 0, o.desde, o.hasta), o, '8 compases')
+        afirmar(!o.atenuada && o.snap && o.snap.on, `con confianza ${g.confianza} la grilla no va atenuada y el snap arranca prendido: ${json(o)}`)
+        // 2 compases y 32 (más que el tema: el tema entero, según la duración de la API).
+        await clicZoom(page, '2')
+        o = await hasta(() => leerOnda(page), (x) => Math.abs((x.hasta - x.desde) - 8 * g.periodo_s) < 0.002, '2 compases no son 8 beats del período de la API')
+        mismasLineas(o.beats, lineasEsperadas(g, 0, o.desde, o.hasta), o, '2 compases')
+        await clicZoom(page, '32')
+        o = await hasta(() => leerOnda(page), (x) => x.desde === 0 && Math.abs(x.hasta - tr.dur) < 0.002, `32 compases (${128 * g.periodo_s} s) es más que el tema: tiene que verse entero (${tr.dur} s)`)
+
+        // El kick se ve: con 2 compases, la barra de graves en cada kick GENERADO es alta, y medio
+        // beat después (donde suena el hat) casi no hay graves.
+        await clicZoom(page, '2')
+        const p = 60 / t.bpm
+        const kicks = [0, 1, 2, 3].map((j) => t.primer_kick_s + j * p + 0.03)
+        const medios = kicks.map((k) => k + p / 2)
+        const alt = await hasta(() => alturaGraves(page, [...kicks, ...medios]), (a) => a.slice(0, 4).every((x) => x > 0.3),
+          'la barra de graves no se ve alta donde suena cada kick generado')
+        for (let k = 0; k < 4; k++) afirmar(alt[k] > 4 * alt[4 + k], `el kick ${k + 1} no se distingue del contratiempo en los graves: ${json(alt)}`)
+      })
+    }],
+
+    ['editor D (f54): la grilla es estimada — ocultar, correr ½ beat y fino (queda en el navegador); atenuada con confianza baja; sin grilla no dibuja y dice por qué', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const g = (await onda3Api(ctx, t.rid)).grilla
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        // H: medio beat (el error típico es el contratiempo).
+        await page.keyboard.press('h')
+        let o = await hasta(() => leerOnda(page), (x) => x.estado.includes('+½ beat'), 'H no corrió la grilla medio beat')
+        mismasLineas(o.beats, lineasEsperadas(g, g.periodo_s / 2, o.desde, o.hasta), o, 'medio beat')
+        await page.click('button[aria-label="Correr la grilla 5 milisegundos para atrás"]')
+        o = await hasta(() => leerOnda(page), (x) => x.estado.includes('+½ beat −5 ms'), 'el botón fino no corrió 5 ms')
+        mismasLineas(o.beats, lineasEsperadas(g, g.periodo_s / 2 - 0.005, o.desde, o.hasta), o, 'medio beat − 5 ms')
+        // G: se oculta (y sin grilla a la vista no se ajusta nada a ella).
+        await page.focus('.edd-onda')
+        await page.keyboard.press('g')
+        o = await hasta(() => leerOnda(page), (x) => x.beats.length === 0, 'G no ocultó la grilla')
+        afirmar(o.estado.includes('oculta') && o.snap.off && !o.snap.on, `oculta: tiene que decirlo y el snap queda apagado: ${json(o)}`)
+        // Recargar: el ajuste quedó en este navegador.
+        await abrirEditorD(page, ctx, t.item.titulo)
+        o = await leerOnda(page)
+        afirmar(o.beats.length === 0 && o.estado.includes('oculta'), `después de recargar la grilla tenía que seguir oculta: ${json(o)}`)
+        await page.focus('.edd-onda')
+        await page.keyboard.press('g')
+        o = await hasta(() => leerOnda(page), (x) => x.beats.length > 0, 'G no volvió a mostrar la grilla')
+        mismasLineas(o.beats, lineasEsperadas(g, g.periodo_s / 2 - 0.005, o.desde, o.hasta), o, 'el ajuste después de recargar')
+        await page.evaluate(() => [...document.querySelectorAll('.edd-grilla-btns button')].find((b) => b.textContent === 'Como la estimó el motor').click())
+        o = await hasta(() => leerOnda(page), (x) => x.estado.includes('sin ajuste'), '«Como la estimó el motor» no volvió al ajuste de fábrica')
+        mismasLineas(o.beats, lineasEsperadas(g, 0, o.desde, o.hasta), o, 'de vuelta a la del motor')
+
+        // AvPág: el tema sin grilla (kicks en cada corchea). No se dibuja ninguna línea, se dice
+        // el motivo de la API y el zoom pasa a segundos.
+        const g2 = (await onda3Api(ctx, por['Sin grilla'].rid)).grilla
+        afirmar(g2 && g2.primer_beat_s === null && g2.motivo, `el tema sin grilla trae grilla en la API: ${json(g2)}`)
+        await pasarTema(page, 'PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin grilla'].item.titulo), 'AvPág no pasó al tema siguiente')
+        await esperarOnda(page, 'sin grilla', true)
+        o = await leerOnda(page)
+        igual([o.beats.length, o.estado, o.unidad, o.zooms.map((z) => z[0])],
+          [0, `Sin grilla de beats: ${g2.motivo}. No se dibuja ninguna (una grilla inventada mentiría).`, 'segundos', ['4', '8', '15', '30', '60']],
+          'sin grilla: ninguna línea, el motivo de la API y el zoom en segundos')
+        afirmar(Math.abs((o.hasta - o.desde) - 15) < 0.002, `sin grilla el zoom por defecto son 15 s: ${o.hasta - o.desde}`)
+        afirmar(o.snap === null, 'sin grilla no hay casilla de «ajustar a la grilla»')
+        // El tema sin BPM: «?» y sin beats.
+        await pasarTema(page, 'PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin BPM'].item.titulo), 'AvPág no pasó al tercer tema')
+        await esperarOnda(page, 'sin BPM', true)
+        const tr3 = (await apiPedir(ctx, rutaMarcas(por['Sin BPM'].rid))).data.track
+        igual(tr3.bpm, null, 'la API tendría que decir que el tema sin pulso no tiene BPM')
+        igual((await page.$$eval('.edd-chip', (cs) => cs.map((c) => c.textContent))).slice(0, 2), ['? BPM', '? key'], 'sin BPM ni key medidos la cabecera dice «?» (no un número)')
+        o = await leerOnda(page)
+        igual([o.beats.length, o.estado], [0, 'Sin grilla de beats: el tema no tiene BPM medido. No se dibuja ninguna (una grilla inventada mentiría).'], 'sin BPM no hay grilla')
+
+        // Confianza baja (la respuesta de /onda3 con la confianza bajada a 0,25, lo único que
+        // cambia): atenuada, dicho, y el snap arranca apagado.
+        let cambio = { confianza: 0.25 }
+        await interceptar(page, async (req) => {
+          if (!/\/onda3/.test(req.url())) return false
+          const u = new URL(req.url())
+          const d = await (await fetch(ctx.url + u.pathname + u.search)).json()
+          if (d.grilla && d.grilla.primer_beat_s !== null) Object.assign(d.grilla, cambio)
+          await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(d) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        o = await leerOnda(page)
+        afirmar(o.atenuada && o.estadoClase.includes('is-baja') && o.estado.includes('confianza 0,25 (baja)'), `con confianza 0,25 la grilla va atenuada y lo dice: ${json(o)}`)
+        afirmar(o.beats.length > 0 && o.snap && !o.snap.on && !o.snap.off, `atenuada se dibuja igual, con el snap apagado (y prendible): ${json(o)}`)
+        // Confianza 1,00 con nitidez 0,37 (el caso del acorde sostenido de la auditoría: fase
+        // corrida 56 ms): la confianza sola no la salva, va atenuada y lo dice.
+        cambio = { confianza: 1, concentracion: 0.37 }
+        await abrirEditorD(page, ctx, t.item.titulo)
+        o = await leerOnda(page)
+        afirmar(o.atenuada && o.estado.includes('confianza 1,00 · nitidez 0,37 (baja)') && o.estado.includes('puede estar corrida') && !o.snap.on,
+          `con nitidez 0,37 la grilla va atenuada aunque la confianza sea 1,00, y lo dice: ${json(o)}`)
+      })
+    }],
+
+    ['editor D (f54): pads A–H con el teclado, snap a la grilla, memory, loop de N beats, lista editable y deshacer / rehacer contra la API', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const g = (await onda3Api(ctx, t.rid)).grilla
+        const P = g.periodo_s
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        // 3 beats con → (el período de la grilla de la API) y la tecla 1 (pad A vacío): un hot
+        // cue A en la línea de grilla más cercana (snap prendido con confianza alta).
+        let x = 0
+        for (let i = 0; i < 3; i++) { await page.keyboard.press('ArrowRight'); x = ms3(x + P) }
+        igual(await reloj(page), tiempoTabla(x), '→ no movió el cursor un período de la grilla')
+        const lin = g.primer_beat_s + Math.round((x - g.primer_beat_s) / P) * P
+        const a = await conTecla(page, ['1'], 'POST')
+        igual([a.status, a.data.marca.tipo, a.data.marca.num, a.data.marca.inicio], [201, 'cue', 0, ms3(lin)], 'la tecla 1 no fijó el hot cue A en la línea de grilla más cercana')
+        // Q apaga el snap: Mayús+→ dos veces (±10 ms) y M = memory exactamente ahí.
+        await page.keyboard.press('q')
+        await hasta(() => leerOnda(page), (o) => !o.snap.on, 'Q no apagó el snap')
+        for (let i = 0; i < 2; i++) { await page.keyboard.down('Shift'); await page.keyboard.press('ArrowRight'); await page.keyboard.up('Shift'); x = ms3(x + 0.01) }
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual([mem.data.marca.tipo, mem.data.marca.inicio], ['memory', x], 'M sin snap: la memory en el cursor (3 beats + 20 ms)')
+        // L: un loop de 4 beats (los del período de la grilla) desde el cursor; siempre naranja.
+        const lp = await conTecla(page, ['l'], 'POST')
+        igual([lp.data.marca.tipo, lp.data.marca.inicio, lp.data.marca.fin, lp.data.marca.num], ['loop', x, ms3(x + 4 * P), null], 'L: loop de 4 beats desde el cursor')
+        let api_ = await filasComoApi(page, ctx, t.rid, 'después de A, M y L')
+        // Los colores son los de la tabla del motor y la memory no depende del color: es hueca y dice M.
+        const vis = await page.evaluate(() => [...document.querySelectorAll('.edd-fila')].map((r) => {
+          const b = r.querySelector('.edd-tag')
+          const cs = getComputedStyle(b)
+          return [r.dataset.tipo, b.textContent, cs.backgroundColor, cs.color]
+        }))
+        // Los colores pedidos por el dueño (motor/cue_marks.py), escritos acá: A rojo, loop
+        // naranja, memory sin relleno con borde y letra en el neutro de la tabla.
+        const COLOR = { cue: ['rgb(255, 77, 90)', 'rgb(22, 24, 38)'], loop: ['rgb(255, 154, 46)', 'rgb(22, 24, 38)'], memory: ['rgba(0, 0, 0, 0)', 'rgb(242, 243, 248)'] }
+        igual(vis, filasEsperadas(api_).map((f) => [f.tipo, f.rotulo, ...COLOR[f.tipo]]), 'la lista no lleva la letra y los colores de la tabla del motor (A rojo, loop naranja, memory hueca)')
+        // El pad A dice su letra y su tiempo, y el pad lleno lleva al cue.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('End')
+        await page.click('.edd-pad[data-pad="0"]')
+        igual(await reloj(page), tiempoTabla(ms3(lin)), 'tocar el pad A lleno no llevó el cursor a su cue')
+        const padA = await page.$eval('.edd-pad[data-pad="0"]', (b) => [b.querySelector('.edd-pad-n').textContent, b.querySelector('.edd-pad-tiempo').textContent])
+        igual(padA, ['A', tiempoTabla(ms3(lin))], 'el pad A no dice su letra y su tiempo')
+
+        // Renombrar desde la lista.
+        const cueA = api_.find((m) => m.tipo === 'cue')
+        const nom = `.edd-fila[data-id="${cueA.id}"] .edd-in-n`
+        await page.click(nom)
+        await page.type(nom, 'Drop')
+        const ren = await conTecla(page, ['Enter'], 'PATCH')
+        igual([ren.status, ren.data.marca.nombre], [200, 'Drop'], 'renombrar desde la lista')
+        // Cambiar el tipo: la memory pasa a hot cue (toma el primer pad libre: B).
+        const m0 = api_.find((m) => m.tipo === 'memory')
+        const borra = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${m0.id}"] select.edd-tipo`, 'cue')
+        igual((await borra).status(), 200, 'cambiar el tipo no borró la marca vieja')
+        api_ = await filasComoApi(page, ctx, t.rid, 'después de pasar la memory a hot cue')
+        const nuevoB = api_.find((m) => m.tipo === 'cue' && m.num === 1)
+        afirmar(nuevoB && nuevoB.inicio === m0.inicio && !api_.some((m) => m.tipo === 'memory'), `la memory no pasó a hot cue B en el mismo tiempo: ${json(api_)}`)
+
+        // Ctrl+Z: vuelve la memory (con otro id) y se va el hot cue B; Ctrl+Y lo rehace.
+        await page.focus('.edd-onda')
+        const d1 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        await d1
+        api_ = await filasComoApi(page, ctx, t.rid, 'después de Ctrl+Z')
+        afirmar(api_.some((m) => m.tipo === 'memory' && m.inicio === m0.inicio) && !api_.some((m) => m.tipo === 'cue' && m.num === 1), `Ctrl+Z no deshizo el cambio de tipo: ${json(api_)}`)
+        const d2 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+        await d2
+        api_ = await filasComoApi(page, ctx, t.rid, 'después de Ctrl+Y')
+        afirmar(api_.some((m) => m.tipo === 'cue' && m.num === 1 && m.inicio === m0.inicio) && !api_.some((m) => m.tipo === 'memory'), `Ctrl+Y no rehízo el cambio de tipo: ${json(api_)}`)
+        // Mayús+1 borra el pad A; Ctrl+Z lo vuelve a poner igual (tiempo, pad y nombre).
+        const del = await conTecla(page, ['Shift', 'Digit1'], 'DELETE')
+        igual(del.status, 200, 'Mayús+1 no borró el pad A')
+        afirmar(!(await marcasApi(ctx, t.rid)).some((m) => m.num === 0), 'el pad A sigue en la API')
+        const vuelve = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([vuelve.data.marca.tipo, vuelve.data.marca.num, vuelve.data.marca.inicio, vuelve.data.marca.nombre], ['cue', 0, ms3(lin), 'Drop'], 'Ctrl+Z no volvió a poner el pad A como estaba')
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer el borrado')
+        // Escribiendo un nombre ningún atajo dispara (ni Ctrl+Z del editor). El pad A recreado
+        // tiene otro id en la base.
+        const pedidos = pedidosDeMarcas(page)
+        await page.click(`.edd-fila[data-id="${vuelve.data.marca.id}"] .edd-in-n`)
+        await page.keyboard.type('c1m')
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        await page.keyboard.press('Escape')
+        igual(pedidos, [], 'escribir en el nombre disparó atajos')
+        afirmar(await page.$('.edd'), 'Escape en un campo cerró el editor (tenía que solo deshacer lo escrito)')
+      })
+    }],
+
+    ['editor D (f54): se reproduce con el audio local y el cabezal va con el audio; teclado, foco, Esc devuelve el foco, 44 px y 400 px', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await abrirPlaylist(page, ctx)
+        // f56: al lado, «Exportar a Rekordbox (con cues)» habilitada (la playlist tiene temas).
+        const acciones = await page.$$eval('.crate-accion', (bs) => bs.map((b) => [b.querySelector('.crate-accion-t')?.textContent, b.getAttribute('aria-disabled')]))
+        igual([acciones[0], acciones[2]], [['Marcar cues', null], ['Exportar a Rekordbox (con cues)', null]], 'las acciones 1 y 3 de la playlist tienen que estar habilitadas')
+        // Desde la acción «Marcar cues» de la playlist, con el teclado (foco + Enter, como lo
+        // haría alguien sin mouse): abre el primer tema analizado.
+        await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Marcar cues')).focus())
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+        await esperarOnda(page, 'desde Marcar cues')
+        igual(await page.$eval('#edd-titulo', (h) => h.firstChild.textContent), t.item.titulo, '«Marcar cues» no abrió el primer tema de la playlist')
+        igual(await page.evaluate(() => document.activeElement?.classList.contains('edd-onda')), true, 'el foco no arranca en la onda (los atajos tienen que andar de entrada)')
+        // Espacio: suena el audio LOCAL del tema y el cabezal lo sigue.
+        await page.keyboard.press('Space')
+        const ruta = `/api/radio/audio/${t.rid}`
+        await hasta(() => sonando(page), (s) => json(s) === json([ruta]), 'Espacio no hizo sonar (solo) el audio del tema')
+        await hasta(() => page.evaluate(() => [...window.__medios][0]?.currentTime ?? 0), (c) => c > 0.6, 'el audio no avanza')
+        const sync = await page.evaluate(() => {
+          const a = [...window.__medios].find((m) => !m.paused)
+          const o = document.querySelector('.edd-onda')
+          const [d, h] = [Number(o.dataset.desde), Number(o.dataset.hasta)]
+          return { esperado: ((a.currentTime - d) / (h - d)) * 100, dibujado: parseFloat(document.querySelector('.edd-onda .edd-cabezal').style.left) }
+        })
+        afirmar(Math.abs(sync.esperado - sync.dibujado) < 1.5, `el cabezal no va con el audio: ${json(sync)}`)
+        await page.keyboard.press('Space')
+        await hasta(() => sonando(page), (s) => s.length === 0, 'Espacio no pausó')
+        // Navegación entre temas y vuelta.
+        await page.keyboard.press('PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === por['Sin grilla'].item.titulo, 'AvPág no pasó al tema siguiente de la playlist')
+        igual(await page.$eval('.edd-sel select', (s) => s.options[s.selectedIndex].textContent), `2. ${por['Sin grilla'].item.artista ? `${por['Sin grilla'].item.artista} — ` : ''}${por['Sin grilla'].item.titulo}`, 'el selector de temas no sigue al tema abierto')
+        await pasarTema(page, 'PageUp')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === t.item.titulo, 'RePág no volvió al tema anterior')
+        await esperarOnda(page, 'vuelta', true)
+        // Todo lo que se toca mide 44 px o más.
+        igual(await chicos(page, '.edd button, .edd select, .edd input:not([type=checkbox]), .edd-snap, .edd [role=slider]'), [], 'hay controles del editor de menos de 44 px')
+        // Atajos visibles y con aria-keyshortcuts.
+        const atajos = await page.$$eval('.edd [aria-keyshortcuts]', (bs) => bs.map((b) => b.getAttribute('aria-keyshortcuts')))
+        for (const k of ['Space', 'C', 'M', 'I', 'O', 'L', 'G', 'H', 'Q', '1', '8', 'Control+Z', 'PageDown', 'Escape']) afirmar(atajos.includes(k), `falta el atajo ${k} en los controles`)
+        // Tab no se escapa del editor.
+        await page.focus('.edd-cerrar')
+        for (let i = 0; i < 80; i++) {
+          await page.keyboard.press('Tab')
+          afirmar(await page.evaluate(() => Boolean(document.activeElement?.closest('.edd'))), `Tab sacó el foco del editor (paso ${i + 1})`)
+        }
+        // 400 px: nada se sale del ancho.
+        await page.setViewport({ width: 400, height: 860 })
+        await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+        const d = await desbordeDe(page)
+        afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `editor a 400 px: hay contenido fuera del ancho: ${json(d)}`)
+        igual(await page.$eval('.edd-fondo', (f) => f.scrollWidth <= f.clientWidth), true, 'a 400 px el editor tiene desplazamiento horizontal')
+        // Esc cierra y el foco vuelve a lo que lo abrió.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('Escape')
+        await hasta(() => page.$('.edd'), (v) => !v, 'Escape no cerró el editor')
+        // El botón mismo (no el <body>, que también «contiene» el texto: así el test era ciego).
+        igual(await page.evaluate(() => {
+          const a = document.activeElement
+          return a && a.classList.contains('crate-accion') ? a.querySelector('.crate-accion-t')?.textContent ?? null : `${a?.tagName}.${a?.className}`
+        }), 'Marcar cues', 'al cerrar, el foco no volvió a «Marcar cues»')
+        igual(await sonando(page), [], 'al cerrar quedó algo sonando')
+      })
+    }],
+
+    ['editor D (f54): con DPR 1,25 (Windows al 125 %) el kick se dibuja en el azul puro de los graves, no rayado', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1.25 })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        igual(await page.evaluate(() => window.devicePixelRatio), 1.25, 'la página no quedó a DPR 1,25')
+        await clicZoom(page, '2')
+        // En los 40 ms después de cada kick generado: de los píxeles «azulados», cuántos son el
+        // azul PURO de los graves (el de la muestra de la leyenda). Una columna que cae entre
+        // píxeles físicos se mezcla con la de al lado y da azules sucios (rayado).
+        const pureza = (ts) => page.evaluate((lista) => {
+          const cv = document.querySelector('.edd-onda canvas')
+          const o = document.querySelector('.edd-onda')
+          const [desde, hasta] = [Number(o.dataset.desde), Number(o.dataset.hasta)]
+          const m = getComputedStyle(document.querySelector('.edd-sw.is-graves')).backgroundColor.match(/\d+/g).map(Number)
+          const c = cv.getContext('2d')
+          return lista.map((t) => {
+            const x0 = Math.floor(((t - desde) / (hasta - desde)) * cv.width)
+            const x1 = Math.ceil(((t + 0.04 - desde) / (hasta - desde)) * cv.width)
+            const d = c.getImageData(x0, 0, Math.max(1, x1 - x0), cv.height).data
+            let azules = 0, puros = 0
+            for (let i = 0; i < d.length; i += 4) {
+              const [r, g, b] = [d[i], d[i + 1], d[i + 2]]
+              if (b > 150 && b - r > 80 && b - g > 40) {
+                azules++
+                if (Math.abs(r - m[0]) <= 3 && Math.abs(g - m[1]) <= 3 && Math.abs(b - m[2]) <= 3) puros++
+              }
+            }
+            return { azules, puros, fraccion: azules ? Math.round((puros / azules) * 1000) / 1000 : 0 }
+          })
+        }, ts)
+        const p = 60 / t.bpm
+        const kicks = [0, 1, 2, 3].map((j) => t.primer_kick_s + j * p)
+        const v = await hasta(() => pureza(kicks), (x) => x.every((k) => k.azules > 200), 'no se dibujaron los graves de los kicks')
+        for (const [k, x] of v.entries()) afirmar(x.fraccion >= 0.9, `kick ${k + 1} a DPR 1,25: solo ${x.fraccion} de los píxeles azules son el azul puro de los graves (rayado): ${json(v)}`)
+      })
+    }],
+
+    ['editor D (f54): fallas del servidor — un éxito no borra el aviso de lo perdido; un rechazo relee la lista y sale del historial', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const estadoTxt = () => page.$eval('.edd-estado', (e) => e.textContent)
+        const avisoTxt = () => page.$eval('.edd-falla', (e) => e.textContent).catch(() => null)
+
+        // (1) La primera M recibe un 500 del servidor; la segunda sale bien.
+        let fallar = 1
+        await interceptar(page, async (req) => {
+          if (fallar > 0 && req.method() === 'POST' && /\/marcas$/.test(new URL(req.url()).pathname)) {
+            fallar -= 1
+            await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada del servidor' }) })
+            return true
+          }
+          return false
+        })
+        await page.focus('.edd-onda')
+        igual((await conTecla(page, ['m'], 'POST')).status, 500, 'la primera M tenía que recibir el 500 simulado')
+        await page.keyboard.press('ArrowRight')
+        const bien = await conTecla(page, ['m'], 'POST')
+        igual(bien.status, 201, 'la segunda M tenía que guardarse')
+        let api_ = await filasComoApi(page, ctx, t.rid, 'después de una M fallida y una buena')
+        igual(api_.map((m) => m.id), [bien.data.marca.id], 'en la base quedó solo la memory que se guardó')
+        let est = await hasta(estadoTxt, (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+        afirmar(!est.startsWith('✓') && est.includes('1 cambio no se guardó'), `con una memory perdida el estado no puede decir «✓ Guardado» a secas: ${json(est)}`)
+        const av = await avisoTxt()
+        afirmar(av && av.includes('Memory cue en') && av.includes('falla simulada del servidor'), `el aviso de la memory perdida (con el motivo del server) se borró con el éxito: ${json(av)}`)
+        await page.click('.edd-descartar')
+        est = await hasta(estadoTxt, (s) => s.startsWith('✓ Guardado'), 'después de descartar el aviso (lista igual al server) tiene que decir «✓ Guardado»')
+
+        // (2) Un hot cue que otra pestaña borra: Ctrl+Z (borrarlo) da 404; la lista se relee, el
+        // paso sale del historial y el próximo Ctrl+Z deshace el paso anterior (la memory).
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const cue = await conTecla(page, ['c'], 'POST')
+        igual(cue.status, 201, 'C no creó el hot cue')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${cue.data.marca.id}`, 'DELETE')).status, 200, 'la «otra pestaña» no pudo borrar el cue')
+        const z1 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual(z1.status, 404, 'deshacer la creación de un cue que ya no existe tiene que dar 404')
+        await filasComoApi(page, ctx, t.rid, 'después del 404 la lista tiene que ser la del servidor')
+        afirmar((await avisoTxt() || '').includes(z1.data.error), `el aviso no dice el motivo del server (${z1.data.error})`)
+        const z2 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const r2 = await z2
+        igual([r2.status(), new URL(r2.url()).pathname], [200, `${rutaMarcas(t.rid)}/${bien.data.marca.id}`],
+          'el segundo Ctrl+Z repitió el pedido imposible en vez de deshacer el paso anterior (la memory)')
+        api_ = await filasComoApi(page, ctx, t.rid, 'después del segundo Ctrl+Z')
+        igual(api_, [], 'la memory se tenía que deshacer')
+
+        // (3) «Al cursor» sobre una marca que otra pestaña borró: 404 y la fila se va.
+        const otra = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 2 })).data.marca
+        await page.click('.edd-pad[data-pad="0"]')            // fija A en el cursor: la lista se refresca con la memory
+        await filasComoApi(page, ctx, t.rid, 'la lista no trajo la memory creada por la otra pestaña')
+        await apiPedir(ctx, `${rutaMarcas(t.rid)}/${otra.id}`, 'DELETE')
+        const patch = page.waitForResponse((r) => r.request().method() === 'PATCH', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${otra.id}"] .edd-alcursor`)
+        const rp = await patch
+        igual(rp.status(), 404, '«Al cursor» sobre una marca borrada tenía que dar 404')
+        await hasta(() => page.$(`.edd-fila[data-id="${otra.id}"]`), (x) => !x, 'la fila de la marca borrada quedó en la lista')
+        await filasComoApi(page, ctx, t.rid, 'después del 404 de «Al cursor»')
+
+        // (4) Un pad que otra pestaña ocupó: la tecla 2 (pad B, vacío en esta pantalla) da 400 y
+        // la lista pasa a mostrar el pad B de la otra pestaña.
+        const ajena = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 5, num: 1 })).data.marca
+        igual(await page.$eval('.edd-pad[data-pad="1"]', (b) => b.classList.contains('is-vacio')), true, 'el pad B tendría que verse vacío antes de releer')
+        await page.focus('.edd-onda')
+        const b = await conTecla(page, ['2'], 'POST')
+        igual(b.status, 400, 'fijar el pad B ocupado por otra pestaña tenía que dar 400')
+        await filasComoApi(page, ctx, t.rid, 'después del 400 la lista tiene que traer el pad B de la otra pestaña')
+        igual(await page.$eval('.edd-pad[data-pad="1"] .edd-pad-tiempo', (e) => e.textContent), tiempoTabla(ajena.inicio), 'el pad B no muestra el cue que puso la otra pestaña')
+        afirmar((await avisoTxt() || '').includes(b.data.error), `el aviso no dice el motivo del 400 (${b.data.error})`)
+
+        // (5) Un cambio de tipo deshecho A MEDIAS: memory → hot cue (crear el cue + borrar la
+        // memory); otra pestaña borra el cue; Ctrl+Z recrea la memory (sale) y borrar el cue da
+        // 404. La memory recreada ya está en el servidor: el próximo Ctrl+Z la tiene que sacar.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const mem5 = await conTecla(page, ['m'], 'POST')
+        igual(mem5.status, 201, 'M no creó la memory del paso (5)')
+        await filasComoApi(page, ctx, t.rid, 'con la memory del paso (5)')
+        const nuevoCue = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const borraMem = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${mem5.data.marca.id}"] select.edd-tipo`, 'cue')
+        const cue5 = await (await nuevoCue).json()
+        igual((await borraMem).status(), 200, 'cambiar el tipo no borró la memory')
+        await filasComoApi(page, ctx, t.rid, 'después de pasar la memory a hot cue')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${cue5.marca.id}`, 'DELETE')).status, 200, 'la «otra pestaña» no pudo borrar el cue nuevo')
+        await page.focus('.edd-onda')
+        const recrea = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const z404 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const memVuelta = await (await recrea).json()
+        igual((await z404).status(), 404, 'borrar el cue que la otra pestaña ya borró tenía que dar 404')
+        igual([memVuelta.marca.tipo, memVuelta.marca.inicio], ['memory', mem5.data.marca.inicio], 'Ctrl+Z no recreó la memory')
+        await filasComoApi(page, ctx, t.rid, 'después del Ctrl+Z a medias')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+        const nFallas = () => page.$$eval('.edd-fallas li', (ls) => ls.length)
+        const fallasAntes = await nFallas()
+        const z5 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z5.status, (z5.data.marcas || []).some((x) => x.id === memVuelta.marca.id)], [200, false],
+          'el Ctrl+Z siguiente no sacó la memory que quedó guardada a medias (el paso a medias se perdió del historial)')
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer lo que quedó a medias')
+        // Y el Ctrl+Z que sigue es el paso ANTERIOR del historial (el hot cue del pad A del paso
+        // (3)), no otra vez la memory: con la memory recreada dos veces en el historial, este
+        // pedido sería un DELETE de la memory que ya no existe (404 y un aviso de falla espurio).
+        const padA = (await marcasApi(ctx, t.rid)).find((x) => x.tipo === 'cue' && x.num === 0)
+        afirmar(padA, 'antes del último Ctrl+Z tendría que estar el hot cue del pad A del paso (3)')
+        const z6 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z6.status, (z6.data.marcas || []).some((x) => x.id === padA.id)], [200, false],
+          'el último Ctrl+Z no borró el hot cue del pad A (el historial repitió un paso)')
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer el pad A')
+        igual(await nFallas(), fallasAntes, 'deshacer lo que quedó a medias y el paso anterior agregó avisos de falla')
+
+        // (6) REHACER a medias: memory → hot cue, Ctrl+Z (entero), otra pestaña borra la memory
+        // recreada y Ctrl+Y: el hot cue se vuelve a crear (sale) y borrar la memory da 404. Ese
+        // hot cue nuevo no lo crea ningún otro paso: tiene que quedar en el historial, y el
+        // próximo Ctrl+Z lo saca (si se perdiera, el Ctrl+Z iría a la memory borrada: 404).
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const mem6 = await conTecla(page, ['m'], 'POST')
+        igual(mem6.status, 201, '(6): M no creó la memory')
+        await filasComoApi(page, ctx, t.rid, '(6): con la memory')
+        const cue6p = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const mem6d = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${mem6.data.marca.id}"] select.edd-tipo`, 'cue')
+        igual([(await cue6p).status(), (await mem6d).status()], [201, 200], '(6): el cambio de tipo no se hizo entero')
+        await filasComoApi(page, ctx, t.rid, '(6): con el hot cue')
+        await page.focus('.edd-onda')
+        const memDeVuelta = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const cueSeVa = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const memX = await (await memDeVuelta).json()
+        igual((await cueSeVa).status(), 200, '(6): Ctrl+Z no sacó el hot cue')
+        await filasComoApi(page, ctx, t.rid, '(6): después del Ctrl+Z entero')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), '(6): el estado no terminó de guardar')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${memX.marca.id}`, 'DELETE')).status, 200, '(6): la «otra pestaña» no pudo borrar la memory recreada')
+        const cueOtraVez = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const memYaNo = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+        const cueY = await (await cueOtraVez).json()
+        igual((await memYaNo).status(), 404, '(6): borrar la memory que la otra pestaña ya borró tenía que dar 404')
+        await filasComoApi(page, ctx, t.rid, '(6): después del Ctrl+Y a medias')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), '(6): el estado no terminó de guardar')
+        const z7 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z7.status, (z7.data.marcas || []).some((x) => x.id === cueY.marca.id)], [200, false],
+          '(6): el Ctrl+Z después del Ctrl+Y a medias no sacó el hot cue que quedó guardado (se perdió del historial)')
+        await filasComoApi(page, ctx, t.rid, '(6): después de deshacer lo que quedó a medias')
+      })
+    }],
+
+    ['editor D (f54): hot loop — «El loop va a un pad», el rótulo cuenta los beats con el período de la grilla; «sin pad», borrar y Ctrl+Z lo devuelven como estaba', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        // La grilla de /onda3 con otro período (0,5 s = 120 BPM) que el BPM de la base (128): el
+        // loop se crea con el período de la GRILLA, y el rótulo del pad lo tiene que contar con
+        // el mismo (con 60/128 un loop de 4 beats diría «4.3 beats»). Lo único que cambia.
+        const P = 0.5
+        await interceptar(page, async (req) => {
+          if (!/\/onda3/.test(req.url())) return false
+          const u = new URL(req.url())
+          const d = await (await fetch(ctx.url + u.pathname + u.search)).json()
+          if (d.grilla && d.grilla.primer_beat_s !== null) d.grilla.periodo_s = P
+          await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(d) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.evaluate(() => [...document.querySelectorAll('label.edd-snap')].find((l) => l.textContent.includes('El loop va a un pad')).querySelector('input').click())
+        await page.focus('.edd-onda')
+        // L con «en un pad»: un loop de 4 beats de la grilla en el primer pad libre (A).
+        const lp = await conTecla(page, ['l'], 'POST')
+        igual([lp.status, lp.data.marca.tipo, lp.data.marca.num], [201, 'loop', 0], 'L con «El loop va a un pad» no creó el loop en el pad A')
+        const m = lp.data.marca
+        afirmar(Math.abs((m.fin - m.inicio) - 4 * P) < 0.0015, `el loop no dura 4 beats de la grilla (${4 * P} s): ${json(m)}`)
+        await hasta(() => page.$eval('.edd-pad[data-pad="0"] .edd-pad-nom', (e) => e.textContent).catch(() => null), (v) => v === 'Loop · 4 beats',
+          'el pad A no dice «Loop · 4 beats» (los beats contados con el período de la grilla con que se creó)')
+        // «sin pad» desde la lista: el loop sigue, sin pad.
+        const pr = page.waitForResponse((r) => r.request().method() === 'PATCH', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${m.id}"] select.edd-pad-sel`, '')
+        igual((await pr).status(), 200, '«sin pad» no se guardó')
+        let api_ = await filasComoApi(page, ctx, t.rid, 'después de «sin pad»')
+        igual(api_.map((x) => [x.id, x.tipo, x.num]), [[m.id, 'loop', null]], 'el loop no quedó sin pad')
+        // Borrarlo y Ctrl+Z: vuelve (otro id) como estaba al borrarlo, sin pad.
+        const dr = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${m.id}"] .edd-borrar`)
+        igual((await dr).status(), 200, 'Borrar no borró el loop')
+        await page.focus('.edd-onda')
+        const z1 = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([z1.status, z1.data.marca.tipo, z1.data.marca.num, z1.data.marca.inicio, z1.data.marca.fin], [201, 'loop', null, m.inicio, m.fin], 'Ctrl+Z no volvió a poner el loop como estaba (sin pad)')
+        // Ctrl+Z otra vez: vuelve a su pad, sobre la marca RECREADA (su id nuevo).
+        const z2 = await conTecla(page, ['Control', 'z'], 'PATCH')
+        igual([z2.status, z2.data.marca.id, z2.data.marca.num], [200, z1.data.marca.id, 0], 'el segundo Ctrl+Z no devolvió el loop a su pad A (o fue a otro id)')
+        await filasComoApi(page, ctx, t.rid, 'después de devolverlo a su pad')
+        // Mayús+1 borra el hot loop del pad A; Ctrl+Z lo recrea EN SU PAD.
+        const del = await conTecla(page, ['Shift', 'Digit1'], 'DELETE')
+        igual(del.status, 200, 'Mayús+1 no borró el hot loop del pad A')
+        const z3 = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([z3.status, z3.data.marca.tipo, z3.data.marca.num, z3.data.marca.inicio, z3.data.marca.fin], [201, 'loop', 0, m.inicio, m.fin], 'Ctrl+Z no recreó el hot loop en su pad A')
+        api_ = await filasComoApi(page, ctx, t.rid, 'después de recrear el hot loop')
+        igual(api_.map((x) => [x.tipo, x.num]), [['loop', 0]], 'tendría que quedar solo el hot loop del pad A')
+        await hasta(() => page.$eval('.edd-pad[data-pad="0"] .edd-pad-nom', (e) => e.textContent).catch(() => null), (v) => v === 'Loop · 4 beats',
+          'el pad A recreado no dice «Loop · 4 beats»')
+      })
+    }],
+
+    ['editor D (f54): al pasar de tema, ni el historial ni el ajuste del anterior llegan al nuevo (Ctrl+Z y G en el render del cambio; una respuesta que llega tarde)', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const A = por['Con grilla']
+        const B = por['Sin grilla']
+        const clave = (rid) => `musiflix.editorD.grilla.${rid}`
+        const pedidos = pedidosDeMarcas(page)
+        const temaCargado = (que) => hasta(() => page.evaluate(() => ({
+          grilla: document.querySelector('.edd-grilla-estado')?.textContent ?? '',
+          estado: document.querySelector('.edd-estado')?.textContent ?? '',
+        })), (v) => v.grilla && !v.grilla.includes('Leyendo') && v.estado.trim() !== '' && !v.estado.includes('Guardando'), `${que}: el tema no terminó de cargar`, 20000)
+        const botonesHistorial = () => page.$$eval('.edd-acc button[aria-keyshortcuts="Control+Z"], .edd-acc button[aria-keyshortcuts="Control+Y"]', (bs) => bs.map((b) => b.disabled))
+
+        // (1) En A: una memory y su borrado. Un Ctrl+Z con el historial de A la vuelve a CREAR.
+        await abrirEditorD(page, ctx, A.item.titulo)
+        await page.focus('.edd-onda')
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual(mem.status, 201, 'M no creó la memory en A')
+        const dr = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${mem.data.marca.id}"] .edd-borrar`)
+        igual((await dr).status(), 200, 'no se borró la memory de A')
+        await filasComoApi(page, ctx, A.rid, 'A sin marcas')
+        await page.evaluate((k) => localStorage.removeItem(k), clave(B.rid))
+        pedidos.length = 0
+        // AvPág y, apenas React pinta el tema nuevo (título de B) y ANTES del efecto que vacía
+        // historial, ajuste y onda, Ctrl+Z y G: en el mismo turno de JS, sin esperar nada.
+        const vista = await page.evaluate(async (tituloB) => {
+          const onda = document.querySelector('.edd-onda')
+          const tecla = (key, extra = {}) => onda.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }))
+          tecla('PageDown', { code: 'PageDown' })
+          for (let i = 0; i < 10 && !(document.querySelector('#edd-titulo')?.textContent || '').startsWith(tituloB); i++) await Promise.resolve()
+          const v = {
+            titulo: document.querySelector('#edd-titulo')?.textContent ?? null,
+            leyendo: Boolean(document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')),
+            grilla: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
+            botonesGrilla: [...document.querySelectorAll('.edd-grilla-btns button')].map((b) => b.disabled),
+          }
+          tecla('z', { code: 'KeyZ', ctrlKey: true })
+          tecla('g', { code: 'KeyG' })
+          return v
+        }, B.item.titulo)
+        afirmar((vista.titulo || '').startsWith(B.item.titulo) && !vista.leyendo && (vista.grilla || '').startsWith('estimada'),
+          `no se llegó al render del cambio de tema (título de B con la grilla de A todavía): el caso no probaría nada: ${json(vista)}`)
+        // Sin los datos del tema nuevo, los botones de la grilla (que no harían nada) se ven deshabilitados.
+        igual(vista.botonesGrilla, [true, true, true, true, true], 'en el render del cambio de tema los botones de la grilla no están deshabilitados')
+        await temaCargado('B')
+        await new Promise((r) => setTimeout(r, 300))
+        igual(pedidos, [], 'Ctrl+Z en el render del cambio de tema mandó una escritura con el historial del tema anterior')
+        igual(await marcasApi(ctx, B.rid), [], 'el tema nuevo recibió una marca del historial del anterior')
+        igual(await page.evaluate((k) => localStorage.getItem(k), clave(B.rid)), null, 'G en el render del cambio guardó el ajuste del tema anterior bajo la clave del nuevo')
+        igual(await botonesHistorial(), [true, true], 'el tema nuevo arrancó con historial')
+
+        // (2) De vuelta en A, una memory nueva; Ctrl+Z (que la borra) y AvPág en el mismo turno, con
+        // la respuesta del DELETE demorada: llega con B abierto y no puede tocar su historial.
+        await pasarTema(page, 'PageUp')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(A.item.titulo), 'RePág no volvió a A')
+        await esperarOnda(page, 'A', true)
+        await temaCargado('A')
+        await page.focus('.edd-onda')
+        const mem2 = await conTecla(page, ['m'], 'POST')
+        igual(mem2.status, 201, 'M no creó la segunda memory en A')
+        await filasComoApi(page, ctx, A.rid, 'A con la segunda memory')
+        // Una sola intercepción para todo el caso: demora 1,5 s los pedidos de marcas del método
+        // que diga `demora.metodo` (null = ninguno).
+        const demora = { metodo: 'DELETE' }
+        await interceptar(page, async (req) => {
+          if (demora.metodo && req.method() === demora.metodo && /\/marcas/.test(new URL(req.url()).pathname)) await new Promise((r) => setTimeout(r, 1500))
+          return false
+        })
+        const tecleado = (teclas) => page.evaluate((ts) => {
+          const onda = document.querySelector('.edd-onda')
+          for (const [key, extra] of ts) onda.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }))
+        }, teclas)
+        // Espera la respuesta demorada de A con B ya cargado (si llegara antes, el caso no
+        // probaría nada) y revisa que B no se enteró: sin historial, sin «✓ Guardado», sin marcas.
+        const respuestaTardia = async (metodo, que) => {
+          let llego = false
+          const tarde = page.waitForResponse((r) => r.request().method() === metodo && /\/marcas/.test(new URL(r.url()).pathname), { timeout: ESPERA_MS })
+          tarde.then(() => { llego = true }, () => {})
+          return async () => {
+            await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(B.item.titulo), `${que}: AvPág no pasó a B`)
+            await temaCargado(`${que}: B`)
+            afirmar(!llego, `${que}: la respuesta de A llegó antes de que B terminara de cargar: el caso no probaría nada`)
+            const r = await tarde
+            await new Promise((ok) => setTimeout(ok, 400))
+            igual(await botonesHistorial(), [true, true], `${que}: la respuesta tardía de A le registró un paso a B (Deshacer/Rehacer habilitado en B)`)
+            const est = await page.$eval('.edd-estado', (e) => e.textContent)
+            afirmar(!est.includes('Guardado'), `${que}: B dice «Guardado» por una escritura de A: ${json(est)}`)
+            igual(await marcasApi(ctx, B.rid), [], `${que}: B recibió marcas`)
+            return r
+          }
+        }
+        const volverA = async (que) => {
+          await pasarTema(page, 'PageUp')
+          await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(A.item.titulo), `${que}: RePág no volvió a A`)
+          await esperarOnda(page, `${que}: A`, true)
+          await temaCargado(`${que}: A`)
+        }
+        const enB2 = await respuestaTardia('DELETE', 'Ctrl+Z')
+        await tecleado([['z', { code: 'KeyZ', ctrlKey: true }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB2()).status(), 200, 'el DELETE del Ctrl+Z de A no se hizo')
+        afirmar(!(await page.$eval('.edd-aviso', (e) => e.textContent)).includes('Deshecho'), 'B dice «Deshecho.» por un Ctrl+Z del tema anterior')
+
+        // (3) Una acción DIRECTA en A (M) y AvPág, con el POST demorado: la memory se crea en A
+        // (su tema) y B no registra el paso, ni dice «✓ Guardado», ni recibe la marca.
+        demora.metodo = null
+        await volverA('(3)')
+        demora.metodo = 'POST'
+        const enB3 = await respuestaTardia('POST', 'M')
+        await tecleado([['m', { code: 'KeyM' }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB3()).status(), 201, 'el POST de la M de A no se hizo')
+        demora.metodo = null
+        const enA3 = await marcasApi(ctx, A.rid)
+        igual(enA3.map((x) => x.tipo), ['memory'], 'la memory de la M tenía que quedar en A (su tema)')
+
+        // (4) Cambiar el tipo en A (memory → hot cue: crear el cue y RECIÉN después borrar la
+        // memory) y AvPág, con el POST demorado: el cambio se completa contra A aunque llegue con
+        // B abierto. En A queda UNA marca (la nueva), no memory + hot cue en el mismo tiempo.
+        await volverA('(4)')
+        await filasComoApi(page, ctx, A.rid, '(4): A con la memory')
+        demora.metodo = 'POST'
+        const enB4 = await respuestaTardia('POST', 'cambio de tipo')
+        await page.select(`.edd-fila[data-id="${enA3[0].id}"] select.edd-tipo`, 'cue')
+        await tecleado([['PageDown', { code: 'PageDown' }]])
+        igual((await enB4()).status(), 201, 'el POST del cambio de tipo de A no se hizo')
+        demora.metodo = null
+        await hasta(() => marcasApi(ctx, A.rid), (ms) => ms.length === 1 && ms[0].tipo === 'cue' && ms[0].inicio === enA3[0].inicio,
+          'el cambio de tipo interrumpido por AvPág no se completó en A (tenía que quedar solo el hot cue nuevo)')
+        await volverA('(4) vuelta')
+        const finalA = await filasComoApi(page, ctx, A.rid, '(4): la lista de A después del cambio de tipo')
+        igual(finalA.map((x) => x.tipo), ['cue'], 'A no muestra una sola marca (la nueva)')
+
+        // (5) Lo mismo con un Ctrl+Z de un cambio de tipo (un grupo: crear la vieja + borrar la
+        // nueva) interrumpido por AvPág: las dos sub-operaciones se completan contra A.
+        const borraCue = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${finalA[0].id}"] select.edd-tipo`, 'memory')
+        igual((await borraCue).status(), 200, '(5): pasar el hot cue a memory no borró el cue')
+        const conMemory = await filasComoApi(page, ctx, A.rid, '(5): A con la memory')
+        igual(conMemory.map((x) => x.tipo), ['memory'], '(5): A tendría que tener solo la memory')
+        await hasta(() => page.$eval('.edd-estado', (e) => e.textContent), (s) => !s.includes('Guardando'), '(5): el estado no terminó de guardar')
+        demora.metodo = 'POST'
+        const enB5 = await respuestaTardia('POST', 'Ctrl+Z del cambio de tipo')
+        await tecleado([['z', { code: 'KeyZ', ctrlKey: true }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB5()).status(), 201, 'el POST del Ctrl+Z del cambio de tipo no se hizo')
+        demora.metodo = null
+        await hasta(() => marcasApi(ctx, A.rid), (ms) => ms.length === 1 && ms[0].tipo === 'cue' && ms[0].inicio === conMemory[0].inicio,
+          'el Ctrl+Z del cambio de tipo interrumpido por AvPág no se completó en A (tenía que quedar solo el hot cue recreado)')
+      })
     }],
   ]
 }
