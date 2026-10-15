@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getMarcas, crearMarca, cambiarMarca, borrarMarca, getOnda3, radioAudioUrl, radioAudioMotivo } from '../api'
-import { fmtTiempo, parseTiempo, padLibre, marcaDelPad, errorLoop, beatsDeLoop, claseMarca, acotar, avisoDuracion } from '../cues'
+import { fmtTiempo, parseTiempo, padLibre, marcaDelPad, errorLoop, claseMarca, acotar, avisoDuracion } from '../cues'
 import {
   ZOOM_COMPASES, ZOOM_SEGUNDOS, ZOOM_DEFECTO, AJUSTE_FINO_S, PADS, LOOP_BEATS,
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, cuerpoCrear, diferencia,
-  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso,
+  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, temaVigente, beatsLoop,
 } from '../editorD'
 import { usePlayer } from '../player/context'
 import { useVolumenEn } from '../hooks'
@@ -197,8 +197,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
 
   useEffect(() => () => { audioRef.current?.pause() }, [])
 
-  // El ajuste de la grilla se guarda en este navegador, por tema.
+  // El ajuste de la grilla se guarda en este navegador, por tema. Recién pasado de tema, el
+  // ajuste y la grilla que hay son del anterior: no se guardan bajo la clave del nuevo.
   const cambiarAjuste = (nuevo) => {
+    if (!temaVigente(id, idRef.current, track)) return
     setAjuste(nuevo)
     guardarAjuste(storage(), id, nuevo)
   }
@@ -393,6 +395,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
     let r = null
     try { r = await hacer(tid) } catch { r = null }
     vuelo.current.n -= 1
+    // La respuesta llegó con OTRO tema abierto: no toca la lista, el estado, los avisos ni el
+    // historial del actual (null = el que llamó no registra nada; el historial del tema
+    // anterior ya se vació al pasar de tema).
+    if (!temaVigente(tid, idRef.current)) return null
     if (r && r.ok && Array.isArray(r.data?.marcas)) {
       ponerLista(tid, r.data.marcas, seq)
       rechazado.current = false
@@ -414,31 +420,32 @@ export default function EditorCues({ temas, inicial, onClose }) {
     return null
   }
 
-  // Las operaciones del historial contra el servidor. Devuelve los ids que cambiaron
-  // ([viejo, nuevo]) o null si algo falló.
+  // Las operaciones del historial contra el servidor. Devuelve { ok, cambios, hechas }:
+  // `cambios`, los ids que cambiaron ([viejo, nuevo]); `hechas`, las operaciones simples que el
+  // servidor confirmó tal como se mandaron. En un grupo que falla a medias, `ok` es false y
+  // `hechas` dice qué alcanzó a quedar guardado.
   const aplicar = async (op, que) => {
     const tid = id
+    const simple = (d, cambios) => (d ? { ok: true, cambios, hechas: [op] } : { ok: false, cambios: [], hechas: [] })
     if (op.tipo === 'crear') {
       const d = await conEstado(que, () => crearMarca(tid, cuerpoCrear(op.marca)))
-      return d ? [[op.marca.id, d.marca.id]] : null
+      return simple(d, d ? [[op.marca.id, d.marca.id]] : [])
     }
-    if (op.tipo === 'borrar') {
-      const d = await conEstado(que, () => borrarMarca(tid, op.marca.id))
-      return d ? [] : null
-    }
-    if (op.tipo === 'cambiar') {
-      const d = await conEstado(que, () => cambiarMarca(tid, op.id, op.despues))
-      return d ? [] : null
-    }
+    if (op.tipo === 'borrar') return simple(await conEstado(que, () => borrarMarca(tid, op.marca.id)), [])
+    if (op.tipo === 'cambiar') return simple(await conEstado(que, () => cambiarMarca(tid, op.id, op.despues)), [])
     const cambios = []
+    const hechas = []
     for (const o of op.ops) {
+      // Se pasó a otro tema en el medio: lo que falta no se manda.
+      if (!temaVigente(tid, idRef.current)) return { ok: false, cambios, hechas }
       let x = o
       for (const [a, b] of cambios) x = reemplazarId({ pasado: [x], futuro: [] }, a, b).pasado[0]
       const r = await aplicar(x, que)
-      if (!r) return null
-      cambios.push(...r)
+      cambios.push(...r.cambios)
+      hechas.push(...r.hechas)
+      if (!r.ok) return { ok: false, cambios, hechas }
     }
-    return cambios
+    return { ok: true, cambios, hechas }
   }
 
   const hecho = (op) => setHistorial((h) => registrar(h, op))
@@ -484,23 +491,30 @@ export default function EditorCues({ temas, inicial, onClose }) {
   }
 
   const correrHistorial = async (dir) => {
+    // Recién pasado de tema, `historial` todavía es el del anterior (lo vacía el efecto).
+    const tid = id
+    if (!temaVigente(tid, idRef.current, track)) return
     if (ocupado.current) return
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
     ocupado.current = true
     const r = await aplicar(paso.aplicar, dir < 0 ? 'Deshacer' : 'Rehacer')
     ocupado.current = false
-    if (!r) {
+    // Se pasó a otro tema mientras tanto: su historial no es este.
+    if (!temaVigente(tid, idRef.current)) return
+    if (!r.ok) {
       // Rechazado: sacarlo del historial (si no, cada Ctrl+Z repetiría el mismo pedido
-      // imposible). Sin red o 5xx: queda donde estaba, para volver a intentar.
-      if (rechazado.current) {
-        setHistorial(descartarPaso(paso.h, dir))
-        setAviso(`${dir < 0 ? 'Deshacer' : 'Rehacer'} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
+      // imposible). Sin red o 5xx: queda donde estaba, para volver a intentar — salvo que
+      // parte de un grupo ya se haya guardado: repetirlo entero la repetiría. Lo que se
+      // guardó queda en el historial como un paso propio (se puede deshacer).
+      if (rechazado.current || r.hechas.length) {
+        setHistorial(descartarPaso(paso.h, dir, r.hechas, r.cambios))
+        setAviso(`${dir < 0 ? 'Deshacer' : 'Rehacer'} no se pudo${r.hechas.length ? ' completo' : ''}: ${rechazado.current ? 'el servidor lo rechazó' : 'el servidor no contestó'} (el motivo está en el aviso). ${r.hechas.length ? 'Lo que alcanzó a guardarse quedó en el historial como un paso aparte' : 'Lo saqué del historial'}; la lista es la que tiene guardada el servidor.`)
       }
       return
     }
     let h = paso.h
-    for (const [a, b] of r) h = reemplazarId(h, a, b)
+    for (const [a, b] of r.cambios) h = reemplazarId(h, a, b)
     setHistorial(h)
     setAviso(dir < 0 ? 'Deshecho.' : 'Rehecho.')
   }
@@ -600,7 +614,9 @@ export default function EditorCues({ temas, inicial, onClose }) {
   acciones.current = {
     play: alternar,
     beat: (a) => moverBeat(a.dir),
-    fino: (a) => irA(posActual() + a.dir * FINO_CURSOR_S),
+    // fino, grilla, medioBeat, fin: recién pasado de tema, cursor, ajuste, grilla y duración
+    // son del anterior hasta que llegan los datos del nuevo (`track`).
+    fino: (a) => track && irA(posActual() + a.dir * FINO_CURSOR_S),
     pad: (a) => tocarPad(a.num),
     borrarPad: (a) => tocarPad(a.num, { borrarlo: true }),
     cue: () => ponerCue(),
@@ -609,13 +625,13 @@ export default function EditorCues({ temas, inicial, onClose }) {
     loopOut: ponerLoopOut,
     loopBeats: ponerLoopBeats,
     zoom: (a) => cambiarZoom(a.dir),
-    grilla: () => eg.hay && cambiarAjuste({ ...ajuste, oculta: !ajuste.oculta }),
-    medioBeat: () => eg.hay && cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) }),
+    grilla: () => track && eg.hay && cambiarAjuste({ ...ajuste, oculta: !ajuste.oculta }),
+    medioBeat: () => track && eg.hay && cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) }),
     snap: () => grillaVisible && setSnap((s) => !s),
     deshacer: () => correrHistorial(-1),
     rehacer: () => correrHistorial(1),
     inicio: () => irA(0, { centrar: true }),
-    fin: () => irA(dur, { centrar: true }),
+    fin: () => track && irA(dur, { centrar: true }),
     tema: (a) => irTema(idx + a.dir),
     cerrar: () => onClose(),
   }
@@ -968,7 +984,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
                     <span className={`edd-pad-n ${m ? claseMarca(m) : `cue-c${n + 1}`}`} aria-hidden="true">{letra}</span>
                     <span className="edd-pad-t">
                       {!m && <span className="edd-pad-vacio">Vacío</span>}
-                      {m && <span className="edd-pad-nom">{loop ? `Loop${beatsDeLoop(m.inicio, m.fin, track && track.bpm) !== null ? ` · ${beatsDeLoop(m.inicio, m.fin, track.bpm)} beats` : ''}` : (m.nombre || 'Hot cue')}</span>}
+                      {m && <span className="edd-pad-nom">{loop ? `Loop${beatsLoop(m.inicio, m.fin, periodo) !== null ? ` · ${beatsLoop(m.inicio, m.fin, periodo)} beats` : ''}` : (m.nombre || 'Hot cue')}</span>}
                       {m && <span className="edd-pad-tiempo mono">{fmtTiempo(m.inicio)}{loop ? ` → ${fmtTiempo(m.fin)}` : ''}</span>}
                     </span>
                     <Kbd>{n + 1}</Kbd>

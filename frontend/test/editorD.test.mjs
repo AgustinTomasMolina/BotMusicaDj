@@ -15,6 +15,7 @@ import {
   anchoZoom, ventana, xDeTiempo, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
+  temaVigente, beatsLoop,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -243,10 +244,61 @@ test('un paso que el servidor rechazó sale del historial (no se repite con el p
   assert.deepEqual(descartarPaso(r.h, 1), { pasado: [{ tipo: 'crear', marca: M1 }], futuro: [] })
 })
 
+test('un grupo rechazado a medias: lo que se guardó queda en el historial como un paso propio, con el id nuevo', () => {
+  // Cambiar el tipo de M1 (cue id 7) a memory: se creó la memory 9 y se borró M1.
+  const nueva = { ...M1, id: 9, tipo: 'memory', num: null }
+  const h = registrar(historialVacio(), { tipo: 'grupo', ops: [{ tipo: 'crear', marca: nueva }, { tipo: 'borrar', marca: M1 }] })
+  // Deshacer = grupo [crear M1, borrar 9]. Crear M1 sale (vuelve con id 12) y borrar la 9 se
+  // rechaza (otra pestaña la borró): la M1 recreada YA está en el servidor.
+  const d = deshacer(h)
+  const h2 = descartarPaso(d.h, -1, [{ tipo: 'crear', marca: M1 }], [[7, 12]])
+  assert.deepEqual(h2, { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: { ...M1, id: 12 } }] }], futuro: [] })
+  assert.deepEqual(deshacer(h2).aplicar, { tipo: 'grupo', ops: [{ tipo: 'borrar', marca: { ...M1, id: 12 } }] },
+    'el próximo Ctrl+Z saca la marca que quedó guardada (por su id nuevo)')
+  // Rehacer a medias: se creó la memory (id 15) y el borrado de M1 se rechazó.
+  const r = rehacer(d.h)
+  const h3 = descartarPaso(r.h, 1, [{ tipo: 'crear', marca: nueva }], [[9, 15]])
+  assert.deepEqual(h3, { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: { ...nueva, id: 15 } }] }], futuro: [] })
+  // Sin nada guardado, como antes: el paso sale entero.
+  assert.deepEqual(descartarPaso(d.h, -1, [], []), { pasado: [], futuro: [] })
+})
+
+test('reemplazarId llega a las marcas de un paso «grupo»', () => {
+  const nueva = { ...M1, id: 9, tipo: 'memory', num: null }
+  const h = { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: nueva }, { tipo: 'borrar', marca: M1 }] }],
+    futuro: [{ tipo: 'grupo', ops: [{ tipo: 'cambiar', id: 7, antes: { inicio: 1 }, despues: { inicio: 2 } }] }] }
+  const h2 = reemplazarId(h, 7, 12)
+  assert.deepEqual(h2.pasado[0].ops.map((o) => o.marca.id), [9, 12])
+  assert.equal(h2.futuro[0].ops[0].id, 12)
+})
+
+test('temaVigente: una acción o una respuesta solo vale para el tema abierto y con sus datos cargados', () => {
+  assert.equal(temaVigente('a1', 'a1', true), true)
+  assert.equal(temaVigente('a1', 'a1'), true, 'sin decir si está cargado (una respuesta): alcanza con que sea el mismo tema')
+  assert.equal(temaVigente('a1', 'b2', true), false, 'la respuesta de otro tema no toca el actual')
+  assert.equal(temaVigente('b2', 'b2', null), false, 'recién pasado de tema, sin los datos del nuevo: lo que hay es del anterior')
+  assert.equal(temaVigente('b2', 'b2', false), false)
+  assert.equal(temaVigente(null, null, true), false)
+})
+
+test('beatsLoop: con el MISMO período con que se crea el loop (el de la grilla)', () => {
+  // Grilla afinada a 0,5 s (120 BPM) con el BPM de la base en 128: un loop de 4 beats de la
+  // grilla dura 2 s y es «4», no 4,3 (2 / 0,46875).
+  assert.equal(beatsLoop(10, 12, 0.5), 4)
+  // Con el fin redondeado al ms como lo guarda el editor: 16 beats de 0,468912 s.
+  assert.equal(beatsLoop(3, Math.round((3 + 16 * 0.468912) * 1000) / 1000, 0.468912), 16)
+  // Sin grilla el período es 60/BPM (`periodoBeat`): 2 s a 120 BPM = 4 beats.
+  assert.equal(beatsLoop(0, 2, periodoBeat(null, 120)), 4)
+  assert.equal(beatsLoop(0, 2, null), null)
+  assert.equal(beatsLoop(2, 2, 0.5), null)
+})
+
 test('cuerpoCrear: lo que el POST acepta, sin id ni fechas', () => {
   assert.deepEqual(cuerpoCrear({ ...M1, creada: 'x' }), { tipo: 'cue', inicio: 1.5, num: 0, nombre: 'Drop' })
   assert.deepEqual(cuerpoCrear({ id: 3, tipo: 'loop', num: null, inicio: 4, fin: 6, nombre: null }), { tipo: 'loop', inicio: 4, fin: 6 })
   assert.deepEqual(cuerpoCrear({ id: 3, tipo: 'memory', num: null, inicio: 2, fin: null, nombre: '' }), { tipo: 'memory', inicio: 2 })
+  // Un hot loop (loop en un pad) se recrea EN SU PAD.
+  assert.deepEqual(cuerpoCrear({ id: 4, tipo: 'loop', num: 2, inicio: 4, fin: 6, nombre: null }), { tipo: 'loop', inicio: 4, fin: 6, num: 2 })
 })
 
 test('diferencia: solo lo que cambió, para el PATCH y su inversa', () => {
@@ -271,6 +323,15 @@ test('atajos: pads por código (Mayús + número borra), flechas y Mayús, marca
   assert.deepEqual(atajoD(tecla('-')), { tipo: 'zoom', dir: -1 })
   assert.deepEqual(atajoD(tecla('PageDown')), { tipo: 'tema', dir: 1 })
   assert.deepEqual(atajoD(tecla('Escape')), { tipo: 'cerrar' })
+})
+
+test('atajos: el teclado numérico también fija y borra pads (por code Numpad1..8)', () => {
+  assert.deepEqual(atajoD(tecla('3', { code: 'Numpad3' })), { tipo: 'pad', num: 2 })
+  assert.deepEqual(atajoD(tecla('8', { code: 'Numpad8' })), { tipo: 'pad', num: 7 })
+  // Mayús + teclado numérico: Windows manda la tecla de navegación (Numpad3 → «PageDown»);
+  // el pad sale del `code`, no de `key`.
+  assert.deepEqual(atajoD(tecla('PageDown', { code: 'Numpad3', shiftKey: true })), { tipo: 'borrarPad', num: 2 })
+  assert.equal(atajoD(tecla('9', { code: 'Numpad9' })), null)
 })
 
 test('Ctrl+Z deshace, Ctrl+Mayús+Z y Ctrl+Y rehacen; otras combinaciones con Ctrl no son atajos', () => {

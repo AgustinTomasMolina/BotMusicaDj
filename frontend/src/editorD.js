@@ -409,6 +409,32 @@ export function compasDe(t, g, offset) {
 // Sacar del historial un paso que el servidor rechazó (la marca ya no existe, el pad está
 // ocupado): `h` es el historial como quedó DESPUÉS de deshacer / rehacer (`paso.h`), con la
 // operación ya movida; se la tira para que el próximo Ctrl+Z no repita el mismo pedido.
-export function descartarPaso(h, dir) {
-  return dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+//
+// Un 'grupo' (cambiar el tipo = crear + borrar) puede quedar A MEDIAS: una sub-operación se
+// aplicó y la siguiente se rechazó. Lo aplicado ya está en el servidor y no puede quedar fuera
+// del historial (no se podría deshacer): `hechas` son esas sub-operaciones tal como se
+// aplicaron y van al pasado como un grupo nuevo; `cambios` ([viejo, nuevo]) son los ids que
+// cambiaron al aplicarlas (una marca recreada) y se propagan a todo el historial.
+export function descartarPaso(h, dir, hechas = [], cambios = []) {
+  let out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+  if (hechas.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops: hechas }], futuro: out.futuro }
+  for (const [viejo, nuevo] of cambios) out = reemplazarId(out, viejo, nuevo)
+  return out
+}
+
+// ¿Una acción (o la respuesta de una escritura) le corresponde al tema que está abierto? Al
+// pasar de tema hay un render con el id nuevo y el estado del anterior (historial, ajuste,
+// grilla, duración: los vacía un efecto que corre después) y una escritura puede contestar
+// cuando ya se pasó a otro tema. `tid`: el tema de la acción; `actual`: el abierto ahora;
+// `cargado`: si el tema abierto ya tiene sus datos (sin ellos, lo que hay es del anterior).
+export function temaVigente(tid, actual, cargado = true) {
+  return Boolean(cargado) && tid !== null && tid !== undefined && tid === actual
+}
+
+// Cuántos beats dura un loop con el MISMO período con que se crea (`periodoBeat`: el de la
+// grilla si la hay, si no 60/BPM): un loop de 16 beats se lee «16 beats», no 15,9 por la
+// diferencia entre el BPM redondeado y el período afinado. Un decimal; null sin período.
+export function beatsLoop(entrada, salida, periodo) {
+  if (!finito(periodo) || !(periodo > 0) || !finito(entrada) || !finito(salida) || !(salida > entrada)) return null
+  return Math.round(((salida - entrada) / periodo) * 10) / 10
 }
