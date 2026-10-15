@@ -343,27 +343,57 @@ def test_un_replace_que_falla_una_vez_se_reintenta(audio, tmp_path, monkeypatch)
     np.testing.assert_array_equal(p2.peaks, p.peaks)
 
 
-def test_si_la_cache_no_se_puede_escribir_igual_devuelve_los_picos(audio, tmp_path, monkeypatch):
+def _aviso_de_cache(caplog, cache: Path):
+    """El ÚNICO aviso de "no se pudo guardar la caché" que dejó `motor.peaks`, y que nombra el
+    archivo de la caché (dentro de `cache`). No fallar hacia afuera no puede ser callarse."""
+    avisos = [r for r in caplog.records
+              if r.name == "motor.peaks" and "no se pudo guardar la caché" in r.getMessage()]
+    assert len(avisos) == 1, [r.getMessage() for r in caplog.records]
+    assert avisos[0].levelname == "WARNING" and str(cache) in avisos[0].getMessage()
+    return avisos[0]
+
+
+def test_si_la_cache_no_se_puede_escribir_igual_devuelve_los_picos(audio, tmp_path, monkeypatch,
+                                                                   caplog):
     """H11: un fallo al ESCRIBIR la caché no tira el pedido ni los picos ya calculados (antes
-    el PermissionError salía como 409 "no pude leer el archivo")."""
+    el PermissionError salía como 409 "no pude leer el archivo"). Pero queda en el log."""
+    import logging
+
     cache = tmp_path / "peaks"
     llamadas = _replace_que_falla(monkeypatch, veces=10 ** 6)
-    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        p, de_cache = cached_peaks(audio, cache, bins=BINS)
     assert de_cache is False
     np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-5)
     assert (p.duration_s, p.sample_rate, p.channels) == (30.0, SR, 2)
     assert len(llamadas) == peaks_mod.REPLACE_INTENTOS
     assert sorted(x.name for x in cache.iterdir()) == [], "quedó el .tmp o una caché a medias"
+    assert "El proceso no tiene acceso al archivo" in _aviso_de_cache(caplog, cache).getMessage()
 
 
-def test_carpeta_de_cache_imposible_igual_devuelve_los_picos(audio, tmp_path):
-    """Si ni se puede crear la carpeta de la caché (acá es un archivo), los picos salen igual."""
+def test_carpeta_de_cache_imposible_igual_devuelve_los_picos(audio, tmp_path, caplog):
+    """Si ni se puede crear la carpeta de la caché (acá es un archivo), los picos salen igual,
+    y el log lo dice."""
+    import logging
+
     cache = tmp_path / "peaks"
     cache.write_text("no soy una carpeta", encoding="utf-8")
-    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        p, de_cache = cached_peaks(audio, cache, bins=BINS)
     assert de_cache is False
     np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-5)
     assert cache.read_text(encoding="utf-8") == "no soy una carpeta"
+    _aviso_de_cache(caplog, cache)
+
+
+def test_un_replace_que_falla_una_vez_no_avisa(audio, tmp_path, monkeypatch, caplog):
+    """El reintento que sale bien no es un fallo: no ensucia el log."""
+    import logging
+
+    _replace_que_falla(monkeypatch, veces=1)
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        cached_peaks(audio, tmp_path / "peaks", bins=BINS)
+    assert [r.getMessage() for r in caplog.records if r.name == "motor.peaks"] == []
 
 
 def test_la_cache_tiene_tope_y_poda_lo_menos_usado(tmp_path):

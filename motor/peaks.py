@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import tempfile
@@ -30,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 PEAK_BINS = 1000
 BLOCK_FRAMES = 65536
@@ -267,29 +270,32 @@ def _escribir_cache(cache_dir: Path, archivo: Path, datos: dict) -> bool:
     """Escribe la caché de forma atómica (un lector nunca ve un JSON a medio escribir). Devuelve
     si quedó escrita. NUNCA falla hacia afuera por un OSError: los picos ya están calculados y
     no guardarlos solo cuesta recalcularlos la próxima vez; tirar el pedido por eso, no. El
-    `.tmp` no queda tirado en ningún caso."""
+    `.tmp` no queda tirado en ningún caso. Que no fallar no sea callar: un fallo que se repite
+    (carpeta sin permisos, disco lleno) queda avisado en el log, si no la caché no anda y nadie
+    se entera."""
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
-    except OSError:
+    except OSError as e:
+        _log.warning("no se pudo guardar la caché de la onda en %s: %s", archivo, e)
         return False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(datos, f)
-        for intento in range(1, REPLACE_INTENTOS + 1):
+        for _ in range(REPLACE_INTENTOS - 1):
             try:
                 os.replace(tmp, archivo)
                 return True
             except PermissionError:
-                if intento == REPLACE_INTENTOS:
-                    raise
                 time.sleep(REPLACE_ESPERA_S)
-    except OSError:
+        os.replace(tmp, archivo)          # el último intento: si falla, va al except de abajo
+        return True
+    except OSError as e:
+        _log.warning("no se pudo guardar la caché de la onda en %s: %s", archivo, e)
         return False
     finally:
         with contextlib.suppress(OSError):
             Path(tmp).unlink(missing_ok=True)            # tras un replace exitoso ya no está
-    return False                                         # pragma: no cover — el for siempre sale
 
 
 def cached_peaks(path: Path | str, cache_dir: Path | str, bins: int = PEAK_BINS,
