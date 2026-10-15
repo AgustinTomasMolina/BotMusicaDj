@@ -6,7 +6,8 @@ import {
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
-  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso,
+  contarIguales, cerrarPaso,
+  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD,
 } from '../editorD'
 import { usePlayer } from '../player/context'
 import { useVolumenEn } from '../hooks'
@@ -91,13 +92,15 @@ function CampoNombre({ valor, etiqueta, max, onCommit }) {
 const Kbd = ({ children }) => <kbd className="edd-kbd">{children}</kbd>
 
 /* ---------- la pantalla ---------- */
-export default function EditorCues({ temas, inicial, onClose }) {
+export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const [idx, setIdx] = useState(() => Math.max(0, temas.findIndex((t) => t.analisis?.radio_id === inicial)))
   const tema = temas[idx] || null
   const id = tema ? tema.analisis.radio_id : null
 
   const [datos, setDatos] = useState(null)          // {track, marcas, limites} | {error}
-  const [general, setGeneral] = useState(null)      // /onda3 del tema entero | {error}
+  // /onda3 del tema entero | {error}, con el `id` del tema: la del tema anterior no se usa ni un
+  // render (3.ª auditoría f54: entre el título nuevo y el efecto se leía la grilla del anterior).
+  const [generalRaw, setGeneral] = useState(null)
   const [detalle, setDetalle] = useState(null)      // /onda3 del tramo a la vista
   // En una pantalla angosta arranca más cerca (4 compases): 8 en 360 px no dejan ver el kick.
   const [zoom, setZoom] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? ZOOM_DEFECTO - 1 : ZOOM_DEFECTO))
@@ -142,6 +145,14 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const arrastreRef = useRef(null)
   const panRef = useRef(null)
   const ocupado = useRef(false)          // una operación de deshacer/rehacer en curso
+  const cola = useRef([])                // Ctrl+Z / Ctrl+Y apretados mientras tanto (−1 / +1)
+  // El editor se cerró: lo que vuelva después y falle se avisa por `onFallaTardia` (la playlist).
+  const cerrado = useRef(false)
+  const tardia = useRef(onFallaTardia)
+  tardia.current = onFallaTardia
+  // Cambios de tipo que quedaron a medias en un tema que ya no estaba abierto: tid → [textos].
+  // Se muestran al volver a ese tema (con su lista recién leída del servidor).
+  const pendientesDe = useRef(new Map())
 
   const player = usePlayer()
   useVolumenEn(audioRef, player.volume, player.muted)
@@ -149,6 +160,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const track = datos && datos.track && datos.track.id === id ? datos.track : null
   const marcas = useMemo(() => (track ? datos.marcas : []), [track, datos])
   const durEje = track ? Number(track.dur) || 0 : 0
+  const general = generalRaw && generalRaw.id === id ? generalRaw : null
   const durAudio = general && !general.error ? Number(general.duracion_audio) || 0 : 0
   const dur = durEje || durAudio
   const g = general && !general.error ? general.grilla : null
@@ -167,8 +179,8 @@ export default function EditorCues({ temas, inicial, onClose }) {
     // (la época ya subió en irTema, en el mismo instante del cambio)
     vuelo.current.n = 0
     ocupado.current = false
+    cola.current = []
     setReleyendo(0)
-    setFallasTotal(0)
     setCierre(false)
     const a = audioRef.current
     if (a) { a.pause(); a.src = radioAudioUrl(id) }
@@ -181,7 +193,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
     setHistorial(historialVacio())
     setLoopIn(null)
     setAviso('')
-    setFallas([])
+    const pend = pendientesDe.current.get(id) || []
+    pendientesDe.current.delete(id)
+    setFallas(pend.map((texto) => ({ id: ++fallaSeq.current, texto, reconciliada: true })))
+    setFallasTotal(pend.length)
     setEstado({ fase: 'leido' })
     setAjuste(leerAjuste(storage(), id))
     getMarcas(id)
@@ -196,17 +211,22 @@ export default function EditorCues({ temas, inicial, onClose }) {
       .then((r) => {
         if (!vivo) return
         if (r.ok && r.data && r.data.bandas) {
-          setGeneral(r.data)
+          setGeneral({ ...r.data, id })
           // Snap: prendido solo con una grilla que el motor da por buena.
           const e = estadoGrilla(r.data.grilla)
           setSnap(e.hay && !e.atenuada)
-        } else setGeneral({ error: motivoDe(r) })
+        } else setGeneral({ id, error: motivoDe(r) })
       })
-      .catch(() => vivo && setGeneral({ error: CONEXION }))
+      .catch(() => vivo && setGeneral({ id, error: CONEXION }))
     return () => { vivo = false }
   }, [id])
 
-  useEffect(() => () => { audioRef.current?.pause() }, [])
+  // Al cerrar: el audio no queda sonando y lo que esté en vuelo ya no es de esta pantalla.
+  useEffect(() => {
+    cerrado.current = false
+    const a = audioRef.current          // el <audio> es el mismo toda la vida del editor
+    return () => { cerrado.current = true; epoca.current += 1; a?.pause() }
+  }, [])
 
   // El ajuste de la grilla se guarda en este navegador, por tema.
   const cambiarAjuste = (nuevo) => {
@@ -425,7 +445,17 @@ export default function EditorCues({ temas, inicial, onClose }) {
     let r = null
     try { r = await hacer(tid) } catch { r = null }
     const ok = Boolean(r && r.ok && Array.isArray(r.data?.marcas))
-    if (!vigente(tid, ep)) return { ok: false, tipo: 'ajeno', servidor: ok, tid, ep }
+    if (!vigente(tid, ep)) {
+      if (cerrado.current) {
+        // El editor ya se cerró: si falló, que la playlist lo diga (nadie más se va a enterar).
+        if (!ok) tardia.current?.(`${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}`)
+      } else if (tid === idRef.current) {
+        // Se fue y se volvió al MISMO tema (A → B → A): no se toca el historial de esta visita,
+        // pero la lista sí tiene que mostrar lo que el server ya tiene.
+        releer(tid)
+      }
+      return { ok: false, tipo: 'ajeno', servidor: ok, tid, ep }
+    }
     vuelo.current.n -= 1
     if (ok) {
       if (!ponerLista(tid, r.data.marcas, seq)) releer(tid)
@@ -449,6 +479,8 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const aplicarPaso = async (op, que) => {
     const tid = idRef.current
     const ep = epoca.current
+    // Defensa en profundidad: el historial se vacía al cambiar de tema y `hecho` solo registra
+    // en el tema vigente, así que esto no debería pasar nunca.
     if (op.tid !== undefined && op.tid !== tid) return { ok: false, tipo: 'ajeno', cambios: [] }
     let real = await releer(tid)
     if (!vigente(tid, ep)) return { ok: false, tipo: 'ajeno', cambios: [] }
@@ -475,7 +507,9 @@ export default function EditorCues({ temas, inicial, onClose }) {
     return { ok: true, cambios }
   }
 
-  // Registra un paso confirmado, SOLO si sigue abierto el tema en el que nació.
+  // Registra un paso confirmado, SOLO si sigue abierto el tema en el que nació. Defensa en
+  // profundidad: `conEstado` ya devuelve 'ajeno' (y nadie llama a `hecho`) si el tema cambió;
+  // esta guarda queda por si una llamada nueva se olvida de mirar el resultado.
   const hecho = (op, r) => {
     if (!vigente(r.tid, r.ep)) return
     setHistorial((h) => registrar(h, { ...op, tid: r.tid }))
@@ -485,7 +519,8 @@ export default function EditorCues({ temas, inicial, onClose }) {
     if (!track) return null
     const r = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
     if (!r.ok) return null
-    hecho({ tipo: 'crear', marca: r.data.marca }, r)
+    // `iguales`: cuántas idénticas hay con ella (dos memory en el mismo tiempo son legítimas).
+    hecho({ tipo: 'crear', marca: r.data.marca, iguales: contarIguales(r.data.marca, r.data.marcas) }, r)
     return r.data
   }
   const cambiar = async (m, nuevos, que) => {
@@ -497,9 +532,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
     return r.data
   }
   const borrar = async (m) => {
+    const iguales = contarIguales(m, marcas)
     const r = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
     if (!r.ok) return null
-    hecho({ tipo: 'borrar', marca: m }, r)
+    hecho({ tipo: 'borrar', marca: m, iguales }, r)
     setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`)
     return r.data
   }
@@ -520,24 +556,53 @@ export default function EditorCues({ temas, inicial, onClose }) {
     }
     if (tipo === 'cue' && padLibre(marcas) === null) { setAviso('Los 8 pads están ocupados: liberá uno para pasar esta marca a hot cue.'); return }
     const que = `${nombreD(m)} → ${NOMBRE_TIPO[tipo]}`
+    const igualesVieja = contarIguales(m, marcas)
+    const origen = { tid: idRef.current, titulo: tema ? tema.titulo : 'otro tema' }
+    // Quedaron las dos (la nueva y la vieja) en un tema que ya no está abierto: se avisa acá
+    // nombrando ese tema, queda anotado para cuando se vuelva a él, y si el editor se cerró, la
+    // playlist lo dice (3.ª auditoría f54: no puede quedar a medias en silencio).
+    const aMedias = () => {
+      const texto = `«${origen.titulo}»: ${que} quedó a medias (no se pudo borrar la marca vieja): quedaron las dos. Borrá la que sobra.`
+      pendientesDe.current.set(origen.tid, [...(pendientesDe.current.get(origen.tid) || []), texto])
+      if (cerrado.current) tardia.current?.(texto)
+      else if (idRef.current !== origen.tid) setAviso(texto)
+      else {
+        // Se fue y se volvió al tema de origen (A → B → A): va directo a sus avisos.
+        pendientesDe.current.delete(origen.tid)
+        setFallas((f) => [...f, { id: ++fallaSeq.current, texto, reconciliada: false }].slice(-5))
+        setFallasTotal((n) => n + 1)
+        releer(origen.tid)
+      }
+    }
     const r1 = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
     if (!r1.ok) {
-      if (r1.tipo === 'ajeno' && r1.servidor) borrarMarca(r1.tid, m.id).catch(() => {})
+      // Se creó la nueva con otro tema abierto: se termina en el tema de ORIGEN (borrar la vieja).
+      if (r1.tipo === 'ajeno' && r1.servidor) {
+        borrarMarca(r1.tid, m.id).then((x) => { if (!(x && x.ok)) aMedias() }).catch(aMedias)
+      }
       return
     }
     const r2 = await conEstado(que, (tid) => borrarMarca(tid, m.id))
-    if (r2.ok) hecho({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: r1.data.marca }, { tipo: 'borrar', marca: m }] }, r2)
-    else if (r2.tipo !== 'ajeno') hecho({ tipo: 'crear', marca: r1.data.marca }, r1)
+    const nueva = { tipo: 'crear', marca: r1.data.marca, iguales: contarIguales(r1.data.marca, r1.data.marcas) }
+    if (r2.ok) hecho({ tipo: 'grupo', ops: [nueva, { tipo: 'borrar', marca: m, iguales: igualesVieja }] }, r2)
+    else if (r2.tipo !== 'ajeno') hecho(nueva, r1)
+    else if (!r2.servidor) aMedias()
   }
 
   const correrHistorial = async (dir) => {
-    if (ocupado.current) return
+    // Un Ctrl+Z / Ctrl+Y apretado mientras otro viaja no se pierde: espera su turno (lo corre
+    // el efecto de abajo, con el historial ya actualizado).
+    if (ocupado.current) { cola.current.push(dir); return }
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
+    // Defensa en profundidad (ver `aplicarPaso`): un paso de otro tema no se aplica nunca acá.
     if (paso.aplicar.tid !== undefined && paso.aplicar.tid !== idRef.current) {
       setAviso('Ese paso es de otro tema: no lo apliqué acá.')
       return
     }
+    // El paso, tal como está en el historial: al terminar se lo ubica en el historial ACTUAL
+    // (`cerrarPaso`), que pudo cambiar mientras viajaba el pedido (otra edición registrada).
+    const original = dir < 0 ? historial.pasado[historial.pasado.length - 1] : historial.futuro[0]
     const ep = epoca.current
     ocupado.current = true
     const r = await aplicarPaso(paso.aplicar, dir < 0 ? 'Deshacer' : 'Rehacer')
@@ -546,17 +611,16 @@ export default function EditorCues({ temas, inicial, onClose }) {
     if (r.tipo === 'ajeno') return
     const remapear = (h) => r.cambios.reduce((x, [a, b]) => reemplazarId(x, a, b), h)
     const que = dir < 0 ? 'Deshacer' : 'Rehacer'
+    const desenlace = r.ok ? 'ok' : r.tipo === 'rechazo' ? 'rechazo' : 'reintentable'
+    setHistorial((h) => remapear(cerrarPaso(h, original, dir, desenlace)))
     if (r.ok) {
-      setHistorial(remapear(paso.h))
       setAviso(dir < 0 ? 'Deshecho.' : 'Rehecho.')
     } else if (r.tipo === 'rechazo') {
-      // Sacarlo del historial: si no, cada Ctrl+Z repetiría el mismo pedido imposible.
-      setHistorial(remapear(descartarPaso(paso.h, dir)))
+      // Sale del historial (cerrarPaso): si no, cada Ctrl+Z repetiría el mismo pedido imposible.
       setAviso(`${que} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
     } else {
       // Sin red, 5xx o la base ocupada: el paso queda para reintentar. Si quedó a medias, lo
       // hecho ya está en la base y el próximo intento saltea esa parte (no duplica).
-      setHistorial(remapear(historial))
       setAviso(r.sinLectura
         ? `${que}: no pude leer el servidor, así que no mandé nada. Reintentá cuando vuelva.`
         : r.parcial
@@ -564,6 +628,13 @@ export default function EditorCues({ temas, inicial, onClose }) {
           : `${que} no se pudo (sin red, el servidor falló o la base estaba ocupada). Quedó en el historial: reintentá.`)
     }
   }
+
+  // El siguiente Ctrl+Z / Ctrl+Y en cola, cuando termina el anterior (después del render que
+  // aplicó su resultado: así ve el historial actual).
+  useEffect(() => {
+    if (ocupado.current || !cola.current.length) return
+    correrHistorial(cola.current.shift())
+  })
 
   /* ---------- poner marcas ---------- */
   const enGrilla = (t) => (snapActivo ? snapGrilla(t, g, ajuste.offset) : t)
@@ -835,7 +906,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
   // del servidor (auditoría f54).
   const pendientes = vuelo.current.n > 0 || releyendo > 0
   useEffect(() => { if (!sinConfirmar) setCierre(false) }, [sinConfirmar])
-  const noSeGuardo = `${fallasTotal} cambio${fallasTotal === 1 ? '' : 's'} no se guardó${fallasTotal === 1 ? '' : 'ron'} (ver el aviso)`
+  const noSeGuardo = fallasTotal === 1 ? '1 cambio no se guardó (ver el aviso)' : `${fallasTotal} cambios no se guardaron (ver el aviso)`
   const cuenta = (tipo) => marcas.filter((m) => m.tipo === tipo).length
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`

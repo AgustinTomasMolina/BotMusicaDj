@@ -641,6 +641,8 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
       {rekordboxOpen && crate && <ExportRekordbox crate={crate} toast={toast} onClose={() => setRekordboxOpen(false)} />}
       {cuesDe !== undefined && crate && (
         <EditorCues temas={analizados} inicial={cuesDe}
+          // Una escritura que vuelve con error DESPUÉS de cerrar el editor: si no, nadie se entera.
+          onFallaTardia={(texto) => toast.danger({ title: 'Un cambio de cues no se guardó', body: `${texto} Abrí «Marcar cues» de nuevo para ver lo que quedó.` })}
           onClose={(r) => {
             setCuesDe(undefined)
             cargarCrate(crate.id)
