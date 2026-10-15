@@ -415,11 +415,31 @@ export function compasDe(t, g, offset) {
 // del historial (no se podría deshacer): `hechas` son esas sub-operaciones tal como se
 // aplicaron y van al pasado como un grupo nuevo; `cambios` ([viejo, nuevo]) son los ids que
 // cambiaron al aplicarlas (una marca recreada) y se propagan a todo el historial.
+//
+// Sin duplicar: si una marca recreada ya la crea OTRO paso del pasado (deshacer a medias un
+// cambio de tipo vuelve a crear la marca vieja, y su creación original sigue en el pasado), ese
+// 'crear' no va al grupo — quedaría dos veces y el segundo Ctrl+Z que la borra daría 404.
 export function descartarPaso(h, dir, hechas = [], cambios = []) {
   let out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
-  if (hechas.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops: hechas }], futuro: out.futuro }
   for (const [viejo, nuevo] of cambios) out = reemplazarId(out, viejo, nuevo)
+  let ops = hechas
+  for (const [viejo, nuevo] of cambios) ops = ops.map((o) => conId(o, viejo, nuevo))
+  const vivas = marcasVivas(out.pasado)
+  ops = ops.filter((o) => !(o.tipo === 'crear' && vivas.has(o.marca.id)))
+  if (ops.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops }], futuro: out.futuro }
   return out
+}
+
+// Los ids que el pasado deja creados (recorrido en orden: un 'crear' la suma, un 'borrar' la saca).
+function marcasVivas(pasado) {
+  const vivas = new Set()
+  const recorrer = (op) => {
+    if (op.tipo === 'grupo') op.ops.forEach(recorrer)
+    else if (op.tipo === 'crear') vivas.add(op.marca.id)
+    else if (op.tipo === 'borrar') vivas.delete(op.marca.id)
+  }
+  pasado.forEach(recorrer)
+  return vivas
 }
 
 // ¿Una acción (o la respuesta de una escritura) le corresponde al tema que está abierto? Al

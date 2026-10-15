@@ -395,10 +395,12 @@ export default function EditorCues({ temas, inicial, onClose }) {
     let r = null
     try { r = await hacer(tid) } catch { r = null }
     vuelo.current.n -= 1
-    // La respuesta llegó con OTRO tema abierto: no toca la lista, el estado, los avisos ni el
-    // historial del actual (null = el que llamó no registra nada; el historial del tema
-    // anterior ya se vació al pasar de tema).
-    if (!temaVigente(tid, idRef.current)) return null
+    // La respuesta llegó con OTRO tema abierto. El pedido se hizo contra SU tema (`tid`) y vale:
+    // se devuelve como siempre, para que lo que sigue (borrar la marca vieja de un cambio de
+    // tipo, la próxima sub-operación de un grupo) se complete contra ese tema y el servidor
+    // quede coherente. Lo que NO se toca es la pantalla del tema abierto: lista, estado, avisos
+    // e historial (los que llaman registran el paso solo con `temaVigente`).
+    if (!temaVigente(tid, idRef.current)) return r && r.ok && Array.isArray(r.data?.marcas) ? r.data : null
     if (r && r.ok && Array.isArray(r.data?.marcas)) {
       ponerLista(tid, r.data.marcas, seq)
       rechazado.current = false
@@ -436,8 +438,6 @@ export default function EditorCues({ temas, inicial, onClose }) {
     const cambios = []
     const hechas = []
     for (const o of op.ops) {
-      // Se pasó a otro tema en el medio: lo que falta no se manda.
-      if (!temaVigente(tid, idRef.current)) return { ok: false, cambios, hechas }
       let x = o
       for (const [a, b] of cambios) x = reemplazarId({ pasado: [x], futuro: [] }, a, b).pasado[0]
       const r = await aplicar(x, que)
@@ -449,23 +449,29 @@ export default function EditorCues({ temas, inicial, onClose }) {
   }
 
   const hecho = (op) => setHistorial((h) => registrar(h, op))
+  // Un paso se registra solo si su tema sigue abierto: el historial del tema que se dejó ya se
+  // vació al pasar de tema, y el del tema nuevo no es suyo.
+  const hechoEn = (tid, op) => { if (temaVigente(tid, idRef.current)) hecho(op) }
 
   const crear = async (cuerpo, que) => {
     if (!track) return null
-    const d = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
-    if (d) hecho({ tipo: 'crear', marca: d.marca })
+    const tid = id
+    const d = await conEstado(que, (t) => crearMarca(t, cuerpo))
+    if (d) hechoEn(tid, { tipo: 'crear', marca: d.marca })
     return d
   }
   const cambiar = async (m, nuevos, que) => {
     const { antes, despues } = diferencia(m, { ...m, ...nuevos })
     if (!Object.keys(despues).length) return null
-    const d = await conEstado(que, (tid) => cambiarMarca(tid, m.id, despues))
-    if (d) hecho({ tipo: 'cambiar', id: m.id, antes, despues })
+    const tid = id
+    const d = await conEstado(que, (t) => cambiarMarca(t, m.id, despues))
+    if (d) hechoEn(tid, { tipo: 'cambiar', id: m.id, antes, despues })
     return d
   }
   const borrar = async (m) => {
-    const d = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
-    if (d) { hecho({ tipo: 'borrar', marca: m }); setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`) }
+    const tid = id
+    const d = await conEstado(`Borrar ${nombreD(m)}`, (t) => borrarMarca(t, m.id))
+    if (d && temaVigente(tid, idRef.current)) { hecho({ tipo: 'borrar', marca: m }); setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`) }
     return d
   }
   // Cambiar el tipo: se crea la marca nueva y RECIÉN después se borra la vieja (si la nueva
@@ -483,11 +489,12 @@ export default function EditorCues({ temas, inicial, onClose }) {
     }
     if (tipo === 'cue' && padLibre(marcas) === null) { setAviso('Los 8 pads están ocupados: liberá uno para pasar esta marca a hot cue.'); return }
     const que = `${nombreD(m)} → ${NOMBRE_TIPO[tipo]}`
-    const d = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
+    const tid = id
+    const d = await conEstado(que, (t) => crearMarca(t, cuerpo))
     if (!d) return
-    const b = await conEstado(que, (tid) => borrarMarca(tid, m.id))
-    if (b) hecho({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: d.marca }, { tipo: 'borrar', marca: m }] })
-    else hecho({ tipo: 'crear', marca: d.marca })
+    const b = await conEstado(que, (t) => borrarMarca(t, m.id))
+    if (b) hechoEn(tid, { tipo: 'grupo', ops: [{ tipo: 'crear', marca: d.marca }, { tipo: 'borrar', marca: m }] })
+    else hechoEn(tid, { tipo: 'crear', marca: d.marca })
   }
 
   const correrHistorial = async (dir) => {
@@ -903,15 +910,15 @@ export default function EditorCues({ temas, inicial, onClose }) {
             </p>
             {eg.hay && (
               <div className="edd-grilla-btns">
-                <button type="button" className="btn btn-secondary edd-btn" aria-pressed={ajuste.oculta} aria-keyshortcuts="G"
+                <button type="button" className="btn btn-secondary edd-btn" aria-pressed={ajuste.oculta} aria-keyshortcuts="G" disabled={!track}
                   onClick={() => acciones.current.grilla()}>{ajuste.oculta ? 'Mostrar grilla' : 'Ocultar grilla'} <Kbd>G</Kbd></button>
-                <button type="button" className="btn btn-secondary edd-btn edd-medio" aria-keyshortcuts="H" disabled={ajuste.oculta}
+                <button type="button" className="btn btn-secondary edd-btn edd-medio" aria-keyshortcuts="H" disabled={!track || ajuste.oculta}
                   onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) })}>Correr ½ beat <Kbd>H</Kbd></button>
-                <button type="button" className="btn btn-secondary edd-btn" disabled={ajuste.oculta} aria-label="Correr la grilla 5 milisegundos para atrás"
+                <button type="button" className="btn btn-secondary edd-btn" disabled={!track || ajuste.oculta} aria-label="Correr la grilla 5 milisegundos para atrás"
                   onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, -AJUSTE_FINO_S, g.periodo_s) })}>−5 ms</button>
-                <button type="button" className="btn btn-secondary edd-btn" disabled={ajuste.oculta} aria-label="Correr la grilla 5 milisegundos para adelante"
+                <button type="button" className="btn btn-secondary edd-btn" disabled={!track || ajuste.oculta} aria-label="Correr la grilla 5 milisegundos para adelante"
                   onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, AJUSTE_FINO_S, g.periodo_s) })}>+5 ms</button>
-                <button type="button" className="btn btn-secondary edd-btn" disabled={!ajuste.offset}
+                <button type="button" className="btn btn-secondary edd-btn" disabled={!track || !ajuste.offset}
                   onClick={() => cambiarAjuste({ ...ajuste, offset: 0 })}>Como la estimó el motor</button>
                 <label className={`edd-snap${grillaVisible ? '' : ' is-off'}`}>
                   <input type="checkbox" checked={snapActivo} disabled={!grillaVisible} onChange={() => setSnap((s) => !s)} aria-keyshortcuts="Q" />

@@ -263,6 +263,23 @@ test('un grupo rechazado a medias: lo que se guardó queda en el historial como 
   assert.deepEqual(descartarPaso(d.h, -1, [], []), { pasado: [], futuro: [] })
 })
 
+test('a medias sin duplicar: la marca recreada que ya crea un paso del pasado no se agrega otra vez', () => {
+  // M (memory 9) creada en el editor; después pasada a hot cue (cue 11 + borrar la 9).
+  const mem = { id: 9, tipo: 'memory', num: null, inicio: 2, fin: null, nombre: null }
+  const cue = { id: 11, tipo: 'cue', num: 0, inicio: 2, fin: null, nombre: null }
+  let h = registrar(historialVacio(), { tipo: 'crear', marca: mem })
+  h = registrar(h, { tipo: 'grupo', ops: [{ tipo: 'crear', marca: cue }, { tipo: 'borrar', marca: mem }] })
+  // Ctrl+Z del cambio de tipo: la memory vuelve (id 15) y borrar el cue da 404 (otra pestaña).
+  const d = deshacer(h)
+  const h2 = descartarPaso(d.h, -1, [{ tipo: 'crear', marca: mem }], [[9, 15]])
+  assert.deepEqual(h2, { pasado: [{ tipo: 'crear', marca: { ...mem, id: 15 } }], futuro: [] },
+    'la creación de la memory queda UNA vez (la original, con el id nuevo), no crear(15) | grupo[crear(15)]')
+  // Dos Ctrl+Z seguidos: el primero borra la 15 (existe), el segundo no tiene nada más.
+  const z1 = deshacer(h2)
+  assert.deepEqual(z1.aplicar, { tipo: 'borrar', marca: { ...mem, id: 15 } })
+  assert.equal(deshacer(z1.h), null, 'un segundo Ctrl+Z no repite el borrado de la 15 (daría 404)')
+})
+
 test('reemplazarId llega a las marcas de un paso «grupo»', () => {
   const nueva = { ...M1, id: 9, tipo: 'memory', num: null }
   const h = { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: nueva }, { tipo: 'borrar', marca: M1 }] }],
