@@ -15,7 +15,7 @@ import {
   anchoZoom, ventana, xDeTiempo, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
-  clasificarFalla, yaHecha, opConId,
+  clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -260,14 +260,58 @@ test('clasificarFalla: 400/404 se descartan; 409 (base ocupada), 5xx y sin respu
 
 test('yaHecha: lo que la base ya tiene no se vuelve a mandar (reintentar no duplica)', () => {
   const lista = [{ id: 9, tipo: 'memory', num: null, inicio: 0.204, fin: null }, { id: 3, tipo: 'cue', num: 1, inicio: 2, fin: null, nombre: 'Drop' }]
-  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: true, id: 9 })
-  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.205, fin: null } }, lista), { hecha: false })
-  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'cue', num: 2, inicio: 2, fin: null } }, lista), { hecha: false }, 'otro pad no es la misma marca')
+  // Con ESE id en la lista: hecha.
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 9, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: true, id: 9 })
+  // Con otro id: hecha solo si ya están TODAS las idénticas que tenía que haber (la respuesta
+  // del POST se perdió pero la marca está).
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null }, iguales: 1 }, lista), { hecha: true, id: 9 })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null }, iguales: 2 }, lista), { hecha: false },
+    'había dos memory iguales y queda una: falta la otra (no es «ya hecha»)')
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: false },
+    'sin saber cuántas había, una igual con otro id no alcanza')
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.205, fin: null }, iguales: 1 }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'cue', num: 2, inicio: 2, fin: null }, iguales: 1 }, lista), { hecha: false }, 'otro pad no es la misma marca')
   assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 3 } }, lista), { hecha: false })
   assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 4 } }, lista), { hecha: true })
   assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { nombre: 'X' }, despues: { nombre: 'Drop' } }, lista), { hecha: true })
   assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { inicio: 2 }, despues: { inicio: 3 } }, lista), { hecha: false })
   assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 77, antes: {}, despues: { inicio: 3 } }, lista), { hecha: false }, 'si no está, que lo diga el servidor (404)')
+})
+
+test('dos memory iguales (M M): borrar una y deshacer, o deshacer las dos y rehacer, vuelve a dos', () => {
+  const m1 = { id: 1, tipo: 'memory', num: null, inicio: 0.204, fin: null }
+  const m2 = { ...m1, id: 2 }
+  assert.equal(contarIguales(m1, [m1, m2]), 2)
+  assert.equal(contarIguales(m1, [{ ...m1, id: 7, inicio: 0.3 }]), 0)
+  // D1: borrar m2 (había 2 iguales) y deshacer: la lista tiene solo m1 → falta crearla.
+  assert.deepEqual(yaHecha(inversa({ tipo: 'borrar', marca: m2, iguales: 2 }), [m1]), { hecha: false })
+  // D2: crear m1 (1 igual), crear m2 (2 iguales); deshacer las dos; rehacer m1 (id 3), rehacer m2.
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: m1, iguales: 1 }, []), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: m2, iguales: 2 }, [{ ...m1, id: 3 }]), { hecha: false },
+    'el segundo Ctrl+Y no puede decir «Rehecho.» sin mandar nada')
+  // Dos loops sin pad iguales: lo mismo.
+  const l = { id: 4, tipo: 'loop', num: null, inicio: 1, fin: 2.875 }
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { ...l, id: 5 }, iguales: 2 }, [l]), { hecha: false })
+  assert.equal(inversa({ tipo: 'crear', marca: m1, iguales: 3 }).iguales, 3, 'la inversa conserva cuántas iguales había')
+})
+
+test('cerrarPaso trabaja sobre el historial ACTUAL: lo registrado mientras viajaba el pedido no se pierde', () => {
+  const cue = { tipo: 'crear', marca: { id: 1 } }
+  const mem = { tipo: 'crear', marca: { id: 2 } }
+  const alEmpezar = registrar(historialVacio(), cue)
+  const ahora = registrar(alEmpezar, mem)          // M mientras el Ctrl+Z del cue viajaba
+  // Falla reintentable: nada cambia (la memory sigue arriba para deshacer).
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'reintentable'), ahora)
+  // Sale bien: el cue sale del pasado; como hubo algo nuevo, no va al futuro; la memory queda.
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'ok'), { pasado: [mem], futuro: [] })
+  // Sin nada nuevo: como siempre (pasa al futuro).
+  assert.deepEqual(cerrarPaso(alEmpezar, cue, -1, 'ok'), { pasado: [], futuro: [cue] })
+  // Rechazo: sale y nada más.
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'rechazo'), { pasado: [mem], futuro: [] })
+  // Rehacer: del futuro al final del pasado; rechazado, sale del futuro.
+  const conFuturo = { pasado: [mem], futuro: [cue] }
+  assert.deepEqual(cerrarPaso(conFuturo, cue, 1, 'ok'), { pasado: [mem, cue], futuro: [] })
+  assert.deepEqual(cerrarPaso(conFuturo, cue, 1, 'rechazo'), { pasado: [mem], futuro: [] })
 })
 
 test('opConId cambia el id de marca en cualquier operación, también adentro de un grupo', () => {

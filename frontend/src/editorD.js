@@ -241,9 +241,11 @@ const TOPE = 200
 
 export function inversa(op) {
   const tid = op && op.tid !== undefined ? { tid: op.tid } : {}
+  // `iguales`: cuántas marcas idénticas había con esa marca en la lista (ver `yaHecha`).
+  const iguales = op && op.iguales !== undefined ? { iguales: op.iguales } : {}
   switch (op.tipo) {
-    case 'crear': return { tipo: 'borrar', marca: op.marca, ...tid }
-    case 'borrar': return { tipo: 'crear', marca: op.marca, ...tid }
+    case 'crear': return { tipo: 'borrar', marca: op.marca, ...iguales, ...tid }
+    case 'borrar': return { tipo: 'crear', marca: op.marca, ...iguales, ...tid }
     case 'cambiar': return { tipo: 'cambiar', id: op.id, antes: op.despues, despues: op.antes, ...tid }
     case 'grupo': return { tipo: 'grupo', ops: [...op.ops].reverse().map(inversa), ...tid }
     default: throw new Error(`operación desconocida: ${op && op.tipo}`)
@@ -263,24 +265,58 @@ export function clasificarFalla(status) {
 // ¿La operación ya está hecha en la lista REAL del servidor? Deshacer y rehacer miran esto
 // antes de mandar cada pedido (auditoría f54): reintentar un paso que quedó a medias, o uno
 // cuyo pedido llegó pero cuya respuesta se perdió, no puede duplicar marcas.
-//   crear: ya hay una marca igual (tipo, tiempos, pad) → { hecha: true, id: la de la base }
+//   crear: la marca con ESE id está en la lista; o hay al menos `op.iguales` marcas idénticas
+//          (tipo, tiempos, pad) — las que había cuando la marca existía. Se CUENTA, no se busca
+//          una: el server permite dos memory o dos loops sin pad en el mismo tiempo (solo el pad
+//          es único), y «hay una igual» daba un falso «ya hecho» (3.ª auditoría f54). Contar
+//          también cubre el pedido que llegó al server y cuya respuesta se perdió.
 //   borrar: la marca ya no está → hecha
 //   cambiar: la marca ya tiene los valores nuevos → hecha (si no está, no: el PATCH dará 404)
+const igualT = (a, b) => (a ?? null) === (b ?? null) || (finito(a) && finito(b) && Math.abs(a - b) < 0.0005)
+const identicas = (m, lista) => (Array.isArray(lista) ? lista : []).filter((y) => y.tipo === m.tipo
+  && igualT(y.inicio, m.inicio) && igualT(y.fin, m.fin) && (m.tipo === 'memory' || igualT(y.num, m.num)))
+
+// Cuántas marcas idénticas a `m` hay en la lista (contándola si está).
+export const contarIguales = (m, lista) => identicas(m, lista).length
+
 export function yaHecha(op, marcas) {
   const lista = Array.isArray(marcas) ? marcas : []
-  const igual = (a, b) => (a ?? null) === (b ?? null) || (finito(a) && finito(b) && Math.abs(a - b) < 0.0005)
   if (op.tipo === 'crear') {
     const m = op.marca
-    const x = lista.find((y) => y.tipo === m.tipo && igual(y.inicio, m.inicio) && igual(y.fin, m.fin)
-      && (m.tipo === 'memory' || igual(y.num, m.num)))
-    return x ? { hecha: true, id: x.id } : { hecha: false }
+    if (lista.some((y) => y.id === m.id)) return { hecha: true, id: m.id }
+    const iguales = identicas(m, lista)
+    if (Number.isInteger(op.iguales) && op.iguales > 0 && iguales.length >= op.iguales) {
+      // Ya están todas las que tiene que haber: la que falta es una de esas (la más nueva).
+      return { hecha: true, id: Math.max(...iguales.map((y) => y.id)) }
+    }
+    return { hecha: false }
   }
   if (op.tipo === 'borrar') return { hecha: !lista.some((y) => y.id === op.marca.id) }
   if (op.tipo === 'cambiar') {
     const x = lista.find((y) => y.id === op.id)
-    return { hecha: Boolean(x) && Object.keys(op.despues).every((k) => igual(x[k], op.despues[k])) }
+    return { hecha: Boolean(x) && Object.keys(op.despues).every((k) => igualT(x[k], op.despues[k])) }
   }
   return { hecha: false }
+}
+
+// El historial después de que un deshacer (dir −1) o rehacer (+1) del paso `original` terminó
+// con `desenlace` ('ok' | 'rechazo' | 'reintentable'), aplicado sobre el historial ACTUAL `h`
+// (3.ª auditoría f54: mientras el pedido viajaba se pudo registrar otra edición, que no puede
+// perderse por usar el historial del momento en que empezó el Ctrl+Z).
+//   ok, deshacer: el paso sale del pasado y va al futuro, salvo que mientras tanto se haya
+//                 hecho algo nuevo (eso borra el futuro, como siempre);
+//   ok, rehacer:  sale del futuro (si sigue ahí) y va al final del pasado;
+//   rechazo:      sale de donde esté;  reintentable: todo queda igual.
+export function cerrarPaso(h, original, dir, desenlace) {
+  if (desenlace === 'reintentable' || !original) return h
+  const sin = (xs) => xs.filter((o) => o !== original)
+  if (dir < 0) {
+    if (desenlace === 'rechazo') return { pasado: sin(h.pasado), futuro: h.futuro }
+    const huboNuevo = h.pasado[h.pasado.length - 1] !== original
+    return { pasado: sin(h.pasado), futuro: huboNuevo ? h.futuro : [original, ...h.futuro] }
+  }
+  if (desenlace === 'rechazo') return { pasado: h.pasado, futuro: sin(h.futuro) }
+  return { pasado: [...sin(h.pasado), original], futuro: sin(h.futuro) }
 }
 
 export function registrar(h, op) {
