@@ -73,10 +73,10 @@ def _camelot_de(corr: list[tuple[float, str, str]]) -> str:
 
 def medir_archivo(ruta: str, sr: int = 22050, n_tramos: int = 3,
                   ventana_tramo_s: int = _VENTANA_TRAMO_S) -> Medicion | None:
-    import librosa
+    from motor.decodificar import cargar
 
     try:
-        y, _ = librosa.load(ruta, sr=sr, mono=True)
+        y, _ = cargar(ruta, sr=sr, mono=True)
     except Exception:  # noqa: BLE001
         return None
     if y.size < sr * 5:
@@ -118,10 +118,10 @@ def verificar_replica(ruta: str, sr: int = 22050) -> tuple[str, str, float, floa
 
     Si esto no coincide, todo el informe está midiendo otra cosa que el motor.
     """
-    import librosa
+    from motor.decodificar import cargar
 
     try:
-        y, _ = librosa.load(ruta, sr=sr, mono=True)
+        y, _ = cargar(ruta, sr=sr, mono=True)
     except Exception:  # noqa: BLE001
         return None
     oficial = tono(y, sr)

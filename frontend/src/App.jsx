@@ -76,7 +76,8 @@ export default function App() {
   const openListaForm = () => { setModal(null); setView({ kind: 'listaForm' }) }
   // Radio DJ (motor/): misma navegación que Playlists — chip en la barra y entrada en el menú.
   // preview.stop(): el fragmento que quedó sonando del hover no puede pisar el audio del set.
-  const openRadio = () => { setModal(null); preview.cancel(); preview.stop(); setView({ kind: 'radio' }) }
+  // f55: con `pid` (desde «Armar un set» de Mis playlists) la radio abre con esa playlist elegida.
+  const openRadio = (pid) => { setModal(null); preview.cancel(); preview.stop(); setView({ kind: 'radio', playlist: typeof pid === 'number' ? pid : null, pick: Date.now() }) }
   // id opcional (desde el rail): abre esa playlist. Desde otros botones llega el evento → se ignora.
   // `pick` cambia en cada click: volver a tocar en el rail la misma playlist después de elegir otra
   // adentro de la vista tiene que volver a seleccionarla.
@@ -324,8 +325,8 @@ export default function App() {
   else if (view.kind === 'listaForm') body = <ListForm formato={formato} onBuscar={doBuscarLista} onCancel={goHome} />
   else if (view.kind === 'search') body = <ResultsView data={view.data} {...shared} />
   else if (view.kind === 'lista') body = <ListResults key={view.data.runId ?? 'lista'} data={view.data} {...shared} onSelect={onSelect} onEditar={openListaForm} />
-  else if (view.kind === 'radio') body = <Radio onBiblioteca={setRadioLib} />
-  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} onImportar={() => setImportarOpen(true)} />
+  else if (view.kind === 'radio') body = <Radio onBiblioteca={setRadioLib} playlistId={view.playlist} pick={view.pick} onAbrirPlaylist={openPlaylists} />
+  else if (view.kind === 'playlists') body = <Playlists activePlaylist={activePlaylist} setActivePlaylist={setActivePlaylist} toast={toast} onPlay={play} initialId={view.id} pick={view.pick} onSeleccion={setPlaylistAbierta} formato={formato} onImportar={() => setImportarOpen(true)} onArmarSet={openRadio} />
 
   // Lo que cambia en pantalla sin mover el foco (buscando, error, resultados) se anuncia
   // por una región viva: sin esto un lector de pantalla no se entera de que terminó.

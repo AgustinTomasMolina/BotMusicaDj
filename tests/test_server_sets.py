@@ -11,7 +11,14 @@ import pytest
 
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
-from sinteticos import CATALOGO, LICENCIA, ORIGEN, armar_base_radio, embedding  # noqa: E402
+from sinteticos import (  # noqa: E402
+    CATALOGO,
+    LICENCIA,
+    ORIGEN,
+    armar_base_radio,
+    embedding,
+    playlist_del_catalogo,
+)
 
 from motor.modelos import TrackFeatures  # noqa: E402
 from motor.radio import RadioConfig, build_set  # noqa: E402
@@ -32,6 +39,7 @@ def server(tmp_path_factory):
         for mod in ("server", "jobs", "db"):
             sys.modules.pop(mod, None)
         srv = importlib.import_module("server")
+    srv.db.init_db()        # f55: las playlists de las que arma la radio
     return srv
 
 
@@ -42,16 +50,17 @@ def client(server, monkeypatch):
 
 
 @pytest.fixture
-def biblioteca(tmp_path, monkeypatch):
+def biblioteca(server, tmp_path, monkeypatch):
     db = tmp_path / "djradio" / "biblioteca.sqlite"
     _, rutas = armar_base_radio(tmp_path / "musica", db)
     monkeypatch.setenv("DJRADIO_DB", str(db))
-    return {"db": db, "rutas": rutas}
+    # f55: la radio arma solo desde una playlist; esta tiene todo el catálogo en un género.
+    return {"db": db, "rutas": rutas, "playlist": playlist_del_catalogo(server.db, rutas)}
 
 
 def _mostrado(server, client, biblioteca, largo=4) -> tuple[dict, dict]:
     """Lo que la pantalla muestra (/api/radio/set) y el cuerpo con que lo guardaría."""
-    params = {"track": server._radio_id(biblioteca["rutas"]["uno.wav"]), "largo": largo}
+    params = {"playlist": biblioteca["playlist"], "track": server._radio_id(biblioteca["rutas"]["uno.wav"]), "largo": largo}
     d = client.get("/api/radio/set", params=params).json()
     return d, {**params, "esperado": [p["track"]["id"] for p in d["pasos"]],
                "huella": d["huella"]}
@@ -77,7 +86,7 @@ def test_guardar_guarda_lo_que_se_mostro(server, client, biblioteca):
     assert [_como_se_mostro(p) for p in s["pasos"]] == \
         [_como_se_mostro(p) for p in mostrado["pasos"]]
     assert (s["nombre"], s["total"], s["pedidos"], s["completo"], s["fragmentos"]) == \
-        ("noche 1", 4, 4, True, 1)
+        ("noche 1", 4, 4, True, 0)   # f55: el loop queda afuera antes del motor
     assert s["config"] == mostrado["config"], "la config guardada no es la que se usó"
     assert s["resumen"] == {"ok": 0, "regular": 0, "mala": 0, "sin_calificar": 3}
     assert [(t["n"], t["desde"], t["hasta"], t["calificacion"]) for t in s["transiciones"]] == \
@@ -101,7 +110,8 @@ def test_la_huella_de_la_pantalla_es_la_de_la_foto_del_motor(server, client, bib
     set, calculada acá por separado."""
     mostrado, _ = _mostrado(server, client, biblioteca)
     with Store(biblioteca["db"]) as store:
-        lib = store.load_library()
+        # f55: el pool es la playlist sin lo que no es un track (el loop queda afuera antes).
+        lib = [t for t in store.load_library() if t.path.name != "loop.wav"]
     semilla = next(t for t in lib if t.path.name == "uno.wav")
     config = RadioConfig(length=4)
     rset = build_set(semilla, lib, config)
@@ -238,16 +248,17 @@ def test_un_track_que_ya_no_esta_se_muestra_entero_y_sin_audio(server, client, b
     assert client.get("/api/radio/sets").json()["sets"][0]["faltan"] == 1
 
 
-def test_sin_base_degrada_sin_500_y_no_crea_la_base(client, tmp_path, monkeypatch):
+def test_sin_base_degrada_sin_500_y_no_crea_la_base(server, client, tmp_path, monkeypatch):
     fantasma = tmp_path / "no-existe" / "biblioteca.sqlite"
     monkeypatch.setenv("DJRADIO_DB", str(fantasma))
+    biblioteca = {"playlist": server.db.crear_playlist("sin base")["id"]}
 
     d = client.get("/api/radio/sets").json()
     assert (d["configurada"], d["estado"], d["sets"]) == (False, "sin-base", [])
     assert str(fantasma) in d["motivo"]
     d = client.get("/api/radio/sets/1").json()
     assert (d["estado"], d["set"]) == ("sin-base", None)
-    for r in (client.post("/api/radio/sets", json={"track": "x", "esperado": ["a"],
+    for r in (client.post("/api/radio/sets", json={"playlist": biblioteca["playlist"], "track": "x", "esperado": ["a"],
                                                      "huella": "h"}),
               client.put("/api/radio/sets/1/transiciones/1", json={"calificacion": "ok"}),
               client.delete("/api/radio/sets/1/transiciones/1"),
@@ -347,7 +358,7 @@ def _guardar_uno(server, client, biblioteca) -> tuple[dict, bytes, str]:
     .m3u8 del set ARMADO en ese mismo momento)."""
     _, cuerpo = _mostrado(server, client, biblioteca)
     vivo = client.get("/api/radio/set.m3u8",
-                      params={"track": cuerpo["track"], "largo": cuerpo["largo"]})
+                      params={"playlist": biblioteca["playlist"], "track": cuerpo["track"], "largo": cuerpo["largo"]})
     assert vivo.status_code == 200, vivo.text
     s = client.post("/api/radio/sets", json=cuerpo).json()["set"]
     return s, vivo.content, vivo.headers["content-disposition"]
@@ -382,7 +393,7 @@ def test_el_m3u8_del_set_guardado_no_cambia_si_se_re_escanea_un_track(server, cl
     con.commit()
     con.close()
     hoy = client.get("/api/radio/set.m3u8",
-                     params={"track": s["pasos"][0]["track"]["id"], "largo": 4})
+                     params={"playlist": biblioteca["playlist"], "track": s["pasos"][0]["track"]["id"], "largo": 4})
     assert b"bpm=131.3" in hoy.content and hoy.content != vivo, \
         "el re-escaneo no cambió el set de hoy: el test no probaría nada"
     r = client.get(f"/api/radio/sets/{s['id']}/m3u8")

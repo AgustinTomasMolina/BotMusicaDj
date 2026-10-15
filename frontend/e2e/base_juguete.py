@@ -25,6 +25,7 @@ from sinteticos import (  # noqa: E402
     biblioteca_importable,
     pistas_biblioteca,
     pistas_caratulas,
+    playlist_del_catalogo,
     xml_rekordbox,
 )
 
@@ -152,9 +153,35 @@ def _tamano_png(datos: bytes) -> list[int]:
     return [int.from_bytes(datos[16:20], "big"), int.from_bytes(datos[20:24], "big")]
 
 
+PLAYLIST_RADIO = "Set de juguete"
+
+
+def playlist_radio(destino: Path, rutas_radio: dict, raiz: Path) -> dict:
+    """f55: la playlist de Mis playlists de la que arma la radio en el E2E (la radio de la web
+    arma SOLO desde una playlist). En la base de MusiFlix del server (`<destino>/datos`, la
+    misma MUSIFLIX_DATA_DIR que le pasa run.mjs), con todo el CATALOGO del motor en «Techno» y
+    tres temas que quedan afuera, uno por motivo: uno de House y uno sin género (archivos de la
+    home, que el motor no analizó) y uno sin archivo (de YouTube, por bajar)."""
+    import os
+
+    os.environ["MUSIFLIX_DATA_DIR"] = str(destino / "datos")
+    import db  # noqa: PLC0415 — después de fijar el directorio de datos
+
+    db.init_db()
+    pid = playlist_del_catalogo(db, rutas_radio, PLAYLIST_RADIO)
+    for track, ruta in (({"titulo": "Tres", "artista": "Artista C", "genero": "House", "fuente": "carpeta"},
+                         raiz / "house" / "tres.wav"),
+                        ({"titulo": "Cuatro", "artista": "", "genero": None, "fuente": "carpeta"},
+                         raiz / "otros" / "cuatro.wav"),
+                        ({"titulo": "Por bajar", "artista": "Artista Z", "genero": "Techno",
+                          "fuente": "youtube", "url": "https://www.youtube.com/watch?v=e2e"}, None)):
+        db.agregar_item(pid, track, str(ruta) if ruta else None)
+    return {"radio_playlist": pid, "radio_playlist_nombre": PLAYLIST_RADIO}
+
+
 def main(destino: Path) -> dict:
     db = destino / "djradio" / "biblioteca.sqlite"
-    armar_base_radio(destino / "radio", db, SEGUNDOS)
+    _, rutas_radio = armar_base_radio(destino / "radio", db, SEGUNDOS)
 
     raiz = destino / "musica"
     _, pistas = pistas_biblioteca(raiz, destino / "no-existe" / "fantasma.wav", SEGUNDOS)
@@ -178,6 +205,7 @@ def main(destino: Path) -> dict:
         # base del motor la hace el caso que los usa).
         "editor_d": editor_d(destino / RAIZ_IMPORTAR),
         "editor_carpeta": CARPETA_EDITOR,
+        **playlist_radio(destino, rutas_radio, raiz),
     }
 
 

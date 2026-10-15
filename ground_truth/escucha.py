@@ -325,7 +325,7 @@ def exportar_track(ruta: str, prefijo: str, salida: Path) -> Fragmentos:
     1. Carga el audio COMO LO CARGA EL MOTOR (`motor.analisis.cargar`, 22050 Hz mono) solo
        para saber cuántas muestras ve el análisis, y de ahí `limites_analizados`.
     2. Pasa esos límites a segundos y los corta del original cargado a su sample rate nativo
-       y con sus canales (`librosa.load(sr=None, mono=False)`).
+       y con sus canales (`motor.decodificar.cargar(sr=None, mono=False)`).
     3. Escribe WAV PCM 16 bits (decisión del dueño, por tamaño: la mitad que float32). Eso
        recuantiza: soundfile escala por 32768 y redondea sin dither (error ≤ 1/32768), y
        recorta a ±1.0 lo que se pase (un MP3 decodificado puede tener picos por encima).
@@ -336,10 +336,10 @@ def exportar_track(ruta: str, prefijo: str, salida: Path) -> Fragmentos:
     if not origen.is_file():
         return Fragmentos(estado=AUDIO_NO_ENCONTRADO)
 
-    import librosa
     import soundfile as sf
 
     from motor.analisis import SR, cargar
+    from motor.decodificar import cargar as cargar_nativo
 
     y = cargar(origen, SR)
     if y is None:
@@ -347,7 +347,7 @@ def exportar_track(ruta: str, prefijo: str, salida: Path) -> Fragmentos:
     (c_ini, c_fin), tramos = limites_analizados(y.size, SR)
     del y
 
-    nativo, sr_nativo = librosa.load(str(origen), sr=None, mono=False)
+    nativo, sr_nativo = cargar_nativo(origen, sr=None, mono=False)
     nativo = np.atleast_2d(nativo)          # (canales, muestras), también para mono
     total = nativo.shape[1]
 

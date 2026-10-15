@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  getRadioBiblioteca, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
+  getRadioPlaylist, getRadioSet, exportarRadioM3u8, exportarSetGuardadoM3u8, radioAudioUrl, radioAudioMotivo,
   guardarRadioSet, listarRadioSets, getRadioSetGuardado, renombrarRadioSet, borrarRadioSet,
-  calificarTransicion, descalificarTransicion, contarMarcas,
+  calificarTransicion, descalificarTransicion, contarMarcas, listarPlaylists, guardarSetComoPlaylist,
+  analizarPlaylist, avisarPlaylists,
 } from '../api'
+import { textoPool, etiquetaMotivo, generoDe, textoAnalizando, resumenMarcas } from '../radioPantalla'
 import { fmtDur, normalizeText } from '../utils'
 import { useVolumenEn } from '../hooks'
 import { usePlayer } from '../player/context'
@@ -113,28 +115,121 @@ function motivoDelRechazo(status, data) {
   return `El servidor rechazó el pedido con HTTP ${status} y sin explicación.`
 }
 
-/* ---------- 1. Elegir la semilla ---------- */
+// Los parámetros con que se armó un set (f55: la playlist incluida): con ellos se re-arma,
+// se exporta y se guarda EL MISMO set que se ve, no lo que hoy digan los controles.
+const paramsDelSet = (s) => ({ playlist: s.pool?.playlist?.id, track: s.semilla.id, ...s.config })
+
+/* ---------- 0. Elegir la playlist (f55: la radio arma SOLO desde una playlist) ---------- */
+function ElegirPlaylist({ lists, actual, onElegir }) {
+  if (!lists) return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando tus playlists…</p></div>
+  if (lists.length === 0) {
+    return (
+      <div className="empty">
+        <div className="empty-art"><IconRadio size={26} /></div>
+        <h3>Primero, una playlist</h3>
+        <p>La radio arma el set con los temas de una playlist de Mis playlists. Creá una o importala de Rekordbox o de una carpeta, ponele género a los temas y analizalos.</p>
+      </div>
+    )
+  }
+  return (
+    <section className="rpanel rpl-elegir" aria-labelledby="r-pl-h">
+      <h2 id="r-pl-h" className="rpanel-h">¿De qué playlist sale el set?</h2>
+      <p className="rpanel-sub">Solo entran temas de esa playlist, del mismo género que el tema de arranque.</p>
+      <ul className="rpl-lista">
+        {lists.map((p) => (
+          <li key={p.id}>
+            <button type="button" className="rpl-item" aria-current={p.id === actual ? 'true' : undefined} onClick={() => onElegir(p.id)}>
+              <span className="rpl-nombre">{p.nombre}</span>
+              <span className="rpl-sub">{p.total} tema{p.total === 1 ? '' : 's'}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/* ---------- Lo que entra y lo que queda afuera (f55) ----------
+   El renglón del diseño («Entran 38 de 44 temas…») y la lista de los que quedan afuera con su
+   motivo. Todo viene del server (`pool` del set, o el género de la semilla elegida). */
+// En la barra de «Armar el set» (siempre a la vista, también con el panel plegado): el renglón
+// del diseño y el botón para ver los que quedan afuera. Va en la barra y no en un renglón
+// propio para que a 1440×900 la lista del set siga entrando sin scroll (f50).
+function PoolResumen({ t }) {
+  if (!t) return null
+  return (
+    <span className="rarma-pool">
+      <b className="rpool-tit">{t.titular}</b>{t.detalle ? <>: <span className="rpool-det">{t.detalle}</span></> : '.'}
+    </span>
+  )
+}
+function PoolVer({ t, abierto, setAbierto }) {
+  if (!t || !(t.afuera > 0)) return null
+  // aria-controls solo cuando la lista existe: apuntar a un id que no está es un control roto.
+  return (
+    <button type="button" className="btn btn-secondary rpool-ver" aria-expanded={abierto} aria-controls={abierto ? 'r-afuera' : undefined}
+      onClick={() => setAbierto((a) => !a)}>
+      {abierto ? 'Ocultar los de afuera' : `Ver ${t.afuera === 1 ? 'el que queda afuera' : `los ${t.afuera} que quedan afuera`}`}
+    </button>
+  )
+}
+function Pool({ pool, abierto, analizando, sinAnalizar, onAnalizar, analizandoPedido }) {
+  const t = textoPool(pool)
+  const aviso = textoAnalizando(analizando)
+  if (!(t && abierto) && !aviso && !sinAnalizar) return null
+  return (
+    <div className="rpool" role="region" aria-label="Qué temas de la playlist quedan afuera del set">
+      {t && abierto && (
+        <ol className="rpool-afuera" id="r-afuera">
+          {pool.afuera.map((a) => (
+            <li key={a.item_id} data-motivo={a.motivo}>
+              <span className="mono rpool-n">#{a.posicion}</span>
+              <span className="rpool-tema">{a.artista ? `${a.artista} — ` : ''}{a.titulo || '(sin título)'}</span>
+              {a.genero && <span className="pill rpool-genero">{a.genero}</span>}
+              <span className="rpool-motivo"><b>{etiquetaMotivo(a.motivo)}</b>: {a.texto}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {aviso && <p className="rnota rpool-analizando" role="status">{aviso}</p>}
+      {sinAnalizar > 0 && !analizando && (
+        <p className="rnota rpool-sinanalizar">
+          {sinAnalizar === 1 ? 'Hay 1 tema con archivo que el motor todavía no analizó.' : `Hay ${sinAnalizar} temas con archivo que el motor todavía no analizó.`}{' '}
+          <button type="button" className="btn btn-secondary btn-sm" aria-disabled={analizandoPedido || undefined}
+            onClick={() => { if (!analizandoPedido) onAnalizar() }}>
+            {sinAnalizar === 1 ? 'Analizarlo' : `Analizar los ${sinAnalizar}`}
+          </button>
+        </p>
+      )}
+    </div>
+  )
+}
+
+/* ---------- 1. Elegir la semilla (f55: entre los temas de la playlist) ---------- */
 function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
   const filtrados = useMemo(() => {
     const n = normalizeText(q)
     if (!n) return tracks
-    return tracks.filter((t) => normalizeText(`${t.label} ${t.titulo} ${t.artista}`).includes(n))
+    return tracks.filter((t) => normalizeText(`${t.label} ${t.titulo} ${t.artista} ${t.genero || ''}`).includes(n))
   }, [tracks, q])
   const visibles = filtrados.slice(0, MAX_LISTA)
 
   return (
     <section className="rpanel" aria-labelledby="r-semilla-h">
-      <h2 id="r-semilla-h" className="rpanel-h">1 · El track semilla</h2>
-      <p className="rpanel-sub">Todo el set se arma contra su BPM y su key.</p>
+      <h2 id="r-semilla-h" className="rpanel-h">1 · El tema de arranque (de esta playlist)</h2>
+      <p className="rpanel-sub">Todo el set se arma contra su BPM y su key, y solo con temas de su género.</p>
       <div className="rbuscar">
         <span className="rbuscar-ico" aria-hidden="true"><IconSearch size={15} /></span>
         <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="Filtrá por tema o artista…" autoComplete="off"
-          aria-label="Filtrar la biblioteca del motor" aria-controls="r-lista-semillas" />
+          placeholder="Filtrá por tema, artista o género…" autoComplete="off"
+          aria-label="Filtrar los temas de la playlist" aria-controls="r-lista-semillas" />
       </div>
       <div className="rlista" id="r-lista-semillas" role="list">
-        {visibles.length === 0 && (
-          <p className="rnota">Ningún track de la biblioteca coincide con «{q.trim()}».</p>
+        {tracks.length === 0 && (
+          <p className="rnota">Ningún tema de esta playlist puede arrancar un set todavía.</p>
+        )}
+        {tracks.length > 0 && visibles.length === 0 && (
+          <p className="rnota">Ningún tema de la playlist coincide con «{q.trim()}».</p>
         )}
         {visibles.map((t) => (
           <div role="listitem" key={t.id}>
@@ -149,6 +244,8 @@ function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
                 <span className="rsem-artista truncate">{t.artista || '—'}</span>
               </span>
               <DatosTrack t={t} leyenda={leyenda} />
+              {/* El género es del tema en la playlist (no del motor): es el que decide el pool. */}
+              {t.genero && <span className="pill rsem-genero" title="Género del tema en la playlist">{t.genero}</span>}
               {!t.es_track && <span className="rtag-notrack">no es un track</span>}
             </button>
           </div>
@@ -157,8 +254,9 @@ function Semillero({ tracks, leyenda, elegida, onElegir, q, setQ }) {
       <p className="rlista-pie">
         {filtrados.length > visibles.length
           ? `Se dibujan ${visibles.length} de ${filtrados.length} — filtrá para ver el resto.`
-          : `${filtrados.length} de ${tracks.length} tracks de la biblioteca del motor.`}
+          : `${filtrados.length} de ${tracks.length} temas de la playlist que pueden arrancar un set.`}
       </p>
+      <p className="rnota">Solo salen los temas de la playlist. Si elegís uno de otro género, la lista de entrada cambia a ese género.</p>
       {/* La leyenda del `?` va acá y no solo debajo del set: en esta lista ya hay keys
           dudosas antes de armar nada, y un `?` que solo se explica en un `title` es un
           símbolo mudo para quien no usa mouse (§6). Es el mismo texto del motor, y que
@@ -248,8 +346,13 @@ function Curva({ pasos }) {
 }
 
 /* ---------- La pantalla ---------- */
-export default function Radio({ onBiblioteca }) {
-  const [lib, setLib] = useState(null)        // respuesta de /api/radio/biblioteca
+export default function Radio({ onBiblioteca, playlistId = null, pick, onAbrirPlaylist }) {
+  // f55: de qué playlist sale el set. La elige «Armar un set» de Mis playlists (playlistId) o
+  // la lista de esta pantalla; sin playlist, la pantalla pide elegir una.
+  const [pid, setPid] = useState(playlistId)
+  useEffect(() => { if (playlistId != null) setPid(playlistId) }, [playlistId, pick])
+  const [lists, setLists] = useState(null)   // /api/playlists, para elegir
+  const [lib, setLib] = useState(null)        // respuesta de /api/radio/playlists/{pid}
   const [cfg, setCfg] = useState(null)        // lo que muestran los controles
   const [q, setQ] = useState('')
   const [elegida, setElegida] = useState(null)
@@ -298,26 +401,81 @@ export default function Radio({ onBiblioteca }) {
   // al <body>. El foco va al encabezado de lo que acaba de aparecer (WCAG 2.4.3).
   const tituloRef = useRef(null)
 
+  // Las playlists, para elegir de cuál sale el set (y para «Cambiar playlist»).
   useEffect(() => {
     let vivo = true
-    getRadioBiblioteca()
-      .then((d) => {
-        if (!vivo) return
-        setLib(d)
-        // Los defaults de los controles son los del motor. Si el backend no los manda
-        // (sin el paquete motor), no se inventan: la pantalla muestra el motivo.
-        if (d.opciones && d.opciones.config_default) setCfg({ ...d.opciones.config_default })
-      })
-      .catch(() => vivo && setLib({
-        configurada: false, estado: 'sin-conexion', total: 0, tracks: [], opciones: null,
-        motivo: 'No pude conectar con el servidor para leer la biblioteca del motor. Revisá que esté corriendo y volvé a intentar.',
-      }))
+    listarPlaylists().then((d) => { if (vivo) setLists(d.playlists || []) }).catch(() => { if (vivo) setLists([]) })
+    return () => { vivo = false }
+  }, [intento])
+
+  // La playlist como la ve la radio: semillas, géneros, qué queda afuera. Se vuelve a pedir
+  // mientras haya temas analizándose (el análisis sigue en segundo plano: cuando termina uno,
+  // puede pasar a ser semilla o a entrar al set).
+  const [vuelta, setVuelta] = useState(0)
+  const cargarPlaylist = async (p, { silencioso = false } = {}) => {
+    try {
+      const r = await getRadioPlaylist(p)
+      if (r.ok && Array.isArray(r.data?.semillas)) return r.data
+      if (r.status === 404) return { estado: 'sin-playlist', configurada: true, semillas: [], generos: [], temas: [], opciones: null, motivo: r.data?.error || 'Esa playlist ya no existe.' }
+      const suelto = r.data?.error_texto || r.data?.error
+      return { estado: `http-${r.status}`, configurada: false, semillas: [], generos: [], temas: [], opciones: null, motivo: `El servidor no pudo darme la playlist (HTTP ${r.status})${suelto ? `: ${suelto}` : '.'}` }
+    } catch {
+      if (silencioso) return null
+      return { estado: 'sin-conexion', configurada: false, semillas: [], generos: [], temas: [], opciones: null, motivo: 'No pude conectar con el servidor para leer la playlist. Revisá que esté corriendo y volvé a intentar.' }
+    }
+  }
+  useEffect(() => {
+    if (pid == null) { setLib(null); return undefined }
+    let vivo = true
+    setLib(null)
+    cargarPlaylist(pid).then((d) => {
+      if (!vivo || !d) return
+      setLib(d)
+      // Los defaults de los controles son los del motor. Si el backend no los manda (sin el
+      // paquete motor), no se inventan: la pantalla muestra el motivo.
+      if (d.opciones && d.opciones.config_default) setCfg((c) => c || { ...d.opciones.config_default })
+    })
     // El ref se LEE en el cleanup, no al montar: cuando este efecto corre, el <audio>
     // todavía no está en el DOM (se dibuja más abajo, con los datos ya cargados), así que
     // capturarlo en una variable acá guardaba null y no pausaba nada. Mismo patrón que
     // `views.jsx`.
     return () => { vivo = false; if (audioRef.current) audioRef.current.pause() } // eslint-disable-line react-hooks/exhaustive-deps
-  }, [intento])
+  }, [intento, pid]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (pid == null || !lib || !(lib.analizando > 0)) return undefined
+    const t = setTimeout(async () => {
+      const d = await cargarPlaylist(pid, { silencioso: true })
+      if (d && d.estado === 'ok') setLib(d)
+      setVuelta((v) => v + 1)
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [lib, vuelta, pid]) // eslint-disable-line react-hooks/exhaustive-deps
+  // La semilla elegida se busca de nuevo en cada lectura (puede haber dejado de poder ser
+  // semilla: le sacaron el género, se borró…).
+  useEffect(() => {
+    if (!lib || !elegida) return
+    const sigue = (lib.semillas || []).find((s) => s.id === elegida.id)
+    if (sigue !== elegida) setElegida(sigue || null)
+  }, [lib]) // eslint-disable-line react-hooks/exhaustive-deps
+  const [pidiendoAnalisis, setPidiendoAnalisis] = useState(false)
+  const analizarFaltantes = async () => {
+    if (pid == null) return
+    setPidiendoAnalisis(true)
+    try {
+      await analizarPlaylist(pid)
+      const d = await cargarPlaylist(pid, { silencioso: true })
+      if (d) setLib(d)
+    } finally { setPidiendoAnalisis(false) }
+  }
+  const elegirPlaylist = (p) => {
+    pararAudio()
+    setElegida(null); setSet(null); setGuardado(null); setError(''); setQ('')
+    setPid(p)
+  }
+  const [cambiando, setCambiando] = useState(false)
+  const [verAfuera, setVerAfuera] = useState(false)
+  const [guardandoPl, setGuardandoPl] = useState(false)
+  const [avisoPl, setAvisoPl] = useState(null)   // {tipo, texto, id?, nombre?}
 
   // Al volver de un «Reintentar», el foco va al encabezado de lo que se acaba de dibujar.
   useEffect(() => { if (intento > 0 && lib) tituloRef.current?.focus({ preventScroll: true }) }, [intento, lib])
@@ -327,7 +485,7 @@ export default function Radio({ onBiblioteca }) {
   const avisarBiblioteca = useRef(onBiblioteca)
   avisarBiblioteca.current = onBiblioteca
   useEffect(() => {
-    avisarBiblioteca.current?.(lib ? { estado: lib.estado, configurada: lib.configurada, total: lib.total } : null)
+    avisarBiblioteca.current?.(lib && lib.motor_total != null ? { estado: lib.estado, configurada: lib.configurada, total: lib.motor_total } : null)
   }, [lib])
   useEffect(() => () => avisarBiblioteca.current?.(null), [])
 
@@ -354,8 +512,9 @@ export default function Radio({ onBiblioteca }) {
     setErrorSets('')
     // Armar muestra el set nuevo: el set guardado que se miraba se cierra (sigue en la lista).
     setGuardado(null)
+    setAvisoPl(null)
     try {
-      const r = await getRadioSet(params || { track: elegida.id, ...cfg })
+      const r = await getRadioSet(params || { playlist: pid, track: elegida.id, ...cfg })
       if (!r.ok) {
         // 400: semilla que no es un track, curva inexistente, randomness fuera de 0..1. El
         // texto lo escribe el motor y se muestra tal cual — inventar uno propio acá sería
@@ -402,7 +561,7 @@ export default function Radio({ onBiblioteca }) {
     try {
       const r = guardado
         ? await exportarSetGuardadoM3u8(guardado.id)
-        : await exportarRadioM3u8({ track: set_.semilla.id, ...set_.config }, set_.pasos.map((p) => p.track.id))
+        : await exportarRadioM3u8(paramsDelSet(set_), set_.pasos.map((p) => p.track.id))
       if (!r.ok) {
         setAvisoExport({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data) })
         return
@@ -477,7 +636,7 @@ export default function Radio({ onBiblioteca }) {
     setGuardando(true)
     setErrorGuardar(null)
     try {
-      const r = await guardarRadioSet({ track: set_.semilla.id, ...set_.config },
+      const r = await guardarRadioSet(paramsDelSet(set_),
         set_.pasos.map((p) => p.track.id), set_.huella, nombre)
       if (!r.ok || !r.data?.set) {
         setErrorGuardar({ texto: motivoDelRechazo(r.status, r.data), conflicto: r.status === 409 })
@@ -498,6 +657,28 @@ export default function Radio({ onBiblioteca }) {
       setErrorGuardar({ texto: 'No pude conectar con el servidor para guardar el set. Revisá que esté corriendo y volvé a intentar.', conflicto: false })
     } finally {
       setGuardando(false)
+    }
+  }
+
+  // f55: el set armado que se ve, como playlist NUEVA de Mis playlists (en su orden). El
+  // backend lo re-arma con lo que el set usó y, si no da los mismos temas, 409 sin crear nada.
+  const guardarComoPlaylist = async () => {
+    if (!set_ || !set_.semilla || !set_.pool || guardandoPl) return
+    setGuardandoPl(true)
+    setAvisoPl(null)
+    try {
+      const r = await guardarSetComoPlaylist(set_.pool.playlist.id, paramsDelSet(set_), set_.pasos.map((p) => p.track.id))
+      if (!r.ok || !r.data?.playlist) {
+        setAvisoPl({ tipo: 'err', texto: motivoDelRechazo(r.status, r.data), conflicto: r.status === 409 })
+        return
+      }
+      const p = r.data.playlist
+      avisarPlaylists()
+      setAvisoPl({ tipo: 'ok', texto: `Se guardó la playlist «${p.nombre}» con los ${p.total} temas del set, en este orden.`, id: p.id, nombre: p.nombre })
+    } catch {
+      setAvisoPl({ tipo: 'err', texto: 'No pude conectar con el servidor para guardar la playlist. Revisá que esté corriendo y volvé a intentar.' })
+    } finally {
+      setGuardandoPl(false)
     }
   }
 
@@ -701,41 +882,66 @@ export default function Radio({ onBiblioteca }) {
   // Columna «Cues»: UN pedido con todos los ids del set (los que siguen en la biblioteca).
   // Guardar el set que se ve no lo repite: son los mismos tracks.
   const idsVista = vistaActual ? vistaActual.pasos.filter((p) => p.track.en_biblioteca !== false).map((p) => p.track.id).join(',') : ''
+  // f55: el mismo pedido trae de qué tipo es cada marca (los puntos de color de la columna).
+  // Cuando el editor cambia las marcas de un tema, los puntos salen de la lista que devolvió el
+  // server al guardar (sin volver a pedir los conteos de todo el set).
+  const [marcas, setMarcas] = useState({})
   useEffect(() => {
-    if (!idsVista) { setConteos({}); setHuerfanas(null); return undefined }
+    if (!idsVista) { setConteos({}); setMarcas({}); setHuerfanas(null); return undefined }
     let vivo = true
     contarMarcas(idsVista.split(','))
       .then((r) => {
         if (!vivo) return
-        if (r.ok && r.data && r.data.conteos) { setConteos(r.data.conteos); setHuerfanas(r.data.huerfanas || null) }
-        else setConteos({})
+        if (r.ok && r.data && r.data.conteos) { setConteos(r.data.conteos); setMarcas(r.data.marcas || {}); setHuerfanas(r.data.huerfanas || null) }
+        else { setConteos({}); setMarcas({}) }
       })
-      .catch(() => { if (vivo) setConteos({}) })   // sin conteo: la columna dice «—»
+      .catch(() => { if (vivo) { setConteos({}); setMarcas({}) } })   // sin conteo: la columna dice «—»
     return () => { vivo = false }
   }, [idsVista])
-  const alContar = (id, n) => setConteos((c) => ({ ...c, [id]: n }))
-
-  if (!lib) {
-    return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando la biblioteca del motor…</p></div>
+  const alContar = (id, n, lista) => {
+    setConteos((c) => ({ ...c, [id]: n }))
+    if (Array.isArray(lista)) setMarcas((m) => ({ ...m, [id]: resumenMarcas(lista) }))
   }
 
-  // Sin base, sin motor, base ocupada, vacía o ilegible: el backend manda SIEMPRE el motivo
-  // y el motivo dice qué hacer. Nunca una pantalla vacía sin explicación.
-  if (lib.estado !== 'ok') {
+  // Sin playlist elegida: la lista para elegir (la radio arma SOLO desde una playlist).
+  if (pid == null) {
     return (
-      <div className="empty">
-        <div className="empty-art"><IconRadio size={26} /></div>
-        <h3 ref={tituloRef} tabIndex={-1}>{lib.configurada ? 'La radio no puede leer la biblioteca' : 'Conectá la biblioteca del motor'}</h3>
-        <p>{lib.motivo}</p>
-        <p className="rnota mono">estado: {lib.estado}</p>
-        <button type="button" className="btn btn-secondary"
-          onClick={() => { setLib(null); setSet(null); setGuardado(null); setElegida(null); setIntento((n) => n + 1) }}>
-          Reintentar
-        </button>
+      <div className="radiodj">
+        <div className="radiodj-head"><div className="radiodj-head-id"><h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
+          <p className="muted">El set se arma con los temas de una de tus playlists, del mismo género que el tema de arranque.</p></div></div>
+        <ElegirPlaylist lists={lists} actual={null} onElegir={elegirPlaylist} />
       </div>
     )
   }
 
+  if (!lib) {
+    return <div className="empty"><span className="spinner" aria-hidden="true" /><p>Cargando la playlist…</p></div>
+  }
+
+  // Sin base, sin motor, base ocupada, vacía o ilegible (o la playlist ya no existe): el backend
+  // manda SIEMPRE el motivo y el motivo dice qué hacer. Nunca una pantalla vacía sin explicación.
+  if (lib.estado !== 'ok') {
+    return (
+      <div className="empty">
+        <div className="empty-art"><IconRadio size={26} /></div>
+        <h3 ref={tituloRef} tabIndex={-1}>{lib.estado === 'sin-playlist' ? 'Esa playlist ya no está' : lib.configurada ? 'La radio no puede leer la biblioteca' : 'Conectá la biblioteca del motor'}</h3>
+        <p>{lib.motivo}</p>
+        <p className="rnota mono">estado: {lib.estado}</p>
+        <div className="cluster" style={{ justifyContent: 'center' }}>
+          <button type="button" className="btn btn-secondary"
+            onClick={() => { setLib(null); setSet(null); setGuardado(null); setElegida(null); setIntento((n) => n + 1) }}>
+            Reintentar
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => elegirPlaylist(null)}>Cambiar playlist</button>
+        </div>
+      </div>
+    )
+  }
+
+  // f55: lo que entra al set. Antes de armar, el del género de la semilla elegida; con un set
+  // armado, el que usó ESE set. Un set guardado es una foto: no se dice.
+  const poolVisto = guardado ? null : (set_ ? set_.pool : generoDe(lib, elegida))
+  const tPool = textoPool(poolVisto)
   const leyenda = lib.opciones ? lib.opciones.leyenda_key : null
   const curvas = lib.opciones ? lib.opciones.curvas : null
   // Lo que dibuja el panel del set: el set guardado abierto (su foto) o, si no hay, el armado.
@@ -788,10 +994,14 @@ export default function Radio({ onBiblioteca }) {
         <div className="radiodj-head-id">
           <h1 ref={tituloRef} tabIndex={-1}>Radio DJ</h1>
           <p className="muted">
-            {vista ? `${vista.total} track${vista.total === 1 ? '' : 's'} en el set · ` : ''}
-            {lib.total} analizados en la biblioteca del motor · el set lo arma el motor y cada paso dice por qué está ahí
+            Set desde la playlist <b className="rpl-actual-nombre">{lib.playlist ? lib.playlist.nombre : '—'}</b>
+            {lib.playlist ? ` (${lib.playlist.total} tema${lib.playlist.total === 1 ? '' : 's'})` : ''}
+            {vista ? ` · ${vista.total} track${vista.total === 1 ? '' : 's'} en el set` : ''}
+            {' · '}el set lo arma el motor y cada paso dice por qué está ahí
           </p>
         </div>
+        <button type="button" className="btn btn-secondary rpl-cambiar" aria-expanded={cambiando} aria-controls="r-pl-cambiar"
+          onClick={() => setCambiando((c) => !c)}>Cambiar playlist</button>
         {/* Exportar: la lista .m3u8 que ya existe (la del set armado, o la FOTO de un set
             guardado). El XML con cues para Rekordbox todavía no: lo está verificando otra rama.
             aria-disabled y no disabled, por lo mismo que «Armar el set»: el botón no pierde el
@@ -820,6 +1030,17 @@ export default function Radio({ onBiblioteca }) {
         <p className="rnota rexportar-ok" role="status">{avisoExport.texto}</p>
       )}
 
+      {cambiando && (
+        <div id="r-pl-cambiar"><ElegirPlaylist lists={lists} actual={pid} onElegir={(p) => { setCambiando(false); if (p !== pid) elegirPlaylist(p) }} /></div>
+      )}
+
+      {/* f55: qué temas de la playlist entran (los del género de la semilla) y cuáles quedan
+          afuera, con su motivo. Antes de armar, el del género de la semilla elegida; con un
+          set armado, el que usó ESE set. Un set guardado es una foto: no se dice. */}
+      {!lib.puede_armar && lib.motivo_no_puede && (
+        <div className="alert rno-puede" role="status">{icono}<div><div className="alert-title">Con esta playlist todavía no se puede armar un set</div><p>{lib.motivo_no_puede}</p></div></div>
+      )}
+
       {/* Cómo se arma el set: la semilla, los controles del motor y los sets guardados. Es un
           panel plegable (se pliega solo cuando hay un set); la barra siempre a la vista dice
           qué hay elegido y tiene «Armar el set». */}
@@ -836,11 +1057,17 @@ export default function Radio({ onBiblioteca }) {
             {cfg && cfg.curva && <span>curva <b className="mono">{cfg.curva}</b></span>}
             {cfg && cfg.largo != null && cfg.largo !== '' && <span>largo <b className="mono">{cfg.largo}</b></span>}
             <span>{sets.sets.length} set{sets.sets.length === 1 ? '' : 's'} guardado{sets.sets.length === 1 ? '' : 's'}</span>
+            <PoolResumen t={tPool} />
           </span>
+          <PoolVer t={tPool} abierto={verAfuera} setAbierto={setVerAfuera} />
           <span className="rarma-accion"><BotonArmar elegida={elegida} onArmar={armar} armando={armando} /></span>
         </div>
+        <Pool pool={poolVisto} abierto={verAfuera}
+          analizando={lib.analizando}
+          sinAnalizar={(lib.temas || []).filter((t) => t.motivo === 'sin_analizar').length}
+          onAnalizar={analizarFaltantes} analizandoPedido={pidiendoAnalisis} />
         <div className="radiodj-arma-grid" id="r-arma-cuerpo" hidden={!armaAbierta}>
-          <Semillero tracks={lib.tracks} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
+          <Semillero tracks={lib.semillas} leyenda={leyenda} elegida={elegida} onElegir={setElegida} q={q} setQ={setQ} />
           {cfg
             ? <Controles cfg={cfg} setCfg={setCfg} curvas={curvas} />
             : <p className="rnota">No puedo dibujar los controles: el servidor no mandó los valores del motor.</p>}
@@ -867,8 +1094,36 @@ export default function Radio({ onBiblioteca }) {
                 {guardando ? <><span className="spinner" aria-hidden="true" /> Guardando…</> : 'Guardar set'}
               </button>
             )}
+            {/* f55: el set como playlist nueva de Mis playlists, en su orden. */}
+            {!guardado && (
+              <button type="button" className="btn btn-secondary rguardar-pl"
+                aria-disabled={!set_ || guardandoPl || armando}
+                aria-describedby={set_ ? undefined : 'r-guardar-falta'}
+                onClick={() => { if (set_ && !guardandoPl && !armando) guardarComoPlaylist() }}>
+                {guardandoPl ? <><span className="spinner" aria-hidden="true" /> Guardando…</> : 'Guardar como playlist'}
+              </button>
+            )}
             {!set_ && !guardado && <span className="sr-only" id="r-guardar-falta">Todavía no hay set: armá uno para poder guardarlo.</span>}
           </div>
+
+          {avisoPl && avisoPl.tipo === 'ok' && (
+            <p className="rnota rguardar-pl-ok" role="status">
+              {avisoPl.texto}{' '}
+              {onAbrirPlaylist && <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAbrirPlaylist(avisoPl.id)}>Abrir «{avisoPl.nombre}»</button>}
+            </p>
+          )}
+          {avisoPl && avisoPl.tipo === 'err' && (
+            <div className="alert alert-warn rguardar-pl-error" role="alert">
+              {icono}
+              <div>
+                <div className="alert-title">No se guardó la playlist</div>
+                <p>{avisoPl.texto}</p>
+                {avisoPl.conflicto && set_ && set_.semilla && (
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => armar(paramsDelSet(set_))}>Re-armar el set</button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Calificar se habilita recién guardado: la calificación se escribe contra un set
               guardado, y guardarlo es un paso explícito (nunca un guardado silencioso). */}
@@ -886,7 +1141,7 @@ export default function Radio({ onBiblioteca }) {
                     set usó muestra el set de hoy, y ESE es el que se puede guardar. */}
                 {errorGuardar.conflicto && set_ && set_.semilla && (
                   <button type="button" className="btn btn-secondary btn-sm rrearmar"
-                    onClick={() => armar({ track: set_.semilla.id, ...set_.config })}>
+                    onClick={() => armar(paramsDelSet(set_))}>
                     Re-armar el set
                   </button>
                 )}
@@ -921,7 +1176,7 @@ export default function Radio({ onBiblioteca }) {
             <>
               <Curva pasos={vista.pasos} />
               <ListaSet pasos={vista.pasos} selN={nSel} onSel={elegirFila} sonando={sonando} onAudio={alternarAudio}
-                errorAudio={errorAudio} conteos={conteos} leyenda={leyenda} />
+                errorAudio={errorAudio} conteos={conteos} marcas={marcas} leyenda={leyenda} />
 
               {/* Por qué se cortó: el titular y el detalle son los del motor. */}
               {vista.corte && (
@@ -934,7 +1189,6 @@ export default function Radio({ onBiblioteca }) {
                   </div>
                 </div>
               )}
-              {vista.aviso_fragmentos && <p className="rnota">{vista.aviso_fragmentos}</p>}
               {vista.leyenda_key && <p className="rnota">{vista.leyenda_key}</p>}
               {huerfanas && huerfanas.marcas > 0 && (
                 <div className="rhuerfanas">

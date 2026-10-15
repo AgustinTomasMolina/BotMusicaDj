@@ -64,6 +64,7 @@ class Fila:
     acuerdo: str
     grupo_id: int = 0            # 0 = no está en ningún grupo de duplicados
     accion_duplicado: str = ""   # conservar | descartar, dentro del grupo
+    motivo_duplicado: str = ""   # por qué (calidad medida, o copia ya referenciada)
     cambios: list = field(default_factory=list)   # (campo, antes, despues, motivo)
     metodo: str = "tono"         # qué función produjo la tonalidad
     estado: str = PENDIENTE
@@ -290,6 +291,9 @@ def _fila_html(f: Fila) -> str:
     dup = ""
     if f.grupo_id and f.accion_duplicado:
         dup = f' <span class="badge b-sos">duplicado: {html.escape(f.accion_duplicado)}</span>'
+        if f.motivo_duplicado:
+            dup += (f' <span style="color:var(--suave)">'
+                    f'{html.escape(f.motivo_duplicado)}</span>')
 
     # Campos editables: solo donde hacen falta. El nombre de archivo original al lado es
     # lo único que hay para completarlos, y es justo lo que se pierde una vez que el

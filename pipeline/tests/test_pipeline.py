@@ -144,6 +144,23 @@ def test_los_duplicados_se_agrupan(tmp_path):
     assert "grupo 1" in h
 
 
+def test_el_reporte_dice_el_motivo_del_duplicado(tmp_path):
+    """El criterio de la 5.26: el motivo (copia ya referenciada) llega al reporte."""
+    motivo = "se conserva esta porque ya está referenciada por Rekordbox"
+    f = _fila(archivo="a.wav", grupo_id=1, accion_duplicado="conservar", motivo_duplicado=motivo)
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert motivo in h
+
+
+def test_el_motivo_del_duplicado_se_escapa_en_el_html(tmp_path):
+    """El motivo lleva nombres y texto libre: un '<script>' no puede llegar crudo al reporte."""
+    motivo = '<script>alert("x")</script> & \'q\''
+    f = _fila(archivo="a.wav", grupo_id=1, accion_duplicado="descartar", motivo_duplicado=motivo)
+    h = generar([f], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
+    assert '<script>alert("x")</script>' not in h
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#x27;q&#x27;" in h
+
+
 def test_el_aviso_de_los_cues_esta_en_el_reporte(tmp_path):
     """Que no se busque después por qué 'se perdieron los cues'."""
     h = generar([_fila()], tmp_path, tmp_path / "r.html").read_text(encoding="utf-8")
@@ -322,6 +339,39 @@ def test_pipeline_y_benchmark_dan_la_misma_tonalidad_sobre_el_mismo_audio(tmp_pa
     assert del_pipe.camelot == del_bench.key_est, (
         f"el pipeline dice {del_pipe.camelot} y el benchmark {del_bench.key_est}")
     assert del_pipe.metodo == del_bench.metodo == "tono"
+
+
+def test_procesar_conserva_la_copia_que_rekordbox_ya_referencia(tmp_path):
+    """5.26 de punta a punta: dos copias bit a bit iguales, solo la segunda está en el XML."""
+    import shutil
+    from pathlib import Path
+
+    import soundfile as sf
+
+    from calidad.duplicados import referencias_de_xml
+    from calidad.tests.test_duplicados import _senal, _xml_rekordbox
+    from pipeline.revisar import procesar
+
+    sr = 22050
+    a = tmp_path / "descargas" / "tema_a.wav"
+    b = tmp_path / "biblioteca" / "tema_b.wav"
+    a.parent.mkdir()
+    b.parent.mkdir()
+    sf.write(a, _senal(11, dur=70.0), sr)
+    shutil.copyfile(a, b)
+    xml = _xml_rekordbox(tmp_path / "rb.xml", [b])
+
+    sin = {Path(f.ruta_original).name: f for f in
+           procesar([str(a), str(b)], tmp_path / "stg0", progreso=False)}
+    con = {Path(f.ruta_original).name: f for f in
+           procesar([str(a), str(b)], tmp_path / "stg1", progreso=False,
+                    referencias=referencias_de_xml(rekordbox_xml=xml))}
+
+    assert sin["tema_a.wav"].accion_duplicado == "conservar", "la línea base cambió"
+    assert con["tema_b.wav"].accion_duplicado == "conservar"
+    assert con["tema_a.wav"].accion_duplicado == "descartar"
+    assert "ya está referenciada por Rekordbox" in con["tema_b.wav"].motivo_duplicado
+    assert "ya está referenciada por Rekordbox" in con["tema_a.wav"].motivo_duplicado
 
 
 @pytest.fixture(scope="module")

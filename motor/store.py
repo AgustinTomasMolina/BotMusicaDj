@@ -31,6 +31,7 @@ import contextlib
 import dataclasses
 import os
 import sqlite3
+import threading
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -270,6 +271,12 @@ def _opcional(valor: object) -> float | None:
     return None if valor is None else float(valor)
 
 
+# f55: la biblioteca normalizada de `load_tracks`, por base (ruta real) → (firma, datos). Una
+# entrada por base: una firma nueva reemplaza a la vieja. Ver `Store._biblioteca_normalizada`.
+_CACHE_BIBLIOTECA: dict[str, tuple] = {}
+_CACHE_LOCK = threading.Lock()
+
+
 class Store:
     """Caché de análisis + biblioteca en memoria para la búsqueda vectorial."""
 
@@ -445,8 +452,75 @@ class Store:
         if not filas:
             return []
         norm, _, _, _ = self._normalized(filas)
-        energias = [float(f["energy_raw"]) for f in filas]
+        # Un array y no una lista: `percentil` lo usa sin copiarlo (ver su docstring).
+        energias = np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64)
         return [self._track(f, norm[i], energias) for i, f in enumerate(filas)]
+
+    def load_tracks(self, paths: Iterable[Path | str]) -> list[Track]:
+        """Los tracks de `paths` que están en la base, con EXACTAMENTE los valores que les da
+        `load_library` (misma normalización de la biblioteca entera, mismo percentil de
+        energía), en el mismo orden (por clave). Las rutas que no están en la base no vuelven.
+
+        Para la radio desde una playlist (f55): arma el set con los temas de la playlist y no
+        necesita construir 10k `Track` para usar 30. Se leen igual todas las filas —la media y
+        el desvío del embedding y el universo del percentil son de la biblioteca entera; con
+        una muestra serían otros números—, pero solo se arman los pedidos.
+
+        Caché (f55, latencia de la radio §4): la lectura y normalización de la biblioteca
+        entera se guarda en memoria del proceso mientras la base NO cambie (`_firma_contenido`:
+        el contador de cambios que SQLite escribe en la cabecera en cada commit, el tamaño y la
+        cantidad de tracks). Un scan, un análisis o cualquier escritura la invalida; si no se
+        puede saber (WAL, base en memoria, error al leer), no se usa. Los `Track` se arman
+        nuevos en cada llamada (con su embedding copiado): nadie puede modificar la caché.
+        """
+        claves = {self._key(p) for p in paths}
+        filas, claves_filas, norm, energias = self._biblioteca_normalizada()
+        elegidas = [i for i, k in enumerate(claves_filas) if k in claves]
+        return [self._track(filas[i], norm[i].copy(), energias) for i in elegidas]
+
+    def _biblioteca_normalizada(self):
+        """(filas, path_key de cada fila, embeddings normalizados, energías crudas) de la
+        biblioteca entera, desde la caché si la base no cambió. La firma se toma ANTES de leer:
+        si alguien escribe en el medio, lo leído queda bajo la firma vieja y la próxima vez no
+        coincide (se vuelve a leer) — nunca al revés (datos viejos bajo una firma nueva)."""
+        firma = self._firma_contenido()
+        if firma is not None:
+            with _CACHE_LOCK:
+                guardado = _CACHE_BIBLIOTECA.get(firma[0])
+            if guardado is not None and guardado[0] == firma:
+                return guardado[1]
+        filas = self._rows()
+        if filas:
+            # La misma cuenta que `_normalized`, sin armar 10k `Path` que acá no se usan.
+            norm, _, _ = normalize_matrix(np.vstack([self._embedding(f) for f in filas]).astype(np.float64))
+        else:
+            norm = np.zeros((0, DIM), dtype=np.float64)
+        datos = (filas, [f["path_key"] for f in filas], norm,
+                 np.asarray([float(f["energy_raw"]) for f in filas], dtype=np.float64))
+        if firma is not None:
+            with _CACHE_LOCK:
+                _CACHE_BIBLIOTECA[firma[0]] = (firma, datos)
+        return datos
+
+    def _firma_contenido(self) -> tuple | None:
+        """Qué versión del contenido tiene la base, o None si no se puede saber con certeza.
+
+        El "file change counter" de la cabecera SQLite (bytes 24..27) sube en cada commit que
+        modifica la base en modo rollback journal (el de este Store). En WAL no está
+        garantizado: ahí no hay caché. Se suman el tamaño del archivo y la cantidad de tracks
+        como cinturón. La primera posición es la identidad de la base (la clave de la caché)."""
+        try:
+            modo = str(self._con.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if modo in ("wal", "memory", "off") or str(self.db_path) in ("", ":memory:"):
+                return None
+            ruta = os.path.normcase(os.path.realpath(self.db_path))
+            with open(ruta, "rb") as f:
+                cabecera = f.read(100)
+            if len(cabecera) < 100 or not cabecera.startswith(b"SQLite format 3\x00"):
+                return None
+            return (ruta, int.from_bytes(cabecera[24:28], "big"), os.path.getsize(ruta), self.count())
+        except (OSError, sqlite3.Error):
+            return None
 
     def matrix(self) -> tuple[np.ndarray, list[Path]]:
         """La matriz de embeddings normalizados de TODA la biblioteca y el orden de las
@@ -887,6 +961,54 @@ class Store:
         filas = self._con.execute("SELECT * FROM cue_marks WHERE path_key = ?",
                                   (self._key(path),)).fetchall()
         return _ordenar_marcas([_marca(f) for f in filas])
+
+    def cue_mark_summary(self, paths: Iterable[Path | str]) -> dict[str, dict]:
+        """f55: por clave del store, el resumen de las marcas de cada track que tiene alguna —
+        `{total, pads (los num de los hot cues, ordenados), memory, loop}`— en UNA consulta
+        por tanda (antes: un `list_cue_marks` por track). Los que no tienen no aparecen."""
+        from motor.cue_marks import KIND_CUE, KIND_LOOP, KIND_MEMORY
+
+        claves = sorted({self._key(p) for p in paths})
+        out: dict[str, dict] = {}
+        for i in range(0, len(claves), 500):
+            tanda = claves[i:i + 500]
+            for f in self._con.execute(
+                    f"SELECT path_key, kind, num FROM cue_marks WHERE path_key IN "
+                    f"({', '.join('?' * len(tanda))})", tanda):
+                r = out.setdefault(f["path_key"], {"total": 0, "pads": [], "memory": 0, "loop": 0})
+                r["total"] += 1
+                if f["kind"] == KIND_CUE and f["num"] is not None:
+                    r["pads"].append(int(f["num"]))
+                elif f["kind"] == KIND_MEMORY:
+                    r["memory"] += 1
+                elif f["kind"] == KIND_LOOP:
+                    r["loop"] += 1
+        for r in out.values():
+            r["pads"].sort()
+        return out
+
+    def analysis_state(self, paths: Iterable[Path | str]) -> dict[str, tuple]:
+        """f55: por clave del store, `(bpm, key, key_acuerdo, vigente)` de los tracks de
+        `paths` que están analizados, en UNA consulta por tanda (antes: `get_features` +
+        `needs_analysis` por track). `vigente` es exactamente `not needs_analysis(path)`: el
+        archivo existe y su mtime es el que se analizó. El `stat` se hace solo para los que
+        están en la base. Los que no están no aparecen."""
+        por_clave: dict[str, str] = {}
+        for p in paths:
+            por_clave.setdefault(self._key(p), os.fspath(p))
+        claves = sorted(por_clave)
+        out: dict[str, tuple] = {}
+        for i in range(0, len(claves), 500):
+            tanda = claves[i:i + 500]
+            for f in self._con.execute(
+                    f"SELECT path_key, bpm, key, key_acuerdo, mtime FROM tracks WHERE path_key IN "
+                    f"({', '.join('?' * len(tanda))})", tanda):
+                try:
+                    vigente = float(f["mtime"]) == float(os.stat(por_clave[f["path_key"]]).st_mtime)
+                except OSError:
+                    vigente = False
+                out[f["path_key"]] = (float(f["bpm"]), f["key"], f["key_acuerdo"], vigente)
+        return out
 
     def duration(self, path: Path | str) -> float | None:
         """La duración (s) que midió el análisis, o None si el track no está analizado. Sin
