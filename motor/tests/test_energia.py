@@ -259,5 +259,15 @@ def test_spearman_ascendente_indefinido_es_nan():
     assert math.isnan(ascending_spearman([0.5, 0.5, 0.5, 0.1], "peak")), "tramo constante"
 
 
+def test_percentil_con_un_array_es_el_mismo_numero():
+    """f55: un `np.ndarray` se usa sin pasar por `list()` (era el cuello de botella de
+    `load_library`: ~4 s con 10k tracks). El número no puede cambiar."""
+    biblioteca = np.random.default_rng(3).random(500)
+    for v in (0.0, 0.25, float(biblioteca[17]), 0.999, 2.0):
+        esperado = sum(1 for x in biblioteca if x < v) / 500 * 100
+        assert percentil(v, biblioteca) == percentil(v, list(biblioteca)) == \
+            percentil(v, iter(biblioteca)) == pytest.approx(esperado, abs=1e-12)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

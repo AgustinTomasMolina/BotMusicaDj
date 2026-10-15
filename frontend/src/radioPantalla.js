@@ -47,3 +47,72 @@ export function siguienteTab(tabs, actual, tecla) {
   if (tecla === 'ArrowLeft') return ok[(i < 0 ? 0 : i - 1 + ok.length) % ok.length]
   return null
 }
+
+// ---------- f55: la radio desde una playlist ----------
+
+// Los motivos por los que un tema queda afuera del set (códigos de `radio_playlist.MOTIVOS`),
+// en el orden en que los decide el server, con cómo se dicen contados.
+const MOTIVOS = [
+  ['otro_genero', (n) => `${n} de otro género`],
+  ['sin_genero', (n) => `${n} sin género`],
+  ['sin_archivo', (n) => `${n} sin archivo`],
+  ['analizando', (n) => `${n} todavía analizando`],
+  ['sin_analizar', (n) => `${n} sin analizar`],
+  ['fallo_analisis', (n) => `${n} con el análisis fallado`],
+  ['no_es_track', (n) => `${n} ${n === 1 ? 'no es un track' : 'no son tracks'} (menos de 90 s)`],
+  ['duplicado', (n) => `${n} ${n === 1 ? 'repetido' : 'repetidos'}`],
+]
+
+// El renglón de arriba del set: «Entran 38 de 44 temas, del mismo género que la semilla
+// (Groove)» y «4 de otro género · 1 sin género · 1 sin archivo». Los números son los del server
+// (`pool` de /api/radio/set o un género de /api/radio/playlists/{id}); acá solo se ponen en
+// palabras, y lo que está en cero no se nombra. `afuera` = cuántos quedan afuera en total.
+export function textoPool(pool) {
+  if (!pool || !Number.isFinite(pool.entran) || !Number.isFinite(pool.total)) return null
+  const ex = pool.excluidos || {}
+  const partes = MOTIVOS.filter(([k]) => ex[k] > 0).map(([k, f]) => f(ex[k]))
+  const afuera = MOTIVOS.reduce((s, [k]) => s + (ex[k] > 0 ? ex[k] : 0), 0)
+  return {
+    titular: `Entran ${pool.entran} de ${pool.total} tema${pool.total === 1 ? '' : 's'}, del mismo género que la semilla${pool.genero ? ` (${pool.genero})` : ''}`,
+    detalle: partes.join(' · '),
+    afuera,
+  }
+}
+
+// La etiqueta corta de un motivo, para la lista de los que quedan afuera (el texto largo, con
+// el porqué, lo escribe el server).
+export function etiquetaMotivo(codigo) {
+  return {
+    otro_genero: 'otro género', sin_genero: 'sin género', sin_archivo: 'sin archivo',
+    analizando: 'analizando', sin_analizar: 'sin analizar', fallo_analisis: 'falló el análisis',
+    no_es_track: 'no es un track', duplicado: 'repetido',
+  }[codigo] || codigo || ''
+}
+
+// El género de la semilla elegida dentro de lo que contestó /api/radio/playlists/{id}: con él
+// la pantalla dice, ANTES de armar, cuántos entran y qué queda afuera. null si no hay.
+export function generoDe(radioPlaylist, semilla) {
+  if (!radioPlaylist || !semilla || !Array.isArray(radioPlaylist.generos)) return null
+  return radioPlaylist.generos.find((g) => g.clave === semilla.clave_genero) || null
+}
+
+// Los puntos de color de un tema a partir de la lista de marcas que el server devolvió al
+// escribir (el editor): la MISMA cuenta que `server._marcas_por_clase` (pads = los `num` de los
+// hot cues, en orden; memory y loops contados). Así, después de poner un cue, los puntos se
+// actualizan sin volver a pedir los conteos de todo el set.
+export function resumenMarcas(lista) {
+  const ms = Array.isArray(lista) ? lista : []
+  if (!ms.length) return { total: 0, pads: [], memory: 0, loop: 0 }
+  return {
+    total: ms.length,
+    pads: ms.filter((m) => m.tipo === 'cue' && m.num !== null && m.num !== undefined).map((m) => m.num).sort((a, b) => a - b),
+    memory: ms.filter((m) => m.tipo === 'memory').length,
+    loop: ms.filter((m) => m.tipo === 'loop').length,
+  }
+}
+
+// El aviso de lo que todavía se está analizando: el set se arma con lo que ya está.
+export function textoAnalizando(n) {
+  if (!Number.isFinite(n) || n <= 0) return null
+  return `${n} ${n === 1 ? 'tema' : 'temas'} todavía ${n === 1 ? 'se está analizando' : 'se están analizando'}: el set se arma con los que ya están; cuando ${n === 1 ? 'termine' : 'terminen'}, armalo de nuevo para sumarl${n === 1 ? 'o' : 'os'}.`
+}

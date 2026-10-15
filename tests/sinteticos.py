@@ -100,6 +100,22 @@ def armar_base_radio(raiz: Path, db: Path, segundos: float = 0.25) -> tuple[dict
     return audios, rutas
 
 
+def playlist_del_catalogo(db_mod, rutas: dict, nombre: str = "Radio de prueba",
+                          genero: str = "Techno", fuente: str = "carpeta") -> int:
+    """f55: una playlist de Mis playlists con TODO el CATALOGO del motor, todos del mismo
+    género (la radio de la web arma solo desde una playlist). `db_mod` es el módulo `db` que
+    usa el server bajo prueba; `rutas` las de `armar_base_radio`. Devuelve el id.
+
+    Los items se agregan como los agrega el server (`db.agregar_item` con el archivo YA
+    resuelto): el género es el del item, no un dato del motor."""
+    p = db_mod.crear_playlist(nombre)
+    for nombre_arch, *_resto, artista, titulo, _e in CATALOGO:
+        r = db_mod.agregar_item(p["id"], {"titulo": titulo, "artista": artista, "fuente": fuente,
+                                          "genero": genero}, str(rutas[nombre_arch]))
+        assert r and not r.get("dup"), f"no pude agregar {nombre_arch} a la playlist: {r}"
+    return p["id"]
+
+
 # ------------------------------------------------------- biblioteca local (XML de Rekordbox)
 
 def location(ruta: Path) -> str:

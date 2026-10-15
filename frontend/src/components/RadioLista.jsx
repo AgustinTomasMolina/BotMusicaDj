@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { reducirPicos } from '../minionda'
 import { cargadorOndas } from '../ondas'
 import { siguienteFila, textoCues } from '../radioPantalla'
+import { puntosMarcas, textoMarcas } from '../playlistImport'
 import { fmtDur } from '../utils'
 import Cover from './Cover'
 import { IconPause, IconPlayFill } from './icons'
@@ -90,7 +91,7 @@ function CeldaKey({ t, leyenda }) {
   )
 }
 
-export default function ListaSet({ pasos, selN, onSel, sonando, onAudio, errorAudio, conteos, leyenda }) {
+export default function ListaSet({ pasos, selN, onSel, sonando, onAudio, errorAudio, conteos, marcas = {}, leyenda }) {
   const tablaRef = useRef(null)
   const ns = pasos.map((p) => p.n)
 
@@ -183,6 +184,14 @@ export default function ListaSet({ pasos, selN, onSel, sonando, onAudio, errorAu
               <span role="cell" className="c-key"><CeldaKey t={t} leyenda={leyenda} /></span>
               <span role="cell" className="c-dur"><span className="mono">{t.dur != null ? fmtDur(t.dur) : '—'}</span></span>
               <span role="cell" className="c-cues">
+                {/* f55: un punto por marca, con el color de su pad (loop naranja, memory
+                    blanco), como en Mis playlists. Es decorativo: el texto dice cuántas, y el
+                    `title` de qué tipo (no solo color). */}
+                {!falta && puntosMarcas(marcas[t.id]).length > 0 && (
+                  <span className="cue-puntos rcues-puntos" title={textoMarcas(marcas[t.id])}>
+                    <span aria-hidden="true">{puntosMarcas(marcas[t.id]).map((p, i) => <i key={i} className={p.clase} />)}</span>
+                  </span>
+                )}
                 <span className={`rcues${n === 0 ? ' is-sin' : ''}`}
                   title={n === undefined ? 'Sin conteo de marcas' : `${n} marca${n === 1 ? '' : 's'} guardada${n === 1 ? '' : 's'} (hot cues, memory y loops)`}>
                   {textoCues(n)}

@@ -338,10 +338,19 @@ def _snapshot(track: dict) -> dict:
     }
 
 
-def _tiene_archivo(it: "MiPlaylistItem") -> bool:
+def _tiene_archivo(it: "MiPlaylistItem", existe: dict | None = None) -> bool:
     """¿El item está bajado DE VERDAD? Tener `ruta` no alcanza: si el archivo se borró o se
-    movió, decir "descargado" miente (el botón no ofrecería bajarlo y el .m3u8 lo pierde)."""
+    movió, decir "descargado" miente (el botón no ofrecería bajarlo y el .m3u8 lo pierde).
+    `existe` (f55): lo ya mirado en disco en ESTA lectura, por id (ver `_existencias`)."""
+    if existe is not None and it.id in existe:
+        return existe[it.id]
     return bool(it.ruta) and Path(it.ruta).is_file()
+
+
+def _existencias(items) -> dict:
+    """f55: un solo `is_file` por item y por lectura (antes eran tres: `descargado`,
+    `archivo_estado` y las métricas). Con 1000 temas eran 3000 stats en el camino de la radio."""
+    return {it.id: bool(it.ruta) and Path(it.ruta).is_file() for it in items}
 
 
 # Fuentes de un tema que es un archivo PROPIO del dueño, no algo que bajó MusiFlix (f53): de su
@@ -349,31 +358,31 @@ def _tiene_archivo(it: "MiPlaylistItem") -> bool:
 FUENTES_LOCALES = ("rekordbox", "carpeta", "biblioteca")
 
 
-def _archivo_estado(it: "MiPlaylistItem") -> str:
+def _archivo_estado(it: "MiPlaylistItem", existe: dict | None = None) -> str:
     """Qué pasa con el archivo del tema, en una palabra (f53):
 
     'ok' está en disco · 'no-existe' tenía archivo y ya no está donde se guardó · 'ambiguo' al
     importar había varios archivos DISTINTOS con ese nombre y no se eligió uno · 'no-encontrado'
     al importar no apareció en las carpetas permitidas · 'sin-archivo' nunca tuvo (por bajar)."""
     if it.ruta:
-        return "ok" if Path(it.ruta).is_file() else "no-existe"
+        return "ok" if _tiene_archivo(it, existe) else "no-existe"
     if it.resolucion in ("ambiguo", "no-encontrado"):
         return it.resolucion
     return "sin-archivo"
 
 
-def _item_dict(it: "MiPlaylistItem") -> dict:
+def _item_dict(it: "MiPlaylistItem", existe: dict | None = None) -> dict:
     return {
         "id": it.id, "orden": it.orden, "titulo": it.titulo, "artista": it.artista,
         "fuente": it.fuente, "url": it.url, "thumbnail": it.thumbnail, "duracion": it.duracion,
         "bpm": it.bpm, "camelot": it.camelot, "genero": it.genero, "grade": it.grade,
-        "color": it.color, "formato": it.formato, "descargado": _tiene_archivo(it),
+        "color": it.color, "formato": it.formato, "descargado": _tiene_archivo(it, existe),
         "solo_preview": bool(it.solo_preview), "playlist_id": it.playlist_id,
         # f53. `descargado` sigue queriendo decir "tiene el archivo en disco" (lo usan la descarga
         # —409 si ya lo tiene— y el .m3u8). Lo que NO dice es quién lo trajo: `local` = es un
         # archivo propio del dueño (importado o de su biblioteca), y la pantalla lo muestra como
         # «En tu PC», no como «Descargado». `nombre_archivo` es solo el nombre, nunca la ruta.
-        "archivo_estado": _archivo_estado(it),
+        "archivo_estado": _archivo_estado(it, existe),
         "local": (it.fuente or "").lower() in FUENTES_LOCALES,
         "nombre_archivo": it.archivo or (Path(it.ruta).name if it.ruta else None),
         "homonimos": it.homonimos, "genero_editado": bool(it.genero_editado),
@@ -425,9 +434,9 @@ def metricas_bpm(pares) -> dict:
             "bpm_n": 0, "bpm_afuera": 0}
 
 
-def _metrics(items: list) -> dict:
+def _metrics(items: list, existe: dict | None = None) -> dict:
     total = len(items)
-    descargados = sum(1 for it in items if _tiene_archivo(it))
+    descargados = sum(1 for it in items if _tiene_archivo(it, existe))
     dur = sum((it.duracion or 0) for it in items)
     keys = [0] * 12                       # histograma por número Camelot (1..12)
     for it in items:
@@ -452,6 +461,42 @@ def crear_playlist(nombre: str) -> dict | None:
             return {"id": p.id, "nombre": p.nombre}
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude crear la playlist: {e}")
+        return None
+
+
+# Lo que NO se copia de un item al pasarlo a otra playlist: su identidad y su lugar.
+_NO_SE_COPIA = {"id", "playlist_id", "orden", "agregado_en"}
+
+
+def crear_playlist_desde_items(nombre: str, pid_origen: int, item_ids: list[int]) -> dict | None:
+    """f55: una playlist NUEVA con copias de los items `item_ids` de la playlist `pid_origen`, en
+    ese orden (el del set que armó la radio). Se copia todo el item —título, archivo, género,
+    datos del origen— salvo su id y su lugar: es el mismo tema en otra lista, y el archivo
+    original no se toca (solo se guarda su ruta, como cualquier item).
+
+    Los ids los resolvió el server (son de los temas que entraron al set). Si alguno ya no está
+    en la playlist de origen no se crea nada (None): guardar un set con huecos sería guardar
+    otro set."""
+    try:
+        with SessionLocal() as s:
+            if not s.get(MiPlaylist, pid_origen):
+                return None
+            fuente = {it.id: it for it in s.scalars(select(MiPlaylistItem).where(
+                MiPlaylistItem.playlist_id == pid_origen))}
+            if not item_ids or any(i not in fuente for i in item_ids):
+                return None
+            p = MiPlaylist(nombre=(nombre or "Set")[:300], origen="musiflix")
+            s.add(p)
+            s.flush()
+            cols = [c.name for c in MiPlaylistItem.__table__.columns if c.name not in _NO_SE_COPIA]
+            for orden, i in enumerate(item_ids, 1):
+                viejo = fuente[i]
+                s.add(MiPlaylistItem(playlist_id=p.id, orden=orden,
+                                     **{c: getattr(viejo, c) for c in cols}))
+            s.commit()
+            return {"id": p.id, "nombre": p.nombre, "total": len(item_ids)}
+    except Exception as e:
+        logger.warning(f"⚠️ Crates: no pude guardar el set como playlist: {e}")
         return None
 
 
@@ -529,10 +574,11 @@ def get_playlist_mia(pid: int, con_ruta: bool = False) -> dict | None:
                 return None
             items = list(s.scalars(select(MiPlaylistItem).where(MiPlaylistItem.playlist_id == pid)
                                    .order_by(MiPlaylistItem.orden, MiPlaylistItem.id)))
+            existe = _existencias(items)
             return {"id": p.id, "nombre": p.nombre, "activa": p.activa, **_origen_dict(p),
-                    "metrics": _metrics(items),
-                    "items": [{**_item_dict(it), "ruta": it.ruta} if con_ruta else _item_dict(it)
-                              for it in items]}
+                    "metrics": _metrics(items, existe),
+                    "items": [{**_item_dict(it, existe), "ruta": it.ruta} if con_ruta
+                              else _item_dict(it, existe) for it in items]}
     except Exception as e:
         logger.warning(f"⚠️ Crates: no pude leer la playlist {pid}: {e}"); return None
 
@@ -617,13 +663,16 @@ _SIN_GENERO = {"sin género", "sin genero"}
 
 
 def sanear_genero(valor) -> str | None:
-    """Un género como se guarda: texto corto, sin caracteres de control y con los espacios
-    colapsados. Vacío, "Sin género" (como rotula la home al que no tiene) o algo que no es texto
-    → None: un tema sin género no tiene género, no uno inventado."""
+    """Un género como se guarda: texto corto, sin caracteres de control (C0, DEL y C1) ni
+    invisibles (ancho cero, marcas de dirección, BOM) y con los espacios colapsados: el mismo
+    saneo con el que la radio compara géneros (`radio_playlist.limpiar_texto`). Vacío, "Sin
+    género" (como rotula la home al que no tiene) o algo que no es texto → None: un tema sin
+    género no tiene género, no uno inventado."""
     if not isinstance(valor, str):
         return None
-    limpio = re.sub(r"[\x00-\x1f\x7f]+", " ", valor)
-    limpio = re.sub(r"\s+", " ", limpio).strip()[:GENERO_MAX].strip()
+    from radio_playlist import limpiar_texto
+
+    limpio = limpiar_texto(valor)[:GENERO_MAX].strip()
     if not limpio or limpio.casefold() in _SIN_GENERO:
         return None
     return limpio

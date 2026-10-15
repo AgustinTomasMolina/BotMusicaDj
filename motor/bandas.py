@@ -115,8 +115,8 @@ class Bandas:
 
 # --- decodificación por bloques -----------------------------------------------------------
 #
-# Los mismos backends que `motor.peaks` (y que `librosa.load`): soundfile en streaming y, si no
-# abre el archivo, audioread. Lo que la onda de una banda puede dibujar, esto también.
+# Los mismos backends que `motor.peaks` y que `motor.decodificar.cargar`: soundfile en streaming
+# y, si no abre el archivo, ffmpeg. Lo que la onda de una banda puede dibujar, esto también.
 
 def _abrir(ruta: str, block_frames: int):
     """`(archivo, sr, canales, generador de bloques float32 (n, canales))`. El archivo lo cierra
@@ -128,7 +128,7 @@ def _abrir(ruta: str, block_frames: int):
     try:
         f = sf.SoundFile(ruta, mode="r")
     except (RuntimeError, TypeError, ValueError):     # LibsndfileError es un RuntimeError
-        return _abrir_audioread(ruta)
+        return _abrir_ffmpeg(ruta)
     sr, ch, total = int(f.samplerate), int(f.channels), int(f.frames)
     if total <= 0 or sr <= 0 or ch <= 0:
         f.close()
@@ -151,14 +151,12 @@ def _abrir(ruta: str, block_frames: int):
     return f, sr, ch, bloques()
 
 
-def _abrir_audioread(ruta: str):
+def _abrir_ffmpeg(ruta: str):
+    from motor.decodificar import LectorPCM
+
     try:
-        import audioread
-    except ImportError as e:      # pragma: no cover — viene con librosa
-        raise UnreadableAudio(f"no hay con qué decodificar este formato ({e})") from None
-    try:
-        f = audioread.audio_open(ruta)
-    except Exception as e:  # noqa: BLE001 — audioread tira lo que tire su backend
+        f = LectorPCM(ruta)
+    except Exception as e:  # noqa: BLE001 — sin ffmpeg, sin pista de audio o archivo roto
         raise UnreadableAudio(f"no se pudo decodificar el audio ({type(e).__name__}: {e})") from None
     sr, ch = int(f.samplerate), int(f.channels)
     if sr <= 0 or ch <= 0:
@@ -175,7 +173,7 @@ def _abrir_audioread(ruta: str):
                 if util:
                     yield np.frombuffer(datos[:util], dtype="<i2").reshape(-1, ch) \
                         .astype(np.float32) / np.float32(32768.0)
-        except Exception as e:  # noqa: BLE001 — ídem
+        except Exception as e:  # noqa: BLE001 — ídem (el pipe de ffmpeg se corta o falla)
             raise UnreadableAudio(f"no se pudo decodificar el audio ({type(e).__name__}: {e})") \
                 from None
 

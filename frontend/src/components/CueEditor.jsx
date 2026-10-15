@@ -303,7 +303,7 @@ export default function CueEditor({ trackId, titulo, onConteo, onDatos }) {
     try { r = await hacer() } catch { r = null }
     v.n -= 1
     if (r && r.ok && Array.isArray(r.data?.marcas)) {
-      avisos.current.onConteo?.(trackId, r.data.marcas.length)
+      avisos.current.onConteo?.(trackId, r.data.marcas.length, r.data.marcas)
       if (trackId === selRef.current && seq >= v.aplicado) {
         v.aplicado = seq
         setDatos((d) => (d && d.track && d.track.id === trackId ? { ...d, marcas: r.data.marcas } : d))

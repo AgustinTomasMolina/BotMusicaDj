@@ -186,23 +186,8 @@ export async function sourceAudioReason(src) {
    base SQLite del motor (la que tiene energía, embeddings y confianza de la key). Ids y
    rutas distintos → endpoints distintos (ver el comentario de /api/radio/* en server.py). */
 
-// Biblioteca del motor: tracks para elegir semilla + `opciones` (curvas, defaults de
-// RadioConfig y leyenda del `?`). Siempre 200: sin base contesta con `estado`/`motivo`.
-// Nunca `.then(json)` a secas, por lo mismo que `getRadioSet`: un 500 de FastAPI viene en
-// text/plain y el parseo explotaba, así que la pantalla decía "no pude conectar" cuando el
-// servidor sí había contestado. Un fallo del server se devuelve con la misma forma que usa
-// el backend para degradar (`estado`/`motivo`), así la pantalla lo muestra sin casos nuevos.
-export async function getRadioBiblioteca() {
-  const r = await fetch('/api/radio/biblioteca')
-  const data = await cuerpoRadio(r)
-  if (r.ok && Array.isArray(data?.tracks)) return data
-  const suelto = data?.error_texto || data?.error || data?.detail
-  return {
-    configurada: false, estado: `http-${r.status}`, total: 0, tracks: [], opciones: null,
-    motivo: `El servidor no pudo darme la biblioteca del motor (HTTP ${r.status})`
-      + (suelto ? `: ${typeof suelto === 'string' ? suelto : JSON.stringify(suelto)}` : '.'),
-  }
-}
+// f55: la pantalla ya no pide la biblioteca entera del motor (/api/radio/biblioteca sigue
+// para la CLI y el E2E): las semillas salen de la playlist, con `getRadioPlaylist`.
 
 // Cuerpo de una respuesta de la radio, sin asumir que es JSON.
 //
@@ -307,6 +292,20 @@ export const guardarRadioSet = (params, esperado, huella, nombre) => {
   }
   if (nombre && nombre.trim()) cuerpo.nombre = nombre
   return pedirSets('/api/radio/sets', 'POST', cuerpo)
+}
+// f55: la playlist como la ve la radio (semillas, por género cuántos entran y qué queda afuera,
+// si alcanza para armar). 404 si no existe; sin base, 200 con `estado`/`motivo`.
+export const getRadioPlaylist = (pid) => pedirSets(`/api/radio/playlists/${encodeURIComponent(pid)}`)
+// f55: el set que se ve como playlist NUEVA de Mis playlists, en su orden. Viajan los
+// parámetros que el set usó y los ids de los pasos: si el backend re-arma otra cosa, 409.
+export const guardarSetComoPlaylist = (pid, params, esperado, nombre) => {
+  const cuerpo = { esperado }
+  for (const [k, v] of Object.entries(params || {})) {
+    if (k === 'playlist' || v === undefined || v === null || v === '') continue
+    cuerpo[k] = v
+  }
+  if (nombre && nombre.trim()) cuerpo.nombre = nombre.trim()
+  return pedirSets(`/api/radio/playlists/${encodeURIComponent(pid)}/guardar`, 'POST', cuerpo)
 }
 export const listarRadioSets = () => pedirSets('/api/radio/sets')
 export const getRadioSetGuardado = (id) => pedirSets(`/api/radio/sets/${encodeURIComponent(id)}`)

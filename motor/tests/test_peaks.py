@@ -177,7 +177,7 @@ def test_flac_que_falla_a_mitad_del_stream(audio, tmp_path, como):
 def test_wav_truncado_no_dibuja_silencio_inventado(audio, tmp_path):
     """Un WAV cortado a 3/4: los bins se reparten sobre lo que DE VERDAD hay (libsndfile
     corrige solo el largo de un WAV truncado; el decodificador que declara de más está en
-    `test_audioread_que_estima_de_mas_se_relee`)."""
+    `test_ffmpeg_que_estima_de_mas_se_relee`)."""
     corto = tmp_path / "truncado.wav"
     b = audio.read_bytes()
     corto.write_bytes(b[: 44 + (len(b) - 44) * 3 // 4])        # 3/4 del audio, header intacto
@@ -193,12 +193,12 @@ def test_wav_truncado_no_dibuja_silencio_inventado(audio, tmp_path):
     assert p.peaks[:44].max() == 0.0 and p.peaks[45:88].min() > 0 and p.peaks[90:].max() == 0.0
 
 
-def test_audioread_que_estima_de_mas_se_relee(audio, monkeypatch):
-    """Por el camino de audioread (MP3/M4A vía ffmpeg) la duración es una ESTIMACIÓN. Un
-    decodificador falso que dice 60 s y entrega los 30 del archivo: los bins se reparten sobre
-    lo entregado (si no, la mitad de la onda sería un silencio que no existe). En esta PC
-    audioread no tiene ffmpeg, por eso el decodificador es falso; los datos son los del WAV."""
-    import audioread
+def test_ffmpeg_que_estima_de_mas_se_relee(audio, monkeypatch):
+    """Por el camino de ffmpeg (MP3/M4A) la duración es una ESTIMACIÓN. Un decodificador falso
+    que dice 60 s y entrega los 30 del archivo: los bins se reparten sobre lo entregado (si no,
+    la mitad de la onda sería un silencio que no existe). En esta PC no hay ffmpeg, por eso el
+    decodificador es falso; los datos son los del WAV."""
+    import motor.decodificar as dec
 
     y, sr = sf.read(str(audio), dtype="int16", always_2d=True)
 
@@ -217,7 +217,7 @@ def test_audioread_que_estima_de_mas_se_relee(audio, monkeypatch):
                 yield datos[i:i + 4096 + 2]
 
     monkeypatch.setattr(peaks_mod, "_con_soundfile", lambda *a, **k: None)
-    monkeypatch.setattr(audioread, "audio_open", lambda _ruta: Falso())
+    monkeypatch.setattr(dec, "LectorPCM", lambda _ruta: Falso())
     p = compute_peaks(audio, bins=BINS)
     assert p.duration_s == 30.0, p.duration_s
     # int16 → /32768: el mismo valor que lee soundfile en float32 del PCM_16.
