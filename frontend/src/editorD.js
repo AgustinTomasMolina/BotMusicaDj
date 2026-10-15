@@ -233,18 +233,54 @@ export function columnas(d, v, px) {
 //   { tipo: 'grupo', ops: [...] }      (cambiar el tipo = crear la nueva + borrar la vieja)
 // Deshacer aplica la inversa; rehacer, la original. Recrear una marca borrada le da OTRO id
 // en la base: `reemplazarId` lo propaga a todo el historial.
+// Cada paso lleva `tid`, el tema en el que nació (auditoría f54): un paso de otro tema no se
+// aplica nunca sobre el tema que está abierto. La inversa conserva el `tid`.
 
 export const historialVacio = () => ({ pasado: [], futuro: [] })
 const TOPE = 200
 
 export function inversa(op) {
+  const tid = op && op.tid !== undefined ? { tid: op.tid } : {}
   switch (op.tipo) {
-    case 'crear': return { tipo: 'borrar', marca: op.marca }
-    case 'borrar': return { tipo: 'crear', marca: op.marca }
-    case 'cambiar': return { tipo: 'cambiar', id: op.id, antes: op.despues, despues: op.antes }
-    case 'grupo': return { tipo: 'grupo', ops: [...op.ops].reverse().map(inversa) }
+    case 'crear': return { tipo: 'borrar', marca: op.marca, ...tid }
+    case 'borrar': return { tipo: 'crear', marca: op.marca, ...tid }
+    case 'cambiar': return { tipo: 'cambiar', id: op.id, antes: op.despues, despues: op.antes, ...tid }
+    case 'grupo': return { tipo: 'grupo', ops: [...op.ops].reverse().map(inversa), ...tid }
     default: throw new Error(`operación desconocida: ${op && op.tipo}`)
   }
+}
+
+// ¿Qué hacer con una escritura que el servidor no confirmó? Por el código HTTP (null = sin
+// respuesta: red caída, el server no contestó):
+//   'rechazo'      400 / 404: el pedido no vale tal cual (la marca ya no está, el pad está
+//                  ocupado); repetirlo da lo mismo → el paso sale del historial.
+//   'reintentable' 409 (la base está ocupada: el server dice «reintentá en un rato»), 5xx o
+//                  sin respuesta → el paso queda para volver a intentar.
+export function clasificarFalla(status) {
+  return status === 400 || status === 404 ? 'rechazo' : 'reintentable'
+}
+
+// ¿La operación ya está hecha en la lista REAL del servidor? Deshacer y rehacer miran esto
+// antes de mandar cada pedido (auditoría f54): reintentar un paso que quedó a medias, o uno
+// cuyo pedido llegó pero cuya respuesta se perdió, no puede duplicar marcas.
+//   crear: ya hay una marca igual (tipo, tiempos, pad) → { hecha: true, id: la de la base }
+//   borrar: la marca ya no está → hecha
+//   cambiar: la marca ya tiene los valores nuevos → hecha (si no está, no: el PATCH dará 404)
+export function yaHecha(op, marcas) {
+  const lista = Array.isArray(marcas) ? marcas : []
+  const igual = (a, b) => (a ?? null) === (b ?? null) || (finito(a) && finito(b) && Math.abs(a - b) < 0.0005)
+  if (op.tipo === 'crear') {
+    const m = op.marca
+    const x = lista.find((y) => y.tipo === m.tipo && igual(y.inicio, m.inicio) && igual(y.fin, m.fin)
+      && (m.tipo === 'memory' || igual(y.num, m.num)))
+    return x ? { hecha: true, id: x.id } : { hecha: false }
+  }
+  if (op.tipo === 'borrar') return { hecha: !lista.some((y) => y.id === op.marca.id) }
+  if (op.tipo === 'cambiar') {
+    const x = lista.find((y) => y.id === op.id)
+    return { hecha: Boolean(x) && Object.keys(op.despues).every((k) => igual(x[k], op.despues[k])) }
+  }
+  return { hecha: false }
 }
 
 export function registrar(h, op) {
@@ -265,19 +301,20 @@ export function rehacer(h) {
   return { aplicar: op, h: { pasado: [...h.pasado, op], futuro: h.futuro.slice(1) } }
 }
 
-function conId(op, viejo, nuevo) {
+// Una operación con el id `viejo` de marca cambiado por `nuevo` (la marca se recreó).
+export function opConId(op, viejo, nuevo) {
   switch (op.tipo) {
     case 'crear':
     case 'borrar': return op.marca.id === viejo ? { ...op, marca: { ...op.marca, id: nuevo } } : op
     case 'cambiar': return op.id === viejo ? { ...op, id: nuevo } : op
-    case 'grupo': return { ...op, ops: op.ops.map((o) => conId(o, viejo, nuevo)) }
+    case 'grupo': return { ...op, ops: op.ops.map((o) => opConId(o, viejo, nuevo)) }
     default: return op
   }
 }
 
 export function reemplazarId(h, viejo, nuevo) {
   if (viejo === nuevo) return h
-  return { pasado: h.pasado.map((o) => conId(o, viejo, nuevo)), futuro: h.futuro.map((o) => conId(o, viejo, nuevo)) }
+  return { pasado: h.pasado.map((o) => opConId(o, viejo, nuevo)), futuro: h.futuro.map((o) => opConId(o, viejo, nuevo)) }
 }
 
 // El cuerpo del POST que vuelve a crear una marca (sin id ni fechas).

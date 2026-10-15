@@ -15,6 +15,7 @@ import {
   anchoZoom, ventana, xDeTiempo, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
+  clasificarFalla, yaHecha, opConId,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -241,6 +242,44 @@ test('un paso que el servidor rechazó sale del historial (no se repite con el p
   assert.deepEqual(deshacer(h2).aplicar, { tipo: 'borrar', marca: M1 }, 'el próximo Ctrl+Z es el paso anterior, no el rechazado')
   const r = rehacer(d.h)                       // rehacer rechazado: sale del pasado
   assert.deepEqual(descartarPaso(r.h, 1), { pasado: [{ tipo: 'crear', marca: M1 }], futuro: [] })
+})
+
+test('cada paso conserva el tema en el que nació (tid), también en la inversa de un grupo', () => {
+  assert.deepEqual(inversa({ tipo: 'crear', marca: M1, tid: 'a1' }), { tipo: 'borrar', marca: M1, tid: 'a1' })
+  assert.equal(inversa({ tipo: 'cambiar', id: 7, antes: {}, despues: {}, tid: 'a1' }).tid, 'a1')
+  const g = inversa({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: M1 }], tid: 'b2' })
+  assert.equal(g.tid, 'b2')
+  const h = registrar(historialVacio(), { tipo: 'crear', marca: M1, tid: 'a1' })
+  assert.equal(deshacer(h).aplicar.tid, 'a1', 'deshacer manda el tema del paso')
+  assert.equal(rehacer(deshacer(h).h).aplicar.tid, 'a1')
+})
+
+test('clasificarFalla: 400/404 se descartan; 409 (base ocupada), 5xx y sin respuesta se reintentan', () => {
+  assert.deepEqual([400, 404, 409, 500, 503, null].map(clasificarFalla), ['rechazo', 'rechazo', 'reintentable', 'reintentable', 'reintentable', 'reintentable'])
+})
+
+test('yaHecha: lo que la base ya tiene no se vuelve a mandar (reintentar no duplica)', () => {
+  const lista = [{ id: 9, tipo: 'memory', num: null, inicio: 0.204, fin: null }, { id: 3, tipo: 'cue', num: 1, inicio: 2, fin: null, nombre: 'Drop' }]
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: true, id: 9 })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.205, fin: null } }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'cue', num: 2, inicio: 2, fin: null } }, lista), { hecha: false }, 'otro pad no es la misma marca')
+  assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 3 } }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 4 } }, lista), { hecha: true })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { nombre: 'X' }, despues: { nombre: 'Drop' } }, lista), { hecha: true })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { inicio: 2 }, despues: { inicio: 3 } }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 77, antes: {}, despues: { inicio: 3 } }, lista), { hecha: false }, 'si no está, que lo diga el servidor (404)')
+})
+
+test('opConId cambia el id de marca en cualquier operación, también adentro de un grupo', () => {
+  const g = { tipo: 'grupo', ops: [{ tipo: 'crear', marca: { id: 7 } }, { tipo: 'cambiar', id: 7 }, { tipo: 'borrar', marca: { id: 8 } }] }
+  assert.deepEqual(opConId(g, 7, 12).ops.map((o) => (o.marca ? o.marca.id : o.id)), [12, 12, 8])
+})
+
+test('compasDe con compas_ref varios compases después del primero cuenta desde el PRIMER 1 del tema', () => {
+  // El motor puede dar como referencia un 1 del tercer compás: el compás 1 es el del primer beat.
+  const g = { ...G, compas_ref: 0.25 + 8 * 0.46875 }
+  assert.deepEqual(compasDe(0.26, g, 0), { compas: 1, beat: 1 })
+  assert.deepEqual(compasDe(0.25 + 9 * 0.46875 + 0.01, g, 0), { compas: 3, beat: 2 })
 })
 
 test('cuerpoCrear: lo que el POST acepta, sin id ni fechas', () => {
