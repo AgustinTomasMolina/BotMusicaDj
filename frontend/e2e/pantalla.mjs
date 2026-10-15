@@ -165,7 +165,19 @@ async function abrirRadio(page, ctx, { navegar = true } = {}) {
   if (navegar) await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('button[aria-label="Radio DJ"]', { timeout: ESPERA_MS })
   await page.click('button[aria-label="Radio DJ"]')
+  // f55: sin playlist elegida, la radio pide una: la de juguete.
+  await elegirPlaylistRadio(page, ctx.base.radio_playlist_nombre)
   await page.waitForSelector('.rsem', { timeout: ESPERA_MS })
+}
+
+async function elegirPlaylistRadio(page, nombre) {
+  await page.waitForSelector('.rpl-item', { timeout: ESPERA_MS })
+  const hay = await page.evaluate((n) => {
+    const b = [...document.querySelectorAll('.rpl-item')].find((x) => x.querySelector('.rpl-nombre')?.textContent === n)
+    b?.click()
+    return !!b
+  }, nombre)
+  afirmar(hay, `la radio no ofrece la playlist «${nombre}»`)
 }
 
 // f50: la semilla, los controles y los sets guardados están en un panel que se pliega solo
@@ -286,10 +298,13 @@ async function elegirFila(page, n) {
 // "Título — Artista" (sin artista, solo el título) para los anuncios de la barra.
 const quien = (t) => `${t.titulo}${t.artista ? ` — ${t.artista}` : ''}`
 
+// f55: la radio arma desde la playlist de juguete (base_juguete.py). `lib.tracks` son las
+// semillas que da /api/radio/playlists/{id} y `lib.total` los tracks de la base del motor.
 async function semillaUno(ctx) {
-  const lib = await api(ctx, '/api/radio/biblioteca')
+  const rp = await api(ctx, `/api/radio/playlists/${ctx.base.radio_playlist}`)
+  const lib = { ...rp, tracks: rp.semillas, total: rp.motor_total }
   const uno = lib.tracks.find((t) => t.titulo === 'Uno')
-  afirmar(uno, '/api/radio/biblioteca no trae el track «Uno» de la base de juguete')
+  afirmar(uno, '/api/radio/playlists/{id} no trae la semilla «Uno» de la playlist de juguete')
   return { lib, uno }
 }
 
@@ -324,9 +339,9 @@ function mutarBase(ctx, ...args) {
 // la huella y los ids del set que devuelve /api/radio/set, igual que la pantalla.
 async function guardarUnoPorApi(ctx, nombre) {
   const { uno } = await semillaUno(ctx)
-  const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+  const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
   const r = await apiPedir(ctx, '/api/radio/sets', 'POST', {
-    track: uno.id, ...set.config, esperado: set.pasos.map((p) => p.track.id), huella: set.huella, ...(nombre ? { nombre } : {}),
+    playlist: ctx.base.radio_playlist, track: uno.id, ...set.config, esperado: set.pasos.map((p) => p.track.id), huella: set.huella, ...(nombre ? { nombre } : {}),
   })
   afirmar(r.status === 201, `POST /api/radio/sets contestó ${r.status}: ${json(r.data)}`)
   return r.data.set
@@ -756,7 +771,7 @@ const CASOS_SETS = [
         const nombre = decodeURIComponent((/filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') || '') || [])[1] || '')
         igual(r.headers.get('x-djradio-faltan'), '1', 'la API no cuenta el track que falta')
         // Que el caso tenga dientes: el set de HOY ya no es la foto.
-        const hoy = await fetch(`${ctx.url}/api/radio/set.m3u8?track=${encodeURIComponent(s.pasos[0].track.id)}&largo=${s.config.largo}`)
+        const hoy = await fetch(`${ctx.url}/api/radio/set.m3u8?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(s.pasos[0].track.id)}&largo=${s.config.largo}`)
         const hoyBytes = hoy.ok ? Buffer.from(await hoy.arrayBuffer()) : Buffer.alloc(0)
         afirmar(Buffer.compare(hoyBytes, esperado) !== 0, 'el .m3u8 del set de hoy es igual al de la foto: el caso no probaría nada')
         afirmar(esperado.toString('utf8').includes(`bpm=${bpm1(cambia.bpm)} `), 'el .m3u8 de la foto no trae el BPM que se guardó')
@@ -1404,7 +1419,7 @@ const CASOS_F50 = [
 
   ['radio (f50): la columna «Cues» = las marcas de cada track en la base, con UN pedido de conteos por set', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
-    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
     for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
     const segundo = set.pasos[1].track
@@ -1503,7 +1518,7 @@ const CASOS_F50 = [
 
   ['radio (f50): las minionditas se piden solo para las filas a la vista, de a dos, y el mismo tema una vez', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
-    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     const retenidos = []     // pedidos a /onda que todavía no se contestaron
     const pedidos = []       // ids pedidos, en orden
     let maxEnVuelo = 0
@@ -1555,7 +1570,7 @@ const CASOS_F50 = [
 
   ['radio (f50): elegir una fila con el mouse o Enter lleva el foco a la onda y C pone un cue; con ↑ ↓ el foco se queda en la lista', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
-    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
     const [, p2, p3] = set.pasos
     await limpiarMarcas(ctx, p2.track.id)
@@ -1704,7 +1719,188 @@ const CASOS_F50 = [
 
 /* ---------- casos ---------- */
 
+/* ---------- f55: la radio desde una playlist ---------- */
+
+// Cómo se dice cada motivo contado y su etiqueta en la lista de afuera: escrito acá (es el
+// contrato de la pantalla), no importado del front.
+const MOTIVO_CONTADO = {
+  otro_genero: (n) => `${n} de otro género`, sin_genero: (n) => `${n} sin género`,
+  sin_archivo: (n) => `${n} sin archivo`, analizando: (n) => `${n} todavía analizando`,
+  sin_analizar: (n) => `${n} sin analizar`, fallo_analisis: (n) => `${n} con el análisis fallado`,
+  no_es_track: (n) => `${n} ${n === 1 ? 'no es un track' : 'no son tracks'} (menos de 90 s)`,
+  duplicado: (n) => `${n} ${n === 1 ? 'repetido' : 'repetidos'}`,
+}
+const MOTIVO_ETIQUETA = {
+  otro_genero: 'otro género', sin_genero: 'sin género', sin_archivo: 'sin archivo', analizando: 'analizando',
+  sin_analizar: 'sin analizar', fallo_analisis: 'falló el análisis', no_es_track: 'no es un track', duplicado: 'repetido',
+}
+const poolEsperado = (pool) => ({
+  titular: `Entran ${pool.entran} de ${pool.total} temas, del mismo género que la semilla (${pool.genero})`,
+  detalle: Object.keys(MOTIVO_CONTADO).filter((k) => pool.excluidos[k] > 0).map((k) => MOTIVO_CONTADO[k](pool.excluidos[k])).join(' · '),
+})
+const leerPoolBarra = (page) => page.evaluate(() => ({
+  titular: document.querySelector('.rarma-pool .rpool-tit')?.textContent ?? null,
+  detalle: document.querySelector('.rarma-pool .rpool-det')?.textContent ?? null,
+}))
+const leerAccionSet = (page) => page.evaluate(() => {
+  const b = [...document.querySelectorAll('.crate-accion')].find((x) => x.querySelector('.crate-accion-t')?.textContent === 'Armar un set')
+  if (!b) return null
+  const d = document.getElementById(b.getAttribute('aria-describedby') || '')
+  return { deshabilitada: b.getAttribute('aria-disabled') === 'true', motivo: d && window.__visible(d) ? d.textContent : null, alto: Math.round(b.getBoundingClientRect().height) }
+})
+async function abrirPlaylistEnRail(page, ctx, nombre) {
+  await abrirHome(page, ctx)
+  await hasta(() => page.evaluate((n) => [...document.querySelectorAll('.pl-item')].some((b) => b.querySelector('.pl-item-name')?.textContent === n), nombre),
+    (v) => v, `«${nombre}» no aparece en el rail`)
+  await page.evaluate((n) => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === n).click(), nombre)
+  await hasta(() => page.evaluate(() => document.querySelector('.name-edit')?.value ?? null), (v) => v === nombre, `no se abrió «${nombre}» en Mis playlists`)
+}
+
+const CASOS_F55 = [
+
+  ['radio (f55): sin playlist pide una (= /api/playlists); «Armar un set» de Mis playlists abre la radio con ESA playlist, con el teclado', async (page, ctx) => {
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('button[aria-label="Radio DJ"]', { timeout: ESPERA_MS })
+    await page.click('button[aria-label="Radio DJ"]')
+    const nombres = (await api(ctx, '/api/playlists')).playlists.map((p) => p.nombre)
+    const ofrecidas = await hasta(() => page.$$eval('.rpl-item', (bs) => bs.map((b) => ({ nombre: b.querySelector('.rpl-nombre')?.textContent, alto: Math.round(b.getBoundingClientRect().height), actual: b.getAttribute('aria-current') }))),
+      (v) => v.length === nombres.length, 'la radio no ofrece todas las playlists de /api/playlists')
+    igual(ofrecidas.map((o) => o.nombre), nombres, 'las playlists que ofrece la radio')
+    afirmar(ofrecidas.every((o) => o.alto >= 44 && o.actual === null), `elegir playlist: botones de menos de 44 px o uno marcado sin elegir: ${json(ofrecidas)}`)
+    igual(await page.$$eval('.rsem', (s) => s.length), 0, 'sin playlist elegida no tiene que haber semillas')
+
+    // Desde Mis playlists, con el teclado: Tab llega a «Armar un set» y Enter abre la radio.
+    const rp = await api(ctx, `/api/radio/playlists/${ctx.base.radio_playlist}`)
+    igual([rp.puede_armar, rp.generos.map((g) => [g.genero, g.entran])], [true, [['Techno', 5]]], 'la playlist de juguete según la API')
+    await abrirPlaylistEnRail(page, ctx, ctx.base.radio_playlist_nombre)
+    const acc = await hasta(() => leerAccionSet(page), (a) => a && a.motivo && !a.motivo.startsWith('Revisando'), '«Armar un set» no terminó de preguntarle a la radio')
+    igual(acc.deshabilitada, false, '«Armar un set» tendría que estar habilitado con 5 temas de Techno')
+    afirmar(acc.motivo.startsWith('Techno: 5 temas.') && acc.alto >= 44, `«Armar un set» no dice cuántos entran (o mide menos de 44 px): ${json(acc)}`)
+    await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((x) => x.querySelector('.crate-accion-t')?.textContent === 'Armar un set').focus())
+    await page.keyboard.press('Enter')
+    await page.waitForSelector('.rsem', { timeout: ESPERA_MS })
+    igual(await page.$eval('.rpl-actual-nombre', (e) => e.textContent), ctx.base.radio_playlist_nombre, 'la radio no abrió con la playlist de la que se pidió')
+    igual(await page.$$eval('.rsem .rsem-titulo', (s) => s.map((x) => x.textContent)), rp.semillas.map((s) => s.titulo), 'las semillas no son las de esa playlist')
+
+    // Una playlist vacía: deshabilitado con el motivo del server, y el clic no hace nada.
+    const vacia = await apiPedir(ctx, '/api/playlists', 'POST', { nombre: `E2E vacía ${Date.now()}` })
+    await abrirPlaylistEnRail(page, ctx, vacia.data.playlist.nombre)
+    const acc2 = await hasta(() => leerAccionSet(page), (a) => a && a.motivo && !a.motivo.startsWith('Revisando'), '«Armar un set» no terminó de preguntarle a la radio')
+    igual([acc2.deshabilitada, acc2.motivo], [true, 'La playlist está vacía.'], '«Armar un set» con una playlist vacía')
+    await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((x) => x.querySelector('.crate-accion-t')?.textContent === 'Armar un set').click())
+    await page.evaluate(() => new Promise((r) => setTimeout(r, 300)))
+    igual(await page.$$eval('.rsem, .rpl-item', (s) => s.length), 0, 'el clic en «Armar un set» deshabilitado abrió la radio')
+    await apiPedir(ctx, `/api/playlists/${vacia.data.playlist.id}`, 'DELETE')
+  }],
+
+  ['radio (f55): «Entran N de M» y los que quedan afuera = /api/radio/playlists (antes de armar) y el pool de /api/radio/set (armado)', async (page, ctx) => {
+    const rp = await api(ctx, `/api/radio/playlists/${ctx.base.radio_playlist}`)
+    await abrirRadio(page, ctx)
+    igual(await leerPoolBarra(page), { titular: null, detalle: null }, 'sin semilla no hay género: no se dice cuántos entran')
+    await elegirSemilla(page, 'Uno')
+    const techno = rp.generos.find((g) => g.genero === 'Techno')
+    igual(await leerPoolBarra(page), poolEsperado(techno), 'antes de armar: el renglón no es el del género de la semilla')
+    const set = await armarSet(page)
+    igual([set.pool.entran, set.pool.total, set.pool.genero], [5, 9, 'Techno'], 'la API: la playlist de juguete tiene 9 temas y entran los 5 de Techno que son tracks')
+    igual(await leerPoolBarra(page), poolEsperado(set.pool), 'armado: el renglón no es el pool de /api/radio/set')
+    // Ver los de afuera, con el teclado.
+    igual(await page.$eval('.rpool-ver', (b) => b.textContent), `Ver los ${set.pool.afuera.length} que quedan afuera`, 'el botón no dice cuántos quedan afuera')
+    // Cerrada, aria-controls no apunta a un id que no existe (auditoría f55).
+    igual(await page.$eval('.rpool-ver', (b) => [b.getAttribute('aria-expanded'), b.getAttribute('aria-controls')]), ['false', null],
+      'con la lista cerrada, aria-controls apunta a algo que no está')
+    await page.focus('.rpool-ver')
+    await page.keyboard.press('Enter')
+    const lista = await hasta(() => page.$$eval('#r-afuera li', (ls) => ls.map((l) => ({
+      n: l.querySelector('.rpool-n')?.textContent, tema: l.querySelector('.rpool-tema')?.textContent,
+      genero: l.querySelector('.rpool-genero')?.textContent ?? null, motivo: l.querySelector('.rpool-motivo')?.textContent,
+    }))), (v) => v.length > 0, 'Enter en «Ver los que quedan afuera» no abrió la lista')
+    igual(await page.$eval('.rpool-ver', (b) => [b.getAttribute('aria-expanded'), b.getAttribute('aria-controls'), !!document.getElementById(b.getAttribute('aria-controls'))]),
+      ['true', 'r-afuera', true], 'abierta: aria-expanded y aria-controls a la lista que existe')
+    igual(lista, set.pool.afuera.map((a) => ({
+      n: `#${a.posicion}`, tema: `${a.artista ? `${a.artista} — ` : ''}${a.titulo}`, genero: a.genero, motivo: `${MOTIVO_ETIQUETA[a.motivo]}: ${a.texto}`,
+    })), 'la lista de los que quedan afuera no es la de la API')
+    igual(set.pool.afuera.map((a) => a.motivo).sort(), ['no_es_track', 'otro_genero', 'sin_archivo', 'sin_genero'], 'la base de juguete deja afuera uno por motivo')
+    const enSet = set.pasos.map((p) => p.item_id)
+    afirmar(enSet.every((i) => Number.isInteger(i)) && !set.pool.afuera.some((a) => enSet.includes(a.item_id)),
+      `un tema de afuera está en el set (o un paso sin item): ${json(enSet)}`)
+    await page.keyboard.press('Enter')
+    await hasta(() => page.$$eval('#r-afuera', (x) => x.length), (n) => n === 0, 'Enter otra vez no cerró la lista')
+  }],
+
+  ['radio (f55): «Guardar como playlist» crea la playlist con los temas del set en su orden y se abre en Mis playlists', async (page, ctx) => {
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    const set = await armarSet(page)
+    const resp = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/radio/playlists/${ctx.base.radio_playlist}/guardar`, { timeout: ESPERA_MS })
+    await page.click('.rguardar-pl')
+    const r = await resp
+    igual(r.status(), 201, 'estado del POST de guardar como playlist')
+    const nueva = (await r.json()).playlist
+    const aviso = await hasta(() => page.$eval('.rguardar-pl-ok', (e) => e.textContent).catch(() => null), (v) => !!v, 'no avisó que se guardó')
+    afirmar(aviso.includes(`«${nueva.nombre}»`) && aviso.includes(`${set.total} temas`), `el aviso no dice qué playlist ni cuántos temas: ${aviso}`)
+    const items = (await api(ctx, `/api/playlists/${nueva.id}`)).data.items
+    igual(items.map((i) => i.titulo), set.pasos.map((p) => p.track.titulo), 'la playlist nueva no tiene los temas del set en su orden')
+    igual([...new Set(items.map((i) => i.genero))], ['Techno'], 'la playlist nueva perdió el género de los temas')
+    await page.evaluate(() => [...document.querySelectorAll('.rguardar-pl-ok button')][0].click())
+    await hasta(() => page.evaluate(() => document.querySelector('.name-edit')?.value ?? null), (v) => v === nueva.nombre, '«Abrir» no llevó a la playlist nueva')
+    await apiPedir(ctx, `/api/playlists/${nueva.id}`, 'DELETE')
+  }],
+
+  ['radio (f55): con randomness 0, armar dos veces da el mismo set', async (page, ctx) => {
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    const a = await armarSet(page)
+    igual(a.config.randomness, 0, 'el default del motor ya no es randomness 0: este caso no prueba el determinismo')
+    await desplegarArmado(page)
+    const b = await armarSet(page)
+    igual(b.pasos.map((p) => [p.track.id, p.motivo]), a.pasos.map((p) => [p.track.id, p.motivo]), 'el mismo pedido dio otro set')
+    igual(await page.$$eval('.rpaso .rpaso-titulo', (s) => s.map((x) => x.textContent)), a.pasos.map((p) => p.track.titulo), 'la pantalla no muestra ese set')
+  }],
+
+  ['radio (f55): los puntos de color de cada tema = las marcas de la base (pad, memory, loop), no solo color', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    try {
+      for (const m of [{ tipo: 'cue', inicio: 1, num: 2 }, { tipo: 'memory', inicio: 3 }, { tipo: 'loop', inicio: 5, fin: 9 }]) {
+        const r = await apiPedir(ctx, rutaMarcas(uno.id), 'POST', m)
+        afirmar(r.status === 201 || r.status === 200, `no pude crear la marca ${json(m)}: ${r.status} ${json(r.data)}`)
+      }
+      await abrirRadio(page, ctx)
+      await elegirSemilla(page, 'Uno')
+      const set = await armarSet(page)
+      const filas = await hasta(() => page.$$eval('.rpaso', (rs) => rs.map((r) => ({
+        titulo: r.querySelector('.rpaso-titulo')?.textContent,
+        puntos: [...r.querySelectorAll('.rcues-puntos i')].map((i) => i.className),
+        texto: r.querySelector('.rcues-puntos')?.getAttribute('title') ?? null,
+        cuenta: r.querySelector('.rcues')?.textContent,
+      }))), (v) => v.some((f) => f.puntos.length), 'no aparecieron los puntos de las marcas')
+      igual(filas[0], { titulo: 'Uno', puntos: ['cue-c3', 'cue-mem', 'cue-loop'], texto: '1 hot cue, 1 memory, 1 loop', cuenta: '3 cues' },
+        'los puntos de «Uno» no son sus marcas de la base')
+      afirmar(filas.slice(1).every((f) => f.puntos.length === 0 && f.texto === null), `un tema sin marcas tiene puntos: ${json(filas)}`)
+      igual(filas.length, set.pasos.length, 'filas del set')
+    } finally {
+      await limpiarMarcas(ctx, uno.id)
+    }
+  }],
+
+  ['radio (f55): 400 px con la lista de afuera abierta: sin desborde y los botones nuevos de 44 px', async (page, ctx) => {
+    await abrirRadio(page, ctx)
+    await elegirSemilla(page, 'Uno')
+    await armarSet(page)
+    await page.setViewport({ width: 400, height: 860 })
+    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
+    await page.click('.rpool-ver')
+    await page.waitForSelector('#r-afuera li', { timeout: ESPERA_MS })
+    const d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `a 400 px hay contenido fuera del ancho: ${json(d)}`)
+    const altos = await page.$$eval('.rpool-ver, .rguardar-pl, .rpl-cambiar', (bs) => bs.map((b) => Math.round(b.getBoundingClientRect().height)))
+    afirmar(altos.length === 3 && altos.every((h) => h >= 44), `botones de menos de 44 px: ${json(altos)}`)
+  }],
+]
+
 const CASOS = [
+
+  ...CASOS_F55,
 
   ['home: cada tarjeta muestra el BPM (un decimal) y la key de /api/biblioteca', async (page, ctx) => {
     const lib = await api(ctx, '/api/biblioteca')
@@ -1819,8 +2015,8 @@ const CASOS = [
     igual(pausada.anuncio, `En pausa: ${quien(uno)}`, 'el anuncio aria-live de la barra en pausa')
   }],
 
-  ['radio: cada semilla de la lista = /api/radio/biblioteca (BPM, Camelot y clásica, ?, energía)', async (page, ctx) => {
-    const lib = await api(ctx, '/api/radio/biblioteca')
+  ['radio: cada semilla de la lista = /api/radio/playlists/{id} (BPM, Camelot y clásica, ?, energía, género)', async (page, ctx) => {
+    const { lib } = await semillaUno(ctx)
     const leyenda = lib.opciones.leyenda_key
     await abrirRadio(page, ctx)
     const real = await hasta(() => page.$$eval('.rsem', (bs) => bs.map((b) => ({
@@ -1828,10 +2024,13 @@ const CASOS = [
       artista: b.querySelector('.rsem-artista')?.textContent ?? null,
       datos: window.__datosTrack(b),
       noTrack: !!b.querySelector('.rtag-notrack'),
+      genero: b.querySelector('.rsem-genero')?.textContent ?? null,
     }))), (v) => v.length === lib.tracks.length, `la lista no tiene las ${lib.tracks.length} semillas de la API`)
     const esperado = lib.tracks.map((t) => ({
-      titulo: t.titulo, artista: t.artista || '—', datos: esperadoDatos(t, leyenda), noTrack: !t.es_track,
+      titulo: t.titulo, artista: t.artista || '—', datos: esperadoDatos(t, leyenda), noTrack: !t.es_track, genero: t.genero,
     }))
+    // f55: el loop (no es un track) no puede arrancar un set: no está en la lista.
+    afirmar(!real.some((r) => r.titulo === 'Loop'), 'el loop aparece como semilla')
     for (let i = 0; i < esperado.length; i++) igual(real[i], esperado[i], `semilla ${i + 1} («${esperado[i].titulo}»)`)
     afirmar(esperado.some((t) => t.datos.key.duda), 'la base de juguete no tiene ninguna key dudosa: el chequeo del ? no probaría nada')
   }],
@@ -1839,7 +2038,7 @@ const CASOS = [
   ['radio: el set = /api/radio/set (orden, motivos, datos, titular del corte, fragmentos)', async (page, ctx) => {
     const { lib, uno } = await semillaUno(ctx)
     const leyenda = lib.opciones.leyenda_key
-    const set = await api(ctx, `/api/radio/set?track=${encodeURIComponent(uno.id)}`)
+    const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     await abrirRadio(page, ctx)
     await elegirSemilla(page, 'Uno')
     await armarSet(page)
@@ -1888,16 +2087,20 @@ const CASOS = [
     igual(real.cuenta, `${set.total} track${set.total === 1 ? '' : 's'}${set.pedidos != null ? ` · ${set.total} de ${set.pedidos} pedidos` : ''}`, 'la cuenta del set')
     igual(real.corte, set.corte ? { titular: set.corte.titular, detalle: set.corte.detalle, codigo: set.corte.codigo ?? null } : null,
       'el aviso de por qué se cortó el set')
-    igual(real.notas, [set.aviso_fragmentos, set.leyenda_key].filter(Boolean), 'las notas debajo del set (fragmentos y leyenda del ?)')
+    // f55: el pool ya no trae fragmentos (lo que no es un track queda afuera antes, con motivo).
+    igual([set.fragmentos, set.aviso_fragmentos], [0, null], 'la API: un set desde playlist no tiene fragmentos')
+    igual(real.notas, [set.leyenda_key].filter(Boolean), 'las notas debajo del set (leyenda del ?)')
     igual(real.curva, set.pasos.map((p) => (p.track.energia_pct == null ? '2px' : `${Math.max(2, p.track.energia_pct)}%`)),
       'la curva de energía no sale del mismo percentil que las filas')
-    // Que el caso pruebe algo: la base de juguete corta el set y tiene fragmentos.
-    afirmar(set.corte && set.aviso_fragmentos, 'la base de juguete ya no produce corte ni fragmentos: este caso quedó sin dientes')
+    // Que el caso pruebe algo: la base de juguete corta el set, y el loop (que no es un track)
+    // queda afuera ANTES del motor (f55), con su motivo, en vez de ser un fragmento ignorado.
+    afirmar(set.corte && set.pool.afuera.some((a) => a.motivo === 'no_es_track'),
+      'la base de juguete ya no produce corte ni deja afuera al loop: este caso quedó sin dientes')
   }],
 
   ['radio: exportar baja el mismo .m3u8 (bytes y nombre) que /api/radio/set.m3u8', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
-    const r = await fetch(`${ctx.url}/api/radio/set.m3u8?track=${encodeURIComponent(uno.id)}`)
+    const r = await fetch(`${ctx.url}/api/radio/set.m3u8?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     afirmar(r.ok, `/api/radio/set.m3u8 contestó ${r.status}`)
     const esperadoBytes = Buffer.from(await r.arrayBuffer())
     const disp = r.headers.get('content-disposition') || ''
@@ -2733,7 +2936,7 @@ const CASOS = [
     await abrirStation(page, ctx, s)
     await hasta(() => s.versiones.length, (n) => n === 3, 'no arrancó a pedir versiones')
     await page.click('button[aria-label="Radio DJ"]')
-    await page.waitForSelector('.rsem', { timeout: ESPERA_MS })
+    await page.waitForSelector('.rpl-item', { timeout: ESPERA_MS })   // f55: la radio pide la playlist
     await hasta(() => cortados.length, (n) => n === 3, 'al salir no se cortaron los 3 pedidos en vuelo')
     // Un pedido cortado que igual contestara no puede disparar el siguiente de la cola.
     for (const id of [...s.pendientes.keys()]) { const r = s.pendientes.get(id); s.pendientes.delete(id); try { r() } catch { /* ya cortado */ } }
@@ -3870,7 +4073,11 @@ function casosF53() {
         const acc = await leerAcciones(page)
         igual(acc.slice(1).map((a) => [a.titulo, a.deshabilitada, a.enfocable]), [['Armar un set', true, true], ['Exportar a Rekordbox (con cues)', false, true]],
           'Armar un set tiene que estar deshabilitado y Exportar a Rekordbox disponible (los dos alcanzables con el teclado)')
-        afirmar(acc[1].motivo && /^Todavía no/.test(acc[1].motivo), `«${acc[1].titulo}» no muestra por qué está deshabilitado: ${json(acc[1])}`)
+        // «Armar un set» (f55) dice el motivo de la radio: con Peak no alcanza para un set.
+        const rpPeak = await api(ctx, `/api/radio/playlists/${pidPeak}`)
+        igual(rpPeak.puede_armar, false, 'con Peak la radio no tendría que poder armar un set')
+        await hasta(async () => (await leerAcciones(page))[1].motivo, (m) => !!m && m.startsWith(rpPeak.motivo_no_puede),
+          '«Armar un set» no muestra el motivo de /api/radio/playlists/{id}')
         const antes = await dialogos(page)
         await page.evaluate(() => [...document.querySelectorAll('.crate-accion')].find((b) => b.textContent.includes('Armar un set')).click())
         igual(await dialogos(page), antes, '«Armar un set» deshabilitado abrió algo')

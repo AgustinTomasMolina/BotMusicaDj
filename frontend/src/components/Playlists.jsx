@@ -11,7 +11,7 @@ import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromCrateItem } from '../player/track'
 import { descargas, faltantes, textoLote } from '../playlistDescarga'
-import { analizarPlaylist, progresoAnalisis, editarGeneroItem, generoALosSinGenero } from '../api'
+import { analizarPlaylist, progresoAnalisis, editarGeneroItem, generoALosSinGenero, getRadioPlaylist } from '../api'
 import {
   estadoTema, textoArchivo, datosTema, puntosMarcas, textoMarcas, resumenPlaylist, textoProgreso,
   origenTexto, motivoDe, metricaBpm,
@@ -129,7 +129,7 @@ function GeneroTema({ it, onGuardar }) {
   )
 }
 
-export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick, onSeleccion, formato = 'wav', onImportar }) {
+export default function Playlists({ activePlaylist, setActivePlaylist, toast, onPlay, initialId, pick, onSeleccion, formato = 'wav', onImportar, onArmarSet }) {
   const [lists, setLists] = useState(null)
   const [selId, setSelId] = useState(null)
   const [crate, setCrate] = useState(null)
@@ -145,6 +145,17 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
 
   const cargarLista = async () => { try { const d = await listarPlaylists(); const ps = d.playlists || []; setLists(ps); return ps } catch { setLists([]); return [] } }
   const cargarCrate = async (id) => { if (!id) { setCrate(null); return } try { const d = await getPlaylist(id); setCrate(d.exito ? d.data : null) } catch { setCrate(null) } }
+  // f55: si se puede armar un set con la playlist abierta (lo dice la radio). Se vuelve a
+  // preguntar cada vez que la playlist cambia (género, análisis, quitar un tema).
+  const [radioInfo, setRadioInfo] = useState(null)   // {pid, data}
+  useEffect(() => {
+    if (!crate) { setRadioInfo(null); return undefined }
+    let vivo = true
+    getRadioPlaylist(crate.id)
+      .then((r) => { if (vivo) setRadioInfo({ pid: crate.id, data: r.ok ? r.data : { estado: `http-${r.status}`, motivo: r.data?.error || 'No pude preguntarle a la radio.' } }) })
+      .catch(() => { if (vivo) setRadioInfo({ pid: crate.id, data: { estado: 'sin-conexion', motivo: 'No pude preguntarle a la radio si alcanza para un set.' } }) })
+    return () => { vivo = false }
+  }, [crate])
 
   useEffect(() => { cargarLista() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   // La lista cambia desde afuera (el ＋ del rail, el ＋ de una tarjeta): sin esto, crear la
@@ -430,18 +441,30 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     ? `${analizados.length} tema${analizados.length === 1 ? '' : 's'} listo${analizados.length === 1 ? '' : 's'} para marcar`
                     : porAnalizar ? 'El motor tiene que medir los temas primero' : 'Ningún tema tiene archivo en la PC'}</span>
                 </button>
-                {/* 2 es de la etapa que sigue: deshabilitado con el motivo a la vista.
+                {/* f55: «Armar un set» abre la Radio DJ con esta playlist. Se habilita cuando
+                    algún género tiene al menos 2 temas que entran (lo decide el server, con las
+                    mismas reglas que la radio); si no, deshabilitado con el motivo a la vista.
                     aria-disabled (no `disabled`) para que el teclado llegue y el lector lea el
                     motivo; el click no hace nada. */}
-                <button type="button" className="crate-accion" aria-disabled="true" aria-describedby="acc-set-d">
-                  <span className="crate-accion-n" aria-hidden="true">2</span>
-                  <span className="crate-accion-t">Armar un set</span>
-                  <span className="crate-accion-d" id="acc-set-d">
-                    {`Todavía no: llega en la próxima etapa (la radio desde una playlist).${res && res.sinGenero > 0
-                      ? ` ${res.sinGenero === 1 ? 'El tema sin género no va a entrar' : `Los ${res.sinGenero} temas sin género no van a entrar`}: el set solo junta temas del mismo género.`
-                      : ''}`}
-                  </span>
-                </button>
+                {(() => {
+                  const ri = radioInfo && radioInfo.pid === crate.id ? radioInfo.data : null
+                  const puede = !!(ri && ri.estado === 'ok' && ri.puede_armar)
+                  const sinG = res && res.sinGenero > 0
+                    ? ` ${res.sinGenero === 1 ? 'El tema sin género no va a entrar' : `Los ${res.sinGenero} temas sin género no van a entrar`}: el set solo junta temas del mismo género.`
+                    : ''
+                  const desc = !ri ? 'Revisando qué temas pueden entrar…'
+                    : puede ? `${ri.generos.filter((g) => g.entran > 0).map((g) => `${g.genero}: ${g.entran} tema${g.entran === 1 ? '' : 's'}`).join(' · ')}. Solo entran temas del mismo género que el de arranque.${sinG}`
+                      : `${ri.motivo_no_puede || ri.motivo || 'Todavía no se puede armar un set con esta playlist.'}${sinG}`
+                  return (
+                    <button type="button" className="crate-accion crate-accion-set" aria-describedby="acc-set-d"
+                      aria-disabled={puede ? undefined : 'true'}
+                      onClick={() => { if (puede) onArmarSet?.(crate.id) }}>
+                      <span className="crate-accion-n" aria-hidden="true">2</span>
+                      <span className="crate-accion-t">Armar un set</span>
+                      <span className="crate-accion-d" id="acc-set-d">{desc}</span>
+                    </button>
+                  )
+                })()}
                 {/* f56: XML con la playlist y sus cues. Qué va y qué no lo dice el diálogo. */}
                 <button type="button" className="crate-accion" aria-describedby="acc-exp-d"
                   onClick={() => { if (crate.items?.length) setRekordboxOpen(true) }}

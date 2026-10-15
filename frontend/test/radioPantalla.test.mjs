@@ -5,7 +5,47 @@
 // Uso (desde frontend/):  npm run test:unidad
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { textoCues, textoEnergia, siguienteFila, siguienteTab } from '../src/radioPantalla.js'
+import {
+  textoCues, textoEnergia, siguienteFila, siguienteTab, textoPool, etiquetaMotivo, generoDe, textoAnalizando,
+  resumenMarcas,
+} from '../src/radioPantalla.js'
+
+const ceros = { otro_genero: 0, sin_genero: 0, sin_archivo: 0, analizando: 0, sin_analizar: 0, fallo_analisis: 0, no_es_track: 0, duplicado: 0 }
+
+test('textoPool (f55): el renglón del diseño, con los números del server y sin los ceros', () => {
+  assert.deepEqual(textoPool({ genero: 'Groove', entran: 38, total: 44, excluidos: { ...ceros, otro_genero: 4, sin_genero: 1, sin_archivo: 1 } }), {
+    titular: 'Entran 38 de 44 temas, del mismo género que la semilla (Groove)',
+    detalle: '4 de otro género · 1 sin género · 1 sin archivo',
+    afuera: 6,
+  })
+  assert.deepEqual(textoPool({ genero: 'Techno', entran: 1, total: 1, excluidos: ceros }),
+    { titular: 'Entran 1 de 1 tema, del mismo género que la semilla (Techno)', detalle: '', afuera: 0 })
+  assert.equal(textoPool({ genero: 'X', entran: 2, total: 5, excluidos: { ...ceros, no_es_track: 1, duplicado: 2 } }).detalle,
+    '1 no es un track (menos de 90 s) · 2 repetidos')
+  assert.equal(textoPool(null), null)
+  assert.equal(textoPool({ entran: undefined, total: 3 }), null)
+})
+
+test('resumenMarcas (f55): la misma cuenta que server._marcas_por_clase', () => {
+  assert.deepEqual(resumenMarcas([
+    { tipo: 'cue', num: 3 }, { tipo: 'memory', num: null }, { tipo: 'cue', num: 0 },
+    { tipo: 'loop', num: 5 }, { tipo: 'memory', num: null },
+  ]), { total: 5, pads: [0, 3], memory: 2, loop: 1 })
+  assert.deepEqual(resumenMarcas([]), { total: 0, pads: [], memory: 0, loop: 0 })
+  assert.deepEqual(resumenMarcas(undefined), { total: 0, pads: [], memory: 0, loop: 0 })
+})
+
+test('etiquetaMotivo, generoDe y textoAnalizando (f55)', () => {
+  assert.equal(etiquetaMotivo('otro_genero'), 'otro género')
+  assert.equal(etiquetaMotivo('duplicado'), 'repetido')
+  const rp = { generos: [{ clave: 'techno', genero: 'Techno' }, { clave: 'house', genero: 'House' }] }
+  assert.equal(generoDe(rp, { clave_genero: 'house' }).genero, 'House')
+  assert.equal(generoDe(rp, { clave_genero: 'trance' }), null)
+  assert.equal(generoDe(rp, null), null)
+  assert.equal(textoAnalizando(0), null)
+  assert.equal(textoAnalizando(1), '1 tema todavía se está analizando: el set se arma con los que ya están; cuando termine, armalo de nuevo para sumarlo.')
+  assert.equal(textoAnalizando(3), '3 temas todavía se están analizando: el set se arma con los que ya están; cuando terminen, armalo de nuevo para sumarlos.')
+})
 
 test('textoCues: «sin cues» con 0, singular y plural, y guion sin conteo (no un 0)', () => {
   assert.equal(textoCues(0), 'sin cues')
