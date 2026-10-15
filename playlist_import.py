@@ -105,6 +105,8 @@ class Coleccion:
 
 def leer_rekordbox(datos: bytes, nombre_xml: str) -> Coleccion:
     """Parsea el XML (ya validado con `validar_xml`). Levanta `Rechazo` con el motivo."""
+    from rekordbox_cues import marcas_de_track
+
     from ground_truth.rekordbox import a_camelot
 
     validar_xml(datos)
@@ -127,8 +129,11 @@ def leer_rekordbox(datos: bytes, nombre_xml: str) -> Coleccion:
         bpm = _float(tr.get("AverageBpm"))
         tonalidad = (tr.get("Tonality") or "").strip()
         dur = _float(tr.get("TotalTime"))
-        # POSITION_MARK y TEMPO se ignoran en esta etapa (los trae la exportación con cues).
+        # f56: los POSITION_MARK (hot cues, memory cues y loops del DJ) viajan con el tema y el
+        # server los guarda como marcas de la página (`rekordbox_cues`). TEMPO no se importa.
+        marcas, ignoradas = marcas_de_track(tr)
         tracks[tid] = {
+            "marcas": marcas, "marcas_ignoradas": ignoradas,
             "rb_track_id": tid,
             "titulo": (tr.get("Name") or "").strip() or (Path(nombre_de_ruta(ubic)).stem if ubic else ""),
             "artista": (tr.get("Artist") or "").strip(),
@@ -217,10 +222,14 @@ def resumen_playlist(col: Coleccion, p: dict) -> dict:
     """Lo que la pantalla muestra de una playlist del XML, sin rutas."""
     estados = [col.resoluciones.get(col.tracks[t]["location"], ("no-encontrado", None, 0))[0]
                for t in p["entradas"]]
+    # f56: cuántas marcas del DJ (hot cues, memory cues y loops) traen sus temas en el XML.
+    marcas = [m for t in p["entradas"] for m in (col.tracks[t].get("marcas") or ())]
     return {"id": p["id"], "nombre": p["nombre"], "carpeta": p["carpeta"], "ruta": p["ruta"],
             "total": len(p["entradas"]), "encontrados": estados.count("ok"),
             "ambiguos": estados.count("ambiguo"), "faltan": estados.count("no-encontrado"),
-            "inexistentes": p["inexistentes"]}
+            "inexistentes": p["inexistentes"],
+            "cues": sum(1 for m in marcas if m["kind"] != "loop"),
+            "loops": sum(1 for m in marcas if m["kind"] == "loop")}
 
 
 def temas_de_playlist(col: Coleccion, p: dict) -> list[dict]:
@@ -235,6 +244,8 @@ def temas_de_playlist(col: Coleccion, p: dict) -> list[dict]:
             "duracion": t["duracion"], "ruta": ruta, "resolucion": estado,
             "homonimos": homonimos if estado == "ambiguo" else None,
             "archivo": nombre_de_ruta(t["location"]) if t["location"] else None,
+            # f56: las marcas del DJ en Rekordbox (el server las guarda por la ruta resuelta).
+            "marcas": t.get("marcas") or [], "marcas_ignoradas": t.get("marcas_ignoradas") or {},
         })
     return temas
 

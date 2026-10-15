@@ -1747,6 +1747,23 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .mb-genero:hover{box-shadow:none}
 .mb-genero:hover b{box-shadow:inset 0 0 0 1px var(--color-accent)}
 .crate-accion[aria-disabled=true]{cursor:not-allowed;background:var(--color-well);border-color:var(--color-divider)}
+/* Diálogo «Exportar a Rekordbox (con cues)» (f56). Objetivos de 44 px y sin desborde a 400 px. */
+.rbx-dialog{width:min(560px,100%);max-height:calc(100vh - 2*var(--space-4));overflow:auto;display:flex;flex-direction:column;gap:var(--space-3)}
+.rbx-dialog .btn,.rbx-dialog .imp-check{min-height:44px;min-width:44px}
+.rbx-kv{font-size:13px;margin:0}
+.rbx-kv dd{overflow-wrap:anywhere}
+.rbx-cargando{margin:0;font-size:12.5px;color:var(--color-neutral-300)}
+.rbx-avisos,.rbx-omitidos ul{margin:0;padding-left:18px;font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.rbx-avisos{color:var(--color-warn)}
+.rbx-omitidos{display:flex;flex-direction:column;gap:4px}
+.rbx-omitidos ul{max-height:180px;overflow:auto;color:var(--color-neutral-300)}
+.rbx-sub{margin:0;font-size:12.5px;font-weight:600}
+.rbx-nota{margin:0;font-size:12px;line-height:1.45;color:var(--color-neutral-300);overflow-wrap:anywhere}
+.rbx-nota.is-warn{color:var(--color-warn)}
+.rbx-hecho{display:flex;flex-direction:column;gap:4px;padding:var(--space-2) var(--space-3);border-radius:var(--radius-md);background:var(--color-well);font-size:12.5px;line-height:1.45}
+.rbx-hecho p{margin:0;overflow-wrap:anywhere}
+.rbx-descargar[aria-disabled=true]{opacity:.55;cursor:not-allowed}
+.imp-cues{display:block;font-size:11.5px;color:var(--color-neutral-300)}
 .crate-accion[aria-disabled=true] .crate-accion-n{background:var(--color-raise);color:var(--color-neutral-300)}
 .crate-accion[aria-disabled=true] .crate-accion-t{color:var(--color-neutral-300)}
 /* En tarjeta (≤728 px de contenido) la fila de la playlist conserva BPM, key, marcas y género

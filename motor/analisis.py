@@ -34,6 +34,7 @@ NO modifica el archivo: solo lo lee (regla del proyecto).
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 
@@ -54,11 +55,14 @@ def cargar(ruta: str | Path, sr: int = SR) -> np.ndarray | None:
     Es LA carga del motor y del benchmark: si uno cargara a otro sample rate o en estéreo,
     medirían audios distintos.
     """
-    import librosa
+    from motor.decodificar import cargar as _cargar_audio
 
     try:
-        y, _ = librosa.load(str(ruta), sr=sr, mono=True)
-    except Exception:  # noqa: BLE001 — cualquier archivo que no decodifica es "no cargó"
+        y, _ = _cargar_audio(ruta, sr=sr, mono=True)
+    except Exception as e:  # noqa: BLE001 — cualquier archivo que no decodifica es "no cargó"
+        # Se devuelve None (contrato), pero el MOTIVO queda dicho: «no se pudo analizar» sobre un
+        # archivo que antes andaba (p. ej. falta ffmpeg para un M4A) no puede ser mudo.
+        logging.getLogger(__name__).warning("no se pudo decodificar %s: %s", Path(ruta).name, e)
         return None
     if y.size < sr:  # < 1 s de audio: no sirve
         return None

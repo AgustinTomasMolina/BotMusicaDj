@@ -6,7 +6,14 @@ se midió, usando señal sintética para que corra siempre.
 """
 import numpy as np
 
-from calidad.duplicados import SR_HUELLA, Ficha, huella, mismo_audio, similitud
+from calidad.duplicados import (
+    SR_HUELLA,
+    Ficha,
+    huella,
+    mismo_audio,
+    muestra_para_huella,
+    similitud,
+)
 from calidad.tests.recortes import recortar_del_medio
 
 SR = SR_HUELLA
@@ -61,29 +68,60 @@ def test_un_edit_realista_no_se_agrupa_con_el_original():
     """30 s de diferencia: la compuerta de duración tiene que separarlos."""
     y = _senal(seed=1, dur=200.0)
     r = recortar_del_medio(y, SR, 30.0)
-    a = Ficha("a", "a", y.size / SR, huella(y[30 * SR:90 * SR]))
-    b = Ficha("b", "b", r.size / SR, huella(r[30 * SR:90 * SR]))
+    a = Ficha("a", "a", y.size / SR, huella(muestra_para_huella(y)))
+    b = Ficha("b", "b", r.size / SR, huella(muestra_para_huella(r)))
     agrupa, _ = mismo_audio(a, b)
     assert not agrupa, "un edit de 30 s no puede agruparse con el original"
 
 
-def test_la_huella_no_ve_un_corte_fuera_de_su_ventana():
-    """Documenta la limitación medida: la huella mira 30-90 s y nada más.
-
-    Un corte en el minuto 2 deja la ventana intacta, así que la huella da 1.0 y TODA la
-    separación la aporta la duración. Si este test empieza a fallar es porque la huella
-    pasó a mirar el track completo, que es justamente la mejora pendiente.
-    """
-    y = _senal(seed=2, dur=200.0)
-    r = recortar_del_medio(y, SR, 20.0, posicion=0.6)   # ~120 s, fuera de 30-90
-    h_a = huella(y[30 * SR:90 * SR])
-    h_b = huella(r[30 * SR:90 * SR])
-    assert similitud(h_a, h_b) > 0.999
+def _reemplazar(y, otra, desde_s, hasta_s):
+    """Copia de `y` con [desde_s, hasta_s) cambiado por audio de `otra`: MISMA duración, medio
+    distinto. Es el caso que la compuerta de duración no puede ver."""
+    z = y.copy()
+    a, b = int(desde_s * SR), int(hasta_s * SR)
+    z[a:b] = otra[a:b]
+    return z
 
 
-def test_la_huella_si_ve_un_corte_dentro_de_su_ventana():
+def test_la_huella_vieja_era_ciega_fuera_de_30_90_s():
+    """Documenta la limitación que tenía la huella (tarea 5.25) y que la 5.27 corrigió: con un
+    bloque contiguo de 30 a 90 s, un tramo distinto en 120-160 s daba similitud 1.0.
+
+    Es la VENTANA VIEJA armada a mano: sirve de control para que el test de abajo no pase
+    por una señal que ya se vea distinta en 30-90 s."""
+    y = _senal(seed=5, dur=200.0)
+    z = _reemplazar(y, _senal(seed=105, dur=200.0), 120.0, 160.0)
+    assert similitud(huella(y[30 * SR:90 * SR]), huella(z[30 * SR:90 * SR])) > 0.999
+
+
+def test_la_huella_ve_un_medio_distinto_de_la_misma_duracion():
+    """Criterio de la 5.27: dos archivos de MISMA duración y distinto contenido en el medio
+    (120-160 s, fuera de lo que miraba la huella vieja) NO se agrupan. Antes se agrupaban
+    con similitud 1.0 porque toda la separación la ponía una duración que acá es igual."""
+    y = _senal(seed=5, dur=200.0)
+    z = _reemplazar(y, _senal(seed=105, dur=200.0), 120.0, 160.0)
+    a = Ficha("a", "a", y.size / SR, huella(muestra_para_huella(y)))
+    b = Ficha("b", "b", z.size / SR, huella(muestra_para_huella(z)))
+    agrupa, sim = mismo_audio(a, b)
+    assert not agrupa, f"la huella no vio 40 s distintos en el medio (similitud {sim:.4f})"
+    assert sim < 0.85
+
+
+def test_la_misma_senal_con_otra_ganancia_sigue_agrupada():
+    """Contrapeso del anterior: ver todo el track no puede volver a la huella quisquillosa.
+    El mismo audio a otro volumen es el duplicado de siempre."""
+    y = _senal(seed=5, dur=200.0)
+    a = Ficha("a", "a", y.size / SR, huella(muestra_para_huella(y)))
+    b = Ficha("b", "b", y.size / SR, huella(muestra_para_huella(y * 0.5)))
+    agrupa, sim = mismo_audio(a, b)
+    assert agrupa and sim > 0.99
+
+
+def test_la_huella_ve_un_corte_con_el_resto_igual():
+    """El corte del medio (cambia la duración) también se ve en la huella nueva, aunque acá
+    la separación ya la haría la compuerta de duración: la huella sola da distinto."""
     y = _senal(seed=3, dur=200.0)
-    r = recortar_del_medio(y, SR, 20.0, posicion=0.25)  # ~50 s, dentro de 30-90
-    h_a = huella(y[30 * SR:90 * SR])
-    h_b = huella(r[30 * SR:90 * SR])
+    r = recortar_del_medio(y, SR, 20.0, posicion=0.25)
+    h_a = huella(muestra_para_huella(y))
+    h_b = huella(muestra_para_huella(r))
     assert similitud(h_a, h_b) < 0.99

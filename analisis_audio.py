@@ -23,19 +23,23 @@ _CAMELOT = {
 
 def bpm_rapido(archivo: str, dur: int = 30) -> int:
     """Solo BPM (sin tono) — más rápido. Para enriquecer muchos temas."""
-    import numpy as np
     import librosa
-    y, sr = librosa.load(archivo, mono=True, duration=dur)
+    import numpy as np
+
+    from motor.decodificar import cargar
+    y, sr = cargar(archivo, sr=22050, mono=True, duration=dur)   # 22050 = el default de librosa.load
     tempo = librosa.beat.beat_track(y=y, sr=sr)[0]
     return round(float(np.atleast_1d(tempo)[0]))
 
 
 def bpm_y_tono(archivo: str, dur: int = 60) -> dict:
     """Devuelve {bpm, tono, camelot} analizando hasta `dur` segundos del audio."""
-    import numpy as np
     import librosa
+    import numpy as np
 
-    y, sr = librosa.load(archivo, mono=True, duration=dur)
+    from motor.decodificar import cargar
+
+    y, sr = cargar(archivo, sr=22050, mono=True, duration=dur)   # 22050 = el default de librosa.load
 
     tempo = librosa.beat.beat_track(y=y, sr=sr)[0]
     bpm = round(float(np.atleast_1d(tempo)[0]))
