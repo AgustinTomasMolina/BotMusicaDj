@@ -298,6 +298,8 @@ def test_colores_de_las_marcas():
     ("cue", 1e306, None, None, None, "fuera de rango"),
     ("cue", 1.7e308, None, None, None, "fuera de rango"),
     ("cue", 86400.001, None, None, None, "fuera de rango"),
+    # Cosmético de la segunda auditoría: con `:g` decía "86400 s es más que 24 horas".
+    ("cue", 86400.0004, None, None, None, r"86400\.0004 s es más que 24 horas"),
     ("loop", 1.0, 1e306, None, None, "fuera de rango"),
     ("cue", True, None, None, None, "número"),
     ("cue", "12.5", None, None, None, "número"),
@@ -325,6 +327,13 @@ def test_colores_de_las_marcas():
     ("cue", 1.0, None, None, "\ufeffintro", r"U\+FEFF"),
     ("cue", 1.0, None, None, "drop\u2060", r"U\+2060"),
     ("cue", 1.0, None, None, "pa\u00adlabra", r"U\+00AD"),
+    # H10: ZWJ / ZWNJ se permiten dentro de texto real, pero un nombre hecho SOLO de eso (y
+    # espacios) se dibuja vac\u00edo.
+    ("cue", 1.0, None, None, "\u200d", "ning\u00fan car\u00e1cter visible"),
+    ("cue", 1.0, None, None, "\u200c", "ning\u00fan car\u00e1cter visible"),
+    ("cue", 1.0, None, None, "\u200c\u200d", "ning\u00fan car\u00e1cter visible"),
+    ("cue", 1.0, None, None, "\u200d" * NAME_MAX, "ning\u00fan car\u00e1cter visible"),
+    ("cue", 1.0, None, None, " \u200d \u3000\u200c ", "ning\u00fan car\u00e1cter visible"),
     ("cue", 1.0, None, None, "x" * (NAME_MAX + 1), "como mucho"),
     ("cue", 1.0, None, None, 42, "es un texto"),
 ])

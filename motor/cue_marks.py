@@ -194,8 +194,11 @@ def seconds_to_ms(value: object, campo: str) -> int:
     if v < 0:
         raise InvalidCueMark(f"`{campo}` no puede ser negativo; recibí {v:g}")
     if v > MAX_SECONDS:
-        raise InvalidCueMark(f"`{campo}` está fuera de rango: {v:g} s es más que "
-                             f"{MAX_SECONDS // 3600} horas")
+        # `repr` y no `:g`: `:g` redondea a 6 cifras y 86400.0004 salía "86400 s es más que 24
+        # horas", un mensaje que se contradice. `repr` da el float más corto que vuelve al
+        # mismo valor, así que siempre se lee mayor que el tope.
+        raise InvalidCueMark(f"`{campo}` está fuera de rango: {v!r} s es más que "
+                             f"{MAX_SECONDS // 3600} horas ({MAX_SECONDS} s)")
     return int(round(v * 1000))
 
 
@@ -219,6 +222,12 @@ def clean_mark_name(name: object) -> str | None:
     name = name.strip()
     if not name:
         return None
+    # `strip` no saca U+200D ni U+200C (son Cf, no espacios): un nombre hecho solo de eso se
+    # dibuja vacío. Tiene que quedar al menos un carácter visible; el emoji con ZWJ y el persa
+    # con ZWNJ lo tienen.
+    if all(unicodedata.category(c) == "Cf" or c.isspace() for c in name):
+        raise InvalidCueMark("el nombre de una marca no tiene ningún carácter visible (solo "
+                             "unidores invisibles U+200C / U+200D)")
     if len(name) > NAME_MAX:
         raise InvalidCueMark(f"el nombre de una marca tiene como mucho {NAME_MAX} caracteres; "
                              f"recibí {len(name)}")

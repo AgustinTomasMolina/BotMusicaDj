@@ -3437,11 +3437,16 @@ async def radio_onda(track_id: str):
         return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
                             status_code=409)
     except (RuntimeError, ValueError, ArithmeticError) as e:
-        # Cinturón: un decodificador que falla de una forma que `motor.peaks` no previó. Es un
-        # archivo que no se pudo leer (422), no un 500; queda en el log para mirarlo.
-        logger.warning(f"⚠️ Onda: {type(e).__name__} leyendo {ruta}: {e}")
-        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda "
-                                      f"({type(e).__name__})"}, status_code=422)
+        # Cinturón. `motor.peaks` convierte en UnreadableAudio todo lo que falla AL DECODIFICAR
+        # (y la caché inválida se recalcula), así que lo que llega acá es casi seguro un error
+        # del cálculo propio. No se culpa al archivo, que puede estar perfecto; tampoco es un
+        # 500. El detalle completo (con la traza) queda en el log.
+        logger.warning(f"⚠️ Onda: {type(e).__name__} calculando la onda de {ruta}: {e}",
+                       exc_info=True)
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: falló el "
+                                      f"cálculo ({type(e).__name__}), no necesariamente el "
+                                      f"archivo; el detalle quedó en el log del servidor"},
+                            status_code=422)
     return {"bins": int(picos.peaks.size),
             "picos": [float(v) for v in picos.peaks],          # 5 decimales, de la caché
             "duracion_audio": round(picos.duration_s, 3), "sample_rate": picos.sample_rate,
@@ -3577,10 +3582,15 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
         return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
                             status_code=409)
     except (RuntimeError, ValueError, ArithmeticError) as e:
-        # Cinturón, como en /onda: un decodificador que falla de una forma no prevista.
-        logger.warning(f"⚠️ Onda3: {type(e).__name__} leyendo {ruta}: {e}")
-        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda "
-                                      f"({type(e).__name__})"}, status_code=422)
+        # Cinturón, como en /onda: `motor.bandas` convierte en UnreadableAudio lo que falla AL
+        # DECODIFICAR, así que lo que llega acá es casi seguro un error del cálculo propio. No
+        # se culpa al archivo ni es un 500; la traza queda en el log.
+        logger.warning(f"⚠️ Onda3: {type(e).__name__} calculando la onda de {ruta}: {e}",
+                       exc_info=True)
+        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: falló el "
+                                      f"cálculo ({type(e).__name__}), no necesariamente el "
+                                      f"archivo; el detalle quedó en el log del servidor"},
+                            status_code=422)
     rango, motivo = _onda3_rango(d, h, b.duration_s)
     if motivo is not None:
         return JSONResponse({"error": motivo}, status_code=400)
