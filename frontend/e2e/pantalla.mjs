@@ -1805,13 +1805,17 @@ const CASOS_F55 = [
     igual(await leerPoolBarra(page), poolEsperado(set.pool), 'armado: el renglón no es el pool de /api/radio/set')
     // Ver los de afuera, con el teclado.
     igual(await page.$eval('.rpool-ver', (b) => b.textContent), `Ver los ${set.pool.afuera.length} que quedan afuera`, 'el botón no dice cuántos quedan afuera')
+    // Cerrada, aria-controls no apunta a un id que no existe (auditoría f55).
+    igual(await page.$eval('.rpool-ver', (b) => [b.getAttribute('aria-expanded'), b.getAttribute('aria-controls')]), ['false', null],
+      'con la lista cerrada, aria-controls apunta a algo que no está')
     await page.focus('.rpool-ver')
     await page.keyboard.press('Enter')
     const lista = await hasta(() => page.$$eval('#r-afuera li', (ls) => ls.map((l) => ({
       n: l.querySelector('.rpool-n')?.textContent, tema: l.querySelector('.rpool-tema')?.textContent,
       genero: l.querySelector('.rpool-genero')?.textContent ?? null, motivo: l.querySelector('.rpool-motivo')?.textContent,
     }))), (v) => v.length > 0, 'Enter en «Ver los que quedan afuera» no abrió la lista')
-    igual(await page.$eval('.rpool-ver', (b) => b.getAttribute('aria-expanded')), 'true', 'aria-expanded del botón abierto')
+    igual(await page.$eval('.rpool-ver', (b) => [b.getAttribute('aria-expanded'), b.getAttribute('aria-controls'), !!document.getElementById(b.getAttribute('aria-controls'))]),
+      ['true', 'r-afuera', true], 'abierta: aria-expanded y aria-controls a la lista que existe')
     igual(lista, set.pool.afuera.map((a) => ({
       n: `#${a.posicion}`, tema: `${a.artista ? `${a.artista} — ` : ''}${a.titulo}`, genero: a.genero, motivo: `${MOTIVO_ETIQUETA[a.motivo]}: ${a.texto}`,
     })), 'la lista de los que quedan afuera no es la de la API')
@@ -2083,7 +2087,9 @@ const CASOS = [
     igual(real.cuenta, `${set.total} track${set.total === 1 ? '' : 's'}${set.pedidos != null ? ` · ${set.total} de ${set.pedidos} pedidos` : ''}`, 'la cuenta del set')
     igual(real.corte, set.corte ? { titular: set.corte.titular, detalle: set.corte.detalle, codigo: set.corte.codigo ?? null } : null,
       'el aviso de por qué se cortó el set')
-    igual(real.notas, [set.aviso_fragmentos, set.leyenda_key].filter(Boolean), 'las notas debajo del set (fragmentos y leyenda del ?)')
+    // f55: el pool ya no trae fragmentos (lo que no es un track queda afuera antes, con motivo).
+    igual([set.fragmentos, set.aviso_fragmentos], [0, null], 'la API: un set desde playlist no tiene fragmentos')
+    igual(real.notas, [set.leyenda_key].filter(Boolean), 'las notas debajo del set (leyenda del ?)')
     igual(real.curva, set.pasos.map((p) => (p.track.energia_pct == null ? '2px' : `${Math.max(2, p.track.energia_pct)}%`)),
       'la curva de energía no sale del mismo percentil que las filas')
     // Que el caso pruebe algo: la base de juguete corta el set, y el loop (que no es un track)

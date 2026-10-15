@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 # Consola de Windows en UTF-8 para que los emojis/logs no rompan el proceso
@@ -2381,19 +2382,30 @@ def _contexto_playlist(pid: int) -> "_ContextoPlaylist | None":
     for rid, t in por_id.items():
         _radio_audio.setdefault(rid, str(t.path))     # audio, onda y marcas por el mismo id
 
-    from motor.modelos import es_track
+    try:
+        from motor.cli import db_por_defecto
+        from motor.modelos import es_track
+        base = str(db_por_defecto())
+    except ImportError:          # sin motor/ no hay tracks: `es_track` no se llega a usar
+        es_track, base = None, None
     temas = []
     for i, it in enumerate(items, 1):
         a = it["analisis"]
         rid = a.get("radio_id")
         t = por_id.get(rid) if rid else None
         ok = it.get("archivo_estado") == "ok" and bool(it.get("ruta"))
+        # Los motivos viajan al navegador: sin la ruta del archivo ni la de la base (un error
+        # del decodificador la trae entera, `motor.cli.analizar_para_guardar`).
+        conocidas = (it.get("ruta"), os.path.abspath(it["ruta"]) if it.get("ruta") else None,
+                     base, os.path.dirname(base) if base else None)
         temas.append(radio_playlist.Tema(
             item_id=it["id"], posicion=i, titulo=it.get("titulo") or "",
             artista=it.get("artista") or "", genero=it.get("genero"),
-            archivo_ok=ok, archivo_motivo=None if ok else a.get("motivo"),
+            archivo_ok=ok,
+            archivo_motivo=None if ok else radio_playlist.ocultar_rutas(a.get("motivo"), conocidas),
             analisis=a.get("estado") or "pendiente",
-            analisis_motivo=a.get("motivo") if a.get("estado") == "fallo" else None,
+            analisis_motivo=(radio_playlist.ocultar_rutas(a.get("motivo"), conocidas)
+                             if a.get("estado") == "fallo" else None),
             clave_archivo=os.path.normcase(os.path.abspath(it["ruta"])) if ok else None,
             radio_id=rid if t is not None else None,
             es_track=es_track(t.duration) if t is not None else None))
@@ -2595,6 +2607,16 @@ async def radio_playlist_ver(pid: str):
     }
 
 
+_NOMBRE_PLAYLIST_MAX = 300      # el largo de la columna (db.MiPlaylist.nombre)
+
+
+def _nombre_playlist(texto) -> str:
+    """El nombre de una playlist que guarda la radio: sin controles (C0/C1) ni invisibles, los
+    espacios colapsados y con tope de largo (mismo criterio que `_nombre_xml`). "" si no queda
+    nada (y entonces va el nombre por defecto)."""
+    return radio_playlist.limpiar_texto(texto)[:_NOMBRE_PLAYLIST_MAX].strip()
+
+
 @app.post("/api/radio/playlists/{pid}/guardar")
 async def radio_playlist_guardar(pid: str, request: Request):
     """Guarda el set que se ve como una playlist NUEVA de Mis playlists, en el orden del set
@@ -2615,7 +2637,7 @@ async def radio_playlist_guardar(pid: str, request: Request):
         params = [_campo(cuerpo, "largo", int), _campo(cuerpo, "curva", str),
                   _campo(cuerpo, "artist_gap", int), _campo(cuerpo, "mmr_lambda", float),
                   _campo(cuerpo, "semilla", int), _campo(cuerpo, "randomness", float)]
-        nombre = (_campo(cuerpo, "nombre", str) or "").strip()
+        nombre = _nombre_playlist(_campo(cuerpo, "nombre", str))
         esperado = cuerpo.get("esperado")
         if not (isinstance(esperado, list) and esperado
                 and all(isinstance(i, str) for i in esperado)):
@@ -2636,8 +2658,10 @@ async def radio_playlist_guardar(pid: str, request: Request):
                              "esperado": esperado, "armado": ids}, status_code=409)
     origen = armado.pool["playlist"]
     if not nombre:
-        nombre = (f"{origen['nombre']} · set desde {armado.elegida.title or armado.elegida.path.stem}"
-                  f" ({armado.config.curve})")
+        # El título sale de un tag del archivo: pasa por el mismo saneo que el que escribe el DJ.
+        nombre = _nombre_playlist(f"{origen['nombre']} · set desde "
+                                  f"{armado.elegida.title or armado.elegida.path.stem} "
+                                  f"({armado.config.curve})")
     items = [armado.item_de[i] for i in ids]
     nueva = await asyncio.to_thread(db.crear_playlist_desde_items, nombre, origen["id"], items)
     if nueva is None:
@@ -4098,21 +4122,28 @@ def _id_url(texto: str) -> int | None:
 
 def _analizar_y_guardar(ruta: str) -> str | None:
     """Lo que hace el hilo con UN archivo: el análisis del scan y el upsert en la base del motor
-    (creándola si no existe, como `scan`). None si anduvo, el motivo si no."""
+    (creándola si no existe, como `scan`). None si anduvo, el motivo si no.
+
+    f55: el motivo viaja al navegador (el estado del tema, el progreso, lo que queda afuera del
+    set), así que sale SIN rutas: un error del decodificador trae la ruta entera del archivo
+    (`motor.cli.analizar_para_guardar` devuelve `f"{type(e).__name__}: {e}"`)."""
     from motor.cli import analizar_para_guardar, db_por_defecto, esta_bloqueada, guardar_analisis
     from motor.store import EsquemaIncompatible, Store
 
+    base = db_por_defecto()
+    sin_rutas = lambda m: radio_playlist.ocultar_rutas(  # noqa: E731
+        m, (ruta, os.path.abspath(ruta), str(base), str(Path(base).parent)))
     res = analizar_para_guardar(ruta)
     if isinstance(res, str):
-        return res
+        return sin_rutas(res)
     try:
-        with Store(db_por_defecto()) as store:
+        with Store(base) as store:
             guardar_analisis(store, ruta, res)      # licencia y origen: "no declarado"
     except EsquemaIncompatible:
         return "la base del motor es de otra versión: no la toco"
     except sqlite3.OperationalError as e:
         return ("la base del motor está ocupada (un scan u otra instancia): reintentá en un rato"
-                if esta_bloqueada(e) else f"no pude escribir en la base del motor ({e})")
+                if esta_bloqueada(e) else sin_rutas(f"no pude escribir en la base del motor ({e})"))
     return None
 
 
@@ -4126,22 +4157,9 @@ _analizador = playlist_analisis.AnalizadorFondo(_analizar_y_guardar, _al_guardar
 
 
 def _marcas_por_clase(store, rutas: list[str]) -> dict[str, dict]:
-    """{clave del store: {total, pads, memory, loop}} — los puntos de color de la tabla. Primero
-    `cue_mark_counts` (una consulta para todos); el detalle solo de los que tienen marcas."""
-    from motor.store import Store as _S
-
-    conteos = store.cue_mark_counts(rutas)
-    out = {}
-    for r in rutas:
-        k = _S._key(r)
-        if not conteos.get(k):
-            continue
-        marcas = store.list_cue_marks(r)
-        out[k] = {"total": len(marcas),
-                  "pads": sorted(m.num for m in marcas if m.kind == "cue" and m.num is not None),
-                  "memory": sum(1 for m in marcas if m.kind == "memory"),
-                  "loop": sum(1 for m in marcas if m.kind == "loop")}
-    return out
+    """{clave del store: {total, pads, memory, loop}} — los puntos de color de la tabla. f55: en
+    una consulta por tanda (`Store.cue_mark_summary`), no una por tema."""
+    return store.cue_mark_summary(rutas)
 
 
 def _dato_externo(it: dict) -> dict:
@@ -4168,6 +4186,13 @@ _MOTIVO_ARCHIVO = {
 }
 
 
+class _Medido(NamedTuple):
+    """Lo que `_analisis_items` usa de lo medido por el motor (de `Store.analysis_state`)."""
+    bpm: float
+    key: str
+    key_acuerdo: str | None
+
+
 def _analisis_items(items: list[dict]) -> tuple[list[dict], dict]:
     """Cada item con su `analisis` (estado, motivo, radio_id, BPM/key y de dónde salen,
     marcas), y el estado de la base del motor. Nunca levanta por la base: sin base o con la
@@ -4175,12 +4200,16 @@ def _analisis_items(items: list[dict]) -> tuple[list[dict], dict]:
     con_archivo = [it for it in items if it.get("archivo_estado") == "ok" and it.get("ruta")]
 
     def leer(store):
+        # f55: en lote (una consulta por tanda de 500, no dos por tema): con 1000 temas eran
+        # 2000 consultas y 1000 stats en el camino de la radio. `analysis_state` da lo mismo
+        # que `get_features` + `needs_analysis`.
+        rutas = [os.path.abspath(it["ruta"]) for it in con_archivo]
+        estado = store.analysis_state(rutas)
         vistos = {}
-        for it in con_archivo:
-            ruta = os.path.abspath(it["ruta"])
-            f = store.get_features(ruta)
-            vistos[it["id"]] = (f, f is not None and not store.needs_analysis(ruta))
-        return vistos, _marcas_por_clase(store, [os.path.abspath(it["ruta"]) for it in con_archivo])
+        for it, ruta in zip(con_archivo, rutas, strict=True):
+            e = estado.get(_S._key(ruta))
+            vistos[it["id"]] = (None, False) if e is None else (_Medido(*e[:3]), e[3])
+        return vistos, _marcas_por_clase(store, rutas)
 
     vistos, marcas, estado, motivo = {}, {}, _RADIO_OK, None
     try:

@@ -1325,6 +1325,48 @@ def test_load_tracks_da_los_mismos_tracks_que_load_library(tmp_path):
     assert not np.allclose(solos[0], todos[_catalogo()[0]["nombre"]].embedding)
 
 
+def test_analysis_state_y_cue_mark_summary_dan_lo_mismo_que_de_a_uno(tmp_path):
+    """f55: las versiones en lote dan EXACTAMENTE lo que daban `get_features` +
+    `needs_analysis` y `list_cue_marks` por track (el server las usa en el camino de la radio)."""
+    import time as reloj
+
+    db = tmp_path / "b.sqlite"
+    with Store(db) as store:
+        rutas = _poblar(store, tmp_path, range(5))
+        r = list(rutas.values())
+        # r[1] cambia después del análisis (mtime nuevo); r[2] se borra; r[4] no está en la base.
+        reloj.sleep(0.02)
+        r[1].write_bytes(b"otro contenido")
+        os.utime(r[1], (reloj.time() + 5, reloj.time() + 5))
+        r[2].unlink()
+        assert store.delete(r[4])
+        store.add_cue_mark(r[0], "cue", 1.0, num=5)
+        store.add_cue_mark(r[0], "cue", 2.0, num=1)
+        store.add_cue_mark(r[0], "memory", 3.0)
+        store.add_cue_mark(r[3], "loop", 1.0, 2.0)
+        store.add_cue_mark(r[3], "loop", 3.0, 4.0, num=2)
+        pedidas = r + [tmp_path / "nunca.wav"]
+        lote = store.analysis_state(pedidas)
+        de_a_uno = {}
+        for p in pedidas:
+            f = store.get_features(p)
+            if f is not None:
+                de_a_uno[Store._key(p)] = (f.bpm, f.key, f.key_acuerdo, not store.needs_analysis(p))
+        assert lote == de_a_uno
+        assert [lote[Store._key(p)][3] for p in r[:4]] == [True, False, False, True], \
+            "el caso no tiene un vigente, uno cambiado y uno borrado: no prueba nada"
+        resumen = store.cue_mark_summary(pedidas)
+        esperado = {}
+        for p in pedidas:
+            ms = store.list_cue_marks(p)
+            if ms:
+                esperado[Store._key(p)] = {
+                    "total": len(ms), "pads": sorted(m.num for m in ms if m.kind == "cue" and m.num is not None),
+                    "memory": sum(m.kind == "memory" for m in ms), "loop": sum(m.kind == "loop" for m in ms)}
+        assert resumen == esperado
+        assert resumen[Store._key(r[0])] == {"total": 3, "pads": [1, 5], "memory": 1, "loop": 0}
+
+
 def _iguales_a_load_library(store, rutas) -> None:
     """`load_tracks` da EXACTAMENTE lo que da `load_library` para esas rutas, ahora."""
     todos = {t.path.name: t for t in store.load_library()}

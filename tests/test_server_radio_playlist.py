@@ -16,9 +16,9 @@ Los BPM/keys se ESCRIBEN en la base del motor (como en `test_server_radio.py`): 
 prueba es qué entra al pool y que el set sea el del motor, no la medición.
 """
 import importlib
+import os
 import re
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -194,6 +194,56 @@ def test_lo_que_se_esta_analizando_no_entra_y_se_cuenta(server, client, escena, 
     assert "Dos" not in [p["track"]["titulo"] for p in d["pasos"]]
 
 
+def test_lo_que_se_analiza_de_otro_genero_no_se_cuenta_en_este_set(server, client, escena, monkeypatch):
+    """«N todavía analizando» habla del género del set: «Seis» (House) analizándose no es algo
+    que vaya a sumarse a un set de Techno (auditoría f55, M12)."""
+    ruta_seis = str(escena["rutas"]["seis.wav"])
+    real = server._analizador.estado_de
+    monkeypatch.setattr(server._analizador, "estado_de",
+                        lambda r: "analizando" if Path(r) == Path(ruta_seis) else real(r))
+    d = _set(client, escena)
+    assert (d["pool"]["entran"], d["pool"]["analizando"]) == (5, 0)
+    assert {a["titulo"]: a["motivo"] for a in d["pool"]["afuera"]}["Seis"] == "otro_genero"
+    rp = client.get(f"/api/radio/playlists/{escena['pid']}").json()
+    assert rp["analizando"] == 1, "en toda la playlist sí hay uno analizándose"
+
+
+def test_un_archivo_borrado_queda_afuera_como_sin_archivo(client, escena):
+    """El item tiene ruta pero el archivo ya no está: «sin archivo» (con el motivo del archivo),
+    no «sin analizar» (auditoría f55, M14)."""
+    escena["rutas"]["tres.wav"].unlink()
+    d = _set(client, escena)
+    tres = next(a for a in d["pool"]["afuera"] if a["titulo"] == "Tres")
+    assert (tres["motivo"], tres["texto"]) == \
+        ("sin_archivo", "No encuentro el archivo: se movió o se borró desde que se agregó.")
+    assert (d["pool"]["entran"], d["pool"]["excluidos"]["sin_archivo"]) == (4, 2)
+
+
+def test_el_motivo_de_un_analisis_fallido_no_trae_rutas(server, client, escena, monkeypatch):
+    """El error del decodificador trae la ruta entera del archivo (también como la escribe
+    `repr`, con la barra doble): al navegador llega solo el nombre (auditoría f55)."""
+    ruta = escena["rutas"]["dos.wav"]
+    crudo = (f"LibsndfileError: Error opening {str(ruta)!r}: Format not recognised. "
+             f"Base: {os.environ['DJRADIO_DB']}")
+    # 1) Lo que devuelve el hilo de análisis ya sale limpio.
+    monkeypatch.setattr("motor.cli.analizar_para_guardar", lambda r: crudo)
+    limpio = server._analizar_y_guardar(str(ruta))
+    assert limpio == "LibsndfileError: Error opening 'dos.wav': Format not recognised. Base: biblioteca.sqlite", limpio
+    # 2) Y aunque llegara un motivo con rutas, la radio no lo devuelve.
+    with Store(escena["db"]) as store:
+        store.delete(ruta)
+    real = server._analizador.motivo_fallo
+    monkeypatch.setattr(server._analizador, "motivo_fallo",
+                        lambda r: crudo if Path(r) == Path(ruta) else real(r))
+    d = _set(client, escena)
+    rp = client.get(f"/api/radio/playlists/{escena['pid']}").json()
+    dos = next(a for a in d["pool"]["afuera"] if a["titulo"] == "Dos")
+    assert dos["motivo"] == "fallo_analisis"
+    for texto in (dos["texto"], next(t for t in rp["temas"] if t["titulo"] == "Dos")["texto"]):
+        assert "dos.wav" in texto and str(ruta.parent) not in texto and \
+            str(ruta.parent).replace("\\", "\\\\") not in texto and "djradio" not in texto, texto
+
+
 def test_duplicado_entra_el_primero_de_la_playlist(server, client, escena):
     """Con la copia ANTES en la playlist, entra la copia y el original es el duplicado: el
     original ya no puede arrancar el set (400 con el motivo) y la copia sí."""
@@ -299,14 +349,53 @@ def test_un_analisis_nuevo_se_ve_en_el_proximo_set_aunque_haya_cache(client, esc
     assert dos["track"]["bpm"] == 129.1, "el set siguió con el BPM de antes del re-análisis"
 
 
-def test_latencia_de_la_radio_desde_playlist(client, escena):
-    """Spec §4: < 200 ms. Acá con la base chica (con 10k tracks se midió aparte: ver el
-    informe de f55); lo que protege es que el endpoint no haga trabajo por tema de más."""
-    _set(client, escena)
-    t0 = time.perf_counter()
-    for _ in range(5):
-        _set(client, escena)
-    assert (time.perf_counter() - t0) / 5 < 0.2
+def test_el_trabajo_por_pedido_no_crece_por_tema(server, client, escena, monkeypatch, tmp_path):
+    """Spec §4 (latencia < 200 ms): en vez de un reloj (flaky), se cuenta el trabajo. Una
+    playlist 10 veces más grande NO hace más consultas a la base del motor (van en lote), y
+    hace como mucho 2 `stat` más por tema (¿existe el archivo?, ¿cambió desde el análisis?).
+    Con 10k tracks y 40/300/1000 temas se midió aparte (informe de f55)."""
+    raiz = tmp_path / "muchos"
+    rutas = {}
+    with Store(escena["db"]) as store:
+        for i in range(50):
+            r = raiz / f"m{i:02d}.wav"
+            wav(r, 400.0 + 7 * i)
+            rutas[f"m{i:02d}.wav"] = r
+            store.upsert(r, TrackFeatures(bpm=126.0 + (i % 5), key="8A", energy_raw=0.1 + i / 100,
+                                          embedding=embedding(100 + i), key_acuerdo="3/3", key_tramos="8A|8A|8A"),
+                         duration=300.0, license=LICENCIA, source_url=ORIGEN, artist=f"M{i}", title=f"Muchos {i}")
+    filas = [(n, f"Muchos {i}", f"M{i}", "Techno", "carpeta") for i, n in enumerate(rutas)]
+    chica = _crear_playlist(server, rutas, filas[:5], "Chica5")
+    grande = _crear_playlist(server, rutas, filas, "Grande50")
+    semilla = server._radio_id(rutas["m00.wav"])
+
+    consultas, stats = [], []
+    init_real, stat_real = Store.__init__, os.stat
+
+    def init_contado(self, *a, **k):
+        init_real(self, *a, **k)
+        self._con.set_trace_callback(consultas.append)
+
+    def stat_contado(p, *a, **k):
+        stats.append(p)
+        return stat_real(p, *a, **k)
+
+    def medir(pid):
+        for url, params in ((f"/api/radio/playlists/{pid}", {}),
+                            ("/api/radio/set", {"playlist": pid, "track": semilla, "largo": 5})):
+            client.get(url, params=params)            # el primero llena la caché de la biblioteca
+            consultas.clear(), stats.clear()
+            r = client.get(url, params=params)
+            assert r.status_code == 200, r.text
+            yield url.split("/")[3], len(consultas), len(stats)
+
+    monkeypatch.setattr(Store, "__init__", init_contado)
+    monkeypatch.setattr(os, "stat", stat_contado)
+    a, b = list(medir(chica)), list(medir(grande))
+    for (que, q5, s5), (_, q50, s50) in zip(a, b, strict=True):
+        assert q50 == q5, f"{que}: con 50 temas {q50} consultas a la base del motor y con 5, {q5}"
+        assert s50 - s5 <= 2 * 45, f"{que}: {s50 - s5} stats de más para 45 temas de más"
+        assert q5 > 0, "no se contó ninguna consulta: el contador no está midiendo"
 
 
 # ------------------------------------------------------------------ guardar como playlist
@@ -335,6 +424,32 @@ def test_guardar_el_set_como_playlist_nueva_en_su_orden(server, client, escena):
     # Sin nombre, uno que dice de dónde sale.
     r2 = _guardar(client, escena, d)
     assert r2.json()["playlist"]["nombre"] == "Mezcla · set desde Uno (peak)"
+
+
+def test_guardar_sanea_el_nombre(server, client, escena):
+    """El nombre se guarda sin controles (C0/C1) ni invisibles y con los espacios colapsados;
+    si no queda nada, va el de por defecto (auditoría f55)."""
+    d = _set(client, escena, largo=2)
+    r = _guardar(client, escena, d, nombre="  Noche​\x85\x07 de⁠  martes﻿ ")
+    assert r.status_code == 201 and r.json()["playlist"]["nombre"] == "Noche de martes", r.text
+    assert server.db.get_playlist_mia(r.json()["playlist"]["id"])["nombre"] == "Noche de martes"
+    r = _guardar(client, escena, d, nombre="​\x07 ﻿")
+    assert r.json()["playlist"]["nombre"] == "Mezcla · set desde Uno (peak)", r.text
+
+
+def test_crear_playlist_desde_items_solo_con_items_de_la_playlist_de_origen(server, escena):
+    """`db.crear_playlist_desde_items` copia SOLO items de la playlist de origen: un id de otra
+    playlist no se copia (ni se crea nada a medias) (auditoría f55, M11)."""
+    otra = _crear_playlist(server, escena["rutas"], PLAYLIST[:2], nombre="Otra")
+    ajeno = server.db.get_playlist_mia(otra)["items"][0]["id"]
+    propio = escena["items"][0]["id"]
+    antes = len(server.db.listar_playlists())
+    assert server.db.crear_playlist_desde_items("x", escena["pid"], [propio, ajeno]) is None
+    assert server.db.crear_playlist_desde_items("x", escena["pid"], []) is None
+    assert server.db.crear_playlist_desde_items("x", 999999, [propio]) is None
+    assert len(server.db.listar_playlists()) == antes, "se creó una playlist a medias"
+    ok = server.db.crear_playlist_desde_items("y", escena["pid"], [propio])
+    assert ok["total"] == 1 and [i["titulo"] for i in server.db.get_playlist_mia(ok["id"])["items"]] == ["Uno"]
 
 
 def test_guardar_se_niega_si_el_set_no_es_el_que_se_ve(server, client, escena):

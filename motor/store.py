@@ -962,6 +962,54 @@ class Store:
                                   (self._key(path),)).fetchall()
         return _ordenar_marcas([_marca(f) for f in filas])
 
+    def cue_mark_summary(self, paths: Iterable[Path | str]) -> dict[str, dict]:
+        """f55: por clave del store, el resumen de las marcas de cada track que tiene alguna —
+        `{total, pads (los num de los hot cues, ordenados), memory, loop}`— en UNA consulta
+        por tanda (antes: un `list_cue_marks` por track). Los que no tienen no aparecen."""
+        from motor.cue_marks import KIND_CUE, KIND_LOOP, KIND_MEMORY
+
+        claves = sorted({self._key(p) for p in paths})
+        out: dict[str, dict] = {}
+        for i in range(0, len(claves), 500):
+            tanda = claves[i:i + 500]
+            for f in self._con.execute(
+                    f"SELECT path_key, kind, num FROM cue_marks WHERE path_key IN "
+                    f"({', '.join('?' * len(tanda))})", tanda):
+                r = out.setdefault(f["path_key"], {"total": 0, "pads": [], "memory": 0, "loop": 0})
+                r["total"] += 1
+                if f["kind"] == KIND_CUE and f["num"] is not None:
+                    r["pads"].append(int(f["num"]))
+                elif f["kind"] == KIND_MEMORY:
+                    r["memory"] += 1
+                elif f["kind"] == KIND_LOOP:
+                    r["loop"] += 1
+        for r in out.values():
+            r["pads"].sort()
+        return out
+
+    def analysis_state(self, paths: Iterable[Path | str]) -> dict[str, tuple]:
+        """f55: por clave del store, `(bpm, key, key_acuerdo, vigente)` de los tracks de
+        `paths` que están analizados, en UNA consulta por tanda (antes: `get_features` +
+        `needs_analysis` por track). `vigente` es exactamente `not needs_analysis(path)`: el
+        archivo existe y su mtime es el que se analizó. El `stat` se hace solo para los que
+        están en la base. Los que no están no aparecen."""
+        por_clave: dict[str, str] = {}
+        for p in paths:
+            por_clave.setdefault(self._key(p), os.fspath(p))
+        claves = sorted(por_clave)
+        out: dict[str, tuple] = {}
+        for i in range(0, len(claves), 500):
+            tanda = claves[i:i + 500]
+            for f in self._con.execute(
+                    f"SELECT path_key, bpm, key, key_acuerdo, mtime FROM tracks WHERE path_key IN "
+                    f"({', '.join('?' * len(tanda))})", tanda):
+                try:
+                    vigente = float(f["mtime"]) == float(os.stat(por_clave[f["path_key"]]).st_mtime)
+                except OSError:
+                    vigente = False
+                out[f["path_key"]] = (float(f["bpm"]), f["key"], f["key_acuerdo"], vigente)
+        return out
+
     def cue_mark_counts(self, paths: Iterable[Path | str]) -> dict[str, int]:
         """Cuántas marcas tiene cada track, por clave del store (`_key`). Los que no tienen
         no aparecen."""

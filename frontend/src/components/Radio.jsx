@@ -165,8 +165,9 @@ function PoolResumen({ t }) {
 }
 function PoolVer({ t, abierto, setAbierto }) {
   if (!t || !(t.afuera > 0)) return null
+  // aria-controls solo cuando la lista existe: apuntar a un id que no está es un control roto.
   return (
-    <button type="button" className="btn btn-secondary rpool-ver" aria-expanded={abierto} aria-controls="r-afuera"
+    <button type="button" className="btn btn-secondary rpool-ver" aria-expanded={abierto} aria-controls={abierto ? 'r-afuera' : undefined}
       onClick={() => setAbierto((a) => !a)}>
       {abierto ? 'Ocultar los de afuera' : `Ver ${t.afuera === 1 ? 'el que queda afuera' : `los ${t.afuera} que quedan afuera`}`}
     </button>
@@ -1188,7 +1189,6 @@ export default function Radio({ onBiblioteca, playlistId = null, pick, onAbrirPl
                   </div>
                 </div>
               )}
-              {vista.aviso_fragmentos && <p className="rnota">{vista.aviso_fragmentos}</p>}
               {vista.leyenda_key && <p className="rnota">{vista.leyenda_key}</p>}
               {huerfanas && huerfanas.marcas > 0 && (
                 <div className="rhuerfanas">

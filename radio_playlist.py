@@ -34,6 +34,7 @@ server arma los `Tema` con lo que ya sabe (db + `_analisis_items` + la base del 
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -59,13 +60,53 @@ EN_CURSO = ("analizando", "en-cola")
 MINIMO_SET = 2
 
 
-def normalizar(texto) -> str:
-    """Texto comparable: NFKC, casefold, sin espacios en las puntas y los de adentro colapsados.
-    "  Hard   Bounce" y "hard bounce" son el mismo; "ＴＥＣＨＮＯ" (ancho completo, típico de
-    un copiar-pegar) y "techno" también."""
+# Caracteres que no se ven y no son espacio: guion suave, ancho cero, marcas de dirección, BOM.
+# Un copiar-pegar los trae sin que nadie se entere ("Tech​no" se ve "Techno" y no lo es).
+_INVISIBLES = re.compile("[­​-‏‪-‮⁠-⁤⁦-⁩﻿]")
+# Controles C0, DEL y C1: no son texto.
+_CONTROLES = re.compile("[\x00-\x1f\x7f-\x9f]")
+
+
+def limpiar_texto(texto) -> str:
+    """Un texto corto (género, nombre) como se guarda y se muestra: sin invisibles, los
+    controles como espacio y los espacios colapsados. Lo usan `db.sanear_genero`, el nombre de
+    la playlist que guarda la radio y la comparación de géneros de acá: un solo saneo."""
     if texto is None:
         return ""
-    return " ".join(unicodedata.normalize("NFKC", str(texto)).casefold().split())
+    t = _CONTROLES.sub(" ", _INVISIBLES.sub("", str(texto)))
+    return " ".join(t.split())
+
+
+def normalizar(texto) -> str:
+    """Texto comparable: sin invisibles ni controles, NFKC, casefold, sin espacios en las puntas
+    y los de adentro colapsados. "  Hard   Bounce" y "hard bounce" son el mismo; "ＴＥＣＨＮＯ"
+    (ancho completo, típico de un copiar-pegar), "Tech​no" y "techno" también."""
+    if texto is None:
+        return ""
+    return " ".join(unicodedata.normalize("NFKC", limpiar_texto(texto)).casefold().split())
+
+
+# Rutas absolutas dentro de un texto de error (Windows con unidad o UNC, o POSIX). Las carpetas
+# del medio pueden tener espacios ("Bot MUSICA"); el último tramo se corta en un espacio, una
+# comilla o un separador de mensaje.
+_RUTA = re.compile(r"(?:[A-Za-z]:|\\\\[^\\/\s'\"]+)(?:[\\/]+[^\\/'\"<>|:;,()\r\n]+(?=[\\/]))*"
+                   r"[\\/]+[^\\/\s'\"<>|:;,()]*"
+                   r"|(?<![\w.~])/(?:[^/'\"<>|:;,()\r\n]+/)+[^/\s'\"<>|:;,()]*")
+
+
+def ocultar_rutas(texto, conocidas=()) -> str | None:
+    """El texto de un error SIN rutas de la PC (nunca viajan al navegador): primero las rutas
+    que se conocen (`conocidas`: el archivo del tema, la base del motor; también como las
+    escribe `repr`, con la barra doble), y después cualquier otra ruta absoluta. Cada ruta
+    queda como su último tramo (el nombre del archivo o de la carpeta)."""
+    if texto is None:
+        return None
+    t = str(texto)
+    for r in sorted({str(c) for c in conocidas if c}, key=len, reverse=True):
+        nombre = r.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        for forma in (r.replace("\\", "\\\\"), r, r.replace("\\", "/")):
+            t = t.replace(forma, nombre)
+    return _RUTA.sub(lambda m: m.group(0).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1], t)
 
 
 def clave_genero(genero) -> str | None:

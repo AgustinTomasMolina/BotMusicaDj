@@ -19,6 +19,40 @@ def test_la_clave_de_genero_no_inventa_parecidos():
     assert [rp.clave_genero(g) for g in (None, "", "   ", "Sin género", "sin genero")] == [None] * 5
 
 
+def test_invisibles_y_controles_no_hacen_otro_genero():
+    """«Tech\u200bno» se ve igual que «Techno»: es el mismo género (auditoría f55). Y el saneo
+    con el que se GUARDA el género (`db.sanear_genero`) es el mismo."""
+    import db
+
+    for sucio in ("Tech\u200bno", "Tech\u2060no", "\ufeffTechno", "Techno\x85", "Tech\u200dno\u200e",
+                  "Tech\u00adno"):
+        assert rp.clave_genero(sucio) == "techno", repr(sucio)
+    assert db.sanear_genero("  Hard\u200b \x85 Techno\x07 ") == "Hard Techno"
+    assert db.sanear_genero("\u200b\ufeff") is None
+    assert rp.clave_genero("Hard Techno") != rp.clave_genero("Techno")
+
+
+def test_ocultar_rutas():
+    win = r"C:\Users\Dueño\Bot MUSICA\musica\dos.wav"
+    assert rp.ocultar_rutas(f"Error opening {win!r}: bad", [win]) == "Error opening 'dos.wav': bad"
+    # Sin conocerla: la ruta absoluta (con carpetas con espacio) queda en su último tramo.
+    assert rp.ocultar_rutas(f"falló {win} al leer") == "falló dos.wav al leer"
+    assert rp.ocultar_rutas("no pude con /home/dj/Mi Musica/x.flac: corrupto") == "no pude con x.flac: corrupto"
+    assert rp.ocultar_rutas(r"en \\nas\share\a b\c.wav listo") == "en c.wav listo"
+    assert rp.ocultar_rutas("sin rutas: 3/4 y 128.0 BPM") == "sin rutas: 3/4 y 128.0 BPM"
+    assert rp.ocultar_rutas(None) is None
+
+
+def test_en_curso_no_cuenta_temas_sin_archivo():
+    """«N todavía analizando» cuenta solo lo que el motor puede estar analizando: un tema sin
+    archivo no (auditoría f55, M17)."""
+    sin = rp.Tema(item_id=9, posicion=9, titulo="X", artista="", genero="Techno", archivo_ok=False,
+                  archivo_motivo="no está", analisis="en-cola", analisis_motivo=None,
+                  clave_archivo=None, radio_id=None, es_track=None)
+    con = tema(1, "Uno", analisis="analizando")
+    assert (rp.en_curso([sin, con]), rp.en_curso([sin, con], "techno"), rp.en_curso([sin])) == (1, 1, 0)
+
+
 def test_cada_motivo_en_su_orden_y_la_particion_cierra():
     temas = [
         tema(1, "Uno"),
