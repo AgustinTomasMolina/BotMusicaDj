@@ -5,7 +5,7 @@ import {
   ZOOM_COMPASES, ZOOM_SEGUNDOS, ZOOM_DEFECTO, AJUSTE_FINO_S, PADS, LOOP_BEATS,
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
-  historialVacio, registrar, deshacer, rehacer, reemplazarId, cuerpoCrear, diferencia,
+  historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso,
 } from '../editorD'
 import { usePlayer } from '../player/context'
@@ -111,7 +111,10 @@ export default function EditorCues({ temas, inicial, onClose }) {
   // Lo que el servidor no confirmó: {id, texto, reconciliada}. `reconciliada` = después de la
   // falla se volvió a leer la lista del servidor y la pantalla muestra esa (auditoría f54: un
   // éxito posterior ya no borra el aviso de una marca que se perdió).
-  const [fallas, setFallas] = useState([])
+  const [fallas, setFallas] = useState([])          // las últimas 5 (el total va aparte)
+  const [fallasTotal, setFallasTotal] = useState(0)
+  const [releyendo, setReleyendo] = useState(0)      // relecturas del servidor en vuelo
+  const [cierre, setCierre] = useState(false)        // Esc con cambios sin confirmar: pedir otra vez
   const [aviso, setAviso] = useState('')
   const [loopIn, setLoopIn] = useState(null)
   const [loopBeats, setLoopBeats] = useState(4)
@@ -133,7 +136,9 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const vuelo = useRef({ n: 0 })
   const lista = useRef({ seq: 0, aplicada: 0 })   // la lista que llega más tarde no pisa a una más nueva
   const fallaSeq = useRef(0)
-  const rechazado = useRef(false)                 // la última escritura fallida, ¿la rechazó el servidor?
+  // Sube cada vez que se cambia de tema: lo que vuelve de un pedido de una época anterior no
+  // toca el tema abierto (auditoría f54: marcas fantasma en OTRO tema).
+  const epoca = useRef(0)
   const arrastreRef = useRef(null)
   const panRef = useRef(null)
   const ocupado = useRef(false)          // una operación de deshacer/rehacer en curso
@@ -159,6 +164,12 @@ export default function EditorCues({ temas, inicial, onClose }) {
   useEffect(() => {
     if (!id) return undefined
     let vivo = true
+    // (la época ya subió en irTema, en el mismo instante del cambio)
+    vuelo.current.n = 0
+    ocupado.current = false
+    setReleyendo(0)
+    setFallasTotal(0)
+    setCierre(false)
     const a = audioRef.current
     if (a) { a.pause(); a.src = radioAudioUrl(id) }
     cursorRef.current = 0
@@ -365,104 +376,137 @@ export default function EditorCues({ temas, inicial, onClose }) {
   }
 
   /* ---------- escrituras ---------- */
-  // La lista que se dibuja es SIEMPRE una que mandó el servidor (respuesta de una escritura o
-  // relectura). `seq` es el orden en que se PIDIÓ: una respuesta vieja no pisa a una nueva.
+  // REGLAS (auditorías de f54)
+  // - La lista que se dibuja es SIEMPRE una que mandó el servidor (respuesta de una escritura
+  //   o relectura). `seq` es el orden en que se PIDIÓ: una respuesta vieja no pisa a una nueva;
+  //   si la respuesta de una escritura llega tarde y no se aplica, se relee (la de la escritura
+  //   puede ser más nueva que la relectura que la tapó).
+  // - Cada pedido nace con el tema abierto y su ÉPOCA (`epoca` sube al cambiar de tema). Una
+  //   respuesta que vuelve con otro tema abierto no toca nada del tema nuevo: ni la lista, ni
+  //   el historial, ni los avisos, ni el estado. Cada paso del historial lleva su `tid`.
+  // - Deshacer / rehacer releen la lista del servidor ANTES de mandar nada y saltean lo que ya
+  //   está hecho (`yaHecha`): un paso que quedó a medias, o cuyo pedido llegó pero cuya
+  //   respuesta se perdió, se puede reintentar sin duplicar marcas.
+  const vigente = (tid, ep) => ep === epoca.current && tid === idRef.current
+
   const ponerLista = (tid, nuevas, seq) => {
-    if (tid !== idRef.current || seq < lista.current.aplicada) return
+    if (tid !== idRef.current || seq < lista.current.aplicada) return false
     lista.current.aplicada = seq
     setDatos((d) => (d && d.track && d.track.id === tid ? { ...d, marcas: nuevas } : d))
-  }
-
-  // Vuelve a leer las marcas del servidor. Si sale bien, la pantalla muestra lo que de verdad
-  // quedó guardado y las fallas hasta `hasta` (o todas) quedan reconciliadas.
-  const releer = async (tid, hasta) => {
-    const seq = ++lista.current.seq
-    let r = null
-    try { r = await getMarcas(tid) } catch { r = null }
-    if (!(r && r.ok && Array.isArray(r.data?.marcas))) return false
-    ponerLista(tid, r.data.marcas, seq)
-    if (tid === idRef.current) setFallas((f) => f.map((x) => (hasta === undefined || x.id <= hasta ? { ...x, reconciliada: true } : x)))
     return true
   }
 
+  // Vuelve a leer las marcas del servidor. Si sale bien, la pantalla muestra lo que de verdad
+  // quedó guardado y las fallas anteriores quedan reconciliadas. Devuelve la lista, o null.
+  const releer = async (tid) => {
+    const ep = epoca.current
+    const hasta = fallaSeq.current
+    const seq = ++lista.current.seq
+    setReleyendo((n) => n + 1)
+    let r = null
+    try { r = await getMarcas(tid) } catch { r = null }
+    if (!vigente(tid, ep)) return null
+    setReleyendo((n) => Math.max(0, n - 1))
+    if (!(r && r.ok && Array.isArray(r.data?.marcas))) return null
+    ponerLista(tid, r.data.marcas, seq)
+    setFallas((f) => f.map((x) => (x.id <= hasta ? { ...x, reconciliada: true } : x)))
+    return r.data.marcas
+  }
+
+  // Una escritura. Devuelve { ok, data, tid } o { ok: false, tipo, tid } con `tipo`:
+  // 'rechazo' | 'reintentable' (clasificarFalla) | 'ajeno' (volvió con otro tema abierto;
+  // `servidor` dice si el servidor la hizo igual, en el tema de origen).
   const conEstado = async (que, hacer) => {
-    const tid = id
+    const tid = idRef.current
+    const ep = epoca.current
     const seq = ++lista.current.seq
     vuelo.current.n += 1
     setEstado({ fase: 'guardando' })
     let r = null
     try { r = await hacer(tid) } catch { r = null }
+    const ok = Boolean(r && r.ok && Array.isArray(r.data?.marcas))
+    if (!vigente(tid, ep)) return { ok: false, tipo: 'ajeno', servidor: ok, tid, ep }
     vuelo.current.n -= 1
-    if (r && r.ok && Array.isArray(r.data?.marcas)) {
-      ponerLista(tid, r.data.marcas, seq)
-      rechazado.current = false
+    if (ok) {
+      if (!ponerLista(tid, r.data.marcas, seq)) releer(tid)
       if (vuelo.current.n === 0) setEstado({ fase: 'guardado', que, hora: new Date() })
-      return r.data
+      return { ok: true, data: r.data, tid, ep }
     }
-    // 400 / 404 / 409: el servidor RECHAZÓ el pedido tal cual (una marca que otra pestaña
-    // borró, un pad que otra ocupó, la base ocupada): repetirlo da lo mismo. 5xx o sin red:
-    // puede no haber llegado; el historial no se toca y se puede volver a intentar. En los dos
-    // casos el aviso queda (un éxito posterior no lo borra) y se relee la lista del servidor:
-    // lo que se ve vuelve a ser lo guardado, no lo que se creía guardado.
-    rechazado.current = Boolean(r) && [400, 404, 409].includes(r.status)
+    // El aviso queda (un éxito posterior no lo borra) y se relee la lista del servidor: lo
+    // que se ve vuelve a ser lo guardado, no lo que se creía guardado.
+    const tipo = clasificarFalla(r ? r.status : null)
     const fid = ++fallaSeq.current
-    if (tid === idRef.current) {
-      setFallas((f) => [...f, { id: fid, texto: `${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}`, reconciliada: false }].slice(-5))
-    }
-    await releer(tid, fid)
-    if (vuelo.current.n === 0) setEstado({ fase: 'leido' })
-    return null
+    const extra = tipo === 'reintentable' && r && r.status === 409 ? ' Es pasajero: reintentá en un rato.' : ''
+    setFallas((f) => [...f, { id: fid, texto: `${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}${extra}`, reconciliada: false }].slice(-5))
+    setFallasTotal((n) => n + 1)
+    await releer(tid)
+    if (vigente(tid, ep) && vuelo.current.n === 0) setEstado({ fase: 'leido' })
+    return { ok: false, tipo, tid, ep }
   }
 
-  // Las operaciones del historial contra el servidor. Devuelve los ids que cambiaron
-  // ([viejo, nuevo]) o null si algo falló.
-  const aplicar = async (op, que) => {
-    const tid = id
-    if (op.tipo === 'crear') {
-      const d = await conEstado(que, () => crearMarca(tid, cuerpoCrear(op.marca)))
-      return d ? [[op.marca.id, d.marca.id]] : null
-    }
-    if (op.tipo === 'borrar') {
-      const d = await conEstado(que, () => borrarMarca(tid, op.marca.id))
-      return d ? [] : null
-    }
-    if (op.tipo === 'cambiar') {
-      const d = await conEstado(que, () => cambiarMarca(tid, op.id, op.despues))
-      return d ? [] : null
-    }
+  // Un paso del historial contra el servidor, sin duplicar nada (ver REGLAS).
+  // { ok, cambios: [[id viejo, id nuevo]] } o { ok: false, tipo, cambios, parcial }.
+  const aplicarPaso = async (op, que) => {
+    const tid = idRef.current
+    const ep = epoca.current
+    if (op.tid !== undefined && op.tid !== tid) return { ok: false, tipo: 'ajeno', cambios: [] }
+    let real = await releer(tid)
+    if (!vigente(tid, ep)) return { ok: false, tipo: 'ajeno', cambios: [] }
+    if (!real) return { ok: false, tipo: 'reintentable', cambios: [], sinLectura: true }
     const cambios = []
-    for (const o of op.ops) {
+    let hechas = 0
+    for (const o of op.tipo === 'grupo' ? op.ops : [op]) {
       let x = o
-      for (const [a, b] of cambios) x = reemplazarId({ pasado: [x], futuro: [] }, a, b).pasado[0]
-      const r = await aplicar(x, que)
-      if (!r) return null
-      cambios.push(...r)
+      for (const [a, b] of cambios) x = opConId(x, a, b)
+      const y = yaHecha(x, real)
+      if (y.hecha) {
+        if (x.tipo === 'crear' && y.id !== x.marca.id) cambios.push([x.marca.id, y.id])
+        hechas += 1
+        continue
+      }
+      const r = x.tipo === 'crear' ? await conEstado(que, (t) => crearMarca(t, cuerpoCrear(x.marca)))
+        : x.tipo === 'borrar' ? await conEstado(que, (t) => borrarMarca(t, x.marca.id))
+          : await conEstado(que, (t) => cambiarMarca(t, x.id, x.despues))
+      if (!r.ok) return { ok: false, tipo: r.tipo, cambios, parcial: hechas > 0 }
+      if (x.tipo === 'crear') cambios.push([x.marca.id, r.data.marca.id])
+      real = r.data.marcas
+      hechas += 1
     }
-    return cambios
+    return { ok: true, cambios }
   }
 
-  const hecho = (op) => setHistorial((h) => registrar(h, op))
+  // Registra un paso confirmado, SOLO si sigue abierto el tema en el que nació.
+  const hecho = (op, r) => {
+    if (!vigente(r.tid, r.ep)) return
+    setHistorial((h) => registrar(h, { ...op, tid: r.tid }))
+  }
 
   const crear = async (cuerpo, que) => {
     if (!track) return null
-    const d = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
-    if (d) hecho({ tipo: 'crear', marca: d.marca })
-    return d
+    const r = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
+    if (!r.ok) return null
+    hecho({ tipo: 'crear', marca: r.data.marca }, r)
+    return r.data
   }
   const cambiar = async (m, nuevos, que) => {
     const { antes, despues } = diferencia(m, { ...m, ...nuevos })
     if (!Object.keys(despues).length) return null
-    const d = await conEstado(que, (tid) => cambiarMarca(tid, m.id, despues))
-    if (d) hecho({ tipo: 'cambiar', id: m.id, antes, despues })
-    return d
+    const r = await conEstado(que, (tid) => cambiarMarca(tid, m.id, despues))
+    if (!r.ok) return null
+    hecho({ tipo: 'cambiar', id: m.id, antes, despues }, r)
+    return r.data
   }
   const borrar = async (m) => {
-    const d = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
-    if (d) { hecho({ tipo: 'borrar', marca: m }); setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`) }
-    return d
+    const r = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
+    if (!r.ok) return null
+    hecho({ tipo: 'borrar', marca: m }, r)
+    setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`)
+    return r.data
   }
   // Cambiar el tipo: se crea la marca nueva y RECIÉN después se borra la vieja (si la nueva
-  // no se pudo crear, no se perdió nada). Un solo paso para deshacer.
+  // no se pudo crear, no se perdió nada). Un solo paso para deshacer. Si mientras tanto se
+  // cambió de tema, se termina en el tema de ORIGEN (borrar la vieja, para no dejar las dos) y
+  // no se registra nada en el tema nuevo.
   const cambiarTipo = async (m, tipo) => {
     if (tipo === m.tipo) return
     const cuerpo = { tipo, inicio: m.inicio }
@@ -476,33 +520,49 @@ export default function EditorCues({ temas, inicial, onClose }) {
     }
     if (tipo === 'cue' && padLibre(marcas) === null) { setAviso('Los 8 pads están ocupados: liberá uno para pasar esta marca a hot cue.'); return }
     const que = `${nombreD(m)} → ${NOMBRE_TIPO[tipo]}`
-    const d = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
-    if (!d) return
-    const b = await conEstado(que, (tid) => borrarMarca(tid, m.id))
-    if (b) hecho({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: d.marca }, { tipo: 'borrar', marca: m }] })
-    else hecho({ tipo: 'crear', marca: d.marca })
+    const r1 = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
+    if (!r1.ok) {
+      if (r1.tipo === 'ajeno' && r1.servidor) borrarMarca(r1.tid, m.id).catch(() => {})
+      return
+    }
+    const r2 = await conEstado(que, (tid) => borrarMarca(tid, m.id))
+    if (r2.ok) hecho({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: r1.data.marca }, { tipo: 'borrar', marca: m }] }, r2)
+    else if (r2.tipo !== 'ajeno') hecho({ tipo: 'crear', marca: r1.data.marca }, r1)
   }
 
   const correrHistorial = async (dir) => {
     if (ocupado.current) return
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
-    ocupado.current = true
-    const r = await aplicar(paso.aplicar, dir < 0 ? 'Deshacer' : 'Rehacer')
-    ocupado.current = false
-    if (!r) {
-      // Rechazado: sacarlo del historial (si no, cada Ctrl+Z repetiría el mismo pedido
-      // imposible). Sin red o 5xx: queda donde estaba, para volver a intentar.
-      if (rechazado.current) {
-        setHistorial(descartarPaso(paso.h, dir))
-        setAviso(`${dir < 0 ? 'Deshacer' : 'Rehacer'} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
-      }
+    if (paso.aplicar.tid !== undefined && paso.aplicar.tid !== idRef.current) {
+      setAviso('Ese paso es de otro tema: no lo apliqué acá.')
       return
     }
-    let h = paso.h
-    for (const [a, b] of r) h = reemplazarId(h, a, b)
-    setHistorial(h)
-    setAviso(dir < 0 ? 'Deshecho.' : 'Rehecho.')
+    const ep = epoca.current
+    ocupado.current = true
+    const r = await aplicarPaso(paso.aplicar, dir < 0 ? 'Deshacer' : 'Rehacer')
+    if (ep !== epoca.current) return          // el tema cambió: no se toca nada del nuevo
+    ocupado.current = false
+    if (r.tipo === 'ajeno') return
+    const remapear = (h) => r.cambios.reduce((x, [a, b]) => reemplazarId(x, a, b), h)
+    const que = dir < 0 ? 'Deshacer' : 'Rehacer'
+    if (r.ok) {
+      setHistorial(remapear(paso.h))
+      setAviso(dir < 0 ? 'Deshecho.' : 'Rehecho.')
+    } else if (r.tipo === 'rechazo') {
+      // Sacarlo del historial: si no, cada Ctrl+Z repetiría el mismo pedido imposible.
+      setHistorial(remapear(descartarPaso(paso.h, dir)))
+      setAviso(`${que} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
+    } else {
+      // Sin red, 5xx o la base ocupada: el paso queda para reintentar. Si quedó a medias, lo
+      // hecho ya está en la base y el próximo intento saltea esa parte (no duplica).
+      setHistorial(remapear(historial))
+      setAviso(r.sinLectura
+        ? `${que}: no pude leer el servidor, así que no mandé nada. Reintentá cuando vuelva.`
+        : r.parcial
+          ? `${que} quedó a medias: lo que se hizo ya está guardado y la lista es la del servidor. ${dir < 0 ? 'Ctrl+Z' : 'Ctrl+Y'} de nuevo termina lo que falta, sin repetir lo hecho.`
+          : `${que} no se pudo (sin red, el servidor falló o la base estaba ocupada). Quedó en el historial: reintentá.`)
+    }
   }
 
   /* ---------- poner marcas ---------- */
@@ -617,11 +677,22 @@ export default function EditorCues({ temas, inicial, onClose }) {
     inicio: () => irA(0, { centrar: true }),
     fin: () => irA(dur, { centrar: true }),
     tema: (a) => irTema(idx + a.dir),
-    cerrar: () => onClose(),
+    cerrar: () => cerrar(),
   }
 
+  // Cerrar con cambios sin confirmar (no se pudo releer el servidor) pide una segunda vez, y al
+  // cerrar igual el aviso viaja a la playlist (auditoría f54: Esc no puede tirarlo en silencio).
+  const cerrar = () => {
+    if (sinConfirmar > 0 && !cierre) {
+      setCierre(true)
+      setAviso(`Hay ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar: no sé si quedaron guardados. «Volver a leer del servidor» lo averigua; Esc otra vez (o Cerrar) cierra igual.`)
+      return
+    }
+    onClose(sinConfirmar > 0 ? { sinConfirmar, textos: fallas.filter((f) => !f.reconciliada).map((f) => f.texto) } : undefined)
+  }
   const irTema = (k) => {
     if (k < 0 || k >= temas.length || k === idx) return
+    epoca.current += 1          // ya: una respuesta que llegue antes del render no es del tema nuevo
     audioRef.current?.pause()
     setIdx(k)
   }
@@ -760,6 +831,11 @@ export default function EditorCues({ temas, inicial, onClose }) {
   const zooms = eg.hay ? ZOOM_COMPASES : ZOOM_SEGUNDOS
   const hora = estado.hora ? estado.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
   const sinConfirmar = fallas.filter((f) => !f.reconciliada).length
+  // Mientras haya escrituras o relecturas en vuelo, el estado no afirma que la lista sea la
+  // del servidor (auditoría f54).
+  const pendientes = vuelo.current.n > 0 || releyendo > 0
+  useEffect(() => { if (!sinConfirmar) setCierre(false) }, [sinConfirmar])
+  const noSeGuardo = `${fallasTotal} cambio${fallasTotal === 1 ? '' : 's'} no se guardó${fallasTotal === 1 ? '' : 'ron'} (ver el aviso)`
   const cuenta = (tipo) => marcas.filter((m) => m.tipo === tipo).length
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`
@@ -821,7 +897,7 @@ export default function EditorCues({ temas, inicial, onClose }) {
               </select>
             </label>
             <button type="button" className="btn btn-secondary edd-btn" onClick={() => irTema(idx + 1)} disabled={idx === temas.length - 1} aria-keyshortcuts="PageDown">Siguiente → <Kbd>AvPág</Kbd></button>
-            <button type="button" className="btn btn-secondary edd-btn edd-cerrar" onClick={onClose} aria-keyshortcuts="Escape">Cerrar <Kbd>Esc</Kbd></button>
+            <button type="button" className="btn btn-secondary edd-btn edd-cerrar" onClick={() => cerrar()} aria-keyshortcuts="Escape">Cerrar <Kbd>Esc</Kbd></button>
           </nav>
         </header>
 
@@ -1005,20 +1081,23 @@ export default function EditorCues({ temas, inicial, onClose }) {
             {/* «✓ Guardado» solo con la lista igual a la del servidor y sin fallas sin avisar:
                 una falla no reconciliada (no se pudo releer) manda sobre cualquier éxito. */}
             <p className={`edd-estado is-${sinConfirmar ? 'desincronizado' : estado.fase}`} role="status" aria-live="polite">
-              {sinConfirmar > 0 && `⚠ ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar y no pude volver a leer el servidor: la lista puede no ser la que quedó guardada.`}
-              {!sinConfirmar && estado.fase === 'guardando' && <><span className="spinner" aria-hidden="true" /> Guardando…</>}
-              {!sinConfirmar && estado.fase === 'guardado' && !fallas.length && <>✓ Guardado en la biblioteca {hora && <span className="mono">{hora}</span>} · {resumen}</>}
-              {!sinConfirmar && estado.fase === 'guardado' && fallas.length > 0 && `Lista igual a la del servidor · ${resumen} · ${fallas.length} cambio${fallas.length === 1 ? '' : 's'} no se guardó${fallas.length === 1 ? '' : 'ron'} (ver el aviso)`}
-              {!sinConfirmar && estado.fase === 'leido' && track && `${marcas.length ? resumen : 'Sin marcas todavía'} · ${fallas.length ? `lista releída del servidor · ${fallas.length} cambio${fallas.length === 1 ? '' : 's'} no se guardó${fallas.length === 1 ? '' : 'ron'} (ver el aviso)` : 'se guardan solas en la biblioteca'}`}
+              {sinConfirmar > 0 && (releyendo > 0
+                ? `⚠ ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar: releyendo el servidor…`
+                : `⚠ ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar y no pude volver a leer el servidor: la lista puede no ser la que quedó guardada.`)}
+              {!sinConfirmar && (pendientes || estado.fase === 'guardando') && <><span className="spinner" aria-hidden="true" /> {releyendo ? 'Releyendo el servidor…' : 'Guardando…'}</>}
+              {!sinConfirmar && !pendientes && estado.fase === 'guardado' && !fallasTotal && <>✓ Guardado en la biblioteca {hora && <span className="mono">{hora}</span>} · {resumen}</>}
+              {!sinConfirmar && !pendientes && estado.fase === 'guardado' && fallasTotal > 0 && `Lista igual a la del servidor · ${resumen} · ${noSeGuardo}`}
+              {!sinConfirmar && !pendientes && estado.fase === 'leido' && track && `${marcas.length ? resumen : 'Sin marcas todavía'} · ${fallasTotal ? `lista releída del servidor · ${noSeGuardo}` : 'se guardan solas en la biblioteca'}`}
             </p>
-            {fallas.length > 0 && (
+            {fallasTotal > 0 && (
               <div className="alert alert-warn edd-falla" role="alert">
                 <div>
                   <div className="alert-title">No se guardó</div>
                   <ul className="edd-fallas">{fallas.map((f) => <li key={f.id}>{f.texto}</li>)}</ul>
+                  {fallasTotal > fallas.length && <p className="edd-nota">Y {fallasTotal - fallas.length} aviso{fallasTotal - fallas.length === 1 ? '' : 's'} más de antes (se muestran los últimos {fallas.length}).</p>}
                   {sinConfirmar > 0
-                    ? <button type="button" className="btn btn-secondary edd-btn edd-releer" onClick={() => releer(id)}>Volver a leer del servidor</button>
-                    : <button type="button" className="btn btn-secondary edd-btn edd-descartar" onClick={() => setFallas([])}>Entendido: descartar el aviso</button>}
+                    ? <button type="button" className="btn btn-secondary edd-btn edd-releer" onClick={() => releer(id)} disabled={releyendo > 0}>Volver a leer del servidor</button>
+                    : <button type="button" className="btn btn-secondary edd-btn edd-descartar" onClick={() => { setFallas([]); setFallasTotal(0) }}>Entendido: descartar el aviso</button>}
                 </div>
               </div>
             )}
