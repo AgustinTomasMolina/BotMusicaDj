@@ -144,7 +144,11 @@ def editor_d(raiz: Path) -> dict:
     for titulo, d in temas.items():
         ruta = carpeta / d["archivo"]
         sf.write(str(ruta), (0.5 * d.pop("y")).astype(np.float32), sr, subtype="PCM_16")
-        out[titulo] = {**d, "ruta": str(ruta), "dur": dur}
+        # La ruta RESUELTA, la misma que guarda la importación de la carpeta
+        # (`playlist_import.carpeta_segura` hace `resolve`): con el temporal en la forma corta
+        # 8.3 de Windows (C:\Users\NOMBRE~1\...) la ruta tal cual es otra clave en la base del
+        # motor (`Store._key` no expande nombres cortos) y el tema quedaría «pendiente».
+        out[titulo] = {**d, "ruta": str(ruta.resolve()), "dur": dur}
     return out
 
 

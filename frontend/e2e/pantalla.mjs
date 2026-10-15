@@ -4437,10 +4437,29 @@ function casosF54() {
     await page.evaluate(() => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === 'Editor').click())
     await hasta(() => page.$eval('.crate-head .name-edit', (i) => i.value).catch(() => null), (v) => v === 'Editor', 'no se abrió la playlist «Editor»')
   }
-  const esperarOnda = (page, que) => hasta(() => page.evaluate(() => ({
+  // Al pasar de tema (AvPág/RePág) la onda vieja NO se borra en el mismo render que el título:
+  // la borra el efecto «cambiar de tema» de EditorCues, que corre después. Entre los dos hay
+  // renders con el título nuevo y la grilla del tema anterior (medido: ~15 ms), y esperar solo
+  // «no dice Leyendo» los toma por la onda cargada. `pasarTema` aprieta la tecla con un
+  // observador ya puesto que anota cuándo aparece «Leyendo el audio…» (el render del efecto,
+  // siempre antes de que llegue la onda nueva); con `trasCambio`, `esperarOnda` exige haberlo
+  // visto: la onda que se ve después es la del tema nuevo, nunca la anterior.
+  const pasarTema = async (page, tecla) => {
+    await page.evaluate(() => {
+      window.__eddLeyendo = false
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')) { window.__eddLeyendo = true; obs.disconnect() }
+      })
+      obs.observe(document.querySelector('.edd'), { subtree: true, childList: true, characterData: true })
+    })
+    await page.keyboard.press(tecla)
+  }
+  const esperarOnda = (page, que, trasCambio = false) => hasta(() => page.evaluate(() => ({
     msg: document.querySelector('.edd-msg')?.textContent ?? null,
     estado: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
-  })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo'), `${que}: la onda no terminó de cargar`, 20000)
+    leyendo: window.__eddLeyendo === true,
+  })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo') && (!trasCambio || v.leyendo),
+  `${que}: la onda no terminó de cargar`, 20000)
   // Abre el editor desde el botón «Cues» de la fila del tema (el visible).
   const abrirEditorD = async (page, ctx, titulo) => {
     await abrirPlaylist(page, ctx)
@@ -4509,10 +4528,15 @@ function casosF54() {
     rotulo: m.tipo === 'cue' ? PADS[m.num] : m.tipo === 'memory' ? 'M' : Number.isInteger(m.num) ? `Loop ${PADS[m.num]}` : 'Loop',
     tiempos: [m.inicio, ...(m.tipo === 'loop' ? [m.fin] : [])].map(tiempoTabla), nombre: m.nombre || '',
   }))
+  // La API se relee en cada vuelta: una acción de la pantalla (el clic en un pad, una tecla)
+  // escribe con un POST que puede llegar DESPUÉS de una foto de la API tomada enseguida, y
+  // contra esa foto vieja la lista correcta no coincidiría nunca.
   const filasComoApi = async (page, ctx, rid, que) => {
-    const api_ = await marcasApi(ctx, rid)
-    await hasta(() => leerFilas(page), (v) => json(v) === json(filasEsperadas(api_)), `${que}: la lista no es la de la API`)
-    return api_
+    const v = await hasta(async () => {
+      const api_ = await marcasApi(ctx, rid)
+      return { pantalla: await leerFilas(page), api: filasEsperadas(api_), api_ }
+    }, (x) => json(x.pantalla) === json(x.api), `${que}: la lista no es la de la API`)
+    return v.api_
   }
   const chicos = (page, sel) => page.$$eval(sel, (els) => els.filter((e) => window.__visible(e)).map((e) => {
     const r = e.getBoundingClientRect()
@@ -4614,9 +4638,9 @@ function casosF54() {
         // el motivo de la API y el zoom pasa a segundos.
         const g2 = (await onda3Api(ctx, por['Sin grilla'].rid)).grilla
         afirmar(g2 && g2.primer_beat_s === null && g2.motivo, `el tema sin grilla trae grilla en la API: ${json(g2)}`)
-        await page.keyboard.press('PageDown')
+        await pasarTema(page, 'PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin grilla'].item.titulo), 'AvPág no pasó al tema siguiente')
-        await esperarOnda(page, 'sin grilla')
+        await esperarOnda(page, 'sin grilla', true)
         o = await leerOnda(page)
         igual([o.beats.length, o.estado, o.unidad, o.zooms.map((z) => z[0])],
           [0, `Sin grilla de beats: ${g2.motivo}. No se dibuja ninguna (una grilla inventada mentiría).`, 'segundos', ['4', '8', '15', '30', '60']],
@@ -4624,9 +4648,9 @@ function casosF54() {
         afirmar(Math.abs((o.hasta - o.desde) - 15) < 0.002, `sin grilla el zoom por defecto son 15 s: ${o.hasta - o.desde}`)
         afirmar(o.snap === null, 'sin grilla no hay casilla de «ajustar a la grilla»')
         // El tema sin BPM: «?» y sin beats.
-        await page.keyboard.press('PageDown')
+        await pasarTema(page, 'PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin BPM'].item.titulo), 'AvPág no pasó al tercer tema')
-        await esperarOnda(page, 'sin BPM')
+        await esperarOnda(page, 'sin BPM', true)
         const tr3 = (await apiPedir(ctx, rutaMarcas(por['Sin BPM'].rid))).data.track
         igual(tr3.bpm, null, 'la API tendría que decir que el tema sin pulso no tiene BPM')
         igual((await page.$$eval('.edd-chip', (cs) => cs.map((c) => c.textContent))).slice(0, 2), ['? BPM', '? key'], 'sin BPM ni key medidos la cabecera dice «?» (no un número)')
@@ -4781,9 +4805,9 @@ function casosF54() {
         await page.keyboard.press('PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === por['Sin grilla'].item.titulo, 'AvPág no pasó al tema siguiente de la playlist')
         igual(await page.$eval('.edd-sel select', (s) => s.options[s.selectedIndex].textContent), `2. ${por['Sin grilla'].item.artista ? `${por['Sin grilla'].item.artista} — ` : ''}${por['Sin grilla'].item.titulo}`, 'el selector de temas no sigue al tema abierto')
-        await page.keyboard.press('PageUp')
+        await pasarTema(page, 'PageUp')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === t.item.titulo, 'RePág no volvió al tema anterior')
-        await esperarOnda(page, 'vuelta')
+        await esperarOnda(page, 'vuelta', true)
         // Todo lo que se toca mide 44 px o más.
         igual(await chicos(page, '.edd button, .edd select, .edd input:not([type=checkbox]), .edd-snap, .edd [role=slider]'), [], 'hay controles del editor de menos de 44 px')
         // Atajos visibles y con aria-keyshortcuts.
