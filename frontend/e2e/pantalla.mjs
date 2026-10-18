@@ -6277,5 +6277,258 @@ function casosF54() {
         igual(await marcasApi(ctx, B.rid), [], '(6): B no puede recibir nada')
       })
     }],
+    ['editor D (f54): un Ctrl+Z rechazado A MEDIAS (memory de otra sesión → hot cue; el DELETE da 400) deja lo guardado en el historial y lo dice', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        // La memory la hizo OTRA sesión: no está en el historial de este editor.
+        const ajena = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 7 })).data.marca
+        let rechazar = 0
+        await interceptar(page, async (req) => {
+          if (rechazar > 0 && req.method() === 'DELETE' && /\/marcas\/\d+$/.test(new URL(req.url()).pathname)) {
+            rechazar -= 1
+            await req.respond({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'rechazo simulado' }) })
+            return true
+          }
+          return false
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await abrirFila(page, ajena.id)
+        const borraMem = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${ajena.id}"] select.edd-tipo`, 'cue')
+        igual((await borraMem).status(), 200, 'pasar la memory a hot cue no borró la memory')
+        igual((await filasComoApi(page, ctx, t.rid, 'con el hot cue')).map((m) => m.tipo), ['cue'], 'tenía que quedar solo el hot cue')
+        await hasta(() => page.$eval('.edd-estado', (e) => e.textContent), (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+        // Ctrl+Z = [crear la memory, borrar el cue]: la memory vuelve y el DELETE del cue da 400.
+        rechazar = 1
+        await page.focus('.edd-onda')
+        const recrea = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const d400 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const memVuelta = await (await recrea).json()
+        igual((await d400).status(), 400, 'el borrado del cue tenía que recibir el 400 simulado')
+        const despues = await filasComoApi(page, ctx, t.rid, 'después del Ctrl+Z a medias')
+        igual(despues.map((m) => m.tipo).sort(), ['cue', 'memory'], 'en la base quedan el cue y la memory recreada')
+        const av = await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.includes('quedó a medias'), 'el aviso no dice que quedó a medias')
+        afirmar(av.includes('SÍ se guardó') && !av.includes('Lo saqué del historial'), `el aviso tiene que decir que una parte sí se guardó: ${json(av)}`)
+        igual(await page.$eval('.edd-marcar button[aria-keyshortcuts="Control+Z"]', (b) => b.disabled), false, 'Deshacer quedó deshabilitado: lo guardado se perdió del historial')
+        // El Ctrl+Z siguiente saca lo que sí se guardó (la memory recreada): vuelve a quedar el cue.
+        const z2 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z2.status, (z2.data.marcas || []).map((m) => m.id)], [200, despues.filter((m) => m.tipo === 'cue').map((m) => m.id)],
+          `el Ctrl+Z siguiente tenía que borrar la memory recreada (${memVuelta.marca.id})`)
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer lo guardado a medias')
+      })
+    }],
+
+    ['editor D (f54): «Borrar repetidos» que falla a la mitad dice cuántas borró y cuántas quedan (no «quedó una de cada»); Ctrl+Z las devuelve', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Sin grilla']
+        for (let i = 0; i < 6; i++) await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 2, fin: 4 })
+        let deletes = 0
+        await interceptar(page, async (req) => {
+          if (req.method() !== 'DELETE' || !/\/marcas\/\d+$/.test(new URL(req.url()).pathname)) return false
+          deletes += 1
+          if (deletes !== 3) return false
+          await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada' }) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.click('.edd-borrar-rep')
+        await page.click('.edd-rep-si')
+        const av = await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.startsWith('⚠ Borré'), 'no avisó lo que pasó con el borrado a medias')
+        afirmar(av.startsWith('⚠ Borré 2 de 5; quedan 3 repetidas') && !av.includes('quedó una de cada'), `el aviso miente sobre lo que se borró: ${json(av)}`)
+        await hasta(() => page.$eval('.edd-repetidos', (e) => e.textContent).catch(() => ''), (x) => x.includes('Hay 3 loops repetidos'), 'el aviso de repetidos no quedó con las 3 que faltan')
+        igual((await filasComoApi(page, ctx, t.rid, 'después del borrado a medias')).length, 4, 'tenían que quedar 4 loops (6 − 2)')
+        await page.focus('.edd-onda')
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        await hasta(() => marcasApi(ctx, t.rid), (m) => m.length === 6, 'Ctrl+Z no volvió a poner las 2 que se borraron')
+      })
+    }],
+
+    ['editor D (f54): Ctrl+Z apretado mientras una creación viaja espera su turno y deshace ESA creación (no la anterior, y el futuro queda)', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        let demorar = 0
+        await interceptar(page, async (req) => {
+          if (demorar <= 0 || req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
+          demorar -= 1
+          await new Promise((r) => setTimeout(r, 1200))
+          await req.continue()
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual(mem.status, 201, 'M no creó la memory')
+        await filasComoApi(page, ctx, t.rid, 'con la memory')
+        const escr = pedidosDeMarcas(page)
+        demorar = 1
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('c')                         // POST demorado 1,2 s
+        await new Promise((r) => setTimeout(r, 150))
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        await hasta(() => escr.length, (n) => n === 2, 'no salieron el POST del cue y el DELETE del deshacer')
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x === 'Deshecho.', 'el Ctrl+Z no terminó')
+        afirmar(escr[0].startsWith('POST') && escr[1].startsWith('DELETE'), `el orden tenía que ser crear el cue y después deshacerlo: ${json(escr)}`)
+        const api_ = await filasComoApi(page, ctx, t.rid, 'después del Ctrl+Z')
+        igual(api_.map((m) => [m.id, m.tipo]), [[mem.data.marca.id, 'memory']], 'el Ctrl+Z deshizo otra cosa: tenía que quedar la memory y no el cue')
+        igual(await page.$eval('.edd-marcar button[aria-keyshortcuts="Control+Y"]', (b) => b.disabled), false, 'Rehacer quedó deshabilitado: se perdió el futuro')
+        const y = await conTecla(page, ['Control', 'y'], 'POST')
+        igual([y.status, y.data.marca.tipo], [201, 'cue'], 'Ctrl+Y no volvió a poner el cue')
+      })
+    }],
+
+    ['editor D (f54): «Borrar repetidos» deja el hot loop con nombre del pad (no el suelto más viejo) y el diálogo dice cuál queda', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Sin grilla']
+        const suelto = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 20, fin: 22 })).data.marca
+        const hot = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 20, fin: 22, num: 0, nombre: 'Intro' })).data.marca
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.click('.edd-borrar-rep')
+        const conf = await page.$eval('.edd-rep-conf', (e) => e.textContent)
+        afirmar(conf.includes('queda loop del pad A 0:20.000 a 0:22.000 «Intro»'), `el diálogo no dice cuál queda: ${json(conf)}`)
+        await page.click('.edd-rep-si')
+        const api_ = await hasta(() => marcasApi(ctx, t.rid), (m) => m.length === 1, 'no se borró el repetido')
+        igual(api_.map((m) => m.id), [hot.id], `se borró el hot loop con nombre (tenía que irse el suelto ${suelto.id})`)
+      })
+    }],
+
+    ['editor D (f54): K con un navegador que no deja guardar: la grilla se ancla y se dice que dura hasta cerrar la pantalla', async (page, ctx) => {
+      await page.evaluateOnNewDocument(() => {
+        const orig = Storage.prototype.setItem
+        Storage.prototype.setItem = function (k, v) {
+          if (String(k).startsWith('musiflix.editorD.')) throw new DOMException('bloqueado', 'SecurityError')
+          return orig.call(this, k, v)
+        }
+      })
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Sin grilla']
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('k')
+        await hasta(() => page.$eval('.edd-grilla-chip', (e) => e.textContent), (v) => v === 'GRILLA ANCLADA POR VOS', 'K no ancló la grilla')
+        const av = await page.$eval('.edd-aviso', (e) => e.textContent)
+        afirmar(av.startsWith('⚠ Grilla anclada') && av.includes('solo hasta que cierres esta pantalla'), `el aviso no dice que no se pudo guardar: ${json(av)}`)
+        const ayuda = await page.$eval('#edd-ayuda', (e) => e.textContent)
+        afirmar(ayuda.includes('Este navegador no deja guardar') && !ayuda.includes('quedan guardados solo en este navegador'), `la ayuda sigue diciendo que queda guardado: ${json(ayuda)}`)
+      })
+    }],
+
+    ['editor D (f54): a 400×800 marcar y el aviso quedan a la vista sin scroll (y con scroll); banderas y tirador del loop de 24 px o más', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const P = 60 / t.bpm
+        await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 1, fin: Math.round((1 + 4 * P) * 1000) / 1000 })
+        await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 1, num: 0, nombre: 'Primer cue con un nombre largo' })
+        // 1440: objetivos táctiles (WCAG 2.5.8: 24 × 24).
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await clicZoom(page, '2')
+        const tam = await page.evaluate(() => ({
+          flags: [...document.querySelectorAll('.edd-flag')].map((f) => Math.round(f.getBoundingClientRect().height)),
+          fin: (() => { const r = document.querySelector('.edd-loop-fin').getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)] })(),
+        }))
+        afirmar(tam.flags.length > 0 && tam.flags.every((h) => h >= 24), `banderas de menos de 24 px de alto: ${json(tam.flags)}`)
+        afirmar(tam.fin[0] >= 24 && tam.fin[1] >= 24, `el tirador de la salida del loop mide ${json(tam.fin)} (mínimo 24 × 24)`)
+        // 400 × 800 (celular).
+        await page.setViewport({ width: 400, height: 800 })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        await page.keyboard.press('o')                      // sin entrada: avisa
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.includes('Primero marcá la entrada'), 'O sin entrada no avisó')
+        const medir = () => page.evaluate(() => {
+          const r = (e) => { const b = e.getBoundingClientRect(); return { top: Math.round(b.top), bottom: Math.round(b.bottom) } }
+          return {
+            botones: [...document.querySelectorAll('.edd-marcar button')].map((b) => ({ txt: (b.getAttribute('aria-label') || b.textContent).trim().slice(0, 20), ...r(b) })),
+            aviso: r(document.querySelector('.edd-aviso')),
+            ancho: document.documentElement.scrollWidth,
+            alto: window.innerHeight,
+          }
+        })
+        for (const scroll of [0, 700]) {
+          await page.$eval('.edd-fondo', (f, y) => { f.scrollTop = y }, scroll)
+          await new Promise((r) => setTimeout(r, 100))
+          const m = await medir()
+          for (const b of m.botones) afirmar(b.top >= 0 && b.bottom <= m.alto, `con scroll ${scroll}: «${b.txt}» queda fuera de la pantalla (${b.top}–${b.bottom} de ${m.alto})`)
+          afirmar(m.aviso.top >= 0 && m.aviso.bottom <= m.alto, `con scroll ${scroll}: el aviso queda fuera de la pantalla: ${json(m.aviso)}`)
+          igual(m.ancho, 400, 'a 400 px no puede haber scroll horizontal')
+        }
+        // La lista no esconde los nombres en el celular.
+        const nom = await page.$$eval('.edd-fila-n', (ns) => ns.filter((n) => window.__visible(n)).map((n) => n.textContent))
+        afirmar(nom.includes('Primer cue con un nombre largo'), `a 400 px la lista no muestra el nombre: ${json(nom)}`)
+      })
+    }],
+
+    ['editor D (f54): textos — «memory cue repetida», beats con coma, y el aviso de una creación que falla no dice que se creó', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const P = (await onda3Api(ctx, t.rid)).grilla.periodo_s
+        await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 5 })
+        await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 5 })
+        await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 1, fin: Math.round((1 + 4.3 * P) * 1000) / 1000 })
+        let fallar = 0
+        await interceptar(page, async (req) => {
+          if (fallar <= 0 || req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
+          fallar -= 1
+          await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada' }) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const rep = await page.$eval('.edd-rep-txt', (e) => e.textContent)
+        afirmar(rep.includes('1 memory cue repetida en 0:05.000'), `concordancia: ${json(rep)}`)
+        await clicZoom(page, '4')
+        const flags = await page.$$eval('.edd-flag', (fs) => fs.map((f) => f.textContent))
+        afirmar(flags.some((f) => f.includes('⟲ 4,3 beats')), `los beats del loop van con coma: ${json(flags)}`)
+        fallar = 1
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('m')
+        const av = await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.includes('no se guardó'), 'la memory que falló no avisó que no se guardó')
+        afirmar(av.startsWith('⚠ Memory cue en'), `el aviso de la memory que falló: ${json(av)}`)
+      })
+    }],
+
+    ['editor D (f54): lo que se dice de la grilla y los golpes — chip «GRILLA ESTIMADA», golpes solo en un tema sin grilla (no al ocultarla), Loop out sin entrada deshabilitado, Ctrl+Z mientras carga', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        // Con grilla: el chip a la vista dice que es estimada.
+        await abrirEditorD(page, ctx, por['Con grilla'].item.titulo)
+        const chip = await page.$eval('.edd-grilla-chip', (e) => ({ txt: e.textContent, visible: window.__visible(e) }))
+        afirmar(chip.visible && chip.txt.startsWith('GRILLA ESTIMADA · conf'), `el chip de la grilla estimada no está a la vista: ${json(chip)}`)
+        await hasta(() => page.$eval('.edd-onda', (e) => e.dataset.tramo), (v) => v === 'detalle', 'no cargó el tramo con resolución')
+        // G la oculta: el tema SIGUE teniendo grilla, no aparecen golpes de graves.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('g')
+        await hasta(() => page.$$eval('.edd-beat', (b) => b.length), (n) => n === 0, 'G no ocultó la grilla')
+        await new Promise((r) => setTimeout(r, 300))
+        igual(await page.$$eval('.edd-golpe', (k) => k.length), 0, 'con la grilla oculta no se dibujan golpes de graves (el tema tiene grilla)')
+        await page.keyboard.press('g')
+        // Loop out: deshabilitado sin entrada, primario con entrada.
+        igual(await page.$eval('.edd-loopout', (b) => b.getAttribute('aria-disabled')), 'true', 'Loop out sin entrada tiene que verse deshabilitado')
+        await page.keyboard.press('i')
+        await hasta(() => page.$eval('.edd-loopout', (b) => [b.getAttribute('aria-disabled'), b.classList.contains('btn-primary')]), (v) => v[0] === null && v[1], 'con la entrada marcada Loop out tenía que habilitarse')
+        // Sin grilla: la leyenda dice qué son las marquitas.
+        const B = por['Sin grilla']
+        let demorarGet = false
+        await interceptar(page, async (req) => {
+          if (!demorarGet || req.method() !== 'GET' || !new URL(req.url()).pathname.endsWith(`/tracks/${B.rid}/marcas`)) return false
+          await new Promise((r) => setTimeout(r, 1500))
+          await req.continue()
+          return true
+        })
+        demorarGet = true
+        await page.focus('.edd-onda')
+        await page.keyboard.press('PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === B.item.titulo, 'AvPág no pasó al tema sin grilla')
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.startsWith('Todavía estoy leyendo el tema'), 'Ctrl+Z mientras carga el tema no dijo por qué no hace nada')
+        demorarGet = false
+        await esperarOnda(page, B.item.titulo)
+        await hasta(() => page.$eval('.edd-onda', (e) => e.dataset.tramo), (v) => v === 'detalle', 'no cargó el tramo con resolución (sin grilla)')
+        await hasta(() => page.$$eval('.edd-golpe', (k) => k.length), (n) => n > 0, 'sin grilla no se dibujaron los golpes de graves')
+        const ley = await page.$eval('.edd-leyenda', (e) => e.textContent)
+        afirmar(ley.includes('golpes de graves (detectados, no son beats)'), `la leyenda no dice qué son los golpes: ${json(ley)}`)
+      })
+    }],
   ]
 }

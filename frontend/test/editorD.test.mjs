@@ -16,7 +16,7 @@ import {
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
   clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
-  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada,
+  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia,
   temaVigente, beatsLoop,
 } from '../src/editorD.js'
 
@@ -587,4 +587,37 @@ test('atajos K (marcar un kick) y B (solo graves)', () => {
   const t = (key) => ({ key, code: '', target: { tagName: 'DIV', getAttribute: () => 'slider' } })
   assert.deepEqual(atajoD(t('k')), { tipo: 'ancla' })
   assert.deepEqual(atajoD(t('B')), { tipo: 'soloGraves' })
+})
+
+/* ---------- auditoría del editor unificado (f54) ---------- */
+
+test('repetidas (M-1): queda la que tiene nombre o pad aunque una suelta sin nombre sea más vieja', () => {
+  const suelto = { id: 3, tipo: 'loop', num: null, inicio: 10, fin: 12, nombre: null }
+  const hot = { id: 9, tipo: 'loop', num: 0, inicio: 10, fin: 12, nombre: 'Intro' }
+  const r = repetidas([hot, suelto])
+  assert.deepEqual(r.grupos.map((g) => [g.queda.id, g.sobran.map((m) => m.id)]), [[9, [3]]], 'se borra el suelto, no el hot loop con nombre del pad A')
+  // Solo con pad (sin nombre) también cuenta; una memory con nombre, igual.
+  assert.equal(repetidas([{ ...suelto }, { ...hot, nombre: null }]).grupos[0].queda.id, 9)
+  assert.equal(repetidas([{ id: 1, tipo: 'memory', inicio: 3 }, { id: 2, tipo: 'memory', inicio: 3, nombre: 'Drop' }]).grupos[0].queda.id, 2)
+  // Entre iguales en eso, la más vieja (los hot cues siempre tienen pad: decide el nombre).
+  assert.equal(repetidas([{ id: 7, tipo: 'cue', num: 3, inicio: 5 }, { id: 4, tipo: 'cue', num: 5, inicio: 5 }]).grupos[0].queda.id, 4)
+  assert.equal(repetidas([{ id: 7, tipo: 'cue', num: 3, inicio: 5, nombre: 'Drop' }, { id: 4, tipo: 'cue', num: 5, inicio: 5 }]).grupos[0].queda.id, 7)
+  assert.equal(marcaPropia({ tipo: 'cue', num: 0, nombre: '  ' }), false, 'un nombre en blanco no es nombre')
+})
+
+test('rescatarHechas (I-1): un Ctrl+Z rechazado a medias deja lo guardado en el historial como paso propio', () => {
+  // El caso de la auditoría: una memory de OTRA sesión (no está en el historial) pasada a hot cue
+  // en el editor = grupo [crear cue 11, borrar memory 9]. Ctrl+Z = [crear memory, borrar cue 11]:
+  // la memory vuelve (id 15) y el DELETE del cue da 400.
+  const mem = { id: 9, tipo: 'memory', num: null, inicio: 2, fin: null, nombre: null }
+  const cue = { id: 11, tipo: 'cue', num: 0, inicio: 2, fin: null, nombre: null }
+  const paso = { tipo: 'grupo', ops: [{ tipo: 'crear', marca: cue }, { tipo: 'borrar', marca: mem }], tid: 'a1' }
+  const h = registrar(historialVacio(), paso)
+  const sin = cerrarPaso(h, paso, -1, 'rechazo')
+  assert.deepEqual(sin, historialVacio(), 'cerrarPaso solo saca el paso entero')
+  const r = rescatarHechas(sin, [{ tipo: 'crear', marca: mem }], [[9, 15]], 'a1')
+  assert.deepEqual(r, { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: { ...mem, id: 15 } }], tid: 'a1' }], futuro: [] })
+  assert.deepEqual(deshacer(r).aplicar, { tipo: 'grupo', ops: [{ tipo: 'borrar', marca: { ...mem, id: 15 } }], tid: 'a1' },
+    'el próximo Ctrl+Z saca la memory que quedó guardada')
+  assert.deepEqual(rescatarHechas(sin, [], []), sin, 'sin nada hecho, nada que rescatar')
 })

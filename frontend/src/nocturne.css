@@ -2078,3 +2078,21 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   .edd-fila-n{display:none}
   .edd-fila-ed{padding-left:0}
 }
+
+/* ---- auditoría f54 (M-3, M-4): marcar y el aviso a la vista en el celular; objetivos ≥ 24 px ---- */
+.edd-dock{display:contents}
+.edd-flags{height:50px}
+.edd-flag{height:24px}
+/* El tirador de la salida del loop: se ve de 8 px (la franja rayada) y se agarra de 24 × 24. */
+.edd-loop-fin{right:-12px;width:24px;padding:0 8px;box-sizing:border-box;background-clip:content-box}
+@media (max-width:640px){
+  .edd-dock{display:flex;flex-direction:column;gap:6px;position:sticky;bottom:0;z-index:6;margin:0 -12px -12px;padding:8px 12px 10px;background:var(--color-bg);border-top:1px solid var(--color-divider);box-shadow:0 -6px 16px rgba(0,0,0,.45)}
+  .edd-dock .edd-marcar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+  .edd-dock .edd-marcar .edd-btn{min-width:0;padding:4px 6px;font-size:13px;line-height:1.15;white-space:normal;justify-content:center;text-align:center}
+  .edd-dock .edd-kbd{display:none}
+  .edd-dock .edd-loopn-l,.edd-dock .edd-loopn{min-width:0;width:100%;min-height:44px}
+  .edd-dock .edd-avisos{gap:2px 8px}
+  .edd-dock .edd-avisos .edd-estado{margin-left:0;font-size:12px}
+  /* La lista: el nombre en su propia línea, debajo del tiempo (antes se escondía). */
+  .edd-fila-n{display:block;grid-column:2/-1;grid-row:2;white-space:normal;overflow-wrap:anywhere}
+}

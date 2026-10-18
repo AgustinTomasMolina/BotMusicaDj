@@ -7,7 +7,7 @@ import {
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
   contarIguales, cerrarPaso, marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda,
-  agruparIguales, repetidas, grillaAnclada,
+  agruparIguales, repetidas, grillaAnclada, rescatarHechas,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, temaVigente, beatsLoop,
 } from '../editorD'
 import { usePlayer } from '../player/context'
@@ -50,6 +50,10 @@ function medirTexto(txt) {
   } catch { return txt.length * 7.6 }
 }
 const coma = (x, d = 2) => Number(x).toFixed(d).replace('.', ',')
+// Beats de un loop con coma decimal, como el resto de los números («4,3 beats»; «4 beats»).
+const fmtBeats = (b) => (Number.isInteger(b) ? String(b) : coma(b, 1))
+// Concordancia: «1 memory cue repetida» (la memory es femenina en todo el editor).
+const REPETIDO = { cue: 'repetido', memory: 'repetida', loop: 'repetido' }
 
 function motivoDe(r) {
   const d = (r && r.data) || {}
@@ -136,6 +140,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const [soloGraves, setSoloGraves] = useState(false) // B: solo la banda de graves (para buscar el kick)
   const [abierta, setAbierta] = useState(null)      // la fila de la lista desplegada para editar
   const [confirmaRep, setConfirmaRep] = useState(false) // «Borrar repetidos» pidiendo confirmación
+  const [noGuarda, setNoGuarda] = useState(false)       // este navegador no deja guardar el ajuste
+  const [, setPulso] = useState(0)                      // re-render para correr la cola de Ctrl+Z
   const [loopBeats, setLoopBeats] = useState(4)
   const [loopPad, setLoopPad] = useState(false)
   const [arrastre, setArrastre] = useState(null)    // {id, borde, t}
@@ -259,10 +265,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
 
   // El ajuste de la grilla se guarda en este navegador, por tema. Recién pasado de tema, el
   // ajuste y la grilla que hay son del anterior: no se guardan bajo la clave del nuevo.
+  // Devuelve si quedó guardado: sin localStorage (navegación privada, bloqueado) el ajuste vale
+  // solo mientras el editor está abierto, y se dice (auditoría f54, M-2).
   const cambiarAjuste = (nuevo) => {
-    if (!temaVigente(id, idRef.current, track)) return
+    if (!temaVigente(id, idRef.current, track)) return false
     setAjuste(nuevo)
-    guardarAjuste(storage(), id, nuevo)
+    const ok = guardarAjuste(storage(), id, nuevo)
+    setNoGuarda(!ok)
+    return ok
   }
 
   /* ---------- tamaño de la onda ---------- */
@@ -570,6 +580,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     if (!real) return { ok: false, tipo: 'reintentable', cambios: [], sinLectura: true }
     const cambios = []
     let hechas = 0
+    const hechasOps = []                           // lo que quedó aplicado, tal como se aplicó
     for (const [i, o] of ops.entries()) {
       let x = o
       for (const [a, b] of cambios) x = opConId(x, a, b)
@@ -577,6 +588,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (y.hecha) {
         if (x.tipo === 'crear' && y.id !== x.marca.id) cambios.push([x.marca.id, y.id])
         hechas += 1
+        hechasOps.push(x)
         continue
       }
       const r = x.tipo === 'crear' ? await conEstado(que, (t) => crearMarca(t, cuerpoCrear(x.marca)))
@@ -592,11 +604,12 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
         } else if (r.tipo === 'ajeno' && !r.servidor && hechas > 0) {
           avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó a medias al pasar de tema (una parte no se guardó). Revisá sus marcas.`)
         }
-        return { ok: false, tipo: r.tipo, cambios, parcial: hechas > 0 }
+        return { ok: false, tipo: r.tipo, cambios, parcial: hechas > 0, hechas: hechasOps }
       }
       if (x.tipo === 'crear') cambios.push([x.marca.id, r.data.marca.id])
       real = r.data.marcas
       hechas += 1
+      hechasOps.push(x)
     }
     return { ok: true, cambios }
   }
@@ -674,9 +687,15 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const correrHistorial = async (dir) => {
     // Un Ctrl+Z / Ctrl+Y apretado mientras otro viaja no se pierde: espera su turno (lo corre
     // el efecto de abajo, con el historial ya actualizado).
-    // Recién pasado de tema (sin sus datos todavía), el historial que hay es del anterior.
-    if (!temaVigente(id, idRef.current, track)) return
-    if (ocupado.current) { cola.current.push(dir); return }
+    // Recién pasado de tema (sin sus datos todavía), el historial que hay es del anterior: no se
+    // aplica nada, y mientras el tema nuevo carga, se dice por qué Ctrl+Z no hace nada.
+    if (!temaVigente(id, idRef.current, track)) {
+      if (id === idRef.current && !track) setAviso('Todavía estoy leyendo el tema: Ctrl+Z y Ctrl+Y no hacen nada hasta que cargue.')
+      return
+    }
+    // Detrás de una creación en vuelo (C y Ctrl+Z enseguida, auditoría f54 I-3): espera a que se
+    // registre, así deshace ESA creación y no la anterior (y no se pierde el futuro).
+    if (ocupado.current || creaciones.current.n > 0) { cola.current.push(dir); return }
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
     // Defensa en profundidad (ver `aplicarPaso`): un paso de otro tema no se aplica nunca acá.
@@ -696,9 +715,17 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     const remapear = (h) => r.cambios.reduce((x, [a, b]) => reemplazarId(x, a, b), h)
     const que = dir < 0 ? 'Deshacer' : 'Rehacer'
     const desenlace = r.ok ? 'ok' : r.tipo === 'rechazo' ? 'rechazo' : 'reintentable'
-    setHistorial((h) => remapear(cerrarPaso(h, original, dir, desenlace)))
+    // Rechazado A MEDIAS (auditoría f54, I-1): lo que sí se aplicó está en el servidor y no puede
+    // quedar fuera del historial; va como un paso propio (rescatarHechas) que Ctrl+Z saca.
+    const rescate = !r.ok && r.tipo === 'rechazo' && r.parcial && r.hechas && r.hechas.length > 0
+    setHistorial((h) => {
+      const x = remapear(cerrarPaso(h, original, dir, desenlace))
+      return rescate ? rescatarHechas(x, r.hechas, r.cambios, original.tid) : x
+    })
     if (r.ok) {
       setAviso(dir < 0 ? 'Deshecho.' : 'Rehecho.')
+    } else if (rescate) {
+      setAviso(`⚠ ${que} quedó a medias: el servidor rechazó una parte (el motivo está en el aviso), pero otra parte SÍ se guardó. Lo guardado quedó en el historial como un paso aparte: Ctrl+Z lo saca. La lista es la que tiene el servidor.`)
     } else if (r.tipo === 'rechazo') {
       // Sale del historial (cerrarPaso): si no, cada Ctrl+Z repetiría el mismo pedido imposible.
       setAviso(`${que} no se pudo: el servidor lo rechazó (el motivo está en el aviso). Lo saqué del historial; la lista es la que tiene guardada el servidor.`)
@@ -716,7 +743,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   // El siguiente Ctrl+Z / Ctrl+Y en cola, cuando termina el anterior (después del render que
   // aplicó su resultado: así ve el historial actual).
   useEffect(() => {
-    if (ocupado.current || !cola.current.length) return
+    if (ocupado.current || creaciones.current.n > 0 || !cola.current.length) return
     correrHistorial(cola.current.shift())
   })
 
@@ -730,15 +757,28 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     const ep = epoca.current
     const aBorrar = repetidas(listaServidor.current).aBorrar
     const ops = []
+    let falla = null
     for (const m of aBorrar) {
       const iguales = contarIguales(m, listaServidor.current)
       const r = await conEstado(`Borrar ${nombreD(m)} (repetida)`, (t) => borrarMarca(t, m.id))
-      if (!r.ok) break
+      if (!r.ok) { falla = r; break }
       ops.push({ tipo: 'borrar', marca: m, iguales })
     }
-    if (!ops.length) return
-    hecho(ops.length === 1 ? ops[0] : { tipo: 'grupo', ops }, { tid, ep })
-    if (vigente(tid, ep)) setAviso(`Borré ${ops.length} marca${ops.length === 1 ? '' : 's'} repetida${ops.length === 1 ? '' : 's'}; quedó una de cada. Ctrl+Z las vuelve a poner.`)
+    if (ops.length) hecho(ops.length === 1 ? ops[0] : { tipo: 'grupo', ops }, { tid, ep })
+    if (!vigente(tid, ep)) return
+    // Lo que de verdad pasó (auditoría f54, I-2): si cortó a la mitad, no dice «quedó una de cada».
+    const faltan = aBorrar.length - ops.length
+    if (!falla) setAviso(`Borré ${ops.length} marca${ops.length === 1 ? '' : 's'} repetida${ops.length === 1 ? '' : 's'}; quedó una de cada. Ctrl+Z las vuelve a poner.`)
+    else setAviso(`⚠ Borré ${ops.length} de ${aBorrar.length}; quedan ${faltan} repetida${faltan === 1 ? '' : 's'}. No se guardó el resto (el motivo está en el aviso).${ops.length ? ' Ctrl+Z vuelve a poner las que borré.' : ''}`)
+  }
+
+  // Crea y RECIÉN con la respuesta avisa (auditoría f54, M-5: «Hot cue C en…» quedaba aunque el
+  // POST fallara). Con otro tema abierto, no toca el aviso del tema nuevo.
+  const crearAvisando = async (cuerpo, texto) => {
+    const ep = epoca.current
+    const d = await crear(cuerpo, texto)
+    if (ep === epoca.current) setAviso(d ? texto : `⚠ ${texto}: no se guardó (el motivo está en el aviso).`)
+    return d
   }
 
   const enGrilla = (t) => (snapActivo ? snapGrilla(t, g, ajuste.offset) : t)
@@ -777,7 +817,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     q.n += 1
     const siguiente = (q.n === 1 ? Promise.resolve(correr()) : q.p.then(correr))
       .catch(() => null)
-      .finally(() => { q.n -= 1 })
+      .finally(() => {
+        q.n -= 1
+        // Un Ctrl+Z que esperaba detrás de las creaciones: un render para que lo corra el efecto.
+        if (q.n === 0 && q === creaciones.current && cola.current.length) setPulso((x) => x + 1)
+      })
     q.p = siguiente
     return siguiente
   }
@@ -789,8 +833,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (yaHay('cue', t)) return null
       const n = num === undefined ? padLibre(listaServidor.current) : num
       if (n === null) { setAviso('⚠ Los 8 pads (A–H) están ocupados: borrá uno o movelo.'); return null }
-      setAviso(`Hot cue ${letraPad(n)} en ${fmtTiempo(t)}`)
-      return crear({ tipo: 'cue', inicio: t, num: n }, `Hot cue ${letraPad(n)} en ${fmtTiempo(t)}`)
+      return crearAvisando({ tipo: 'cue', inicio: t, num: n }, `Hot cue ${letraPad(n)} en ${fmtTiempo(t)}`)
     })
   }
   const ponerMemory = () => {
@@ -798,8 +841,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     const t = aqui()
     return enCola(async () => {
       if (yaHay('memory', t)) return null
-      setAviso(`Memory cue en ${fmtTiempo(t)}`)
-      return crear({ tipo: 'memory', inicio: t }, `Memory cue en ${fmtTiempo(t)}`)
+      return crearAvisando({ tipo: 'memory', inicio: t }, `Memory cue en ${fmtTiempo(t)}`)
     })
   }
   const ponerLoopIn = () => {
@@ -832,8 +874,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (yaHay('loop', entrada, t)) { setLoopIn(null); return null }
       const c = cuerpoLoop(entrada, t)
       if (c.error) { setAviso(c.error); return null }
-      setAviso(`Loop ${fmtTiempo(entrada)} → ${fmtTiempo(t)}`)
-      const d = await crear(c, `Loop ${fmtTiempo(entrada)} → ${fmtTiempo(t)}`)
+      const d = await crearAvisando(c, `Loop ${fmtTiempo(entrada)} → ${fmtTiempo(t)}`)
       if (d) setLoopIn((x) => (x === entrada ? null : x))
       return d
     })
@@ -849,8 +890,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (yaHay('loop', t, fin)) return null
       const c = cuerpoLoop(t, fin)
       if (c.error) { setAviso(c.error); return null }
-      setAviso(`Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
-      return crear(c, `Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
+      return crearAvisando(c, `Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
     })
   }
   const tocarPad = (num, { borrarlo = false } = {}) => {
@@ -913,8 +953,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (estadoGrilla(gMotor).hay) { setAviso('El motor ya estimó una grilla: si está corrida, usá «Ajustar grilla» (½ beat, ±5 ms).'); return }
       const t = ms3(posActual())
       if (!grillaAnclada(gMotor, track.bpm, t)) { setAviso('⚠ Sin BPM medido no hay período: no se puede anclar una grilla.'); return }
-      cambiarAjuste({ ...ajuste, offset: 0, ancla: t })
-      setAviso(`Grilla anclada en ${fmtTiempo(t)}: ese kick es el 1 y el período es el que midió el motor. K otra vez la mueve; «Sacar el ancla» la quita.`)
+      const guardada = cambiarAjuste({ ...ajuste, offset: 0, ancla: t })
+      setAviso(guardada
+        ? `Grilla anclada en ${fmtTiempo(t)}: ese kick es el 1 y el período es el que midió el motor. K otra vez la mueve; «Sacar el ancla» la quita.`
+        : `⚠ Grilla anclada en ${fmtTiempo(t)} solo hasta que cierres esta pantalla: este navegador no deja guardar. Ese kick es el 1 y el período es el que midió el motor.`)
     },
     deshacer: () => correrHistorial(-1),
     rehacer: () => correrHistorial(1),
@@ -1093,6 +1135,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`
   const rep = repetidas(marcas)
+  // Cuál queda de cada grupo, para el diálogo de «Borrar repetidos» (auditoría f54, M-1).
+  const quedaTxt = (q) => `${nombreD(q)}${q.tipo === 'cue' ? ` en ${fmtTiempo(q.inicio)}` : ''}${q.nombre ? ` «${q.nombre}»` : ''}`
   // Beats de un loop con el período con que se crea (el de la grilla; sin grilla, 60/BPM).
   const beatsDe = (m) => beatsLoop(m.inicio, m.fin, periodo)
   const ordenadas = [...marcas].sort((p, q) => p.inicio - q.inicio || p.id - q.id)
@@ -1122,7 +1166,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const textoBandera = (m) => (m.tipo === 'pend' ? '⟲ IN · falta OUT (O)'
     : m.tipo === 'cue' ? `${letraPad(m.num)}${m.nombre ? ` · ${m.nombre}` : ''}`
       : m.tipo === 'memory' ? `▼ ${m.nombre || 'M'}`
-        : `${letraPad(m.num) ? `${letraPad(m.num)} ` : ''}⟲ ${beatsDe(m) !== null ? `${beatsDe(m)} beats` : 'Loop'}${m.nombre ? ` · ${m.nombre}` : ''}`)
+        : `${letraPad(m.num) ? `${letraPad(m.num)} ` : ''}⟲ ${beatsDe(m) !== null ? `${fmtBeats(beatsDe(m))} beats` : 'Loop'}${m.nombre ? ` · ${m.nombre}` : ''}`)
   const textoCorto = (m) => (m.tipo === 'pend' ? '⟲ IN' : m.tipo === 'cue' ? letraPad(m.num) : m.tipo === 'memory' ? '▼' : `${letraPad(m.num) || ''}⟲`)
   const banderas = (() => {
     const medir = (txt) => medirTexto(txt) + 16
@@ -1147,7 +1191,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   })()
   // Golpes de graves del tramo a la vista, SOLO sin grilla (con grilla, la grilla manda). No son
   // kicks: ver `detectarGolpesGraves` (validado contra temas reales: también marcan contratiempos).
-  const golpes = !grillaVisible && dDetalle && alcanza(dDetalle, v, 1, durAudio) ? detectarGolpesGraves(dDetalle, v.desde, v.hasta) : []
+  const golpes = !eg.hay && dDetalle && alcanza(dDetalle, v, 1, durAudio) ? detectarGolpesGraves(dDetalle, v.desde, v.hasta) : []
 
   // Lo que va DETRÁS de la onda en el canvas: un relleno por grupo de loops idénticos y el tramo
   // del loop a medio marcar (de la entrada al cursor).
@@ -1345,6 +1389,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             <span className="edd-zoom-u">{unidadZoom}</span>
           </div>
         </div>
+        {/* Marcar + el loop a medio marcar + el aviso: en el celular (≤ 640 px) quedan pegados abajo
+            de la pantalla, a la vista sin scroll (auditoría f54, M-3); en la compu, en su lugar. */}
+        <div className="edd-dock">
         <div className="edd-marcar" role="group" aria-label="Marcar">
           <button type="button" className="btn btn-primary edd-btn" onClick={() => ponerCue()} aria-keyshortcuts="C" aria-disabled={!track || undefined} title="Hot cue en el primer pad libre">Hot cue <Kbd>C</Kbd></button>
           <button type="button" className="btn btn-secondary edd-btn" onClick={ponerMemory} aria-keyshortcuts="M" aria-disabled={!track || undefined}>Memory cue <Kbd>M</Kbd></button>
@@ -1385,15 +1432,16 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             {!sinConfirmar && !pendientes && estado.fase === 'leido' && track && `${marcas.length ? resumen : 'Sin marcas todavía'} · ${fallasTotal ? `lista releída del servidor · ${noSeGuardo}` : 'se guardan solas en la biblioteca'}`}
           </p>
         </div>
+        </div>
         {rep.aBorrar.length > 0 && (
           <div className="alert alert-warn edd-repetidos" role="region" aria-label="Marcas repetidas">
             <div>
-              <p className="edd-rep-txt">⚠ Hay {rep.grupos.map((x) => `${x.sobran.length} ${PLURAL[x.tipo][x.sobran.length === 1 ? 0 : 1]} repetido${x.sobran.length === 1 ? '' : 's'} en ${fmtTiempo(x.inicio)}`).join(', ')}.</p>
+              <p className="edd-rep-txt">⚠ Hay {rep.grupos.map((x) => `${x.sobran.length} ${PLURAL[x.tipo][x.sobran.length === 1 ? 0 : 1]} ${REPETIDO[x.tipo]}${x.sobran.length === 1 ? '' : 's'} en ${fmtTiempo(x.inicio)}`).join(', ')}.</p>
               {!confirmaRep
                 ? <button type="button" className="btn btn-secondary edd-btn edd-borrar-rep" onClick={() => setConfirmaRep(true)}>Borrar repetidos…</button>
                 : (
                   <span className="edd-rep-conf">
-                    <span>Voy a borrar {rep.aBorrar.length} marca{rep.aBorrar.length === 1 ? '' : 's'} y dejar una de cada (la más vieja). Ctrl+Z las vuelve a poner.</span>
+                    <span>Voy a borrar {rep.aBorrar.length} marca{rep.aBorrar.length === 1 ? '' : 's'}. De cada grupo queda <span className="edd-rep-queda">{rep.grupos.map((x) => quedaTxt(x.queda)).join(' · ')}</span> (la que tiene nombre o pad; si no, la más vieja). Ctrl+Z las vuelve a poner.</span>
                     <button type="button" className="btn btn-secondary edd-btn edd-rep-si" onClick={() => borrarRepetidos()}>Sí, borrar {rep.aBorrar.length}</button>
                     <button type="button" className="btn btn-secondary edd-btn edd-rep-no" onClick={() => setConfirmaRep(false)}>No</button>
                   </span>
@@ -1454,7 +1502,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
                     <span className={`edd-pad-n ${m ? claseMarca(m) : `cue-c${n + 1}`}`} aria-hidden="true">{letra}</span>
                     <span className="edd-pad-t">
                       {!m && <span className="edd-pad-vacio">Vacío</span>}
-                      {m && <span className="edd-pad-nom">{loop ? `⟲ ${beatsDe(m) !== null ? `${beatsDe(m)} beats` : 'Loop'}` : (m.nombre || <span className="edd-sin-nombre">Sin nombre</span>)}</span>}
+                      {m && <span className="edd-pad-nom">{loop ? `⟲ ${beatsDe(m) !== null ? `${fmtBeats(beatsDe(m))} beats` : 'Loop'}` : (m.nombre || <span className="edd-sin-nombre">Sin nombre</span>)}</span>}
                       {m && <span className="edd-pad-tiempo mono">{fmtTiempo(m.inicio)}{loop ? ` → ${fmtTiempo(m.fin)}` : ''}</span>}
                     </span>
                     <Kbd>{n + 1}</Kbd>
@@ -1538,7 +1586,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
           Atajos con el foco en el editor: <Kbd>Espacio</Kbd> reproduce · <Kbd>←</Kbd> <Kbd>→</Kbd> ±1 beat (Mayús: ±10 ms) · <Kbd>1</Kbd>…<Kbd>8</Kbd> pads ·
           {' '}<Kbd>C</Kbd> <Kbd>M</Kbd> <Kbd>I</Kbd> <Kbd>O</Kbd> <Kbd>L</Kbd> marcas · <Kbd>K</Kbd> marcar un kick · <Kbd>B</Kbd> solo graves · <Kbd>+</Kbd> <Kbd>−</Kbd> zoom · <Kbd>G</Kbd> grilla · <Kbd>H</Kbd> ½ beat · <Kbd>Q</Kbd> pegar a la grilla ·
           {' '}<Kbd>Ctrl Z</Kbd> deshacer · <Kbd>RePág</Kbd> <Kbd>AvPág</Kbd> tema · <Kbd>Inicio</Kbd> <Kbd>Fin</Kbd> · <Kbd>Esc</Kbd> cierra.
-          {' '}El ajuste y el ancla de la grilla quedan guardados solo en este navegador. Loops siempre en naranja; memory: ▼ con borde y sin relleno.
+          {' '}{noGuarda ? 'Este navegador no deja guardar: el ajuste y el ancla de la grilla duran hasta que cierres esta pantalla.' : 'El ajuste y el ancla de la grilla quedan guardados solo en este navegador.'} Loops siempre en naranja; memory: ▼ con borde y sin relleno.
         </p>
       </div>
     </div>

@@ -497,13 +497,22 @@ export function compasDe(t, g, offset) {
 // cambio de tipo vuelve a crear la marca vieja, y su creación original sigue en el pasado), ese
 // 'crear' no va al grupo — quedaría dos veces y el segundo Ctrl+Z que la borra daría 404.
 export function descartarPaso(h, dir, hechas = [], cambios = []) {
-  let out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+  const out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+  return rescatarHechas(out, hechas, cambios)
+}
+
+// Lo que un paso rechazado A MEDIAS alcanzó a guardar, al final del pasado como un grupo propio
+// (con el id nuevo de lo recreado y sin duplicar lo que ya crea otro paso: ver descartarPaso).
+// h es el historial SIN el paso (en el editor, cerrarPaso(h, original, dir, 'rechazo') sobre
+// el historial actual); 	id, el tema del paso.
+export function rescatarHechas(h, hechas = [], cambios = [], tid = undefined) {
+  let out = h
   for (const [viejo, nuevo] of cambios) out = reemplazarId(out, viejo, nuevo)
   let ops = hechas
   for (const [viejo, nuevo] of cambios) ops = ops.map((o) => opConId(o, viejo, nuevo))
   const vivas = marcasVivas(out.pasado)
   ops = ops.filter((o) => !(o.tipo === 'crear' && vivas.has(o.marca.id)))
-  if (ops.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops }], futuro: out.futuro }
+  if (ops.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops, ...(tid === undefined ? {} : { tid }) }], futuro: out.futuro }
   return out
 }
 
@@ -566,16 +575,27 @@ export function agruparIguales(marcas) {
 
 // Marcas REPETIDAS para «Borrar repetidos»: del mismo tipo en el mismo tiempo (±50 ms, como el
 // freno de duplicados; un loop, con la misma salida). Para los hot cues no importa el pad: seis
-// cues en 1:15.439 en los pads C–H son el mismo cue repetido. Se deja la de id más bajo (la más
-// vieja) y se ofrecen borrar las demás. { grupos: [{ tipo, inicio, fin, queda, sobran }], aBorrar }.
+// cues en 1:15.439 en los pads C–H son el mismo cue repetido. Queda UNA por grupo:
+// - la que el dueño trabajó (marcaPropia: con nombre, o un loop / memory en un pad) antes que
+//   una suelta sin nombre, aunque la suelta sea más vieja (auditoría f54, M-1: se borraba el hot
+//   loop con nombre del pad A por ser más nuevo que un loop suelto idéntico);
+// - entre iguales en eso, la más vieja (id más bajo).
+// { grupos: [{ tipo, inicio, fin, queda, sobran }], aBorrar }.
+export function marcaPropia(m) {
+  const conNombre = typeof m.nombre === 'string' && m.nombre.trim() !== ''
+  return conNombre || (m.tipo !== 'cue' && Number.isInteger(m.num))
+}
 export function repetidas(marcas) {
   const cerca = (a, b) => (a ?? null) === (b ?? null) || (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TOLERANCIA_MARCA_S + 1e-9)
   const grupos = []
   for (const m of [...(Array.isArray(marcas) ? marcas : [])].sort((p, q) => p.id - q.id)) {
-    const g = grupos.find((x) => x.tipo === m.tipo && cerca(x.queda.inicio, m.inicio) && (m.tipo !== 'loop' || cerca(x.queda.fin, m.fin)))
-    if (g) g.sobran.push(m); else grupos.push({ tipo: m.tipo, inicio: m.inicio, fin: m.fin, queda: m, sobran: [] })
+    const g = grupos.find((x) => x.tipo === m.tipo && cerca(x.ref.inicio, m.inicio) && (m.tipo !== 'loop' || cerca(x.ref.fin, m.fin)))
+    if (g) g.todas.push(m); else grupos.push({ tipo: m.tipo, inicio: m.inicio, fin: m.fin, ref: m, todas: [m] })
   }
-  const con = grupos.filter((g) => g.sobran.length).sort((p, q) => p.inicio - q.inicio)
+  const con = grupos.filter((g) => g.todas.length > 1).map((g) => {
+    const queda = g.todas.find(marcaPropia) || g.todas[0]
+    return { tipo: g.tipo, inicio: g.inicio, fin: g.fin, queda, sobran: g.todas.filter((m) => m !== queda) }
+  }).sort((p, q) => p.inicio - q.inicio)
   return { grupos: con, aBorrar: con.flatMap((g) => g.sobran) }
 }
 
