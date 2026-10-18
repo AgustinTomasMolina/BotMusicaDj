@@ -1738,9 +1738,12 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
    confundirla con el pad H (los dos son #f2f3f8 en la tabla del motor). */
 :root{
   --edd-fondo-onda:#0b0d14;
-  --edd-graves:#3b7bff;
-  --edd-medios:#f0a43a;
-  --edd-agudos:#e6e8f2;
+  /* Colores apagados (pedido del dueño, estilo Rekordbox/Serato): graves azul medio, medios
+     ámbar apagado, agudos blanco suave. Opacos a propósito: el E2E mide en pantalla el azul
+     puro de los graves. */
+  --edd-graves:#4b78c6;
+  --edd-medios:#b98a4e;
+  --edd-agudos:#c3c7d2;
   /* Las líneas de la grilla: blancas bastante opacas con un halo oscuro de 1 px, para que se
      lean sobre los graves azules (auditoría f54) sin tapar el kick (1 px de línea). */
   --edd-beat:rgba(255,255,255,.62);
@@ -1770,7 +1773,7 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-regla>span{position:absolute;top:0;padding-left:4px;white-space:nowrap}
 .edd-regla>span.is-fin{transform:translateX(-100%);padding:0 4px 0 0}
 .edd-flag.is-der{transform:translateX(-100%);border-radius:5px 0 0 5px;padding:5px 5px 5px 7px}
-.edd-flags{position:relative;height:24px;overflow:hidden}
+.edd-flags{position:relative;height:48px;overflow:hidden}
 .edd-flag{position:absolute;top:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 12px/1 var(--font-body);color:var(--cue-ink);background:var(--cue-c);border-radius:0 5px 5px 0;padding:5px 7px 5px 5px;cursor:grab;touch-action:none;user-select:none}
 .edd-flag.is-loop{background:var(--cue-loop)}
 .edd-flag.is-memory{background:var(--color-bg);color:var(--cue-mem);box-shadow:inset 0 0 0 2px var(--cue-mem);border-radius:5px}
@@ -1786,7 +1789,19 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-mk{position:absolute;top:0;bottom:0;width:3px;margin-left:-1.5px;background:var(--cue-c);box-shadow:0 0 0 1px rgba(13,15,23,.7);pointer-events:none}
 .edd-mk.is-memory{width:0;margin-left:0;background:none;box-shadow:none;border-left:2px dashed var(--cue-mem)}
 .edd-mk.is-memory::after{content:"";position:absolute;bottom:0;left:-8px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid var(--cue-mem)}
-.edd-mk-loop{position:absolute;top:0;bottom:0;background:rgba(255,154,46,.20);box-shadow:inset 3px 0 0 var(--cue-loop),inset -3px 0 0 var(--cue-loop);pointer-events:none}
+/* El rango del loop: relleno translúcido (se siguen viendo los kicks y las bandas) y la entrada
+   y la salida bien marcadas. */
+.edd-mk-loop{position:absolute;top:0;bottom:0;background:rgba(255,154,46,.16);box-shadow:inset 3px 0 0 var(--cue-loop),inset -3px 0 0 var(--cue-loop);pointer-events:none}
+.edd-mk-loop.is-sel{background:rgba(255,154,46,.24)}
+.edd-loop-prev{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,rgba(255,154,46,.14) 0 6px,transparent 6px 12px);pointer-events:none}
+.edd-tick{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:rgba(233,233,237,.14)}
+.edd-kick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:rgba(233,233,237,.34)}
+.edd-flag.is-sel{outline:2px solid #fff;outline-offset:1px}
+.edd-pad.is-sel{outline:3px solid #fff;outline-offset:2px}
+.edd-fila.is-sel{border-color:#fff;box-shadow:0 0 0 1px #fff}
+.edd-sin-nombre{font-weight:400;font-style:italic;color:var(--color-neutral-300)}
+.edd-loop-pend{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 12px;border-radius:8px;border:1px dashed var(--cue-loop);color:var(--color-text);font-size:13px}
+.edd-aviso{font-size:13.5px;color:var(--color-text)}
 .edd-loop-fin{position:absolute;top:0;bottom:0;right:-6px;width:12px;cursor:ew-resize;pointer-events:auto;touch-action:none}
 .edd-loopin{position:absolute;top:0;bottom:0;border-left:2px dashed var(--cue-loop);pointer-events:none}
 .edd-cabezal{position:absolute;top:0;bottom:0;left:0;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 0 1px rgba(13,15,23,.6);pointer-events:none}
@@ -1942,3 +1957,142 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .rpool-analizando,.rpool-sinanalizar{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .rcues-puntos{margin-right:6px}
 .rguardar-pl-ok{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+
+/* — Editor D: rediseño de la crítica de f54 (va al final: pisa lo de arriba) —
+   Todo el flujo sin scroll a 1440×900: cabecera en una línea, onda de 200 px, una línea de
+   estado de la onda, transporte + marcar, el aviso pegado, pads y una lista compacta con scroll
+   propio. Paleta en escalera de luminancia (graves oscuro, medios, agudos claro), opaca. */
+:root{
+  --edd-graves:#3d63c2;      /* 3,48:1 sobre el fondo de la onda */
+  --edd-medios:#c98d45;      /* 6,82:1 */
+  --edd-agudos:#b9bfcf;      /* 10,5:1; más apagado que el cabezal (#fff) */
+  --edd-tiempo:rgba(255,255,255,.10);
+  --edd-beat:rgba(205,212,255,.45);
+  --edd-compas:rgba(205,212,255,.75);
+  --edd-halo:rgba(11,13,20,.9);
+  --edd-loop-fondo:rgba(255,154,46,.16);
+  --edd-loop-pend:rgba(255,154,46,.08);
+  --edd-golpe:rgba(205,212,255,.55);
+}
+.edd{gap:8px;padding:12px 24px 24px}
+.edd ::placeholder{color:var(--color-neutral-400);opacity:1}
+.edd-cab{flex-wrap:nowrap;gap:10px 14px}
+.edd-cab-t{flex:1 1 auto;min-width:0}
+.edd-h{font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.edd-chips{flex:none}
+.edd-nav{flex:none;flex-wrap:nowrap}
+.edd-sel{flex:0 1 220px;width:220px}
+.edd-ico{min-width:44px;justify-content:center}
+.edd-ondabox{padding:8px 14px;gap:4px}
+.edd-regla{height:16px}
+.edd-regla>span::after{content:"";position:absolute;left:0;bottom:-2px;width:1px;height:4px;background:var(--color-neutral-300)}
+.edd-flags{height:48px}
+.edd-flag{min-width:24px;max-width:180px;height:22px;box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;padding:3px 7px 3px 5px}
+.edd-flag.is-pend{background:var(--color-bg);color:var(--cue-loop);box-shadow:inset 0 0 0 2px var(--cue-loop);border-radius:5px;outline:2px dashed var(--cue-loop);outline-offset:-2px}
+.edd-flag.is-loop{background:var(--cue-loop)}
+.edd-flag-n{font:700 11px/1 var(--font-body);color:var(--color-warn);background:#161826;border-radius:4px;padding:2px 4px}
+.edd-flag-mas{font:700 11px/1 var(--font-body);color:var(--color-text);background:#161826;border-radius:4px;padding:2px 4px}
+.edd-onda{height:200px}
+/* Detrás de la onda: tiempo (1 px) y golpes de graves (marquitas de 8 px arriba y abajo,
+   atenuadas: no son beats). Encima: beat 2 px, compás 3 px, marcas 2 px con halo. */
+.edd-tick{width:1px;margin-left:-.5px;background:var(--edd-tiempo)}
+.edd-golpe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:linear-gradient(var(--edd-golpe) 0 8px,transparent 8px calc(100% - 8px),var(--edd-golpe) calc(100% - 8px))}
+.edd-beat{width:2px;margin-left:-1px;background:var(--edd-beat);box-shadow:none}
+.edd-beat.is-compas{width:3px;margin-left:-1.5px;background:var(--edd-compas)}
+.edd-onda.is-atenuada .edd-beat{background:none;border-left:2px dashed var(--edd-beat)}
+.edd-onda.is-atenuada .edd-beat.is-compas{border-left:3px dashed var(--edd-compas)}
+.edd-mk{width:2px;margin-left:-1px;box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-mk.is-memory{border-left:2px dashed var(--cue-mem);box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+/* El loop: el relleno va en el canvas (detrás de la onda); acá los bordes con halo, la franja de
+   6 px arriba y el tirador de la salida, visible. */
+.edd-mk-loop{background:transparent;box-shadow:inset 2px 0 0 var(--cue-loop),inset -2px 0 0 var(--cue-loop),-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-mk-loop::before{content:"";position:absolute;left:0;right:0;top:0;height:6px;background:var(--cue-loop)}
+.edd-mk-loop.is-sel{background:transparent;box-shadow:inset 3px 0 0 #fff,inset -3px 0 0 #fff,inset 0 6px 0 var(--cue-loop)}
+.edd-loop-fin{right:-4px;width:8px;top:calc(50% - 12px);bottom:auto;height:24px;background:repeating-linear-gradient(90deg,var(--cue-loop) 0 2px,var(--edd-halo) 2px 3px);border-radius:2px}
+.edd-loop-prev{display:none}
+.edd-loopin{border-left:2px dashed var(--cue-loop);box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-cabezal{background:#fff;box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-cabezal::after{content:"";position:absolute;bottom:0;left:-7px;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:11px solid #fff}
+.edd-cabezal.is-gen::after{display:none}
+.edd-ondaestado{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:12px;color:var(--color-neutral-300)}
+.edd-leyenda{display:inline-flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.edd-sw.is-golpe{background:var(--edd-golpe);width:3px}
+.edd-grilla-chip{font:700 11px var(--font-body);letter-spacing:.04em;border-radius:5px;padding:4px 8px;background:#2a2d3f;color:var(--color-text)}
+.edd-grilla-chip.is-sin,.edd-grilla-chip.is-baja{color:var(--color-warn)}
+.edd-grilla-chip.is-tuya{background:#cdd4ff;color:#161826}
+.edd-solog[aria-pressed=true]{border-color:var(--edd-graves);box-shadow:inset 0 0 0 1px var(--edd-graves)}
+.edd-grilla-ctrl{border-top:0;padding-top:0}
+.edd-grilla-ctrl>summary{list-style:none;cursor:pointer}
+.edd-grilla-ctrl>summary::-webkit-details-marker{display:none}
+.edd-grilla-ctrl[open]{flex-basis:100%}
+.edd-grilla-ctrl[open]>summary{margin-bottom:6px}
+.edd-trans{gap:6px}
+.edd-reloj{font-size:20px;margin:0 4px}
+.edd-marcar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.edd-loopn{min-height:44px;width:auto}
+.edd-loop-pend{padding:4px 10px}
+.edd-avisos{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;min-height:24px}
+.edd-aviso{margin:0;font-size:13px;color:var(--color-neutral-300)}
+.edd-aviso.is-warn{color:var(--color-warn)}
+.edd-avisos .edd-estado{margin-left:auto}
+.edd-repetidos .edd-rep-txt{margin:0 0 6px}
+.edd-rep-conf{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px}
+.edd-rep-si{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+.edd-general{padding:6px 14px}
+.edd-gen{height:44px}
+.edd-abajo{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px}
+.edd-pads-box{gap:6px}
+.edd-sub{line-height:1.4}
+.edd-pads-nota{margin:-2px 0 2px}
+.edd-pad{min-height:52px;padding:4px 10px}
+/* Pad vacío legible: contorno y letra del color del pad (no la letra oscura al 55 %). */
+.edd-pad.is-vacio .edd-pad-n{opacity:1;background:transparent;color:var(--cue-c);box-shadow:inset 0 0 0 2px var(--cue-c)}
+.edd-pad.is-vacio .edd-pad-vacio{color:var(--color-neutral-400)}
+.edd-lista{max-height:300px;overflow:auto;padding:8px 10px}
+.edd-filas{gap:4px}
+.edd-fila{display:block;padding:2px 4px;border-radius:6px;border:1px solid transparent;background:transparent}
+.edd-fila.is-abierta{border-color:var(--color-divider);background:var(--color-bg)}
+.edd-fila-c{display:grid;grid-template-columns:44px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:44px}
+.edd-fila .edd-tag{grid-row:auto;align-self:center}
+.edd-fila-t{font-size:12.5px;white-space:nowrap}
+.edd-fila-n{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.edd-fila-ed{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 8px;padding:6px 0 8px 52px}
+.edd-fila-ed .edd-tiempos,.edd-fila-ed .edd-campo-nom{grid-column:1 / -1}
+.edd-fila .edd-campo-tipo,.edd-fila .edd-campo-pad,.edd-fila .edd-tiempos,.edd-fila .edd-campo-nom{grid-row:auto}
+.edd-fila-ed .edd-alcursor{justify-self:start}
+@media (max-width:1100px){
+  .edd-cab{flex-wrap:wrap}
+  .edd-abajo{grid-template-columns:minmax(0,1fr)}
+  .edd-lista{max-height:none}
+}
+@media (max-width:640px){
+  .edd{padding:8px 16px 20px}
+  .edd-cab{flex-wrap:wrap}
+  .edd-cab-t{flex:1 1 100%}
+  .edd-h{font-size:17px}
+  .edd-ico-txt{display:none}
+  .edd-sel{flex:1 1 0;width:auto}
+  .edd-onda{height:170px}
+  .edd-trans .edd-flex{display:none}
+  .edd-fila-c{grid-template-columns:44px minmax(0,1fr) auto auto}
+  .edd-fila-n{display:none}
+  .edd-fila-ed{padding-left:0}
+}
+
+/* ---- auditoría f54 (M-3, M-4): marcar y el aviso a la vista en el celular; objetivos ≥ 24 px ---- */
+.edd-dock{display:contents}
+.edd-flags{height:50px}
+.edd-flag{height:24px}
+/* El tirador de la salida del loop: se ve de 8 px (la franja rayada) y se agarra de 24 × 24. */
+.edd-loop-fin{right:-12px;width:24px;padding:0 8px;box-sizing:border-box;background-clip:content-box}
+@media (max-width:640px){
+  .edd-dock{display:flex;flex-direction:column;gap:6px;position:sticky;bottom:0;z-index:6;margin:0 -12px -12px;padding:8px 12px 10px;background:var(--color-bg);border-top:1px solid var(--color-divider);box-shadow:0 -6px 16px rgba(0,0,0,.45)}
+  .edd-dock .edd-marcar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+  .edd-dock .edd-marcar .edd-btn{min-width:0;padding:4px 6px;font-size:13px;line-height:1.15;white-space:normal;justify-content:center;text-align:center}
+  .edd-dock .edd-kbd{display:none}
+  .edd-dock .edd-loopn-l,.edd-dock .edd-loopn{min-width:0;width:100%;min-height:44px}
+  .edd-dock .edd-avisos{gap:2px 8px}
+  .edd-dock .edd-avisos .edd-estado{margin-left:0;font-size:12px}
+  /* La lista: el nombre en su propia línea, debajo del tiempo (antes se escondía). */
+  .edd-fila-n{display:block;grid-column:2/-1;grid-row:2;white-space:normal;overflow-wrap:anywhere}
+}

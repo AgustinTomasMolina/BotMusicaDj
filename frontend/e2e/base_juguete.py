@@ -96,7 +96,9 @@ def editor_d(raiz: Path) -> dict:
     import soundfile as sf
 
     sr = 22050
-    dur = 48.0
+    # Más de 90 s: el motor no toma por «track» algo más corto (motor.modelos.es_track) y la
+    # radio de f55 no arma un set con loops ni samples; el E2E del editor la quiere habilitada.
+    dur = 100.0
     t = np.arange(int(dur * sr)) / sr
     carpeta = raiz / CARPETA_EDITOR
     carpeta.mkdir(parents=True, exist_ok=True)
@@ -205,11 +207,11 @@ def main(destino: Path) -> dict:
         "caratula_dibujable": {"1": _tamano_png(imagenes["png"]),
                                "2": _tamano_png(imagenes["png_otro"])},
         **importables(destino / RAIZ_IMPORTAR, destino),
+        **playlist_radio(destino, rutas_radio, raiz),
         # f54: los temas del editor D (archivos en <raíz de importar>/Editor; el alta en la
         # base del motor la hace el caso que los usa).
         "editor_d": editor_d(destino / RAIZ_IMPORTAR),
         "editor_carpeta": CARPETA_EDITOR,
-        **playlist_radio(destino, rutas_radio, raiz),
     }
 
 

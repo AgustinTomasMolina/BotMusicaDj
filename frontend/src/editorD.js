@@ -128,15 +128,17 @@ export function leerAjuste(storage, id) {
     const crudo = storage && storage.getItem(CLAVE + id)
     if (!crudo) return fabrica
     const d = JSON.parse(crudo)
-    return { offset: finito(d.offset) ? d.offset : 0, oculta: d.oculta === true }
+    // ncla (K): el kick que marcó el dueño cuando el motor no dio grilla; solo si está.
+    return { offset: finito(d.offset) ? d.offset : 0, oculta: d.oculta === true, ...(finito(d.ancla) ? { ancla: d.ancla } : {}) }
   } catch { return fabrica }
 }
 
 export function guardarAjuste(storage, id, ajuste) {
   try {
     if (!storage) return false
-    if (!(ajuste.offset) && !ajuste.oculta) storage.removeItem(CLAVE + id)
-    else storage.setItem(CLAVE + id, JSON.stringify({ offset: ajuste.offset || 0, oculta: !!ajuste.oculta }))
+    const ancla = finito(ajuste.ancla) ? { ancla: ajuste.ancla } : {}
+    if (!(ajuste.offset) && !ajuste.oculta && !finito(ajuste.ancla)) storage.removeItem(CLAVE + id)
+    else storage.setItem(CLAVE + id, JSON.stringify({ offset: ajuste.offset || 0, oculta: !!ajuste.oculta, ...ancla }))
     return true
   } catch { return false }
 }
@@ -233,18 +235,90 @@ export function columnas(d, v, px) {
 //   { tipo: 'grupo', ops: [...] }      (cambiar el tipo = crear la nueva + borrar la vieja)
 // Deshacer aplica la inversa; rehacer, la original. Recrear una marca borrada le da OTRO id
 // en la base: `reemplazarId` lo propaga a todo el historial.
+// Cada paso lleva `tid`, el tema en el que nació (auditoría f54): un paso de otro tema no se
+// aplica nunca sobre el tema que está abierto. La inversa conserva el `tid`.
 
 export const historialVacio = () => ({ pasado: [], futuro: [] })
 const TOPE = 200
 
 export function inversa(op) {
+  const tid = op && op.tid !== undefined ? { tid: op.tid } : {}
+  // `iguales`: cuántas marcas idénticas había con esa marca en la lista (ver `yaHecha`).
+  const iguales = op && op.iguales !== undefined ? { iguales: op.iguales } : {}
   switch (op.tipo) {
-    case 'crear': return { tipo: 'borrar', marca: op.marca }
-    case 'borrar': return { tipo: 'crear', marca: op.marca }
-    case 'cambiar': return { tipo: 'cambiar', id: op.id, antes: op.despues, despues: op.antes }
-    case 'grupo': return { tipo: 'grupo', ops: [...op.ops].reverse().map(inversa) }
+    case 'crear': return { tipo: 'borrar', marca: op.marca, ...iguales, ...tid }
+    case 'borrar': return { tipo: 'crear', marca: op.marca, ...iguales, ...tid }
+    case 'cambiar': return { tipo: 'cambiar', id: op.id, antes: op.despues, despues: op.antes, ...tid }
+    case 'grupo': return { tipo: 'grupo', ops: [...op.ops].reverse().map(inversa), ...tid }
     default: throw new Error(`operación desconocida: ${op && op.tipo}`)
   }
+}
+
+// ¿Qué hacer con una escritura que el servidor no confirmó? Por el código HTTP (null = sin
+// respuesta: red caída, el server no contestó):
+//   'rechazo'      400 / 404: el pedido no vale tal cual (la marca ya no está, el pad está
+//                  ocupado); repetirlo da lo mismo → el paso sale del historial.
+//   'reintentable' 409 (la base está ocupada: el server dice «reintentá en un rato»), 5xx o
+//                  sin respuesta → el paso queda para volver a intentar.
+export function clasificarFalla(status) {
+  return status === 400 || status === 404 ? 'rechazo' : 'reintentable'
+}
+
+// ¿La operación ya está hecha en la lista REAL del servidor? Deshacer y rehacer miran esto
+// antes de mandar cada pedido (auditoría f54): reintentar un paso que quedó a medias, o uno
+// cuyo pedido llegó pero cuya respuesta se perdió, no puede duplicar marcas.
+//   crear: la marca con ESE id está en la lista; o hay al menos `op.iguales` marcas idénticas
+//          (tipo, tiempos, pad) — las que había cuando la marca existía. Se CUENTA, no se busca
+//          una: el server permite dos memory o dos loops sin pad en el mismo tiempo (solo el pad
+//          es único), y «hay una igual» daba un falso «ya hecho» (3.ª auditoría f54). Contar
+//          también cubre el pedido que llegó al server y cuya respuesta se perdió.
+//   borrar: la marca ya no está → hecha
+//   cambiar: la marca ya tiene los valores nuevos → hecha (si no está, no: el PATCH dará 404)
+const igualT = (a, b) => (a ?? null) === (b ?? null) || (finito(a) && finito(b) && Math.abs(a - b) < 0.0005)
+const identicas = (m, lista) => (Array.isArray(lista) ? lista : []).filter((y) => y.tipo === m.tipo
+  && igualT(y.inicio, m.inicio) && igualT(y.fin, m.fin) && (m.tipo === 'memory' || igualT(y.num, m.num)))
+
+// Cuántas marcas idénticas a `m` hay en la lista (contándola si está).
+export const contarIguales = (m, lista) => identicas(m, lista).length
+
+export function yaHecha(op, marcas) {
+  const lista = Array.isArray(marcas) ? marcas : []
+  if (op.tipo === 'crear') {
+    const m = op.marca
+    if (lista.some((y) => y.id === m.id)) return { hecha: true, id: m.id }
+    const iguales = identicas(m, lista)
+    if (Number.isInteger(op.iguales) && op.iguales > 0 && iguales.length >= op.iguales) {
+      // Ya están todas las que tiene que haber: la que falta es una de esas (la más nueva).
+      return { hecha: true, id: Math.max(...iguales.map((y) => y.id)) }
+    }
+    return { hecha: false }
+  }
+  if (op.tipo === 'borrar') return { hecha: !lista.some((y) => y.id === op.marca.id) }
+  if (op.tipo === 'cambiar') {
+    const x = lista.find((y) => y.id === op.id)
+    return { hecha: Boolean(x) && Object.keys(op.despues).every((k) => igualT(x[k], op.despues[k])) }
+  }
+  return { hecha: false }
+}
+
+// El historial después de que un deshacer (dir −1) o rehacer (+1) del paso `original` terminó
+// con `desenlace` ('ok' | 'rechazo' | 'reintentable'), aplicado sobre el historial ACTUAL `h`
+// (3.ª auditoría f54: mientras el pedido viajaba se pudo registrar otra edición, que no puede
+// perderse por usar el historial del momento en que empezó el Ctrl+Z).
+//   ok, deshacer: el paso sale del pasado y va al futuro, salvo que mientras tanto se haya
+//                 hecho algo nuevo (eso borra el futuro, como siempre);
+//   ok, rehacer:  sale del futuro (si sigue ahí) y va al final del pasado;
+//   rechazo:      sale de donde esté;  reintentable: todo queda igual.
+export function cerrarPaso(h, original, dir, desenlace) {
+  if (desenlace === 'reintentable' || !original) return h
+  const sin = (xs) => xs.filter((o) => o !== original)
+  if (dir < 0) {
+    if (desenlace === 'rechazo') return { pasado: sin(h.pasado), futuro: h.futuro }
+    const huboNuevo = h.pasado[h.pasado.length - 1] !== original
+    return { pasado: sin(h.pasado), futuro: huboNuevo ? h.futuro : [original, ...h.futuro] }
+  }
+  if (desenlace === 'rechazo') return { pasado: h.pasado, futuro: sin(h.futuro) }
+  return { pasado: [...sin(h.pasado), original], futuro: sin(h.futuro) }
 }
 
 export function registrar(h, op) {
@@ -265,19 +339,20 @@ export function rehacer(h) {
   return { aplicar: op, h: { pasado: [...h.pasado, op], futuro: h.futuro.slice(1) } }
 }
 
-function conId(op, viejo, nuevo) {
+// Una operación con el id `viejo` de marca cambiado por `nuevo` (la marca se recreó).
+export function opConId(op, viejo, nuevo) {
   switch (op.tipo) {
     case 'crear':
     case 'borrar': return op.marca.id === viejo ? { ...op, marca: { ...op.marca, id: nuevo } } : op
     case 'cambiar': return op.id === viejo ? { ...op, id: nuevo } : op
-    case 'grupo': return { ...op, ops: op.ops.map((o) => conId(o, viejo, nuevo)) }
+    case 'grupo': return { ...op, ops: op.ops.map((o) => opConId(o, viejo, nuevo)) }
     default: return op
   }
 }
 
 export function reemplazarId(h, viejo, nuevo) {
   if (viejo === nuevo) return h
-  return { pasado: h.pasado.map((o) => conId(o, viejo, nuevo)), futuro: h.futuro.map((o) => conId(o, viejo, nuevo)) }
+  return { pasado: h.pasado.map((o) => opConId(o, viejo, nuevo)), futuro: h.futuro.map((o) => opConId(o, viejo, nuevo)) }
 }
 
 // El cuerpo del POST que vuelve a crear una marca (sin id ni fechas).
@@ -320,8 +395,8 @@ function activable(target) {
 
 // La acción de una tecla en el editor D, o null. `e`: KeyboardEvent (o algo con key, code...).
 //   play · beat(dir) · fino(dir) · pad(num) · borrarPad(num) · cue · memory · loopIn · loopOut ·
-//   loopBeats · zoom(dir) · grilla · medioBeat · snap · deshacer · rehacer · inicio · fin ·
-//   tema(dir) · cerrar
+//   loopBeats · zoom(dir) · grilla · medioBeat · snap · ancla (K: marcar un kick) · soloGraves (B) ·
+//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar
 export function atajoD(e) {
   if (!e || e.isComposing) return null
   const k = e.key
@@ -358,6 +433,8 @@ export function atajoD(e) {
     case 'g': return { tipo: 'grilla' }
     case 'h': return { tipo: 'medioBeat' }
     case 'q': return { tipo: 'snap' }
+    case 'k': return { tipo: 'ancla' }
+    case 'b': return { tipo: 'soloGraves' }
     default: return null
   }
 }
@@ -420,13 +497,22 @@ export function compasDe(t, g, offset) {
 // cambio de tipo vuelve a crear la marca vieja, y su creación original sigue en el pasado), ese
 // 'crear' no va al grupo — quedaría dos veces y el segundo Ctrl+Z que la borra daría 404.
 export function descartarPaso(h, dir, hechas = [], cambios = []) {
-  let out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+  const out = dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
+  return rescatarHechas(out, hechas, cambios)
+}
+
+// Lo que un paso rechazado A MEDIAS alcanzó a guardar, al final del pasado como un grupo propio
+// (con el id nuevo de lo recreado y sin duplicar lo que ya crea otro paso: ver descartarPaso).
+// h es el historial SIN el paso (en el editor, cerrarPaso(h, original, dir, 'rechazo') sobre
+// el historial actual); 	id, el tema del paso.
+export function rescatarHechas(h, hechas = [], cambios = [], tid = undefined) {
+  let out = h
   for (const [viejo, nuevo] of cambios) out = reemplazarId(out, viejo, nuevo)
   let ops = hechas
-  for (const [viejo, nuevo] of cambios) ops = ops.map((o) => conId(o, viejo, nuevo))
+  for (const [viejo, nuevo] of cambios) ops = ops.map((o) => opConId(o, viejo, nuevo))
   const vivas = marcasVivas(out.pasado)
   ops = ops.filter((o) => !(o.tipo === 'crear' && vivas.has(o.marca.id)))
-  if (ops.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops }], futuro: out.futuro }
+  if (ops.length) out = { pasado: [...out.pasado, { tipo: 'grupo', ops, ...(tid === undefined ? {} : { tid }) }], futuro: out.futuro }
   return out
 }
 
@@ -457,4 +543,139 @@ export function temaVigente(tid, actual, cargado = true) {
 export function beatsLoop(entrada, salida, periodo) {
   if (!finito(periodo) || !(periodo > 0) || !finito(entrada) || !finito(salida) || !(salida > entrada)) return null
   return Math.round(((salida - entrada) / periodo) * 10) / 10
+}
+
+// ---------------------------------------------------------------- pedidos del dueño (f54)
+
+// Tolerancia para «ya hay una marca ahí»: ±50 ms (apretar C diez veces llenaba los 8 pads con
+// cues en el MISMO tiempo).
+export const TOLERANCIA_MARCA_S = 0.05
+
+// La marca del mismo tipo que ya está en ese tiempo (±50 ms), o null. Para un loop, tienen que
+// coincidir la entrada Y la salida (dos loops que arrancan igual pero duran distinto son dos).
+export function marcaCercana(marcas, tipo, inicio, fin = null) {
+  const cerca = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TOLERANCIA_MARCA_S + 1e-9
+  return (Array.isArray(marcas) ? marcas : []).find((m) => m.tipo === tipo && cerca(m.inicio, inicio)
+    && (tipo !== 'loop' || cerca(m.fin, fin))) || null
+}
+
+// Marcas IDÉNTICAS (mismo tipo, tiempos y pad, a ±10 ms) juntas: una bandera y un relleno por
+// grupo, con su `n` (la base del dueño tiene 32 loops iguales encimados: dibujados uno por uno, el
+// relleno al 16 % quedaba opaco). Devuelve [{ marca (la de id más bajo), ids, n }] en orden de tiempo.
+export function agruparIguales(marcas) {
+  const cerca = (a, b) => (a ?? null) === (b ?? null) || (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.01)
+  const grupos = []
+  for (const m of [...(Array.isArray(marcas) ? marcas : [])].sort((p, q) => p.inicio - q.inicio || p.id - q.id)) {
+    const g = grupos.find((x) => x.marca.tipo === m.tipo && cerca(x.marca.inicio, m.inicio) && cerca(x.marca.fin, m.fin)
+      && (x.marca.num ?? null) === (m.num ?? null))
+    if (g) { g.ids.push(m.id); g.n += 1 } else grupos.push({ marca: m, ids: [m.id], n: 1 })
+  }
+  return grupos
+}
+
+// Marcas REPETIDAS para «Borrar repetidos»: del mismo tipo en el mismo tiempo (±50 ms, como el
+// freno de duplicados; un loop, con la misma salida). Para los hot cues no importa el pad: seis
+// cues en 1:15.439 en los pads C–H son el mismo cue repetido. Queda UNA por grupo:
+// - la que el dueño trabajó (marcaPropia: con nombre, o un loop / memory en un pad) antes que
+//   una suelta sin nombre, aunque la suelta sea más vieja (auditoría f54, M-1: se borraba el hot
+//   loop con nombre del pad A por ser más nuevo que un loop suelto idéntico);
+// - entre iguales en eso, la más vieja (id más bajo).
+// { grupos: [{ tipo, inicio, fin, queda, sobran }], aBorrar }.
+export function marcaPropia(m) {
+  const conNombre = typeof m.nombre === 'string' && m.nombre.trim() !== ''
+  return conNombre || (m.tipo !== 'cue' && Number.isInteger(m.num))
+}
+export function repetidas(marcas) {
+  const cerca = (a, b) => (a ?? null) === (b ?? null) || (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TOLERANCIA_MARCA_S + 1e-9)
+  const grupos = []
+  for (const m of [...(Array.isArray(marcas) ? marcas : [])].sort((p, q) => p.id - q.id)) {
+    const g = grupos.find((x) => x.tipo === m.tipo && cerca(x.ref.inicio, m.inicio) && (m.tipo !== 'loop' || cerca(x.ref.fin, m.fin)))
+    if (g) g.todas.push(m); else grupos.push({ tipo: m.tipo, inicio: m.inicio, fin: m.fin, ref: m, todas: [m] })
+  }
+  const con = grupos.filter((g) => g.todas.length > 1).map((g) => {
+    const queda = g.todas.find(marcaPropia) || g.todas[0]
+    return { tipo: g.tipo, inicio: g.inicio, fin: g.fin, queda, sobran: g.todas.filter((m) => m !== queda) }
+  }).sort((p, q) => p.inicio - q.inicio)
+  return { grupos: con, aBorrar: con.flatMap((g) => g.sobran) }
+}
+
+// Banderas en dos carriles sin pisarse. Cada item: {id, x (px de la marca), ancho, anchoMin,
+// prioridad (menor = más importante), der (cuelga a la izquierda de la marca), carril (el
+// preferido)}. Por prioridad y después de izquierda a derecha: su carril, el otro; si no entra
+// entera, la versión corta (solo el rótulo); si tampoco, se suma como «+n» a la que la tapa (que
+// lista las que lleva adentro). Devuelve id → { fila, corta, adentro: [ids] } o { tapadaPor: id }.
+export function filasBanderas(items, filas = 2, margen = 4) {
+  const ocupado = Array.from({ length: filas }, () => [])
+  const libre = (f, a, b) => ocupado[f].every((o) => b + margen <= o.a || a >= o.b + margen)
+  const orden = [...items].sort((p, q) => p.prioridad - q.prioridad || p.x - q.x)
+  const out = {}
+  for (const it of orden) {
+    let puesto = null
+    const pref = Math.min(filas - 1, Math.max(0, it.carril ?? 0))
+    const carriles = [pref, ...Array.from({ length: filas }, (_, f) => f).filter((f) => f !== pref)]
+    for (const [ancho, corta] of [[it.ancho, false], [it.anchoMin, true]]) {
+      // `der`: la bandera cuelga a la IZQUIERDA de su marca (cerca del borde derecho).
+      const [a, b] = it.der ? [it.x - ancho, it.x] : [it.x, it.x + ancho]
+      for (const f of carriles) {
+        if (!puesto && libre(f, a, b)) { ocupado[f].push({ a, b, id: it.id }); puesto = { fila: f, corta, adentro: [] } }
+      }
+      if (puesto) break
+    }
+    if (!puesto) {
+      const [a, b] = it.der ? [it.x - it.anchoMin, it.x] : [it.x, it.x + it.anchoMin]
+      const tapa = ocupado.flat().find((o) => a < o.b + margen && b + margen > o.a)
+      if (tapa) { out[tapa.id].adentro.push(it.id); out[it.id] = { tapadaPor: tapa.id }; continue }
+      out[it.id] = null
+      continue
+    }
+    out[it.id] = puesto
+  }
+  return out
+}
+
+// Golpes en la banda de graves de /onda3 (`d`: {desde, hasta, bandas}): una subida brusca de los
+// graves (al menos `subida` en 50 ms, hasta al menos `piso`), separadas por `separacion` s.
+// NO SON KICKS NI BEATS: validado contra temas reales (capturas de /onda3 de la crítica de f54),
+// en Drum Dealer, con grilla, cayeron 11 en el beat y 11 a contratiempo, y en Modular Pitch 77 en
+// 32 beats: el bajo a contratiempo sube igual que el kick. Por eso la pantalla los dibuja
+// atenuados y rotulados «golpes de graves», y el kick lo ancla el dueño con K. Sin subidas claras
+// (un bajo sostenido, un pad) no hay ninguno; con menos de 40 puntos por segundo, tampoco.
+export function detectarGolpesGraves(d, desde, hasta, { subida = 0.3, piso = 0.45, separacion = 0.12 } = {}) {
+  const g = d && d.bandas && Array.isArray(d.bandas.graves) ? d.bandas.graves : null
+  if (!g || !g.length || !(d.hasta > d.desde)) return []
+  const dt = (d.hasta - d.desde) / g.length
+  if (dt > 0.025) return []
+  const w = Math.max(1, Math.round(0.05 / dt))
+  const out = []
+  let ultimo = -Infinity
+  for (let i = 1; i < g.length; i++) {
+    let antes = Infinity
+    for (let j = Math.max(0, i - w); j < i; j++) if (g[j] < antes) antes = g[j]
+    if (g[i] - antes < subida || g[i] < piso) continue
+    const t = d.desde + i * dt
+    if (t - ultimo < separacion) continue
+    ultimo = t
+    if (t >= desde && t <= hasta) out.push(Math.round(t * 1000) / 1000)
+  }
+  return out
+}
+
+// Cómo se dibuja cada banda (crítica de f54, §2.3): alto = valor^CURVA × ESCALA. Los datos del
+// server no se tocan. Graves² baja el bajo de fondo (0,45 → 0,20) y deja el kick (0,9 → 0,81);
+// medios y agudos van ADENTRO de la silueta de graves (escala 0,8 y 0,5), de atrás para adelante.
+export const CURVA = { graves: 2.0, medios: 1.5, agudos: 1.0 }
+export const ESCALA = { graves: 1.0, medios: 0.8, agudos: 0.5 }
+export const alturaBanda = (valor, banda) => Math.max(0, Math.min(1, valor)) ** CURVA[banda] * ESCALA[banda]
+
+// La grilla anclada por el dueño (K) cuando el motor no dio grilla: el período que SÍ midió (el de
+// /onda3, o 60/BPM) y el kick que marcó el dueño como el 1. No inventa nada: el ancla es suya y se
+// dice en pantalla. null si no hay ancla o no hay período.
+export function grillaAnclada(g, bpm, ancla) {
+  if (!Number.isFinite(ancla)) return null
+  const p = g && Number.isFinite(g.periodo_s) && g.periodo_s > 0 ? g.periodo_s
+    : Number.isFinite(Number(bpm)) && Number(bpm) > 0 ? 60 / Number(bpm) : null
+  if (!p) return null
+  const fase = ((ancla % p) + p) % p
+  return { estimada: false, anclada: true, periodo_s: p, primer_beat_s: Math.round(fase * 1e6) / 1e6, compas_ref: ancla,
+    beats_por_compas: 4, confianza: 1, concentracion: 1, motivo: null }
 }

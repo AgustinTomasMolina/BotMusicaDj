@@ -15,6 +15,8 @@ import {
   anchoZoom, ventana, xDeTiempo, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
+  clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
+  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia,
   temaVigente, beatsLoop,
 } from '../src/editorD.js'
 
@@ -244,6 +246,88 @@ test('un paso que el servidor rechazó sale del historial (no se repite con el p
   assert.deepEqual(descartarPaso(r.h, 1), { pasado: [{ tipo: 'crear', marca: M1 }], futuro: [] })
 })
 
+test('cada paso conserva el tema en el que nació (tid), también en la inversa de un grupo', () => {
+  assert.deepEqual(inversa({ tipo: 'crear', marca: M1, tid: 'a1' }), { tipo: 'borrar', marca: M1, tid: 'a1' })
+  assert.equal(inversa({ tipo: 'cambiar', id: 7, antes: {}, despues: {}, tid: 'a1' }).tid, 'a1')
+  const g = inversa({ tipo: 'grupo', ops: [{ tipo: 'crear', marca: M1 }], tid: 'b2' })
+  assert.equal(g.tid, 'b2')
+  const h = registrar(historialVacio(), { tipo: 'crear', marca: M1, tid: 'a1' })
+  assert.equal(deshacer(h).aplicar.tid, 'a1', 'deshacer manda el tema del paso')
+  assert.equal(rehacer(deshacer(h).h).aplicar.tid, 'a1')
+})
+
+test('clasificarFalla: 400/404 se descartan; 409 (base ocupada), 5xx y sin respuesta se reintentan', () => {
+  assert.deepEqual([400, 404, 409, 500, 503, null].map(clasificarFalla), ['rechazo', 'rechazo', 'reintentable', 'reintentable', 'reintentable', 'reintentable'])
+})
+
+test('yaHecha: lo que la base ya tiene no se vuelve a mandar (reintentar no duplica)', () => {
+  const lista = [{ id: 9, tipo: 'memory', num: null, inicio: 0.204, fin: null }, { id: 3, tipo: 'cue', num: 1, inicio: 2, fin: null, nombre: 'Drop' }]
+  // Con ESE id en la lista: hecha.
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 9, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: true, id: 9 })
+  // Con otro id: hecha solo si ya están TODAS las idénticas que tenía que haber (la respuesta
+  // del POST se perdió pero la marca está).
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null }, iguales: 1 }, lista), { hecha: true, id: 9 })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null }, iguales: 2 }, lista), { hecha: false },
+    'había dos memory iguales y queda una: falta la otra (no es «ya hecha»)')
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.204, fin: null } }, lista), { hecha: false },
+    'sin saber cuántas había, una igual con otro id no alcanza')
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'memory', num: null, inicio: 0.205, fin: null }, iguales: 1 }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { id: 5, tipo: 'cue', num: 2, inicio: 2, fin: null }, iguales: 1 }, lista), { hecha: false }, 'otro pad no es la misma marca')
+  assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 3 } }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'borrar', marca: { id: 4 } }, lista), { hecha: true })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { nombre: 'X' }, despues: { nombre: 'Drop' } }, lista), { hecha: true })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 3, antes: { inicio: 2 }, despues: { inicio: 3 } }, lista), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'cambiar', id: 77, antes: {}, despues: { inicio: 3 } }, lista), { hecha: false }, 'si no está, que lo diga el servidor (404)')
+})
+
+test('dos memory iguales (M M): borrar una y deshacer, o deshacer las dos y rehacer, vuelve a dos', () => {
+  const m1 = { id: 1, tipo: 'memory', num: null, inicio: 0.204, fin: null }
+  const m2 = { ...m1, id: 2 }
+  assert.equal(contarIguales(m1, [m1, m2]), 2)
+  assert.equal(contarIguales(m1, [{ ...m1, id: 7, inicio: 0.3 }]), 0)
+  // D1: borrar m2 (había 2 iguales) y deshacer: la lista tiene solo m1 → falta crearla.
+  assert.deepEqual(yaHecha(inversa({ tipo: 'borrar', marca: m2, iguales: 2 }), [m1]), { hecha: false })
+  // D2: crear m1 (1 igual), crear m2 (2 iguales); deshacer las dos; rehacer m1 (id 3), rehacer m2.
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: m1, iguales: 1 }, []), { hecha: false })
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: m2, iguales: 2 }, [{ ...m1, id: 3 }]), { hecha: false },
+    'el segundo Ctrl+Y no puede decir «Rehecho.» sin mandar nada')
+  // Dos loops sin pad iguales: lo mismo.
+  const l = { id: 4, tipo: 'loop', num: null, inicio: 1, fin: 2.875 }
+  assert.deepEqual(yaHecha({ tipo: 'crear', marca: { ...l, id: 5 }, iguales: 2 }, [l]), { hecha: false })
+  assert.equal(inversa({ tipo: 'crear', marca: m1, iguales: 3 }).iguales, 3, 'la inversa conserva cuántas iguales había')
+})
+
+test('cerrarPaso trabaja sobre el historial ACTUAL: lo registrado mientras viajaba el pedido no se pierde', () => {
+  const cue = { tipo: 'crear', marca: { id: 1 } }
+  const mem = { tipo: 'crear', marca: { id: 2 } }
+  const alEmpezar = registrar(historialVacio(), cue)
+  const ahora = registrar(alEmpezar, mem)          // M mientras el Ctrl+Z del cue viajaba
+  // Falla reintentable: nada cambia (la memory sigue arriba para deshacer).
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'reintentable'), ahora)
+  // Sale bien: el cue sale del pasado; como hubo algo nuevo, no va al futuro; la memory queda.
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'ok'), { pasado: [mem], futuro: [] })
+  // Sin nada nuevo: como siempre (pasa al futuro).
+  assert.deepEqual(cerrarPaso(alEmpezar, cue, -1, 'ok'), { pasado: [], futuro: [cue] })
+  // Rechazo: sale y nada más.
+  assert.deepEqual(cerrarPaso(ahora, cue, -1, 'rechazo'), { pasado: [mem], futuro: [] })
+  // Rehacer: del futuro al final del pasado; rechazado, sale del futuro.
+  const conFuturo = { pasado: [mem], futuro: [cue] }
+  assert.deepEqual(cerrarPaso(conFuturo, cue, 1, 'ok'), { pasado: [mem, cue], futuro: [] })
+  assert.deepEqual(cerrarPaso(conFuturo, cue, 1, 'rechazo'), { pasado: [mem], futuro: [] })
+})
+
+test('opConId cambia el id de marca en cualquier operación, también adentro de un grupo', () => {
+  const g = { tipo: 'grupo', ops: [{ tipo: 'crear', marca: { id: 7 } }, { tipo: 'cambiar', id: 7 }, { tipo: 'borrar', marca: { id: 8 } }] }
+  assert.deepEqual(opConId(g, 7, 12).ops.map((o) => (o.marca ? o.marca.id : o.id)), [12, 12, 8])
+})
+
+test('compasDe con compas_ref varios compases después del primero cuenta desde el PRIMER 1 del tema', () => {
+  // El motor puede dar como referencia un 1 del tercer compás: el compás 1 es el del primer beat.
+  const g = { ...G, compas_ref: 0.25 + 8 * 0.46875 }
+  assert.deepEqual(compasDe(0.26, g, 0), { compas: 1, beat: 1 })
+  assert.deepEqual(compasDe(0.25 + 9 * 0.46875 + 0.01, g, 0), { compas: 3, beat: 2 })
+})
+
 test('un grupo rechazado a medias: lo que se guardó queda en el historial como un paso propio, con el id nuevo', () => {
   // Cambiar el tipo de M1 (cue id 7) a memory: se creó la memory 9 y se borró M1.
   const nueva = { ...M1, id: 9, tipo: 'memory', num: null }
@@ -387,4 +471,153 @@ test('BPM con un decimal solo si se midió; letra del pad; rótulo que no depend
   assert.equal(nombreD({ tipo: 'cue', num: 1, inicio: 3 }), 'hot cue B')
   assert.equal(nombreD({ tipo: 'memory', num: null, inicio: 83.5 }), 'memory cue en 1:23.500')
   assert.equal(nombreD({ tipo: 'loop', num: 4, inicio: 4, fin: 6 }), 'loop del pad E 0:04.000 a 0:06.000')
+})
+
+/* ---------- pedidos del dueño y crítica de diseño (f54) ---------- */
+
+test('marcaCercana: ±50 ms del mismo tipo; un loop tiene que coincidir en entrada y salida', () => {
+  const ms = [{ id: 1, tipo: 'cue', num: 0, inicio: 75.439 }, { id: 2, tipo: 'memory', inicio: 10 }, { id: 3, tipo: 'loop', inicio: 5, fin: 6.875 }]
+  assert.equal(marcaCercana(ms, 'cue', 75.48)?.id, 1, 'a 41 ms ya hay un cue')
+  assert.equal(marcaCercana(ms, 'cue', 75.49), null, 'a 51 ms no')
+  assert.equal(marcaCercana(ms, 'cue', 10), null, 'una memory no es un cue')
+  assert.equal(marcaCercana(ms, 'memory', 9.96)?.id, 2)
+  assert.equal(marcaCercana(ms, 'loop', 5.02, 6.9)?.id, 3)
+  assert.equal(marcaCercana(ms, 'loop', 5, 8.75), null, 'mismo in, otro out: es otro loop')
+})
+
+test('filasBanderas: 2 carriles por prioridad; corta; si no entra, «+n» en la que la tapa', () => {
+  // El caso de la captura del dueño: un hot cue «Primer cue» y un loop en el MISMO punto.
+  const r = filasBanderas([
+    { id: 'loop', x: 100, ancho: 50, anchoMin: 40, prioridad: 1, carril: 1 },
+    { id: 'cue', x: 100, ancho: 90, anchoMin: 20, prioridad: 0, carril: 0 },
+  ])
+  assert.deepEqual(r, { cue: { fila: 0, corta: false, adentro: [] }, loop: { fila: 1, corta: false, adentro: [] } }, 'el hot cue arriba, el loop en el carril de abajo')
+  // Tres en el mismo punto con 2 carriles: la memory no entra y se suma a la que la tapa.
+  const r2 = filasBanderas([
+    { id: 'a', x: 10, ancho: 30, anchoMin: 20, prioridad: 0 },
+    { id: 'b', x: 10, ancho: 30, anchoMin: 20, prioridad: 0 },
+    { id: 'm', x: 12, ancho: 30, anchoMin: 20, prioridad: 2, carril: 1 },
+  ])
+  assert.deepEqual(r2, { a: { fila: 0, corta: false, adentro: ['m'] }, b: { fila: 1, corta: false, adentro: [] }, m: { tapadaPor: 'a' } })
+  // Entra solo corta, al lado de otra, sin tocarla.
+  const r3 = filasBanderas([
+    { id: 'x', x: 0, ancho: 60, anchoMin: 20, prioridad: 0 },
+    { id: 'z', x: 64, ancho: 60, anchoMin: 20, prioridad: 2 },
+    { id: 'y', x: 90, ancho: 30, anchoMin: 20, prioridad: 0 },
+  ], 1)
+  assert.deepEqual(r3.z, { fila: 0, corta: true, adentro: [] }, 'z entera (64..124) pisa a y (90..120); corta (64..84) entra entre x y y')
+  // Colgada a la izquierda (cerca del borde derecho): ocupa [x − ancho, x].
+  const r4 = filasBanderas([
+    { id: 'p', x: 500, ancho: 60, anchoMin: 20, prioridad: 0, der: true },
+    { id: 'q', x: 445, ancho: 30, anchoMin: 20, prioridad: 1 },
+  ], 1)
+  assert.deepEqual(r4, { p: { fila: 0, corta: false, adentro: ['q'] }, q: { tapadaPor: 'p' } }, 'q (445..465) pisa a p (440..500)')
+})
+
+test('agruparIguales: los 32 loops idénticos del dueño son UN grupo con n = 32 (un relleno, una bandera)', () => {
+  const loops = Array.from({ length: 32 }, (_, i) => ({ id: 6 + i, tipo: 'loop', num: null, inicio: 59.576, fin: 61.231 }))
+  const otro = { id: 50, tipo: 'loop', num: null, inicio: 59.576, fin: 63.0 }
+  const g = agruparIguales([...loops, otro, { id: 2, tipo: 'cue', num: 0, inicio: 1 }])
+  assert.deepEqual(g.map((x) => [x.marca.id, x.n]), [[2, 1], [6, 32], [50, 1]], 'en orden de tiempo, el de id más bajo representa al grupo')
+  // Hot cues en el mismo tiempo pero en pads distintos son marcas distintas.
+  assert.equal(agruparIguales([{ id: 1, tipo: 'cue', num: 2, inicio: 75.439 }, { id: 2, tipo: 'cue', num: 3, inicio: 75.439 }]).length, 2)
+})
+
+test('repetidas: lo que ofrece «Borrar repetidos» (queda la más vieja de cada grupo)', () => {
+  const ms = [
+    ...Array.from({ length: 32 }, (_, i) => ({ id: 6 + i, tipo: 'loop', num: null, inicio: 59.576, fin: 61.231 })),
+    ...[41, 42, 43, 44, 45, 46].map((id, k) => ({ id, tipo: 'cue', num: 2 + k, inicio: 75.439 })),
+    { id: 1, tipo: 'cue', num: 0, inicio: 59.576, nombre: 'Primer cue' },
+    { id: 60, tipo: 'memory', inicio: 3 },
+  ]
+  const r = repetidas(ms)
+  assert.deepEqual(r.grupos.map((x) => [x.tipo, x.queda.id, x.sobran.length]), [['loop', 6, 31], ['cue', 41, 5]])
+  assert.equal(r.aBorrar.length, 36)
+  assert.ok(!r.aBorrar.some((m) => m.id === 1 || m.id === 6 || m.id === 41 || m.id === 60), 'nunca la que queda, ni las que no se repiten')
+  assert.deepEqual(repetidas([{ id: 1, tipo: 'memory', inicio: 3 }, { id: 2, tipo: 'memory', inicio: 3.06 }]).aBorrar, [], 'a 60 ms ya no es repetida')
+})
+
+test('detectarGolpesGraves: subidas bruscas de los graves; nada con un bajo sostenido o poca resolución', () => {
+  // 100 puntos por segundo; golpes a 0,25 s y cada 0,5 s (caída exponencial), como el generador.
+  const n = 300
+  const graves = Array.from({ length: n }, (_, i) => {
+    const t = i / 100
+    const k = (t - 0.25) % 0.5
+    return t >= 0.25 && k < 0.15 ? Math.exp(-k * 20) : 0.02
+  })
+  const d = { desde: 0, hasta: 3, bandas: { graves } }
+  assert.deepEqual(detectarGolpesGraves(d, 0, 3), [0.25, 0.75, 1.25, 1.75, 2.25, 2.75])
+  assert.deepEqual(detectarGolpesGraves(d, 1, 2), [1.25, 1.75], 'solo los de la ventana')
+  assert.deepEqual(detectarGolpesGraves({ desde: 0, hasta: 3, bandas: { graves: Array(n).fill(0.85) } }, 0, 3), [], 'un bajo sostenido no da golpes')
+  assert.deepEqual(detectarGolpesGraves({ desde: 0, hasta: 3, bandas: { graves: graves.filter((_, i) => i % 5 === 0) } }, 0, 3), [], 'con 20 puntos por segundo no se distingue un golpe')
+})
+
+test('alturaBanda: graves² (el bajo de fondo baja, el kick queda) y medios y agudos adentro', () => {
+  assert.ok(Math.abs(alturaBanda(0.45, 'graves') - 0.2025) < 1e-9, 'el bajo de 0,45 baja a 0,20')
+  assert.ok(Math.abs(alturaBanda(0.9, 'graves') - 0.81) < 1e-9, 'el kick de 0,9 queda en 0,81')
+  assert.ok(alturaBanda(0.9, 'graves') / alturaBanda(0.45, 'graves') >= 4, 'la diferencia kick/bajo pasa de 2× a 4×')
+  assert.ok(Math.abs(alturaBanda(1, 'medios') - 0.8) < 1e-9 && Math.abs(alturaBanda(1, 'agudos') - 0.5) < 1e-9, 'medios y agudos adentro de la silueta de graves')
+  assert.equal(alturaBanda(1.4, 'graves'), 1, 'acotada')
+})
+
+test('grillaAnclada (K): el kick del dueño es el 1 y el período es el medido; nada sin ancla o sin período', () => {
+  const sin = { periodo_s: 0.413671, primer_beat_s: null, confianza: 0.002 }
+  const g = grillaAnclada(sin, 145.0, 60.0)
+  assert.equal(g.anclada, true)
+  assert.equal(g.periodo_s, 0.413671, 'el período del motor, no 60/BPM')
+  assert.equal(g.compas_ref, 60.0, 'el ancla es el 1')
+  assert.ok(Math.abs(g.primer_beat_s - (60 % 0.413671)) < 1e-6)
+  assert.deepEqual(estadoGrilla(g), { hay: true, atenuada: false, baja: [], motivo: null })
+  assert.ok(Math.abs(grillaAnclada(null, 120, 1.25).periodo_s - 0.5) < 1e-12, 'sin período del motor, 60/BPM medido')
+  assert.equal(grillaAnclada(sin, 145, null), null)
+  assert.equal(grillaAnclada(null, null, 1), null, 'sin BPM no hay período: no se inventa')
+})
+
+test('el ancla se guarda en el navegador con el ajuste, y sin ella el ajuste es el de siempre', () => {
+  const m = new Map()
+  const s = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }
+  guardarAjuste(s, 't1', { offset: 0, oculta: false, ancla: 60 })
+  assert.deepEqual(leerAjuste(s, 't1'), { offset: 0, oculta: false, ancla: 60 })
+  guardarAjuste(s, 't1', { offset: 0, oculta: false })
+  assert.deepEqual(leerAjuste(s, 't1'), { offset: 0, oculta: false })
+  assert.equal(m.size, 0, 'sin ancla ni ajuste no queda nada guardado')
+})
+
+test('atajos K (marcar un kick) y B (solo graves)', () => {
+  const t = (key) => ({ key, code: '', target: { tagName: 'DIV', getAttribute: () => 'slider' } })
+  assert.deepEqual(atajoD(t('k')), { tipo: 'ancla' })
+  assert.deepEqual(atajoD(t('B')), { tipo: 'soloGraves' })
+})
+
+/* ---------- auditoría del editor unificado (f54) ---------- */
+
+test('repetidas (M-1): queda la que tiene nombre o pad aunque una suelta sin nombre sea más vieja', () => {
+  const suelto = { id: 3, tipo: 'loop', num: null, inicio: 10, fin: 12, nombre: null }
+  const hot = { id: 9, tipo: 'loop', num: 0, inicio: 10, fin: 12, nombre: 'Intro' }
+  const r = repetidas([hot, suelto])
+  assert.deepEqual(r.grupos.map((g) => [g.queda.id, g.sobran.map((m) => m.id)]), [[9, [3]]], 'se borra el suelto, no el hot loop con nombre del pad A')
+  // Solo con pad (sin nombre) también cuenta; una memory con nombre, igual.
+  assert.equal(repetidas([{ ...suelto }, { ...hot, nombre: null }]).grupos[0].queda.id, 9)
+  assert.equal(repetidas([{ id: 1, tipo: 'memory', inicio: 3 }, { id: 2, tipo: 'memory', inicio: 3, nombre: 'Drop' }]).grupos[0].queda.id, 2)
+  // Entre iguales en eso, la más vieja (los hot cues siempre tienen pad: decide el nombre).
+  assert.equal(repetidas([{ id: 7, tipo: 'cue', num: 3, inicio: 5 }, { id: 4, tipo: 'cue', num: 5, inicio: 5 }]).grupos[0].queda.id, 4)
+  assert.equal(repetidas([{ id: 7, tipo: 'cue', num: 3, inicio: 5, nombre: 'Drop' }, { id: 4, tipo: 'cue', num: 5, inicio: 5 }]).grupos[0].queda.id, 7)
+  assert.equal(marcaPropia({ tipo: 'cue', num: 0, nombre: '  ' }), false, 'un nombre en blanco no es nombre')
+})
+
+test('rescatarHechas (I-1): un Ctrl+Z rechazado a medias deja lo guardado en el historial como paso propio', () => {
+  // El caso de la auditoría: una memory de OTRA sesión (no está en el historial) pasada a hot cue
+  // en el editor = grupo [crear cue 11, borrar memory 9]. Ctrl+Z = [crear memory, borrar cue 11]:
+  // la memory vuelve (id 15) y el DELETE del cue da 400.
+  const mem = { id: 9, tipo: 'memory', num: null, inicio: 2, fin: null, nombre: null }
+  const cue = { id: 11, tipo: 'cue', num: 0, inicio: 2, fin: null, nombre: null }
+  const paso = { tipo: 'grupo', ops: [{ tipo: 'crear', marca: cue }, { tipo: 'borrar', marca: mem }], tid: 'a1' }
+  const h = registrar(historialVacio(), paso)
+  const sin = cerrarPaso(h, paso, -1, 'rechazo')
+  assert.deepEqual(sin, historialVacio(), 'cerrarPaso solo saca el paso entero')
+  const r = rescatarHechas(sin, [{ tipo: 'crear', marca: mem }], [[9, 15]], 'a1')
+  assert.deepEqual(r, { pasado: [{ tipo: 'grupo', ops: [{ tipo: 'crear', marca: { ...mem, id: 15 } }], tid: 'a1' }], futuro: [] })
+  assert.deepEqual(deshacer(r).aplicar, { tipo: 'grupo', ops: [{ tipo: 'borrar', marca: { ...mem, id: 15 } }], tid: 'a1' },
+    'el próximo Ctrl+Z saca la memory que quedó guardada')
+  assert.deepEqual(rescatarHechas(sin, [], []), sin, 'sin nada hecho, nada que rescatar')
 })
