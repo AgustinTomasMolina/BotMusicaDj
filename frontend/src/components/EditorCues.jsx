@@ -6,7 +6,7 @@ import {
   estadoGrilla, periodoBeat, lineasGrilla, snapGrilla, moverAjuste, textoAjuste, leerAjuste, guardarAjuste,
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
-  contarIguales, cerrarPaso,
+  contarIguales, cerrarPaso, marcaCercana, filasBanderas, detectarKicks, alturasBandas,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD,
 } from '../editorD'
 import { usePlayer } from '../player/context'
@@ -120,6 +120,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const [cierre, setCierre] = useState(false)        // Esc con cambios sin confirmar: pedir otra vez
   const [aviso, setAviso] = useState('')
   const [loopIn, setLoopIn] = useState(null)
+  const [sel, setSel] = useState(null)              // marca seleccionada (resaltada en lista, pad y bandera)
   const [loopBeats, setLoopBeats] = useState(4)
   const [loopPad, setLoopPad] = useState(false)
   const [arrastre, setArrastre] = useState(null)    // {id, borde, t}
@@ -192,6 +193,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     setDetalle(null)
     setHistorial(historialVacio())
     setLoopIn(null)
+    setSel(null)
     setAviso('')
     const pend = pendientesDe.current.get(id) || []
     pendientesDe.current.delete(id)
@@ -290,9 +292,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (!x) continue
       // Anidadas: afuera lo más alto de las tres (agudos), adentro los graves. El kick se ve
       // como una barra de graves alta en cada beat.
-      const hA = Math.round(Math.max(x.agudos, x.medios, x.graves) * alto)
-      const hM = Math.round(Math.max(x.medios, x.graves) * alto)
-      const hG = Math.round(x.graves * alto)
+      // Curva de dibujo (alturasBandas): el kick sobresale del bajo sostenido.
+      const z = alturasBandas(x)
+      const hA = Math.round(z.agudos * alto)
+      const hM = Math.round(z.medios * alto)
+      const hG = Math.round(z.graves * alto)
       for (const [hh, color] of [[hA, cA], [hM, cM], [hG, cG]]) {
         if (hh < 1) continue
         ctx.fillStyle = color
@@ -640,17 +644,30 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const enGrilla = (t) => (snapActivo ? snapGrilla(t, g, ajuste.offset) : t)
   const aqui = () => ms3(acotar(enGrilla(posActual()), dur))
 
+  // Ya hay una marca igual ahí (±50 ms): no se crea otra; se avisa y se selecciona esa (pedido
+  // del dueño: apretar C diez veces llenaba los 8 pads con cues en el mismo tiempo).
+  const yaHay = (tipo, inicio, fin = null) => {
+    const m = marcaCercana(marcas, tipo, inicio, fin)
+    if (!m) return false
+    setSel(m.id)
+    const que = tipo === 'cue' ? 'un hot cue' : tipo === 'memory' ? 'una memory' : 'un loop igual'
+    setAviso(`Ya hay ${que} ahí: ${rotuloMarca(m)} · ${fmtTiempo(m.inicio)}${tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}. No creé otro; lo seleccioné en la lista.`)
+    return true
+  }
+
   const ponerCue = (num) => {
     if (!track) return
+    const t = aqui()
+    if (yaHay('cue', t)) return
     const n = num === undefined ? padLibre(marcas) : num
     if (n === null) { setAviso('Los 8 pads (A–H) están ocupados: borrá uno o movelo.'); return }
-    const t = aqui()
     setAviso('')
     crear({ tipo: 'cue', inicio: t, num: n }, `Hot cue ${letraPad(n)} en ${fmtTiempo(t)}`)
   }
   const ponerMemory = () => {
     if (!track) return
     const t = aqui()
+    if (yaHay('memory', t)) return
     setAviso('')
     crear({ tipo: 'memory', inicio: t }, `Memory cue en ${fmtTiempo(t)}`)
   }
@@ -658,7 +675,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     if (!track) return
     const t = aqui()
     setLoopIn(t)
-    setAviso(`Entrada del loop en ${fmtTiempo(t)}: tocá «Loop out» (O) donde termina.`)
+    setAviso('')
   }
   const cuerpoLoop = (inicio, fin) => {
     const c = { tipo: 'loop', inicio, fin }
@@ -673,7 +690,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     if (!track) return
     const t = aqui()
     const err = errorLoop(loopIn, t, dur)
-    if (err) { setAviso(err); return }
+    if (err) {
+      setAviso(loopIn !== null && !(t > loopIn)
+        ? `La salida del loop tiene que quedar después de la entrada (${fmtTiempo(loopIn)}): mové el cursor hacia adelante y tocá O otra vez.`
+        : err)
+      return
+    }
+    if (yaHay('loop', loopIn, t)) { setLoopIn(null); return }
     const c = cuerpoLoop(loopIn, t)
     if (c.error) { setAviso(c.error); return }
     setAviso('')
@@ -688,6 +711,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     const fin = ms3(t + loopBeats * periodo)
     const err = errorLoop(t, fin, dur)
     if (err) { setAviso(err); return }
+    if (yaHay('loop', t, fin)) return
     const c = cuerpoLoop(t, fin)
     if (c.error) { setAviso(c.error); return }
     setAviso('')
@@ -906,6 +930,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   // del servidor (auditoría f54).
   const pendientes = vuelo.current.n > 0 || releyendo > 0
   useEffect(() => { if (!sinConfirmar) setCierre(false) }, [sinConfirmar])
+  // La marca seleccionada («ya hay una ahí») se trae a la vista en la lista, sin mover el foco.
+  useEffect(() => {
+    if (sel === null) return
+    rootRef.current?.querySelector(`.edd-fila[data-id="${sel}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [sel])
   const noSeGuardo = fallasTotal === 1 ? '1 cambio no se guardó (ver el aviso)' : `${fallasTotal} cambios no se guardaron (ver el aviso)`
   const cuenta = (tipo) => marcas.filter((m) => m.tipo === tipo).length
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
@@ -930,6 +959,27 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     for (let k = Math.ceil(v.desde / paso - 1e-9); k * paso <= v.hasta + 1e-9; k++) out.push({ t: k * paso, txt: fmtTiempo(k * paso, paso < 1 ? 1 : 0) })
     return out
   })()
+
+  // Banderas sin pisarse (filasBanderas): 2 filas, prioridad hot cue > loop > memory (la
+  // seleccionada primero). Ancho estimado por el texto; el estilo lo limita a ese ancho, así
+  // que nunca ocupa más que lo calculado (a lo sumo se recorta con «…»).
+  const PRIO = { cue: 0, loop: 1, memory: 2 }
+  const banderas = (() => {
+    const CAR = 7.6
+    const items = visibles.map((m) => {
+      const pos = Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))
+      const rot = rotuloMarca(m)
+      const extra = (m.tipo === 'memory' ? 14 : 0) + 16
+      const anchoMin = rot.length * CAR + extra
+      const ancho = Math.min(Math.max(anchoMin, (rot.length + (m.nombre ? m.nombre.length + 3 : 0)) * CAR + extra), Math.max(anchoMin, anchoPx * 0.4))
+      return { id: m.id, m, x: (pos / 100) * anchoPx, der: pos > 60, ancho, anchoMin, prioridad: m.id === sel ? -1 : PRIO[m.tipo] }
+    })
+    const lugar = filasBanderas(items)
+    return items.filter((it) => lugar[it.id]).map((it) => ({ ...it, ...lugar[it.id] }))
+  })()
+  // Los kicks que se ven en los graves del tramo a la vista (detectarKicks): sin datos con
+  // resolución, o sin golpes claros, no hay ninguno (no se inventa).
+  const kicks = dDetalle && alcanza(dDetalle, v, 1, durAudio) ? detectarKicks(dDetalle, v.desde, v.hasta) : []
 
   const estadoGrillaTxt = !general ? 'Leyendo el audio…'
     : general.error ? ''
@@ -982,14 +1032,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             {regla.map((r) => <span key={r.t} className={pct(r.t) > 90 ? 'is-fin' : ''} style={{ left: `${pct(r.t)}%` }}>{r.txt}</span>)}
           </div>
           <div className="edd-flags" aria-hidden="true">
-            {visibles.map((m) => (
-              <span key={m.id} data-id={m.id}
-                className={`edd-flag ${claseMarca(m)} is-${m.tipo}${pct(posDe(m, 'inicio')) > 60 ? ' is-der' : ''}`}
-                style={{ left: `${Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))}%` }}
-                title={`${NOMBRE_TIPO[m.tipo]} ${rotuloMarca(m)} · ${fmtTiempo(m.inicio)} (arrastrá para moverla)`}
+            {banderas.map(({ m, der, ancho, anchoMin, fila, corta }) => (
+              <span key={m.id} data-id={m.id} data-fila={fila}
+                className={`edd-flag ${claseMarca(m)} is-${m.tipo}${der ? ' is-der' : ''}${m.id === sel ? ' is-sel' : ''}`}
+                style={{ left: `${Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))}%`, top: `${fila * 24}px`, maxWidth: `${corta ? anchoMin : ancho}px` }}
+                title={`${NOMBRE_TIPO[m.tipo]} ${rotuloMarca(m)}${m.nombre ? ` «${m.nombre}»` : ''} · ${fmtTiempo(m.inicio)} (arrastrá para moverla)`}
                 onPointerDown={(e) => empezarArrastre(e, m, 'inicio')}>
                 {m.tipo === 'memory' && <i className="edd-tri" />}
-                {rotuloMarca(m)}{m.nombre && <span className="edd-flag-nom"> · {m.nombre}</span>}
+                {rotuloMarca(m)}{m.nombre && !corta && <span className="edd-flag-nom"> · {m.nombre}</span>}
               </span>
             ))}
           </div>
@@ -998,9 +1048,16 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(cursor)}
             aria-valuetext={`${fmtTiempo(cursor, 1) ?? '0:00.0'} de ${fmtTiempo(dur, 1) ?? '—'}${compas ? (compas.compas ? `, compás ${compas.compas} beat ${compas.beat}` : `, beat ${compas.beat} antes del primer compás`) : ''}`}
             data-desde={v.desde.toFixed(3)} data-hasta={v.hasta.toFixed(3)}
+            data-tramo={dDetalle && alcanza(dDetalle, v, 1, durAudio) ? 'detalle' : 'general'}
             onPointerDown={ondaDown} onPointerMove={ondaMove}
             onPointerUp={async (e) => { if (!(await soltarArrastre())) ondaUp(e) }}
             onPointerCancel={() => { arrastreRef.current = null; setArrastre(null); panRef.current = null }}>
+            {/* DETRÁS de la onda: las líneas de tiempo (las de la regla) y los kicks que se ven en los
+                graves. Se ven en los huecos entre barras y no tapan la barra del kick. */}
+            <div className="edd-grilla edd-fondo-lineas" aria-hidden="true">
+              {!conCompas && regla.map((r) => <i key={`t${r.t}`} className="edd-tick" data-t={r.t} style={{ left: `${pct(r.t)}%` }} />)}
+              {kicks.map((t) => <i key={`k${t}`} className="edd-kick" data-t={t} style={{ left: `${pct(t)}%` }} />)}
+            </div>
             <canvas ref={canvasRef} className="edd-canvas" aria-hidden="true" />
             <div className="edd-grilla" aria-hidden="true">
               {lineas.map((l) => (
@@ -1008,7 +1065,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
               ))}
             </div>
             {visibles.map((m) => (m.tipo === 'loop' ? (
-              <div key={m.id} className="edd-mk-loop" data-id={m.id} aria-hidden="true"
+              <div key={m.id} className={`edd-mk-loop${m.id === sel ? ' is-sel' : ''}`} data-id={m.id} aria-hidden="true"
                 style={{ left: `${pct(posDe(m, 'inicio'))}%`, width: `${pct(posDe(m, 'fin')) - pct(posDe(m, 'inicio'))}%` }}>
                 <span className="edd-loop-fin" title="Salida del loop (arrastrá para moverla)" onPointerDown={(e) => empezarArrastre(e, m, 'fin')} />
               </div>
@@ -1016,6 +1073,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
               <i key={m.id} className={`edd-mk ${claseMarca(m)} is-${m.tipo}`} data-id={m.id} aria-hidden="true" style={{ left: `${pct(posDe(m, 'inicio'))}%` }} />
             )))}
             {loopIn !== null && loopIn >= v.desde && loopIn <= v.hasta && <i className="edd-loopin" style={{ left: `${pct(loopIn)}%` }} aria-hidden="true" />}
+            {loopIn !== null && cursor > loopIn && (
+              <i className="edd-loop-prev" aria-hidden="true"
+                style={{ left: `${Math.max(0, pct(loopIn))}%`, width: `${Math.max(0, Math.min(100, pct(cursor)) - Math.max(0, pct(loopIn)))}%` }} />
+            )}
             <i className="edd-cabezal" ref={cabezalRef} aria-hidden="true" />
             {!general && <span className="edd-msg">Leyendo el audio…</span>}
             {general && general.error && <span className="edd-msg is-err">{general.error}</span>}
@@ -1075,6 +1136,15 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             <span className="edd-zoom-u">{unidadZoom}</span>
           </div>
         </div>
+        {/* El loop a medio marcar y los avisos de la edición, A LA VISTA junto al transporte (antes
+            quedaban abajo de los pads, fuera de la pantalla: «el out no sale»). */}
+        {loopIn !== null && (
+          <p className="edd-loop-pend" role="status">
+            <span>Loop: entrada en <span className="mono">{fmtTiempo(loopIn)}</span> · falta la salida: mové el cursor y tocá «Loop out» <Kbd>O</Kbd></span>
+            <button type="button" className="btn btn-secondary edd-btn" onClick={() => setLoopIn(null)}>Cancelar el loop</button>
+          </p>
+        )}
+        <p className="edd-nota edd-aviso" role="status" aria-live="polite">{aviso}</p>
 
         {/* ---- vista general ---- */}
         <section className="edd-panel edd-general" aria-label="Vista general del tema">
@@ -1109,13 +1179,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
                     : `Pad ${letra}: hot cue en ${fmtTiempo(m.inicio)}${m.nombre ? `, ${m.nombre}` : ''}. Ir al cue`
                 return (
                   <button key={letra} type="button" data-pad={n} aria-keyshortcuts={String(n + 1)}
-                    className={`edd-pad ${m ? `is-lleno ${claseMarca(m)}` : 'is-vacio'}${loop ? ' is-loop' : ''}`}
+                    className={`edd-pad ${m ? `is-lleno ${claseMarca(m)}` : 'is-vacio'}${loop ? ' is-loop' : ''}${m && m.id === sel ? ' is-sel' : ''}`}
                     aria-label={etiqueta} title={etiqueta}
                     onClick={(e) => tocarPad(n, { borrarlo: e.shiftKey })}>
                     <span className={`edd-pad-n ${m ? claseMarca(m) : `cue-c${n + 1}`}`} aria-hidden="true">{letra}</span>
                     <span className="edd-pad-t">
                       {!m && <span className="edd-pad-vacio">Vacío</span>}
-                      {m && <span className="edd-pad-nom">{loop ? `Loop${beatsDeLoop(m.inicio, m.fin, track && track.bpm) !== null ? ` · ${beatsDeLoop(m.inicio, m.fin, track.bpm)} beats` : ''}` : (m.nombre || 'Hot cue')}</span>}
+                      {m && <span className="edd-pad-nom">{loop ? `Loop${beatsDeLoop(m.inicio, m.fin, track && track.bpm) !== null ? ` · ${beatsDeLoop(m.inicio, m.fin, track.bpm)} beats` : ''}` : (m.nombre || <span className="edd-sin-nombre">Sin nombre</span>)}</span>}
                       {m && <span className="edd-pad-tiempo mono">{fmtTiempo(m.inicio)}{loop ? ` → ${fmtTiempo(m.fin)}` : ''}</span>}
                     </span>
                     <Kbd>{n + 1}</Kbd>
@@ -1147,8 +1217,6 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
               <button type="button" className="btn btn-secondary edd-btn" onClick={() => correrHistorial(-1)} disabled={!historial.pasado.length} aria-keyshortcuts="Control+Z">Deshacer <Kbd>Ctrl Z</Kbd></button>
               <button type="button" className="btn btn-secondary edd-btn" onClick={() => correrHistorial(1)} disabled={!historial.futuro.length} aria-keyshortcuts="Control+Y">Rehacer <Kbd>Ctrl Y</Kbd></button>
             </div>
-            {loopIn !== null && <p className="edd-nota edd-pend">Entrada del loop: <span className="mono">{fmtTiempo(loopIn)}</span> (falta la salida).</p>}
-            <p className="edd-nota edd-aviso" role="status" aria-live="polite">{aviso}</p>
             {/* «✓ Guardado» solo con la lista igual a la del servidor y sin fallas sin avisar:
                 una falla no reconciliada (no se pudo releer) manda sobre cualquier éxito. */}
             <p className={`edd-estado is-${sinConfirmar ? 'desincronizado' : estado.fase}`} role="status" aria-live="polite">
@@ -1179,7 +1247,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
             {track && marcas.length === 0 && <p className="edd-nota">Sin marcas. Reproducí y tocá un pad, C, M, L o I / O.</p>}
             <ul className="edd-filas">
               {marcas.map((m) => (
-                <li key={m.id} className={`edd-fila${m.fuera_del_track ? ' is-fuera' : ''}`} data-id={m.id} data-tipo={m.tipo}>
+                <li key={m.id} className={`edd-fila${m.fuera_del_track ? ' is-fuera' : ''}${m.id === sel ? ' is-sel' : ''}`} data-id={m.id} data-tipo={m.tipo}
+                  aria-current={m.id === sel ? 'true' : undefined}>
                   <button type="button" className={`edd-tag ${claseMarca(m)} is-${m.tipo}`} onClick={() => irA(m.inicio, { centrar: true })}
                     aria-label={`Ir a ${nombreD(m)}`} title={`Ir a ${nombreD(m)}`}>{rotuloMarca(m)}</button>
                   <label className="edd-campo edd-campo-tipo">

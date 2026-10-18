@@ -485,3 +485,79 @@ export function compasDe(t, g, offset) {
 export function descartarPaso(h, dir) {
   return dir < 0 ? { pasado: h.pasado, futuro: h.futuro.slice(1) } : { pasado: h.pasado.slice(0, -1), futuro: h.futuro }
 }
+
+// ---------------------------------------------------------------- pedidos del dueño (f54)
+
+// Tolerancia para «ya hay una marca ahí»: ±50 ms (apretar C diez veces llenaba los 8 pads con
+// cues en el MISMO tiempo).
+export const TOLERANCIA_MARCA_S = 0.05
+
+// La marca del mismo tipo que ya está en ese tiempo (±50 ms), o null. Para un loop, tienen que
+// coincidir la entrada Y la salida (dos loops que arrancan igual pero duran distinto son dos).
+export function marcaCercana(marcas, tipo, inicio, fin = null) {
+  const cerca = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TOLERANCIA_MARCA_S + 1e-9
+  return (Array.isArray(marcas) ? marcas : []).find((m) => m.tipo === tipo && cerca(m.inicio, inicio)
+    && (tipo !== 'loop' || cerca(m.fin, fin))) || null
+}
+
+// Banderas sin pisarse: cada una {id, x (px del borde izquierdo), ancho, anchoMin, prioridad}
+// (menor = más importante: hot cue 0, loop 1, memory 2). Se ubican por prioridad y después de
+// izquierda a derecha en la primera de `filas` filas donde entran sin tocar a otra (`margen`
+// px entre medio); si no entran enteras se prueba la versión corta (solo el rótulo, `anchoMin`);
+// si tampoco, queda oculta (la línea en la onda y la lista la siguen mostrando).
+// Devuelve id → { fila, corta } o null.
+export function filasBanderas(items, filas = 2, margen = 4) {
+  const ocupado = Array.from({ length: filas }, () => [])
+  const libre = (f, a, b) => ocupado[f].every(([x, y]) => b + margen <= x || a >= y + margen)
+  const orden = [...items].sort((p, q) => p.prioridad - q.prioridad || p.x - q.x)
+  const out = {}
+  for (const it of orden) {
+    let puesto = null
+    for (const [ancho, corta] of [[it.ancho, false], [it.anchoMin, true]]) {
+      // `der`: la bandera cuelga a la IZQUIERDA de su marca (cerca del borde derecho).
+      const [a, b] = it.der ? [it.x - ancho, it.x] : [it.x, it.x + ancho]
+      for (let f = 0; f < filas && !puesto; f++) {
+        if (libre(f, a, b)) { ocupado[f].push([a, b]); puesto = { fila: f, corta } }
+      }
+      if (puesto) break
+    }
+    out[it.id] = puesto
+  }
+  return out
+}
+
+// Los kicks que se VEN en la banda de graves de /onda3 (`d`: {desde, hasta, bandas}): una subida
+// brusca de los graves (al menos `subida` en 50 ms, hasta al menos `piso`), separadas por
+// `separacion` s como mínimo. Es lo que dice el audio, no una grilla: sin subidas claras (un
+// bajo sostenido, un pad) no hay kicks; y con menos de 40 puntos por segundo (zoom muy lejos)
+// tampoco, porque a esa resolución no se distingue un golpe.
+export function detectarKicks(d, desde, hasta, { subida = 0.3, piso = 0.45, separacion = 0.12 } = {}) {
+  const g = d && d.bandas && Array.isArray(d.bandas.graves) ? d.bandas.graves : null
+  if (!g || !g.length || !(d.hasta > d.desde)) return []
+  const dt = (d.hasta - d.desde) / g.length
+  if (dt > 0.025) return []
+  const w = Math.max(1, Math.round(0.05 / dt))
+  const out = []
+  let ultimo = -Infinity
+  for (let i = 1; i < g.length; i++) {
+    let antes = Infinity
+    for (let j = Math.max(0, i - w); j < i; j++) if (g[j] < antes) antes = g[j]
+    if (g[i] - antes < subida || g[i] < piso) continue
+    const t = d.desde + i * dt
+    if (t - ultimo < separacion) continue
+    ultimo = t
+    if (t >= desde && t <= hasta) out.push(Math.round(t * 1000) / 1000)
+  }
+  return out
+}
+
+// Alturas de dibujo (0..1) de una columna de la onda. Los datos del server no se tocan: es solo
+// cómo se dibujan. Los graves van con una curva (x²) para que el kick sobresalga del bajo
+// sostenido (un bajo a 0,8 se dibuja a 0,64 y el kick a 1 sigue en 1); medios y agudos, más
+// suave. Anidadas: afuera la más alta, adentro los graves.
+export function alturasBandas(x) {
+  const g = Math.max(0, Math.min(1, x.graves)) ** 2
+  const m = Math.max(0, Math.min(1, x.medios)) ** 1.5
+  const a = Math.max(0, Math.min(1, x.agudos)) ** 1.3
+  return { agudos: Math.max(a, m, g), medios: Math.max(m, g), graves: g }
+}

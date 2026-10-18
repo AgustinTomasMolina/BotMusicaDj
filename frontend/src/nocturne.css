@@ -1738,9 +1738,12 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
    confundirla con el pad H (los dos son #f2f3f8 en la tabla del motor). */
 :root{
   --edd-fondo-onda:#0b0d14;
-  --edd-graves:#3b7bff;
-  --edd-medios:#f0a43a;
-  --edd-agudos:#e6e8f2;
+  /* Colores apagados (pedido del dueño, estilo Rekordbox/Serato): graves azul medio, medios
+     ámbar apagado, agudos blanco suave. Opacos a propósito: el E2E mide en pantalla el azul
+     puro de los graves. */
+  --edd-graves:#4b78c6;
+  --edd-medios:#b98a4e;
+  --edd-agudos:#c3c7d2;
   /* Las líneas de la grilla: blancas bastante opacas con un halo oscuro de 1 px, para que se
      lean sobre los graves azules (auditoría f54) sin tapar el kick (1 px de línea). */
   --edd-beat:rgba(255,255,255,.62);
@@ -1770,7 +1773,7 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-regla>span{position:absolute;top:0;padding-left:4px;white-space:nowrap}
 .edd-regla>span.is-fin{transform:translateX(-100%);padding:0 4px 0 0}
 .edd-flag.is-der{transform:translateX(-100%);border-radius:5px 0 0 5px;padding:5px 5px 5px 7px}
-.edd-flags{position:relative;height:24px;overflow:hidden}
+.edd-flags{position:relative;height:48px;overflow:hidden}
 .edd-flag{position:absolute;top:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:700 12px/1 var(--font-body);color:var(--cue-ink);background:var(--cue-c);border-radius:0 5px 5px 0;padding:5px 7px 5px 5px;cursor:grab;touch-action:none;user-select:none}
 .edd-flag.is-loop{background:var(--cue-loop)}
 .edd-flag.is-memory{background:var(--color-bg);color:var(--cue-mem);box-shadow:inset 0 0 0 2px var(--cue-mem);border-radius:5px}
@@ -1786,7 +1789,19 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-mk{position:absolute;top:0;bottom:0;width:3px;margin-left:-1.5px;background:var(--cue-c);box-shadow:0 0 0 1px rgba(13,15,23,.7);pointer-events:none}
 .edd-mk.is-memory{width:0;margin-left:0;background:none;box-shadow:none;border-left:2px dashed var(--cue-mem)}
 .edd-mk.is-memory::after{content:"";position:absolute;bottom:0;left:-8px;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid var(--cue-mem)}
-.edd-mk-loop{position:absolute;top:0;bottom:0;background:rgba(255,154,46,.20);box-shadow:inset 3px 0 0 var(--cue-loop),inset -3px 0 0 var(--cue-loop);pointer-events:none}
+/* El rango del loop: relleno translúcido (se siguen viendo los kicks y las bandas) y la entrada
+   y la salida bien marcadas. */
+.edd-mk-loop{position:absolute;top:0;bottom:0;background:rgba(255,154,46,.16);box-shadow:inset 3px 0 0 var(--cue-loop),inset -3px 0 0 var(--cue-loop);pointer-events:none}
+.edd-mk-loop.is-sel{background:rgba(255,154,46,.24)}
+.edd-loop-prev{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,rgba(255,154,46,.14) 0 6px,transparent 6px 12px);pointer-events:none}
+.edd-tick{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:rgba(233,233,237,.14)}
+.edd-kick{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:rgba(233,233,237,.34)}
+.edd-flag.is-sel{outline:2px solid #fff;outline-offset:1px}
+.edd-pad.is-sel{outline:3px solid #fff;outline-offset:2px}
+.edd-fila.is-sel{border-color:#fff;box-shadow:0 0 0 1px #fff}
+.edd-sin-nombre{font-weight:400;font-style:italic;color:var(--color-neutral-300)}
+.edd-loop-pend{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 12px;border-radius:8px;border:1px dashed var(--cue-loop);color:var(--color-text);font-size:13px}
+.edd-aviso{font-size:13.5px;color:var(--color-text)}
 .edd-loop-fin{position:absolute;top:0;bottom:0;right:-6px;width:12px;cursor:ew-resize;pointer-events:auto;touch-action:none}
 .edd-loopin{position:absolute;top:0;bottom:0;border-left:2px dashed var(--cue-loop);pointer-events:none}
 .edd-cabezal{position:absolute;top:0;bottom:0;left:0;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 0 1px rgba(13,15,23,.6);pointer-events:none}
