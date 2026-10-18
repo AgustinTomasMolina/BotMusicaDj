@@ -128,15 +128,17 @@ export function leerAjuste(storage, id) {
     const crudo = storage && storage.getItem(CLAVE + id)
     if (!crudo) return fabrica
     const d = JSON.parse(crudo)
-    return { offset: finito(d.offset) ? d.offset : 0, oculta: d.oculta === true }
+    // ncla (K): el kick que marcó el dueño cuando el motor no dio grilla; solo si está.
+    return { offset: finito(d.offset) ? d.offset : 0, oculta: d.oculta === true, ...(finito(d.ancla) ? { ancla: d.ancla } : {}) }
   } catch { return fabrica }
 }
 
 export function guardarAjuste(storage, id, ajuste) {
   try {
     if (!storage) return false
-    if (!(ajuste.offset) && !ajuste.oculta) storage.removeItem(CLAVE + id)
-    else storage.setItem(CLAVE + id, JSON.stringify({ offset: ajuste.offset || 0, oculta: !!ajuste.oculta }))
+    const ancla = finito(ajuste.ancla) ? { ancla: ajuste.ancla } : {}
+    if (!(ajuste.offset) && !ajuste.oculta && !finito(ajuste.ancla)) storage.removeItem(CLAVE + id)
+    else storage.setItem(CLAVE + id, JSON.stringify({ offset: ajuste.offset || 0, oculta: !!ajuste.oculta, ...ancla }))
     return true
   } catch { return false }
 }
@@ -393,8 +395,8 @@ function activable(target) {
 
 // La acción de una tecla en el editor D, o null. `e`: KeyboardEvent (o algo con key, code...).
 //   play · beat(dir) · fino(dir) · pad(num) · borrarPad(num) · cue · memory · loopIn · loopOut ·
-//   loopBeats · zoom(dir) · grilla · medioBeat · snap · deshacer · rehacer · inicio · fin ·
-//   tema(dir) · cerrar
+//   loopBeats · zoom(dir) · grilla · medioBeat · snap · ancla (K: marcar un kick) · soloGraves (B) ·
+//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar
 export function atajoD(e) {
   if (!e || e.isComposing) return null
   const k = e.key
@@ -431,6 +433,8 @@ export function atajoD(e) {
     case 'g': return { tipo: 'grilla' }
     case 'h': return { tipo: 'medioBeat' }
     case 'q': return { tipo: 'snap' }
+    case 'k': return { tipo: 'ancla' }
+    case 'b': return { tipo: 'soloGraves' }
     default: return null
   }
 }
@@ -500,38 +504,77 @@ export function marcaCercana(marcas, tipo, inicio, fin = null) {
     && (tipo !== 'loop' || cerca(m.fin, fin))) || null
 }
 
-// Banderas sin pisarse: cada una {id, x (px del borde izquierdo), ancho, anchoMin, prioridad}
-// (menor = más importante: hot cue 0, loop 1, memory 2). Se ubican por prioridad y después de
-// izquierda a derecha en la primera de `filas` filas donde entran sin tocar a otra (`margen`
-// px entre medio); si no entran enteras se prueba la versión corta (solo el rótulo, `anchoMin`);
-// si tampoco, queda oculta (la línea en la onda y la lista la siguen mostrando).
-// Devuelve id → { fila, corta } o null.
+// Marcas IDÉNTICAS (mismo tipo, tiempos y pad, a ±10 ms) juntas: una bandera y un relleno por
+// grupo, con su `n` (la base del dueño tiene 32 loops iguales encimados: dibujados uno por uno, el
+// relleno al 16 % quedaba opaco). Devuelve [{ marca (la de id más bajo), ids, n }] en orden de tiempo.
+export function agruparIguales(marcas) {
+  const cerca = (a, b) => (a ?? null) === (b ?? null) || (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.01)
+  const grupos = []
+  for (const m of [...(Array.isArray(marcas) ? marcas : [])].sort((p, q) => p.inicio - q.inicio || p.id - q.id)) {
+    const g = grupos.find((x) => x.marca.tipo === m.tipo && cerca(x.marca.inicio, m.inicio) && cerca(x.marca.fin, m.fin)
+      && (x.marca.num ?? null) === (m.num ?? null))
+    if (g) { g.ids.push(m.id); g.n += 1 } else grupos.push({ marca: m, ids: [m.id], n: 1 })
+  }
+  return grupos
+}
+
+// Marcas REPETIDAS para «Borrar repetidos»: del mismo tipo en el mismo tiempo (±50 ms, como el
+// freno de duplicados; un loop, con la misma salida). Para los hot cues no importa el pad: seis
+// cues en 1:15.439 en los pads C–H son el mismo cue repetido. Se deja la de id más bajo (la más
+// vieja) y se ofrecen borrar las demás. { grupos: [{ tipo, inicio, fin, queda, sobran }], aBorrar }.
+export function repetidas(marcas) {
+  const cerca = (a, b) => (a ?? null) === (b ?? null) || (Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TOLERANCIA_MARCA_S + 1e-9)
+  const grupos = []
+  for (const m of [...(Array.isArray(marcas) ? marcas : [])].sort((p, q) => p.id - q.id)) {
+    const g = grupos.find((x) => x.tipo === m.tipo && cerca(x.queda.inicio, m.inicio) && (m.tipo !== 'loop' || cerca(x.queda.fin, m.fin)))
+    if (g) g.sobran.push(m); else grupos.push({ tipo: m.tipo, inicio: m.inicio, fin: m.fin, queda: m, sobran: [] })
+  }
+  const con = grupos.filter((g) => g.sobran.length).sort((p, q) => p.inicio - q.inicio)
+  return { grupos: con, aBorrar: con.flatMap((g) => g.sobran) }
+}
+
+// Banderas en dos carriles sin pisarse. Cada item: {id, x (px de la marca), ancho, anchoMin,
+// prioridad (menor = más importante), der (cuelga a la izquierda de la marca), carril (el
+// preferido)}. Por prioridad y después de izquierda a derecha: su carril, el otro; si no entra
+// entera, la versión corta (solo el rótulo); si tampoco, se suma como «+n» a la que la tapa (que
+// lista las que lleva adentro). Devuelve id → { fila, corta, adentro: [ids] } o { tapadaPor: id }.
 export function filasBanderas(items, filas = 2, margen = 4) {
   const ocupado = Array.from({ length: filas }, () => [])
-  const libre = (f, a, b) => ocupado[f].every(([x, y]) => b + margen <= x || a >= y + margen)
+  const libre = (f, a, b) => ocupado[f].every((o) => b + margen <= o.a || a >= o.b + margen)
   const orden = [...items].sort((p, q) => p.prioridad - q.prioridad || p.x - q.x)
   const out = {}
   for (const it of orden) {
     let puesto = null
+    const pref = Math.min(filas - 1, Math.max(0, it.carril ?? 0))
+    const carriles = [pref, ...Array.from({ length: filas }, (_, f) => f).filter((f) => f !== pref)]
     for (const [ancho, corta] of [[it.ancho, false], [it.anchoMin, true]]) {
       // `der`: la bandera cuelga a la IZQUIERDA de su marca (cerca del borde derecho).
       const [a, b] = it.der ? [it.x - ancho, it.x] : [it.x, it.x + ancho]
-      for (let f = 0; f < filas && !puesto; f++) {
-        if (libre(f, a, b)) { ocupado[f].push([a, b]); puesto = { fila: f, corta } }
+      for (const f of carriles) {
+        if (!puesto && libre(f, a, b)) { ocupado[f].push({ a, b, id: it.id }); puesto = { fila: f, corta, adentro: [] } }
       }
       if (puesto) break
+    }
+    if (!puesto) {
+      const [a, b] = it.der ? [it.x - it.anchoMin, it.x] : [it.x, it.x + it.anchoMin]
+      const tapa = ocupado.flat().find((o) => a < o.b + margen && b + margen > o.a)
+      if (tapa) { out[tapa.id].adentro.push(it.id); out[it.id] = { tapadaPor: tapa.id }; continue }
+      out[it.id] = null
+      continue
     }
     out[it.id] = puesto
   }
   return out
 }
 
-// Los kicks que se VEN en la banda de graves de /onda3 (`d`: {desde, hasta, bandas}): una subida
-// brusca de los graves (al menos `subida` en 50 ms, hasta al menos `piso`), separadas por
-// `separacion` s como mínimo. Es lo que dice el audio, no una grilla: sin subidas claras (un
-// bajo sostenido, un pad) no hay kicks; y con menos de 40 puntos por segundo (zoom muy lejos)
-// tampoco, porque a esa resolución no se distingue un golpe.
-export function detectarKicks(d, desde, hasta, { subida = 0.3, piso = 0.45, separacion = 0.12 } = {}) {
+// Golpes en la banda de graves de /onda3 (`d`: {desde, hasta, bandas}): una subida brusca de los
+// graves (al menos `subida` en 50 ms, hasta al menos `piso`), separadas por `separacion` s.
+// NO SON KICKS NI BEATS: validado contra temas reales (capturas de /onda3 de la crítica de f54),
+// en Drum Dealer, con grilla, cayeron 11 en el beat y 11 a contratiempo, y en Modular Pitch 77 en
+// 32 beats: el bajo a contratiempo sube igual que el kick. Por eso la pantalla los dibuja
+// atenuados y rotulados «golpes de graves», y el kick lo ancla el dueño con K. Sin subidas claras
+// (un bajo sostenido, un pad) no hay ninguno; con menos de 40 puntos por segundo, tampoco.
+export function detectarGolpesGraves(d, desde, hasta, { subida = 0.3, piso = 0.45, separacion = 0.12 } = {}) {
   const g = d && d.bandas && Array.isArray(d.bandas.graves) ? d.bandas.graves : null
   if (!g || !g.length || !(d.hasta > d.desde)) return []
   const dt = (d.hasta - d.desde) / g.length
@@ -551,13 +594,22 @@ export function detectarKicks(d, desde, hasta, { subida = 0.3, piso = 0.45, sepa
   return out
 }
 
-// Alturas de dibujo (0..1) de una columna de la onda. Los datos del server no se tocan: es solo
-// cómo se dibujan. Los graves van con una curva (x²) para que el kick sobresalga del bajo
-// sostenido (un bajo a 0,8 se dibuja a 0,64 y el kick a 1 sigue en 1); medios y agudos, más
-// suave. Anidadas: afuera la más alta, adentro los graves.
-export function alturasBandas(x) {
-  const g = Math.max(0, Math.min(1, x.graves)) ** 2
-  const m = Math.max(0, Math.min(1, x.medios)) ** 1.5
-  const a = Math.max(0, Math.min(1, x.agudos)) ** 1.3
-  return { agudos: Math.max(a, m, g), medios: Math.max(m, g), graves: g }
+// Cómo se dibuja cada banda (crítica de f54, §2.3): alto = valor^CURVA × ESCALA. Los datos del
+// server no se tocan. Graves² baja el bajo de fondo (0,45 → 0,20) y deja el kick (0,9 → 0,81);
+// medios y agudos van ADENTRO de la silueta de graves (escala 0,8 y 0,5), de atrás para adelante.
+export const CURVA = { graves: 2.0, medios: 1.5, agudos: 1.0 }
+export const ESCALA = { graves: 1.0, medios: 0.8, agudos: 0.5 }
+export const alturaBanda = (valor, banda) => Math.max(0, Math.min(1, valor)) ** CURVA[banda] * ESCALA[banda]
+
+// La grilla anclada por el dueño (K) cuando el motor no dio grilla: el período que SÍ midió (el de
+// /onda3, o 60/BPM) y el kick que marcó el dueño como el 1. No inventa nada: el ancla es suya y se
+// dice en pantalla. null si no hay ancla o no hay período.
+export function grillaAnclada(g, bpm, ancla) {
+  if (!Number.isFinite(ancla)) return null
+  const p = g && Number.isFinite(g.periodo_s) && g.periodo_s > 0 ? g.periodo_s
+    : Number.isFinite(Number(bpm)) && Number(bpm) > 0 ? 60 / Number(bpm) : null
+  if (!p) return null
+  const fase = ((ancla % p) + p) % p
+  return { estimada: false, anclada: true, periodo_s: p, primer_beat_s: Math.round(fase * 1e6) / 1e6, compas_ref: ancla,
+    beats_por_compas: 4, confianza: 1, concentracion: 1, motivo: null }
 }

@@ -16,7 +16,7 @@ import {
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
   clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
-  marcaCercana, filasBanderas, detectarKicks, alturasBandas,
+  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -395,7 +395,7 @@ test('BPM con un decimal solo si se midió; letra del pad; rótulo que no depend
   assert.equal(nombreD({ tipo: 'loop', num: 4, inicio: 4, fin: 6 }), 'loop del pad E 0:04.000 a 0:06.000')
 })
 
-/* ---------- pedidos del dueño (f54): duplicados, banderas, kicks, colores ---------- */
+/* ---------- pedidos del dueño y crítica de diseño (f54) ---------- */
 
 test('marcaCercana: ±50 ms del mismo tipo; un loop tiene que coincidir en entrada y salida', () => {
   const ms = [{ id: 1, tipo: 'cue', num: 0, inicio: 75.439 }, { id: 2, tipo: 'memory', inicio: 10 }, { id: 3, tipo: 'loop', inicio: 5, fin: 6.875 }]
@@ -407,37 +407,60 @@ test('marcaCercana: ±50 ms del mismo tipo; un loop tiene que coincidir en entra
   assert.equal(marcaCercana(ms, 'loop', 5, 8.75), null, 'mismo in, otro out: es otro loop')
 })
 
-test('filasBanderas: no se pisan; por prioridad; si no entran, versión corta u oculta', () => {
+test('filasBanderas: 2 carriles por prioridad; corta; si no entra, «+n» en la que la tapa', () => {
   // El caso de la captura del dueño: un hot cue «Primer cue» y un loop en el MISMO punto.
   const r = filasBanderas([
-    { id: 'loop', x: 100, ancho: 50, anchoMin: 40, prioridad: 1 },
-    { id: 'cue', x: 100, ancho: 90, anchoMin: 20, prioridad: 0 },
+    { id: 'loop', x: 100, ancho: 50, anchoMin: 40, prioridad: 1, carril: 1 },
+    { id: 'cue', x: 100, ancho: 90, anchoMin: 20, prioridad: 0, carril: 0 },
   ])
-  assert.deepEqual(r, { cue: { fila: 0, corta: false }, loop: { fila: 1, corta: false } }, 'el hot cue arriba, el loop en la fila de abajo')
-  // Tres en el mismo punto con 2 filas: el tercero (memory) no entra ni corto.
+  assert.deepEqual(r, { cue: { fila: 0, corta: false, adentro: [] }, loop: { fila: 1, corta: false, adentro: [] } }, 'el hot cue arriba, el loop en el carril de abajo')
+  // Tres en el mismo punto con 2 carriles: la memory no entra y se suma a la que la tapa.
   const r2 = filasBanderas([
     { id: 'a', x: 10, ancho: 30, anchoMin: 20, prioridad: 0 },
     { id: 'b', x: 10, ancho: 30, anchoMin: 20, prioridad: 0 },
-    { id: 'm', x: 12, ancho: 30, anchoMin: 20, prioridad: 2 },
+    { id: 'm', x: 12, ancho: 30, anchoMin: 20, prioridad: 2, carril: 1 },
   ])
-  assert.deepEqual(r2, { a: { fila: 0, corta: false }, b: { fila: 1, corta: false }, m: null })
-  // Entra solo corto: al lado de otra, sin tocarla.
+  assert.deepEqual(r2, { a: { fila: 0, corta: false, adentro: ['m'] }, b: { fila: 1, corta: false, adentro: [] }, m: { tapadaPor: 'a' } })
+  // Entra solo corta, al lado de otra, sin tocarla.
   const r3 = filasBanderas([
     { id: 'x', x: 0, ancho: 60, anchoMin: 20, prioridad: 0 },
-    { id: 'y', x: 70, ancho: 60, anchoMin: 20, prioridad: 0 },
-    { id: 'z', x: 30, ancho: 60, anchoMin: 30, prioridad: 2 },
+    { id: 'z', x: 64, ancho: 60, anchoMin: 20, prioridad: 2 },
+    { id: 'y', x: 90, ancho: 30, anchoMin: 20, prioridad: 0 },
   ], 1)
-  assert.deepEqual(r3, { x: { fila: 0, corta: false }, y: { fila: 0, corta: false }, z: null })
+  assert.deepEqual(r3.z, { fila: 0, corta: true, adentro: [] }, 'z entera (64..124) pisa a y (90..120); corta (64..84) entra entre x y y')
   // Colgada a la izquierda (cerca del borde derecho): ocupa [x − ancho, x].
   const r4 = filasBanderas([
     { id: 'p', x: 500, ancho: 60, anchoMin: 20, prioridad: 0, der: true },
     { id: 'q', x: 445, ancho: 30, anchoMin: 20, prioridad: 1 },
   ], 1)
-  assert.deepEqual(r4, { p: { fila: 0, corta: false }, q: null }, 'q (445..475) pisa a p (440..500)')
+  assert.deepEqual(r4, { p: { fila: 0, corta: false, adentro: ['q'] }, q: { tapadaPor: 'p' } }, 'q (445..465) pisa a p (440..500)')
 })
 
-test('detectarKicks: las subidas bruscas de los graves, y nada con un bajo sostenido o poca resolución', () => {
-  // 100 puntos por segundo; kicks a 0,25 s y cada 0,5 s (caída exponencial), como el generador.
+test('agruparIguales: los 32 loops idénticos del dueño son UN grupo con n = 32 (un relleno, una bandera)', () => {
+  const loops = Array.from({ length: 32 }, (_, i) => ({ id: 6 + i, tipo: 'loop', num: null, inicio: 59.576, fin: 61.231 }))
+  const otro = { id: 50, tipo: 'loop', num: null, inicio: 59.576, fin: 63.0 }
+  const g = agruparIguales([...loops, otro, { id: 2, tipo: 'cue', num: 0, inicio: 1 }])
+  assert.deepEqual(g.map((x) => [x.marca.id, x.n]), [[2, 1], [6, 32], [50, 1]], 'en orden de tiempo, el de id más bajo representa al grupo')
+  // Hot cues en el mismo tiempo pero en pads distintos son marcas distintas.
+  assert.equal(agruparIguales([{ id: 1, tipo: 'cue', num: 2, inicio: 75.439 }, { id: 2, tipo: 'cue', num: 3, inicio: 75.439 }]).length, 2)
+})
+
+test('repetidas: lo que ofrece «Borrar repetidos» (queda la más vieja de cada grupo)', () => {
+  const ms = [
+    ...Array.from({ length: 32 }, (_, i) => ({ id: 6 + i, tipo: 'loop', num: null, inicio: 59.576, fin: 61.231 })),
+    ...[41, 42, 43, 44, 45, 46].map((id, k) => ({ id, tipo: 'cue', num: 2 + k, inicio: 75.439 })),
+    { id: 1, tipo: 'cue', num: 0, inicio: 59.576, nombre: 'Primer cue' },
+    { id: 60, tipo: 'memory', inicio: 3 },
+  ]
+  const r = repetidas(ms)
+  assert.deepEqual(r.grupos.map((x) => [x.tipo, x.queda.id, x.sobran.length]), [['loop', 6, 31], ['cue', 41, 5]])
+  assert.equal(r.aBorrar.length, 36)
+  assert.ok(!r.aBorrar.some((m) => m.id === 1 || m.id === 6 || m.id === 41 || m.id === 60), 'nunca la que queda, ni las que no se repiten')
+  assert.deepEqual(repetidas([{ id: 1, tipo: 'memory', inicio: 3 }, { id: 2, tipo: 'memory', inicio: 3.06 }]).aBorrar, [], 'a 60 ms ya no es repetida')
+})
+
+test('detectarGolpesGraves: subidas bruscas de los graves; nada con un bajo sostenido o poca resolución', () => {
+  // 100 puntos por segundo; golpes a 0,25 s y cada 0,5 s (caída exponencial), como el generador.
   const n = 300
   const graves = Array.from({ length: n }, (_, i) => {
     const t = i / 100
@@ -445,20 +468,45 @@ test('detectarKicks: las subidas bruscas de los graves, y nada con un bajo soste
     return t >= 0.25 && k < 0.15 ? Math.exp(-k * 20) : 0.02
   })
   const d = { desde: 0, hasta: 3, bandas: { graves } }
-  assert.deepEqual(detectarKicks(d, 0, 3), [0.25, 0.75, 1.25, 1.75, 2.25, 2.75])
-  assert.deepEqual(detectarKicks(d, 1, 2), [1.25, 1.75], 'solo los de la ventana')
-  // Un bajo sostenido (alto pero sin subidas): ningún kick.
-  assert.deepEqual(detectarKicks({ desde: 0, hasta: 3, bandas: { graves: Array(n).fill(0.85) } }, 0, 3), [])
-  // Con 20 puntos por segundo no se distingue un golpe: nada (no se inventa).
-  assert.deepEqual(detectarKicks({ desde: 0, hasta: 3, bandas: { graves: graves.filter((_, i) => i % 5 === 0) } }, 0, 3), [])
+  assert.deepEqual(detectarGolpesGraves(d, 0, 3), [0.25, 0.75, 1.25, 1.75, 2.25, 2.75])
+  assert.deepEqual(detectarGolpesGraves(d, 1, 2), [1.25, 1.75], 'solo los de la ventana')
+  assert.deepEqual(detectarGolpesGraves({ desde: 0, hasta: 3, bandas: { graves: Array(n).fill(0.85) } }, 0, 3), [], 'un bajo sostenido no da golpes')
+  assert.deepEqual(detectarGolpesGraves({ desde: 0, hasta: 3, bandas: { graves: graves.filter((_, i) => i % 5 === 0) } }, 0, 3), [], 'con 20 puntos por segundo no se distingue un golpe')
 })
 
-test('alturasBandas: el kick sobresale del bajo sostenido (curva en los graves), anidadas', () => {
-  const kick = alturasBandas({ graves: 1, medios: 0.3, agudos: 0.2 })
-  const bajo = alturasBandas({ graves: 0.8, medios: 0.3, agudos: 0.2 })
-  assert.equal(kick.graves, 1)
-  assert.ok(Math.abs(bajo.graves - 0.64) < 1e-9)
-  assert.ok(kick.graves / bajo.graves >= 1.5, 'la diferencia kick/bajo tiene que crecer (1,25 → ≥1,5)')
-  const x = alturasBandas({ graves: 0.5, medios: 0.9, agudos: 0.4 })
-  assert.ok(x.agudos >= x.medios && x.medios >= x.graves, 'afuera la más alta, adentro los graves')
+test('alturaBanda: graves² (el bajo de fondo baja, el kick queda) y medios y agudos adentro', () => {
+  assert.ok(Math.abs(alturaBanda(0.45, 'graves') - 0.2025) < 1e-9, 'el bajo de 0,45 baja a 0,20')
+  assert.ok(Math.abs(alturaBanda(0.9, 'graves') - 0.81) < 1e-9, 'el kick de 0,9 queda en 0,81')
+  assert.ok(alturaBanda(0.9, 'graves') / alturaBanda(0.45, 'graves') >= 4, 'la diferencia kick/bajo pasa de 2× a 4×')
+  assert.ok(Math.abs(alturaBanda(1, 'medios') - 0.8) < 1e-9 && Math.abs(alturaBanda(1, 'agudos') - 0.5) < 1e-9, 'medios y agudos adentro de la silueta de graves')
+  assert.equal(alturaBanda(1.4, 'graves'), 1, 'acotada')
+})
+
+test('grillaAnclada (K): el kick del dueño es el 1 y el período es el medido; nada sin ancla o sin período', () => {
+  const sin = { periodo_s: 0.413671, primer_beat_s: null, confianza: 0.002 }
+  const g = grillaAnclada(sin, 145.0, 60.0)
+  assert.equal(g.anclada, true)
+  assert.equal(g.periodo_s, 0.413671, 'el período del motor, no 60/BPM')
+  assert.equal(g.compas_ref, 60.0, 'el ancla es el 1')
+  assert.ok(Math.abs(g.primer_beat_s - (60 % 0.413671)) < 1e-6)
+  assert.deepEqual(estadoGrilla(g), { hay: true, atenuada: false, baja: [], motivo: null })
+  assert.ok(Math.abs(grillaAnclada(null, 120, 1.25).periodo_s - 0.5) < 1e-12, 'sin período del motor, 60/BPM medido')
+  assert.equal(grillaAnclada(sin, 145, null), null)
+  assert.equal(grillaAnclada(null, null, 1), null, 'sin BPM no hay período: no se inventa')
+})
+
+test('el ancla se guarda en el navegador con el ajuste, y sin ella el ajuste es el de siempre', () => {
+  const m = new Map()
+  const s = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }
+  guardarAjuste(s, 't1', { offset: 0, oculta: false, ancla: 60 })
+  assert.deepEqual(leerAjuste(s, 't1'), { offset: 0, oculta: false, ancla: 60 })
+  guardarAjuste(s, 't1', { offset: 0, oculta: false })
+  assert.deepEqual(leerAjuste(s, 't1'), { offset: 0, oculta: false })
+  assert.equal(m.size, 0, 'sin ancla ni ajuste no queda nada guardado')
+})
+
+test('atajos K (marcar un kick) y B (solo graves)', () => {
+  const t = (key) => ({ key, code: '', target: { tagName: 'DIV', getAttribute: () => 'slider' } })
+  assert.deepEqual(atajoD(t('k')), { tipo: 'ancla' })
+  assert.deepEqual(atajoD(t('B')), { tipo: 'soloGraves' })
 })

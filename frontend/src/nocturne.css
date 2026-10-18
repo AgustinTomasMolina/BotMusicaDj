@@ -1957,3 +1957,124 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .rpool-analizando,.rpool-sinanalizar{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .rcues-puntos{margin-right:6px}
 .rguardar-pl-ok{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+
+/* — Editor D: rediseño de la crítica de f54 (va al final: pisa lo de arriba) —
+   Todo el flujo sin scroll a 1440×900: cabecera en una línea, onda de 200 px, una línea de
+   estado de la onda, transporte + marcar, el aviso pegado, pads y una lista compacta con scroll
+   propio. Paleta en escalera de luminancia (graves oscuro, medios, agudos claro), opaca. */
+:root{
+  --edd-graves:#3d63c2;      /* 3,48:1 sobre el fondo de la onda */
+  --edd-medios:#c98d45;      /* 6,82:1 */
+  --edd-agudos:#b9bfcf;      /* 10,5:1; más apagado que el cabezal (#fff) */
+  --edd-tiempo:rgba(255,255,255,.10);
+  --edd-beat:rgba(205,212,255,.45);
+  --edd-compas:rgba(205,212,255,.75);
+  --edd-halo:rgba(11,13,20,.9);
+  --edd-loop-fondo:rgba(255,154,46,.16);
+  --edd-loop-pend:rgba(255,154,46,.08);
+  --edd-golpe:rgba(205,212,255,.55);
+}
+.edd{gap:8px;padding:12px 24px 24px}
+.edd ::placeholder{color:var(--color-neutral-400);opacity:1}
+.edd-cab{flex-wrap:nowrap;gap:10px 14px}
+.edd-cab-t{flex:1 1 auto;min-width:0}
+.edd-h{font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.edd-chips{flex:none}
+.edd-nav{flex:none;flex-wrap:nowrap}
+.edd-sel{flex:0 1 220px;width:220px}
+.edd-ico{min-width:44px;justify-content:center}
+.edd-ondabox{padding:8px 14px;gap:4px}
+.edd-regla{height:16px}
+.edd-regla>span::after{content:"";position:absolute;left:0;bottom:-2px;width:1px;height:4px;background:var(--color-neutral-300)}
+.edd-flags{height:48px}
+.edd-flag{min-width:24px;max-width:180px;height:22px;box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;padding:3px 7px 3px 5px}
+.edd-flag.is-pend{background:var(--color-bg);color:var(--cue-loop);box-shadow:inset 0 0 0 2px var(--cue-loop);border-radius:5px;outline:2px dashed var(--cue-loop);outline-offset:-2px}
+.edd-flag.is-loop{background:var(--cue-loop)}
+.edd-flag-n{font:700 11px/1 var(--font-body);color:var(--color-warn);background:#161826;border-radius:4px;padding:2px 4px}
+.edd-flag-mas{font:700 11px/1 var(--font-body);color:var(--color-text);background:#161826;border-radius:4px;padding:2px 4px}
+.edd-onda{height:200px}
+/* Detrás de la onda: tiempo (1 px) y golpes de graves (marquitas de 8 px arriba y abajo,
+   atenuadas: no son beats). Encima: beat 2 px, compás 3 px, marcas 2 px con halo. */
+.edd-tick{width:1px;margin-left:-.5px;background:var(--edd-tiempo)}
+.edd-golpe{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:linear-gradient(var(--edd-golpe) 0 8px,transparent 8px calc(100% - 8px),var(--edd-golpe) calc(100% - 8px))}
+.edd-beat{width:2px;margin-left:-1px;background:var(--edd-beat);box-shadow:none}
+.edd-beat.is-compas{width:3px;margin-left:-1.5px;background:var(--edd-compas)}
+.edd-onda.is-atenuada .edd-beat{background:none;border-left:2px dashed var(--edd-beat)}
+.edd-onda.is-atenuada .edd-beat.is-compas{border-left:3px dashed var(--edd-compas)}
+.edd-mk{width:2px;margin-left:-1px;box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-mk.is-memory{border-left:2px dashed var(--cue-mem);box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+/* El loop: el relleno va en el canvas (detrás de la onda); acá los bordes con halo, la franja de
+   6 px arriba y el tirador de la salida, visible. */
+.edd-mk-loop{background:transparent;box-shadow:inset 2px 0 0 var(--cue-loop),inset -2px 0 0 var(--cue-loop),-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-mk-loop::before{content:"";position:absolute;left:0;right:0;top:0;height:6px;background:var(--cue-loop)}
+.edd-mk-loop.is-sel{background:transparent;box-shadow:inset 3px 0 0 #fff,inset -3px 0 0 #fff,inset 0 6px 0 var(--cue-loop)}
+.edd-loop-fin{right:-4px;width:8px;top:calc(50% - 12px);bottom:auto;height:24px;background:repeating-linear-gradient(90deg,var(--cue-loop) 0 2px,var(--edd-halo) 2px 3px);border-radius:2px}
+.edd-loop-prev{display:none}
+.edd-loopin{border-left:2px dashed var(--cue-loop);box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-cabezal{background:#fff;box-shadow:-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-cabezal::after{content:"";position:absolute;bottom:0;left:-7px;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:11px solid #fff}
+.edd-cabezal.is-gen::after{display:none}
+.edd-ondaestado{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:12px;color:var(--color-neutral-300)}
+.edd-leyenda{display:inline-flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+.edd-sw.is-golpe{background:var(--edd-golpe);width:3px}
+.edd-grilla-chip{font:700 11px var(--font-body);letter-spacing:.04em;border-radius:5px;padding:4px 8px;background:#2a2d3f;color:var(--color-text)}
+.edd-grilla-chip.is-sin,.edd-grilla-chip.is-baja{color:var(--color-warn)}
+.edd-grilla-chip.is-tuya{background:#cdd4ff;color:#161826}
+.edd-solog[aria-pressed=true]{border-color:var(--edd-graves);box-shadow:inset 0 0 0 1px var(--edd-graves)}
+.edd-grilla-ctrl{border-top:0;padding-top:0}
+.edd-grilla-ctrl>summary{list-style:none;cursor:pointer}
+.edd-grilla-ctrl>summary::-webkit-details-marker{display:none}
+.edd-grilla-ctrl[open]{flex-basis:100%}
+.edd-grilla-ctrl[open]>summary{margin-bottom:6px}
+.edd-trans{gap:6px}
+.edd-reloj{font-size:20px;margin:0 4px}
+.edd-marcar{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.edd-loopn{min-height:44px;width:auto}
+.edd-loop-pend{padding:4px 10px}
+.edd-avisos{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 16px;min-height:24px}
+.edd-aviso{margin:0;font-size:13px;color:var(--color-neutral-300)}
+.edd-aviso.is-warn{color:var(--color-warn)}
+.edd-avisos .edd-estado{margin-left:auto}
+.edd-repetidos .edd-rep-txt{margin:0 0 6px}
+.edd-rep-conf{display:inline-flex;flex-wrap:wrap;align-items:center;gap:8px}
+.edd-rep-si{color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+.edd-general{padding:6px 14px}
+.edd-gen{height:44px}
+.edd-abajo{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px}
+.edd-pads-box{gap:6px}
+.edd-sub{line-height:1.4}
+.edd-pads-nota{margin:-2px 0 2px}
+.edd-pad{min-height:52px;padding:4px 10px}
+/* Pad vacío legible: contorno y letra del color del pad (no la letra oscura al 55 %). */
+.edd-pad.is-vacio .edd-pad-n{opacity:1;background:transparent;color:var(--cue-c);box-shadow:inset 0 0 0 2px var(--cue-c)}
+.edd-pad.is-vacio .edd-pad-vacio{color:var(--color-neutral-400)}
+.edd-lista{max-height:300px;overflow:auto;padding:8px 10px}
+.edd-filas{gap:4px}
+.edd-fila{display:block;padding:2px 4px;border-radius:6px;border:1px solid transparent;background:transparent}
+.edd-fila.is-abierta{border-color:var(--color-divider);background:var(--color-bg)}
+.edd-fila-c{display:grid;grid-template-columns:44px auto minmax(0,1fr) auto auto;align-items:center;gap:8px;min-height:44px}
+.edd-fila .edd-tag{grid-row:auto;align-self:center}
+.edd-fila-t{font-size:12.5px;white-space:nowrap}
+.edd-fila-n{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.edd-fila-ed{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:6px 8px;padding:6px 0 8px 52px}
+.edd-fila-ed .edd-tiempos,.edd-fila-ed .edd-campo-nom{grid-column:1 / -1}
+.edd-fila .edd-campo-tipo,.edd-fila .edd-campo-pad,.edd-fila .edd-tiempos,.edd-fila .edd-campo-nom{grid-row:auto}
+.edd-fila-ed .edd-alcursor{justify-self:start}
+@media (max-width:1100px){
+  .edd-cab{flex-wrap:wrap}
+  .edd-abajo{grid-template-columns:minmax(0,1fr)}
+  .edd-lista{max-height:none}
+}
+@media (max-width:640px){
+  .edd{padding:8px 16px 20px}
+  .edd-cab{flex-wrap:wrap}
+  .edd-cab-t{flex:1 1 100%}
+  .edd-h{font-size:17px}
+  .edd-ico-txt{display:none}
+  .edd-sel{flex:1 1 0;width:auto}
+  .edd-onda{height:170px}
+  .edd-trans .edd-flex{display:none}
+  .edd-fila-c{grid-template-columns:44px minmax(0,1fr) auto auto}
+  .edd-fila-n{display:none}
+  .edd-fila-ed{padding-left:0}
+}
