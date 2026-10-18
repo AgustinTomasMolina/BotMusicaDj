@@ -8,7 +8,7 @@ import {
   historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
   contarIguales, cerrarPaso, marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda,
   agruparIguales, repetidas, grillaAnclada,
-  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD,
+  atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, temaVigente, beatsLoop,
 } from '../editorD'
 import { usePlayer } from '../player/context'
 import { useVolumenEn } from '../hooks'
@@ -162,7 +162,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const panRef = useRef(null)
   const ocupado = useRef(false)          // una operación de deshacer/rehacer en curso
   const cola = useRef([])                // Ctrl+Z / Ctrl+Y apretados mientras tanto (−1 / +1)
-  const creaciones = useRef(Promise.resolve())   // las creaciones, de a una (ver enCola)
+  const creaciones = useRef({ n: 0, p: Promise.resolve() })   // las creaciones, de a una, por tema (ver enCola)
   // La última lista que mandó el servidor, al instante (sin esperar el render): con esta se
   // decide «ya hay una ahí» y el pad libre.
   const listaServidor = useRef([])
@@ -205,7 +205,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     ocupado.current = false
     cola.current = []
     listaServidor.current = []
-    creaciones.current = Promise.resolve()
+    creaciones.current = { n: 0, p: Promise.resolve() }
     setReleyendo(0)
     setCierre(false)
     const a = audioRef.current
@@ -257,8 +257,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     return () => { cerrado.current = true; epoca.current += 1; a?.pause() }
   }, [])
 
-  // El ajuste de la grilla se guarda en este navegador, por tema.
+  // El ajuste de la grilla se guarda en este navegador, por tema. Recién pasado de tema, el
+  // ajuste y la grilla que hay son del anterior: no se guardan bajo la clave del nuevo.
   const cambiarAjuste = (nuevo) => {
+    if (!temaVigente(id, idRef.current, track)) return
     setAjuste(nuevo)
     guardarAjuste(storage(), id, nuevo)
   }
@@ -478,7 +480,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
         // pero la lista sí tiene que mostrar lo que el server ya tiene.
         releer(tid)
       }
-      return { ok: false, tipo: 'ajeno', servidor: ok, tid, ep }
+      return { ok: false, tipo: 'ajeno', servidor: ok, data: ok ? r.data : null, tid, ep }
     }
     vuelo.current.n -= 1
     if (ok) {
@@ -498,20 +500,77 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     return { ok: false, tipo, tid, ep }
   }
 
+  // Algo quedó a medias en un tema que ya no está abierto: se avisa acá nombrando ese tema,
+  // queda anotado para cuando se vuelva a él, y si el editor se cerró, la playlist lo dice
+  // (3.ª auditoría f54: no puede quedar a medias en silencio).
+  const avisarAMedias = (origen, texto) => {
+    pendientesDe.current.set(origen.tid, [...(pendientesDe.current.get(origen.tid) || []), texto])
+    if (cerrado.current) tardia.current?.(texto)
+    else if (idRef.current !== origen.tid) setAviso(texto)
+    else {
+      // Se fue y se volvió al tema de origen (A → B → A): va directo a sus avisos.
+      pendientesDe.current.delete(origen.tid)
+      setFallas((f) => [...f, { id: ++fallaSeq.current, texto, reconciliada: false }].slice(-5))
+      setFallasTotal((n) => n + 1)
+      releer(origen.tid)
+    }
+  }
+
+  // Lo que falta de un paso del historial cuando se pasó de tema en el medio (Ctrl+Z y AvPág
+  // seguidos, o un grupo cortado a la mitad): se termina contra el tema de ORIGEN, sin tocar la
+  // pantalla del nuevo (no pasa por conEstado). Como deshacer, primero relee y saltea lo que
+  // ya está hecho (yaHecha): no duplica. Si algo falla, se avisa como «a medias».
+  const terminarEnOrigen = async (origen, resto, cambios, que) => {
+    const leer = async () => {
+      try { const g = await getMarcas(origen.tid); return g && g.ok && Array.isArray(g.data?.marcas) ? g.data.marcas : null } catch { return null }
+    }
+    let real = await leer()
+    if (!real) {
+      avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó sin terminar al pasar de tema (no pude leer el servidor). Revisá sus marcas.`)
+      return
+    }
+    const cc = [...cambios]
+    for (const o of resto) {
+      let x = o
+      for (const [a, b] of cc) x = opConId(x, a, b)
+      const y = yaHecha(x, real)
+      if (y.hecha) {
+        if (x.tipo === 'crear' && y.id !== x.marca.id) cc.push([x.marca.id, y.id])
+        continue
+      }
+      let r = null
+      try {
+        r = x.tipo === 'crear' ? await crearMarca(origen.tid, cuerpoCrear(x.marca))
+          : x.tipo === 'borrar' ? await borrarMarca(origen.tid, x.marca.id)
+            : await cambiarMarca(origen.tid, x.id, x.despues)
+      } catch { r = null }
+      if (!(r && r.ok)) {
+        avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó a medias al pasar de tema (${r ? motivoDe(r) : CONEXION}). Revisá sus marcas.`)
+        return
+      }
+      if (x.tipo === 'crear' && r.data?.marca) cc.push([x.marca.id, r.data.marca.id])
+      if (Array.isArray(r.data?.marcas)) real = r.data.marcas
+    }
+    if (idRef.current === origen.tid && !cerrado.current) releer(origen.tid)
+  }
+
   // Un paso del historial contra el servidor, sin duplicar nada (ver REGLAS).
   // { ok, cambios: [[id viejo, id nuevo]] } o { ok: false, tipo, cambios, parcial }.
   const aplicarPaso = async (op, que) => {
     const tid = idRef.current
     const ep = epoca.current
+    const origen = { tid, titulo: tema ? tema.titulo : 'otro tema' }
     // Defensa en profundidad: el historial se vacía al cambiar de tema y `hecho` solo registra
     // en el tema vigente, así que esto no debería pasar nunca.
     if (op.tid !== undefined && op.tid !== tid) return { ok: false, tipo: 'ajeno', cambios: [] }
+    const ops = op.tipo === 'grupo' ? op.ops : [op]
     let real = await releer(tid)
-    if (!vigente(tid, ep)) return { ok: false, tipo: 'ajeno', cambios: [] }
+    // Se pasó de tema mientras se releía (Ctrl+Z y AvPág seguidos): el Ctrl+Z vale para SU tema.
+    if (!vigente(tid, ep)) { terminarEnOrigen(origen, ops, [], que); return { ok: false, tipo: 'ajeno', cambios: [] } }
     if (!real) return { ok: false, tipo: 'reintentable', cambios: [], sinLectura: true }
     const cambios = []
     let hechas = 0
-    for (const o of op.tipo === 'grupo' ? op.ops : [op]) {
+    for (const [i, o] of ops.entries()) {
       let x = o
       for (const [a, b] of cambios) x = opConId(x, a, b)
       const y = yaHecha(x, real)
@@ -523,7 +582,18 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       const r = x.tipo === 'crear' ? await conEstado(que, (t) => crearMarca(t, cuerpoCrear(x.marca)))
         : x.tipo === 'borrar' ? await conEstado(que, (t) => borrarMarca(t, x.marca.id))
           : await conEstado(que, (t) => cambiarMarca(t, x.id, x.despues))
-      if (!r.ok) return { ok: false, tipo: r.tipo, cambios, parcial: hechas > 0 }
+      if (!r.ok) {
+        // Se pasó a otro tema con el grupo a medias y el servidor SÍ hizo esta parte: lo que
+        // falta se termina contra el tema de ORIGEN, sin tocar la pantalla del tema nuevo (si no,
+        // un Ctrl+Z de un cambio de tipo dejaba las dos marcas en el tema que se dejó).
+        if (r.tipo === 'ajeno' && r.servidor && i < ops.length - 1) {
+          const cc = x.tipo === 'crear' && r.data ? [...cambios, [x.marca.id, r.data.marca.id]] : cambios
+          terminarEnOrigen(origen, ops.slice(i + 1), cc, que)
+        } else if (r.tipo === 'ajeno' && !r.servidor && hechas > 0) {
+          avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó a medias al pasar de tema (una parte no se guardó). Revisá sus marcas.`)
+        }
+        return { ok: false, tipo: r.tipo, cambios, parcial: hechas > 0 }
+      }
       if (x.tipo === 'crear') cambios.push([x.marca.id, r.data.marca.id])
       real = r.data.marcas
       hechas += 1
@@ -585,19 +655,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     // Quedaron las dos (la nueva y la vieja) en un tema que ya no está abierto: se avisa acá
     // nombrando ese tema, queda anotado para cuando se vuelva a él, y si el editor se cerró, la
     // playlist lo dice (3.ª auditoría f54: no puede quedar a medias en silencio).
-    const aMedias = () => {
-      const texto = `«${origen.titulo}»: ${que} quedó a medias (no se pudo borrar la marca vieja): quedaron las dos. Borrá la que sobra.`
-      pendientesDe.current.set(origen.tid, [...(pendientesDe.current.get(origen.tid) || []), texto])
-      if (cerrado.current) tardia.current?.(texto)
-      else if (idRef.current !== origen.tid) setAviso(texto)
-      else {
-        // Se fue y se volvió al tema de origen (A → B → A): va directo a sus avisos.
-        pendientesDe.current.delete(origen.tid)
-        setFallas((f) => [...f, { id: ++fallaSeq.current, texto, reconciliada: false }].slice(-5))
-        setFallasTotal((n) => n + 1)
-        releer(origen.tid)
-      }
-    }
+    const aMedias = () => avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó a medias (no se pudo borrar la marca vieja): quedaron las dos. Borrá la que sobra.`)
     const r1 = await conEstado(que, (tid) => crearMarca(tid, cuerpo))
     if (!r1.ok) {
       // Se creó la nueva con otro tema abierto: se termina en el tema de ORIGEN (borrar la vieja).
@@ -616,6 +674,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const correrHistorial = async (dir) => {
     // Un Ctrl+Z / Ctrl+Y apretado mientras otro viaja no se pierde: espera su turno (lo corre
     // el efecto de abajo, con el historial ya actualizado).
+    // Recién pasado de tema (sin sus datos todavía), el historial que hay es del anterior.
+    if (!temaVigente(id, idRef.current, track)) return
     if (ocupado.current) { cola.current.push(dir); return }
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
@@ -661,10 +721,6 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   })
 
   /* ---------- poner marcas ---------- */
-  // Beats de un loop con el período con que se crea (el de la grilla; sin grilla, 60/BPM), con
-  // un decimal; null sin BPM.
-  const beatsLoop = (m) => (periodo && m.fin > m.inicio ? Math.round(((m.fin - m.inicio) / periodo) * 10) / 10 : null)
-
   // «Borrar repetidos» (crítica de f54, P0-9): deja la marca más vieja de cada grupo y borra el
   // resto, después de que el dueño lo confirmó. Un solo paso del historial: Ctrl+Z las vuelve a
   // poner (con iguales, así no se toman por «ya hechas»).
@@ -705,8 +761,24 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   // tiempo es el del momento en que se apretó. Si mientras tanto se cambió de tema, no se crea.
   const enCola = (fn) => {
     const ep = epoca.current
-    const siguiente = creaciones.current.then(() => (ep === epoca.current ? fn() : null)).catch(() => null)
-    creaciones.current = siguiente
+    const q = creaciones.current                    // la cola de ESTE tema (otro tema, otra cola)
+    const titulo = tema ? tema.titulo : 'otro tema'
+    const correr = () => {
+      // Esperaba su turno y mientras tanto se pasó de tema: no se crea en el tema nuevo (el
+      // tiempo y los pads eran del anterior), y se dice.
+      if (ep !== epoca.current) {
+        if (!cerrado.current) setAviso(`«${titulo}»: una marca que esperaba su turno no se creó porque pasaste de tema. Volvé y marcala de nuevo.`)
+        return null
+      }
+      return fn()
+    }
+    // Sin nada en vuelo arranca YA (en el mismo turno de la tecla: C y AvPág seguidos crean el
+    // cue en el tema donde se apretó C); si no, espera a la anterior.
+    q.n += 1
+    const siguiente = (q.n === 1 ? Promise.resolve(correr()) : q.p.then(correr))
+      .catch(() => null)
+      .finally(() => { q.n -= 1 })
+    q.p = siguiente
     return siguiente
   }
 
@@ -819,7 +891,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   acciones.current = {
     play: alternar,
     beat: (a) => moverBeat(a.dir),
-    fino: (a) => irA(posActual() + a.dir * FINO_CURSOR_S),
+    // fino, grilla, medioBeat, fin: recién pasado de tema, cursor, ajuste, grilla y duración
+    // son del anterior hasta que llegan los datos del nuevo (`track`).
+    fino: (a) => track && irA(posActual() + a.dir * FINO_CURSOR_S),
     pad: (a) => tocarPad(a.num),
     borrarPad: (a) => tocarPad(a.num, { borrarlo: true }),
     cue: () => ponerCue(),
@@ -828,8 +902,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     loopOut: ponerLoopOut,
     loopBeats: ponerLoopBeats,
     zoom: (a) => cambiarZoom(a.dir),
-    grilla: () => eg.hay && cambiarAjuste({ ...ajuste, oculta: !ajuste.oculta }),
-    medioBeat: () => eg.hay && cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) }),
+    grilla: () => track && eg.hay && cambiarAjuste({ ...ajuste, oculta: !ajuste.oculta }),
+    medioBeat: () => track && eg.hay && cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) }),
     snap: () => grillaVisible && setSnap((s) => !s),
     soloGraves: () => setSoloGraves((s) => !s),
     // K: el dueño marca un kick y la grilla se dibuja desde ahí con el período medido (solo si el
@@ -845,7 +919,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     deshacer: () => correrHistorial(-1),
     rehacer: () => correrHistorial(1),
     inicio: () => irA(0, { centrar: true }),
-    fin: () => irA(dur, { centrar: true }),
+    fin: () => track && irA(dur, { centrar: true }),
     tema: (a) => irTema(idx + a.dir),
     cerrar: () => cerrar(),
   }
@@ -1019,7 +1093,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const resumen = `${cuenta('cue')} hot cue${cuenta('cue') === 1 ? '' : 's'}, ${cuenta('memory')} memory, ${cuenta('loop')} loop${cuenta('loop') === 1 ? '' : 's'}`
   const etiquetaTema = (t) => `${t.artista ? `${t.artista} — ` : ''}${t.titulo}`
   const rep = repetidas(marcas)
-  const beatsDe = (m) => beatsLoop(m)
+  // Beats de un loop con el período con que se crea (el de la grilla; sin grilla, 60/BPM).
+  const beatsDe = (m) => beatsLoop(m.inicio, m.fin, periodo)
   const ordenadas = [...marcas].sort((p, q) => p.inicio - q.inicio || p.id - q.id)
 
   // Etiquetas de la regla: compases (si hay grilla con el 1) o tiempos. Una cada ~80 px.
@@ -1227,17 +1302,17 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
               </p>
               {eg.hay && (
                 <div className="edd-grilla-btns">
-                  <button type="button" className="btn btn-secondary edd-btn" aria-pressed={ajuste.oculta} aria-keyshortcuts="G"
+                  <button type="button" className="btn btn-secondary edd-btn" aria-pressed={ajuste.oculta} aria-keyshortcuts="G" disabled={!track}
                     onClick={() => acciones.current.grilla()}>{ajuste.oculta ? 'Mostrar grilla' : 'Ocultar grilla'} <Kbd>G</Kbd></button>
-                  <button type="button" className="btn btn-secondary edd-btn edd-medio" aria-keyshortcuts="H" disabled={ajuste.oculta}
+                  <button type="button" className="btn btn-secondary edd-btn edd-medio" aria-keyshortcuts="H" disabled={!track || ajuste.oculta}
                     onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, g.periodo_s / 2, g.periodo_s) })}>Correr ½ beat <Kbd>H</Kbd></button>
-                  <button type="button" className="btn btn-secondary edd-btn" disabled={ajuste.oculta} aria-label="−5 ms: correr la grilla 5 milisegundos para atrás"
+                  <button type="button" className="btn btn-secondary edd-btn" disabled={!track || ajuste.oculta} aria-label="−5 ms: correr la grilla 5 milisegundos para atrás"
                     onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, -AJUSTE_FINO_S, g.periodo_s) })}>−5 ms</button>
-                  <button type="button" className="btn btn-secondary edd-btn" disabled={ajuste.oculta} aria-label="+5 ms: correr la grilla 5 milisegundos para adelante"
+                  <button type="button" className="btn btn-secondary edd-btn" disabled={!track || ajuste.oculta} aria-label="+5 ms: correr la grilla 5 milisegundos para adelante"
                     onClick={() => cambiarAjuste({ ...ajuste, offset: moverAjuste(ajuste.offset, AJUSTE_FINO_S, g.periodo_s) })}>+5 ms</button>
-                  <button type="button" className="btn btn-secondary edd-btn" disabled={!ajuste.offset}
+                  <button type="button" className="btn btn-secondary edd-btn" disabled={!track || !ajuste.offset}
                     onClick={() => cambiarAjuste({ ...ajuste, offset: 0 })}>Volver a la del motor</button>
-                  {anclada && <button type="button" className="btn btn-secondary edd-btn edd-sacar-ancla" onClick={() => { const { ancla, ...resto } = ajuste; void ancla; cambiarAjuste(resto) }}>Sacar el ancla</button>}
+                  {anclada && <button type="button" className="btn btn-secondary edd-btn edd-sacar-ancla" disabled={!track} onClick={() => { const { ancla, ...resto } = ajuste; void ancla; cambiarAjuste(resto) }}>Sacar el ancla</button>}
                   <label className={`edd-snap${grillaVisible ? '' : ' is-off'}`}>
                     <input type="checkbox" checked={snapActivo} disabled={!grillaVisible} onChange={() => setSnap((s) => !s)} aria-keyshortcuts="Q" />
                     Pegar a la grilla <Kbd>Q</Kbd>

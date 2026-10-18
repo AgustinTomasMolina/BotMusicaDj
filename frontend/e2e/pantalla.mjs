@@ -4442,10 +4442,29 @@ function casosF54() {
     await page.evaluate(() => [...document.querySelectorAll('.pl-item')].find((b) => b.querySelector('.pl-item-name')?.textContent === 'Editor').click())
     await hasta(() => page.$eval('.crate-head .name-edit', (i) => i.value).catch(() => null), (v) => v === 'Editor', 'no se abrió la playlist «Editor»')
   }
-  const esperarOnda = (page, que) => hasta(() => page.evaluate(() => ({
+  // Al pasar de tema (AvPág/RePág) la onda vieja NO se borra en el mismo render que el título:
+  // la borra el efecto «cambiar de tema» de EditorCues, que corre después. Entre los dos hay
+  // renders con el título nuevo y la grilla del tema anterior (medido: ~15 ms), y esperar solo
+  // «no dice Leyendo» los toma por la onda cargada. `pasarTema` aprieta la tecla con un
+  // observador ya puesto que anota cuándo aparece «Leyendo el audio…» (el render del efecto,
+  // siempre antes de que llegue la onda nueva); con `trasCambio`, `esperarOnda` exige haberlo
+  // visto: la onda que se ve después es la del tema nuevo, nunca la anterior.
+  const pasarTema = async (page, tecla) => {
+    await page.evaluate(() => {
+      window.__eddLeyendo = false
+      const obs = new MutationObserver(() => {
+        if (document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')) { window.__eddLeyendo = true; obs.disconnect() }
+      })
+      obs.observe(document.querySelector('.edd'), { subtree: true, childList: true, characterData: true })
+    })
+    await page.keyboard.press(tecla)
+  }
+  const esperarOnda = (page, que, trasCambio = false) => hasta(() => page.evaluate(() => ({
     msg: document.querySelector('.edd-msg')?.textContent ?? null,
     estado: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
-  })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo'), `${que}: la onda no terminó de cargar`, 20000)
+    leyendo: window.__eddLeyendo === true,
+  })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo') && (!trasCambio || v.leyendo),
+  `${que}: la onda no terminó de cargar`, 20000)
   // Abre el editor desde el botón «Cues» de la fila del tema (el visible).
   const abrirEditorD = async (page, ctx, titulo) => {
     await abrirPlaylist(page, ctx)
@@ -4641,9 +4660,9 @@ function casosF54() {
         // el motivo de la API y el zoom pasa a segundos.
         const g2 = (await onda3Api(ctx, por['Sin grilla'].rid)).grilla
         afirmar(g2 && g2.primer_beat_s === null && g2.motivo, `el tema sin grilla trae grilla en la API: ${json(g2)}`)
-        await page.keyboard.press('PageDown')
+        await pasarTema(page, 'PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin grilla'].item.titulo), 'AvPág no pasó al tema siguiente')
-        await esperarOnda(page, 'sin grilla')
+        await esperarOnda(page, 'sin grilla', true)
         o = await leerOnda(page)
         igual([o.beats.length, o.estado, o.unidad, o.zooms.map((z) => z[0])],
           [0, `Sin grilla de beats: ${g2.motivo}. No se dibuja ninguna (una grilla inventada mentiría).`, 'segundos', ['4', '8', '15', '30', '60']],
@@ -4651,9 +4670,9 @@ function casosF54() {
         afirmar(Math.abs((o.hasta - o.desde) - 15) < 0.002, `sin grilla el zoom por defecto son 15 s: ${o.hasta - o.desde}`)
         afirmar(o.snap === null, 'sin grilla no hay casilla de «ajustar a la grilla»')
         // El tema sin BPM: «?» y sin beats.
-        await page.keyboard.press('PageDown')
+        await pasarTema(page, 'PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(por['Sin BPM'].item.titulo), 'AvPág no pasó al tercer tema')
-        await esperarOnda(page, 'sin BPM')
+        await esperarOnda(page, 'sin BPM', true)
         const tr3 = (await apiPedir(ctx, rutaMarcas(por['Sin BPM'].rid))).data.track
         igual(tr3.bpm, null, 'la API tendría que decir que el tema sin pulso no tiene BPM')
         igual((await page.$$eval('.edd-chip', (cs) => cs.map((c) => c.textContent))).slice(0, 2), ['? BPM', '? key'], 'sin BPM ni key medidos la cabecera dice «?» (no un número)')
@@ -4818,9 +4837,9 @@ function casosF54() {
         await page.keyboard.press('PageDown')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === por['Sin grilla'].item.titulo, 'AvPág no pasó al tema siguiente de la playlist')
         igual(await page.$eval('.edd-sel select', (s) => s.options[s.selectedIndex].textContent), `2. ${por['Sin grilla'].item.artista ? `${por['Sin grilla'].item.artista} — ` : ''}${por['Sin grilla'].item.titulo}`, 'el selector de temas no sigue al tema abierto')
-        await page.keyboard.press('PageUp')
+        await pasarTema(page, 'PageUp')
         await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === t.item.titulo, 'RePág no volvió al tema anterior')
-        await esperarOnda(page, 'vuelta')
+        await esperarOnda(page, 'vuelta', true)
         // Todo lo que se toca mide 44 px o más.
         igual(await chicos(page, '.edd button, .edd select, .edd input:not([type=checkbox]), .edd-snap, .edd [role=slider]'), [], 'hay controles del editor de menos de 44 px')
         // Atajos visibles y con aria-keyshortcuts.
@@ -5022,6 +5041,89 @@ function casosF54() {
         afirmar((await avisoTxt() || '').includes(b.data.error), `el aviso no dice el motivo del 400 (${b.data.error})`)
         // Desde «Entendido» fallaron tres (el PATCH de 2b, el de 3 y el POST de 4): en plural bien escrito.
         await hasta(estadoTxt, (s) => s.includes('3 cambios no se guardaron (ver el aviso)'), 'el estado no cuenta las tres fallas (o las pluraliza mal)')
+
+        // (5) Un cambio de tipo deshecho A MEDIAS: memory → hot cue (crear el cue + borrar la
+        // memory); otra pestaña borra el cue; Ctrl+Z recrea la memory (sale) y borrar el cue da
+        // 404. La memory recreada ya está en el servidor: el próximo Ctrl+Z la tiene que sacar.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const mem5 = await conTecla(page, ['m'], 'POST')
+        igual(mem5.status, 201, 'M no creó la memory del paso (5)')
+        await filasComoApi(page, ctx, t.rid, 'con la memory del paso (5)')
+        const nuevoCue = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const borraMem = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await abrirFila(page, mem5.data.marca.id)
+        await page.select(`.edd-fila[data-id="${mem5.data.marca.id}"] select.edd-tipo`, 'cue')
+        const cue5 = await (await nuevoCue).json()
+        igual((await borraMem).status(), 200, 'cambiar el tipo no borró la memory')
+        await filasComoApi(page, ctx, t.rid, 'después de pasar la memory a hot cue')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${cue5.marca.id}`, 'DELETE')).status, 200, 'la «otra pestaña» no pudo borrar el cue nuevo')
+        await page.focus('.edd-onda')
+        // Deshacer relee antes de mandar nada (yaHecha): el borrado del cue que la otra pestaña
+        // ya borró NO se manda (en la otra línea de f54 se mandaba y daba 404: el paso quedaba a
+        // medias y había que rescatar lo guardado; acá no queda a medias).
+        const escr5 = pedidosDeMarcas(page)
+        const recrea = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const memVuelta = await (await recrea).json()
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x === 'Deshecho.', 'el Ctrl+Z con el cue ya borrado por otra pestaña no terminó bien')
+        igual(escr5.filter((x) => x.startsWith('DELETE')), [], 'Ctrl+Z mandó el borrado de un cue que ya no estaba (la relectura no lo tiene)')
+        igual([memVuelta.marca.tipo, memVuelta.marca.inicio], ['memory', mem5.data.marca.inicio], 'Ctrl+Z no recreó la memory')
+        await filasComoApi(page, ctx, t.rid, 'después del Ctrl+Z con el cue ya borrado')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+        const nFallas = () => page.$$eval('.edd-fallas li', (ls) => ls.length)
+        const fallasAntes = await nFallas()
+        const z5 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z5.status, (z5.data.marcas || []).some((x) => x.id === memVuelta.marca.id)], [200, false],
+          'el Ctrl+Z siguiente no sacó la memory que quedó guardada a medias (el paso a medias se perdió del historial)')
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer lo que quedó a medias')
+        // Y el Ctrl+Z que sigue es el paso ANTERIOR del historial (el hot cue del pad A del paso
+        // (3)), no otra vez la memory: con la memory recreada dos veces en el historial, este
+        // pedido sería un DELETE de la memory que ya no existe (404 y un aviso de falla espurio).
+        const padA = (await marcasApi(ctx, t.rid)).find((x) => x.tipo === 'cue' && x.num === 0)
+        afirmar(padA, 'antes del último Ctrl+Z tendría que estar el hot cue del pad A del paso (3)')
+        const z6 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z6.status, (z6.data.marcas || []).some((x) => x.id === padA.id)], [200, false],
+          'el último Ctrl+Z no borró el hot cue del pad A (el historial repitió un paso)')
+        await filasComoApi(page, ctx, t.rid, 'después de deshacer el pad A')
+        igual(await nFallas(), fallasAntes, 'deshacer lo que quedó a medias y el paso anterior agregó avisos de falla')
+
+        // (6) REHACER a medias: memory → hot cue, Ctrl+Z (entero), otra pestaña borra la memory
+        // recreada y Ctrl+Y: el hot cue se vuelve a crear (sale) y borrar la memory da 404. Ese
+        // hot cue nuevo no lo crea ningún otro paso: tiene que quedar en el historial, y el
+        // próximo Ctrl+Z lo saca (si se perdiera, el Ctrl+Z iría a la memory borrada: 404).
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        const mem6 = await conTecla(page, ['m'], 'POST')
+        igual(mem6.status, 201, '(6): M no creó la memory')
+        await filasComoApi(page, ctx, t.rid, '(6): con la memory')
+        const cue6p = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const mem6d = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await abrirFila(page, mem6.data.marca.id)
+        await page.select(`.edd-fila[data-id="${mem6.data.marca.id}"] select.edd-tipo`, 'cue')
+        igual([(await cue6p).status(), (await mem6d).status()], [201, 200], '(6): el cambio de tipo no se hizo entero')
+        await filasComoApi(page, ctx, t.rid, '(6): con el hot cue')
+        await page.focus('.edd-onda')
+        const memDeVuelta = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        const cueSeVa = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const memX = await (await memDeVuelta).json()
+        igual((await cueSeVa).status(), 200, '(6): Ctrl+Z no sacó el hot cue')
+        await filasComoApi(page, ctx, t.rid, '(6): después del Ctrl+Z entero')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), '(6): el estado no terminó de guardar')
+        igual((await apiPedir(ctx, `${rutaMarcas(t.rid)}/${memX.marca.id}`, 'DELETE')).status, 200, '(6): la «otra pestaña» no pudo borrar la memory recreada')
+        const escr6 = pedidosDeMarcas(page)
+        const cueOtraVez = page.waitForResponse((r) => r.request().method() === 'POST', { timeout: ESPERA_MS })
+        await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control')
+        const cueY = await (await cueOtraVez).json()
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x === 'Rehecho.', '(6): el Ctrl+Y con la memory ya borrada por otra pestaña no terminó bien')
+        igual(escr6.filter((x) => x.startsWith('DELETE')), [], '(6): Ctrl+Y mandó el borrado de una memory que ya no estaba')
+        await filasComoApi(page, ctx, t.rid, '(6): después del Ctrl+Y a medias')
+        await hasta(estadoTxt, (s) => !s.includes('Guardando'), '(6): el estado no terminó de guardar')
+        const z7 = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual([z7.status, (z7.data.marcas || []).some((x) => x.id === cueY.marca.id)], [200, false],
+          '(6): el Ctrl+Z después del Ctrl+Y a medias no sacó el hot cue que quedó guardado (se perdió del historial)')
+        await filasComoApi(page, ctx, t.rid, '(6): después de deshacer lo que quedó a medias')
       })
     }],
     ['editor D (f54): lo que vuelve tarde con OTRO tema abierto no toca el tema nuevo (ni historial, ni aviso, ni marcas)', async (page, ctx) => {
@@ -5921,6 +6023,258 @@ function casosF54() {
         await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.startsWith('⚠ Ya hay un hot cue'), 'la segunda C (en cola) no avisó que ya hay uno')
         igual(vueltas, [201], 'C C en el mismo lugar tenía que crear UN cue')
         igual((await filasComoApi(page, ctx, t.rid, 'después de C C')).length, 3, 'tienen que quedar 3 hot cues')
+        // C (POST demorado), M (espera su turno) y AvPág: el cue queda en este tema; la memory no
+        // se crea en ninguno de los dos, y el tema nuevo lo dice (antes se perdía en silencio).
+        demorar = 1
+        vueltas.length = 0
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('c')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('m')
+        await page.keyboard.press('PageDown')
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.includes('esperaba su turno no se creó porque pasaste de tema'), 'la memory en cola que se cortó por AvPág no se avisó')
+        await hasta(() => vueltas.length, (n) => n === 1, 'no volvió el POST del cue')
+        await new Promise((r) => setTimeout(r, 300))
+        igual(vueltas, [201], 'tenía que salir solo el POST del cue (la memory en cola no)')
+        const finalA = await marcasApi(ctx, t.rid)
+        igual([finalA.filter((m) => m.tipo === 'cue').length, finalA.filter((m) => m.tipo === 'memory').length], [4, 0], 'en el tema de origen: el cue nuevo sí, la memory no')
+        igual(await marcasApi(ctx, por['Sin grilla'].rid), [], 'el tema nuevo no puede recibir nada')
+      })
+    }],
+
+    ['editor D (f54): hot loop — «El loop va a un pad», el rótulo cuenta los beats con el período de la grilla; «sin pad», borrar y Ctrl+Z lo devuelven como estaba', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        // La grilla de /onda3 con otro período (0,5 s = 120 BPM) que el BPM de la base (128): el
+        // loop se crea con el período de la GRILLA, y el rótulo del pad lo tiene que contar con
+        // el mismo (con 60/128 un loop de 4 beats diría «4.3 beats»). Lo único que cambia.
+        const P = 0.5
+        await interceptar(page, async (req) => {
+          if (!/\/onda3/.test(req.url())) return false
+          const u = new URL(req.url())
+          const d = await (await fetch(ctx.url + u.pathname + u.search)).json()
+          if (d.grilla && d.grilla.primer_beat_s !== null) d.grilla.periodo_s = P
+          await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(d) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.evaluate(() => [...document.querySelectorAll('label.edd-snap')].find((l) => l.textContent.includes('Guardar el loop en un pad')).querySelector('input').click())
+        await page.focus('.edd-onda')
+        // L con «en un pad»: un loop de 4 beats de la grilla en el primer pad libre (A).
+        const lp = await conTecla(page, ['l'], 'POST')
+        igual([lp.status, lp.data.marca.tipo, lp.data.marca.num], [201, 'loop', 0], 'L con «Guardar el loop en un pad» no creó el loop en el pad A')
+        const m = lp.data.marca
+        afirmar(Math.abs((m.fin - m.inicio) - 4 * P) < 0.0015, `el loop no dura 4 beats de la grilla (${4 * P} s): ${json(m)}`)
+        await hasta(() => page.$eval('.edd-pad[data-pad="0"] .edd-pad-nom', (e) => e.textContent).catch(() => null), (v) => v === '⟲ 4 beats',
+          'el pad A no dice «⟲ 4 beats» (los beats contados con el período de la grilla con que se creó)')
+        // «sin pad» desde la lista: el loop sigue, sin pad.
+        const pr = page.waitForResponse((r) => r.request().method() === 'PATCH', { timeout: ESPERA_MS })
+        await abrirFila(page, m.id)
+        await page.select(`.edd-fila[data-id="${m.id}"] select.edd-pad-sel`, '')
+        igual((await pr).status(), 200, '«sin pad» no se guardó')
+        let api_ = await filasComoApi(page, ctx, t.rid, 'después de «sin pad»')
+        igual(api_.map((x) => [x.id, x.tipo, x.num]), [[m.id, 'loop', null]], 'el loop no quedó sin pad')
+        // Borrarlo y Ctrl+Z: vuelve (otro id) como estaba al borrarlo, sin pad.
+        const dr = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${m.id}"] .edd-borrar`)
+        igual((await dr).status(), 200, 'Borrar no borró el loop')
+        await page.focus('.edd-onda')
+        const z1 = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([z1.status, z1.data.marca.tipo, z1.data.marca.num, z1.data.marca.inicio, z1.data.marca.fin], [201, 'loop', null, m.inicio, m.fin], 'Ctrl+Z no volvió a poner el loop como estaba (sin pad)')
+        // Ctrl+Z otra vez: vuelve a su pad, sobre la marca RECREADA (su id nuevo).
+        const z2 = await conTecla(page, ['Control', 'z'], 'PATCH')
+        igual([z2.status, z2.data.marca.id, z2.data.marca.num], [200, z1.data.marca.id, 0], 'el segundo Ctrl+Z no devolvió el loop a su pad A (o fue a otro id)')
+        await filasComoApi(page, ctx, t.rid, 'después de devolverlo a su pad')
+        // Mayús+1 borra el hot loop del pad A; Ctrl+Z lo recrea EN SU PAD.
+        const del = await conTecla(page, ['Shift', 'Digit1'], 'DELETE')
+        igual(del.status, 200, 'Mayús+1 no borró el hot loop del pad A')
+        const z3 = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([z3.status, z3.data.marca.tipo, z3.data.marca.num, z3.data.marca.inicio, z3.data.marca.fin], [201, 'loop', 0, m.inicio, m.fin], 'Ctrl+Z no recreó el hot loop en su pad A')
+        api_ = await filasComoApi(page, ctx, t.rid, 'después de recrear el hot loop')
+        igual(api_.map((x) => [x.tipo, x.num]), [['loop', 0]], 'tendría que quedar solo el hot loop del pad A')
+        await hasta(() => page.$eval('.edd-pad[data-pad="0"] .edd-pad-nom', (e) => e.textContent).catch(() => null), (v) => v === '⟲ 4 beats',
+          'el pad A recreado no dice «⟲ 4 beats»')
+      })
+    }],
+
+    ['editor D (f54): al pasar de tema, ni el historial ni el ajuste del anterior llegan al nuevo (Ctrl+Z y G en el render del cambio; una respuesta que llega tarde)', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const A = por['Con grilla']
+        const B = por['Sin grilla']
+        const clave = (rid) => `musiflix.editorD.grilla.${rid}`
+        const pedidos = pedidosDeMarcas(page)
+        const temaCargado = (que) => hasta(() => page.evaluate(() => ({
+          grilla: document.querySelector('.edd-grilla-estado')?.textContent ?? '',
+          estado: document.querySelector('.edd-estado')?.textContent ?? '',
+        })), (v) => v.grilla && !v.grilla.includes('Leyendo') && v.estado.trim() !== '' && !v.estado.includes('Guardando'), `${que}: el tema no terminó de cargar`, 20000)
+        const botonesHistorial = () => page.$$eval('.edd-marcar button[aria-keyshortcuts="Control+Z"], .edd-marcar button[aria-keyshortcuts="Control+Y"]', (bs) => bs.map((b) => b.disabled))
+
+        // (1) En A: una memory y su borrado. Un Ctrl+Z con el historial de A la vuelve a CREAR.
+        await abrirEditorD(page, ctx, A.item.titulo)
+        await page.focus('.edd-onda')
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual(mem.status, 201, 'M no creó la memory en A')
+        const dr = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${mem.data.marca.id}"] .edd-borrar`)
+        igual((await dr).status(), 200, 'no se borró la memory de A')
+        await filasComoApi(page, ctx, A.rid, 'A sin marcas')
+        await page.evaluate((k) => localStorage.removeItem(k), clave(B.rid))
+        pedidos.length = 0
+        // AvPág y, apenas React pinta el tema nuevo (título de B) y ANTES del efecto que vacía
+        // historial, ajuste y onda, Ctrl+Z y G: en el mismo turno de JS, sin esperar nada.
+        const vista = await page.evaluate(async (tituloB) => {
+          const onda = document.querySelector('.edd-onda')
+          const tecla = (key, extra = {}) => onda.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }))
+          tecla('PageDown', { code: 'PageDown' })
+          for (let i = 0; i < 10 && !(document.querySelector('#edd-titulo')?.textContent || '').startsWith(tituloB); i++) await Promise.resolve()
+          const v = {
+            titulo: document.querySelector('#edd-titulo')?.textContent ?? null,
+            leyendo: Boolean(document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')),
+            grilla: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
+            botonesGrilla: [...document.querySelectorAll('.edd-grilla-btns button')].map((b) => b.disabled),
+          }
+          tecla('z', { code: 'KeyZ', ctrlKey: true })
+          tecla('g', { code: 'KeyG' })
+          return v
+        }, B.item.titulo)
+        // Se llega al render del cambio con el título de B. Puede ser con la grilla de A todavía (el
+        // efecto que la vacía corre después) o ya vaciada («Leyendo el audio…»: con React 18 la
+        // tecla vacía el estado en el mismo turno). En los dos, lo de abajo verifica que Ctrl+Z y
+        // G no mandaron nada ni guardaron el ajuste de A bajo la clave de B.
+        afirmar((vista.titulo || '').startsWith(B.item.titulo), `no se llegó al render del cambio de tema: ${json(vista)}`)
+        if (!vista.leyendo) {
+          afirmar((vista.grilla || '').startsWith('estimada'), `render del cambio sin la grilla de A: ${json(vista)}`)
+          // Sin los datos del tema nuevo, los botones de la grilla (que no harían nada) se ven deshabilitados.
+          afirmar(vista.botonesGrilla.length > 0 && vista.botonesGrilla.every(Boolean), `en el render del cambio de tema los botones de la grilla no están deshabilitados: ${json(vista.botonesGrilla)}`)
+        }
+        await temaCargado('B')
+        await new Promise((r) => setTimeout(r, 300))
+        igual(pedidos, [], 'Ctrl+Z en el render del cambio de tema mandó una escritura con el historial del tema anterior')
+        igual(await marcasApi(ctx, B.rid), [], 'el tema nuevo recibió una marca del historial del anterior')
+        igual(await page.evaluate((k) => localStorage.getItem(k), clave(B.rid)), null, 'G en el render del cambio guardó el ajuste del tema anterior bajo la clave del nuevo')
+        igual(await botonesHistorial(), [true, true], 'el tema nuevo arrancó con historial')
+
+        // (2) De vuelta en A, una memory nueva; Ctrl+Z (que la borra) y AvPág en el mismo turno, con
+        // la respuesta del DELETE demorada: llega con B abierto y no puede tocar su historial.
+        await pasarTema(page, 'PageUp')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(A.item.titulo), 'RePág no volvió a A')
+        await esperarOnda(page, 'A', true)
+        await temaCargado('A')
+        await page.focus('.edd-onda')
+        const mem2 = await conTecla(page, ['m'], 'POST')
+        igual(mem2.status, 201, 'M no creó la segunda memory en A')
+        await filasComoApi(page, ctx, A.rid, 'A con la segunda memory')
+        // Una sola intercepción para todo el caso: demora 1,5 s los pedidos de marcas del método
+        // que diga `demora.metodo` (null = ninguno).
+        const demora = { metodo: 'DELETE' }
+        await interceptar(page, async (req) => {
+          if (demora.metodo && req.method() === demora.metodo && /\/marcas/.test(new URL(req.url()).pathname)) await new Promise((r) => setTimeout(r, 1500))
+          return false
+        })
+        const tecleado = (teclas) => page.evaluate((ts) => {
+          const onda = document.querySelector('.edd-onda')
+          for (const [key, extra] of ts) onda.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...extra }))
+        }, teclas)
+        // Espera la respuesta demorada de A con B ya cargado (si llegara antes, el caso no
+        // probaría nada) y revisa que B no se enteró: sin historial, sin «✓ Guardado», sin marcas.
+        const respuestaTardia = async (metodo, que) => {
+          let llego = false
+          const tarde = page.waitForResponse((r) => r.request().method() === metodo && /\/marcas/.test(new URL(r.url()).pathname), { timeout: ESPERA_MS })
+          tarde.then(() => { llego = true }, () => {})
+          return async () => {
+            await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(B.item.titulo), `${que}: AvPág no pasó a B`)
+            await temaCargado(`${que}: B`)
+            afirmar(!llego, `${que}: la respuesta de A llegó antes de que B terminara de cargar: el caso no probaría nada`)
+            const r = await tarde
+            await new Promise((ok) => setTimeout(ok, 400))
+            igual(await botonesHistorial(), [true, true], `${que}: la respuesta tardía de A le registró un paso a B (Deshacer/Rehacer habilitado en B)`)
+            const est = await page.$eval('.edd-estado', (e) => e.textContent)
+            afirmar(!est.includes('Guardado'), `${que}: B dice «Guardado» por una escritura de A: ${json(est)}`)
+            igual(await marcasApi(ctx, B.rid), [], `${que}: B recibió marcas`)
+            return r
+          }
+        }
+        const volverA = async (que) => {
+          await pasarTema(page, 'PageUp')
+          await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent), (v) => v.startsWith(A.item.titulo), `${que}: RePág no volvió a A`)
+          await esperarOnda(page, `${que}: A`, true)
+          await temaCargado(`${que}: A`)
+        }
+        const enB2 = await respuestaTardia('DELETE', 'Ctrl+Z')
+        await tecleado([['z', { code: 'KeyZ', ctrlKey: true }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB2()).status(), 200, 'el DELETE del Ctrl+Z de A no se hizo')
+        afirmar(!(await page.$eval('.edd-aviso', (e) => e.textContent)).includes('Deshecho'), 'B dice «Deshecho.» por un Ctrl+Z del tema anterior')
+
+        // (3) Una acción DIRECTA en A (M) y AvPág, con el POST demorado: la memory se crea en A
+        // (su tema) y B no registra el paso, ni dice «✓ Guardado», ni recibe la marca.
+        demora.metodo = null
+        await volverA('(3)')
+        demora.metodo = 'POST'
+        const enB3 = await respuestaTardia('POST', 'M')
+        await tecleado([['m', { code: 'KeyM' }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB3()).status(), 201, 'el POST de la M de A no se hizo')
+        demora.metodo = null
+        const enA3 = await marcasApi(ctx, A.rid)
+        igual(enA3.map((x) => x.tipo), ['memory'], 'la memory de la M tenía que quedar en A (su tema)')
+
+        // (4) Cambiar el tipo en A (memory → hot cue: crear el cue y RECIÉN después borrar la
+        // memory) y AvPág, con el POST demorado: el cambio se completa contra A aunque llegue con
+        // B abierto. En A queda UNA marca (la nueva), no memory + hot cue en el mismo tiempo.
+        await volverA('(4)')
+        await filasComoApi(page, ctx, A.rid, '(4): A con la memory')
+        demora.metodo = 'POST'
+        const enB4 = await respuestaTardia('POST', 'cambio de tipo')
+        await abrirFila(page, enA3[0].id)
+        await page.select(`.edd-fila[data-id="${enA3[0].id}"] select.edd-tipo`, 'cue')
+        await tecleado([['PageDown', { code: 'PageDown' }]])
+        igual((await enB4()).status(), 201, 'el POST del cambio de tipo de A no se hizo')
+        demora.metodo = null
+        await hasta(() => marcasApi(ctx, A.rid), (ms) => ms.length === 1 && ms[0].tipo === 'cue' && ms[0].inicio === enA3[0].inicio,
+          'el cambio de tipo interrumpido por AvPág no se completó en A (tenía que quedar solo el hot cue nuevo)')
+        await volverA('(4) vuelta')
+        const finalA = await filasComoApi(page, ctx, A.rid, '(4): la lista de A después del cambio de tipo')
+        igual(finalA.map((x) => x.tipo), ['cue'], 'A no muestra una sola marca (la nueva)')
+
+        // (5) Lo mismo con un Ctrl+Z de un cambio de tipo (un grupo: crear la vieja + borrar la
+        // nueva) interrumpido por AvPág: las dos sub-operaciones se completan contra A.
+        const borraCue = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await abrirFila(page, finalA[0].id)
+        await page.select(`.edd-fila[data-id="${finalA[0].id}"] select.edd-tipo`, 'memory')
+        igual((await borraCue).status(), 200, '(5): pasar el hot cue a memory no borró el cue')
+        const conMemory = await filasComoApi(page, ctx, A.rid, '(5): A con la memory')
+        igual(conMemory.map((x) => x.tipo), ['memory'], '(5): A tendría que tener solo la memory')
+        await hasta(() => page.$eval('.edd-estado', (e) => e.textContent), (s) => !s.includes('Guardando'), '(5): el estado no terminó de guardar')
+        demora.metodo = 'POST'
+        const enB5 = await respuestaTardia('POST', 'Ctrl+Z del cambio de tipo')
+        await tecleado([['z', { code: 'KeyZ', ctrlKey: true }], ['PageDown', { code: 'PageDown' }]])
+        igual((await enB5()).status(), 201, 'el POST del Ctrl+Z del cambio de tipo no se hizo')
+        demora.metodo = null
+        await hasta(() => marcasApi(ctx, A.rid), (ms) => ms.length === 1 && ms[0].tipo === 'cue' && ms[0].inicio === conMemory[0].inicio,
+          'el Ctrl+Z del cambio de tipo interrumpido por AvPág no se completó en A (tenía que quedar solo el hot cue recreado)')
+        // (6) Igual que (5) pero AvPág cuando el POST del grupo YA salió (después de la relectura
+        // previa al deshacer): la respuesta vuelve con B abierto y el borrado que falta se
+        // termina contra A (sin esto quedaban memory + hot cue en el mismo tiempo).
+        await volverA('(6)')
+        const conCue = await filasComoApi(page, ctx, A.rid, '(6): A con el hot cue')
+        await abrirFila(page, conCue[0].id)
+        const borra6 = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.select(`.edd-fila[data-id="${conCue[0].id}"] select.edd-tipo`, 'memory')
+        igual((await borra6).status(), 200, '(6): pasar el hot cue a memory no borró el cue')
+        await filasComoApi(page, ctx, A.rid, '(6): A con la memory')
+        await hasta(() => page.$eval('.edd-estado', (e) => e.textContent), (s) => !s.includes('Guardando'), '(6): el estado no terminó de guardar')
+        demora.metodo = 'POST'
+        const enB6 = await respuestaTardia('POST', '(6) Ctrl+Z con el POST ya en camino')
+        const salio = page.waitForRequest((r) => r.method() === 'POST' && /\/marcas$/.test(new URL(r.url()).pathname), { timeout: ESPERA_MS })
+        await tecleado([['z', { code: 'KeyZ', ctrlKey: true }]])
+        await salio
+        await tecleado([['PageDown', { code: 'PageDown' }]])
+        igual((await enB6()).status(), 201, '(6): el POST del Ctrl+Z no se hizo')
+        demora.metodo = null
+        await hasta(() => marcasApi(ctx, A.rid), (ms) => ms.length === 1 && ms[0].tipo === 'cue',
+          '(6): el grupo cortado a la mitad por AvPág no se completó en A (tenía que quedar solo el hot cue recreado, sin la memory)')
+        igual(await marcasApi(ctx, B.rid), [], '(6): B no puede recibir nada')
       })
     }],
   ]
