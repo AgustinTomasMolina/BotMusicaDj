@@ -4107,13 +4107,15 @@ function casosF53() {
         await abrirEnRail(page, 'Set')
         const mApi = (await itemsApi(ctx, pid)).find((i) => i.titulo === 'Kick Uno').analisis.marcas
         igual([mApi.pads.length, mApi.memory, mApi.loop], [2, 0, 1], 'la API no cuenta las marcas creadas')
+        // f62: la vista previa de la onda dice en su nombre cuántas de cada tipo y dibuja las 3
+        // (decorativas, aria-hidden); los puntos viejos ya no están.
         const marcasFila = await hasta(() => page.evaluate(() => {
           const r = [...document.querySelectorAll('.results-crate .trk')].find((x) => x.querySelector('.trk-title')?.textContent === 'Kick Uno')
-          const p = r?.querySelector('.cue-puntos')
-          return p ? { txt: p.querySelector('.cue-puntos-txt')?.textContent ?? null, puntos: p.querySelectorAll('i').length,
-            puntosOcultos: [...p.querySelectorAll('i')].every((i) => i.closest('[aria-hidden="true"]')) } : null
-        }), (v) => v, 'la fila de Kick Uno no muestra sus marcas')
-        igual(marcasFila, { txt: '2 hot cues, 1 loop', puntos: 3, puntosOcultos: true }, 'las marcas no dicen en texto cuántas de cada tipo')
+          const p = r?.querySelector('.pv')
+          return p ? { txt: p.getAttribute('aria-label'), puntos: p.querySelectorAll('.pv-mk').length,
+            puntosOcultos: [...p.querySelectorAll('.pv-mk')].every((i) => i.closest('[aria-hidden="true"]')), viejos: r.querySelectorAll('.cue-puntos').length } : null
+        }), (v) => v && v.puntos === 3, 'la fila de Kick Uno no muestra sus marcas')
+        igual(marcasFila, { txt: 'Marcar cues de «Kick Uno» (2 hot cues, 1 loop)', puntos: 3, puntosOcultos: true, viejos: 0 }, 'las marcas no dicen en texto cuántas de cada tipo')
         await limpiarMarcas(ctx, uno.analisis.radio_id)
 
         // Sin género en los tags: no se inventa; se pone a todos con el formulario.
@@ -4306,17 +4308,45 @@ function casosF54() {
     leyendo: window.__eddLeyendo === true,
   })), (v) => !v.msg && v.estado && !v.estado.includes('Leyendo') && (!trasCambio || v.leyendo),
   `${que}: la onda no terminó de cargar`, 20000)
-  // Abre el editor desde el botón «Cues» de la fila del tema (el visible).
+  // Abre el editor desde la fila del tema (f62: la vista previa de la onda, cuyo nombre es
+  // «Marcar cues de «tema»» seguido del resumen de sus marcas entre paréntesis).
   const abrirEditorD = async (page, ctx, titulo) => {
     await abrirPlaylist(page, ctx)
     const etiqueta = `Marcar cues de «${titulo}»`
-    await hasta(() => page.evaluate((l) => [...document.querySelectorAll('button')].some((b) => b.getAttribute('aria-label') === l && window.__visible(b)), etiqueta),
+    const boton = (l) => [...document.querySelectorAll('button')].find((b) => {
+      const a = b.getAttribute('aria-label') || ''
+      return (a === l || a.startsWith(`${l} (`)) && window.__visible(b)
+    })
+    await hasta(() => page.evaluate((l, f) => Boolean(new Function(`return ${f}`)()(l)), etiqueta, boton.toString()),
       (v) => v, `no está el botón «${etiqueta}»`)
-    await page.evaluate((l) => [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === l && window.__visible(b)).click(), etiqueta)
+    await page.evaluate((l, f) => new Function(`return ${f}`)()(l).click(), etiqueta, boton.toString())
     await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
     await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent).catch(() => null), (v) => v && v.startsWith(titulo), `el editor no abrió «${titulo}»`)
     await esperarOnda(page, titulo)
   }
+  // f62: lo que muestra la vista previa de la fila del tema `rid` (posiciones en % de la caja,
+  // medidas en pantalla, y los colores pintados), y los --cue-* de :root resueltos por el navegador.
+  const leerPreview = (page, rid) => page.evaluate((id) => {
+    const b = document.querySelector(`.pv[data-pv="${id}"]`)
+    if (!b) return null
+    const caja = b.querySelector('.pv-caja').getBoundingClientRect()
+    const color = (v) => { const e = document.createElement('i'); e.style.color = `var(${v})`; document.body.appendChild(e); const c = getComputedStyle(e).color; e.remove(); return c }
+    const s = b.querySelector('svg.pv-onda')
+    const graves = s ? [...(s.querySelector('.pv-graves')?.getAttribute('d') ?? '').matchAll(/M(\d+) /g)].map((m) => Number(m[1])) : []
+    return {
+      fase: (b.className.match(/\bis-(\w+)/) || [])[1] ?? null, tag: b.tagName, tabIndex: b.tabIndex,
+      label: b.getAttribute('aria-label'), title: b.getAttribute('title') ?? '', texto: b.querySelector('.pv-txt')?.textContent ?? null,
+      dots: b.closest('.trk').querySelectorAll('.cue-puntos').length,
+      svg: s ? { vb: s.getAttribute('viewBox'), ancho: s.getBoundingClientRect().width / caja.width, graves } : null,
+      marcas: [...b.querySelectorAll('.pv-mk')].map((m) => {
+        const r = m.getBoundingClientRect()
+        const cs = getComputedStyle(m)
+        return { id: Number(m.dataset.id), tipo: m.dataset.tipo, x: ((r.left - caja.left) / caja.width) * 100, w: (r.width / caja.width) * 100,
+          centro: (((r.left + r.right) / 2 - caja.left) / caja.width) * 100, fondo: cs.backgroundColor, arriba: cs.borderTopColor, izq: cs.borderLeftColor }
+      }),
+      colores: { cues: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => color(`--cue-${n}`)), mem: color('--cue-mem'), loop: color('--cue-loop') },
+    }
+  }, rid)
   const onda3Api = async (ctx, rid) => (await apiPedir(ctx, `/api/radio/tracks/${rid}/onda3?puntos=10`)).data
   const leerOnda = (page) => page.evaluate(() => {
     const o = document.querySelector('.edd-onda')
@@ -4414,6 +4444,184 @@ function casosF54() {
   }, tiempos)
 
   return [
+    /* f62: la vista previa de la onda en cada fila de Mis playlists. Lo esperado sale de la API
+       (/marcas: tiempos, tipo y pad; track.dur: el eje; /preview: las bandas) y de los colores
+       --cue-* de la tabla única (los lee el navegador de :root, no del código del front). */
+    ['preview (f62): la onda de cada fila con las marcas de la API en su lugar y con SU color; Enter la abre en el editor D y el foco vuelve', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const crear = [{ tipo: 'cue', inicio: 10, num: 0 }, { tipo: 'cue', inicio: 40.5, num: 2 }, { tipo: 'cue', inicio: 85, num: 7 },
+          { tipo: 'memory', inicio: 60 }, { tipo: 'loop', inicio: 20, fin: 30, num: 4 }, { tipo: 'loop', inicio: 70, fin: 75.25 }]
+        for (const m of crear) {
+          const r = await apiPedir(ctx, rutaMarcas(t.rid), 'POST', m)
+          afirmar(r.status === 201, `no pude crear la marca ${json(m)}: ${json(r)}`)
+        }
+        const mApi = (await apiPedir(ctx, rutaMarcas(t.rid))).data
+        const dur = mApi.track.dur
+        const prev = await apiPedir(ctx, `/api/radio/tracks/${t.rid}/preview?puntos=160`)
+        afirmar(prev.status === 200 && prev.data.bandas, `/preview no contestó la onda: ${json(prev)}`)
+        await abrirPlaylist(page, ctx)
+        const v = await hasta(() => leerPreview(page, t.rid), (x) => x && x.fase === 'ok' && x.marcas.length === crear.length,
+          'la vista previa de «Con grilla» no dibujó la onda con sus marcas')
+        // Botón enfocable, con nombre que dice qué abre y cuántas de cada una (contrato de la playlist).
+        igual([v.tag, v.tabIndex, v.label], ['BUTTON', 0, `Marcar cues de «${t.item.titulo}» (3 hot cues, 1 memory, 2 loops)`],
+          'la vista previa no es un botón enfocable con el resumen de las marcas')
+        igual(v.dots, 0, 'quedaron los puntos viejos de «● N hot cue» en la fila')
+        // Cada marca en su lugar (eje = track.dur de la API) y con su color.
+        const pct = (s) => (s / dur) * 100
+        const TOL = 0.4      // % del ancho de 140 px ≈ 0,56 px
+        for (const m of mApi.marcas) {
+          const p = v.marcas.find((x) => x.id === m.id)
+          afirmar(p, `la marca ${m.id} (${m.tipo} en ${m.inicio}) no está en la vista previa`)
+          igual(p.tipo, m.tipo, `la marca ${m.id} se dibuja como ${p.tipo}`)
+          if (m.tipo === 'cue') {
+            afirmar(Math.abs(p.centro - pct(m.inicio)) < TOL, `el hot cue ${m.num + 1} está en ${p.centro}% y le toca ${pct(m.inicio)}%`)
+            igual(p.fondo, v.colores.cues[m.num], `el hot cue del pad ${m.num + 1} no tiene el color de su pad (--cue-${m.num + 1})`)
+          } else if (m.tipo === 'memory') {
+            afirmar(Math.abs(p.x - pct(m.inicio)) < TOL, `la memory está en ${p.x}% y le toca ${pct(m.inicio)}%`)
+            igual(p.izq, v.colores.mem, 'la memory no tiene el color neutro (--cue-mem)')
+          } else {
+            afirmar(Math.abs(p.x - pct(m.inicio)) < TOL && Math.abs(p.w - (pct(m.fin) - pct(m.inicio))) < TOL,
+              `el loop ${m.inicio}→${m.fin} ocupa ${p.x}% + ${p.w}% y le toca ${pct(m.inicio)}% + ${pct(m.fin) - pct(m.inicio)}%`)
+            igual(p.arriba, v.colores.loop, `el loop${Number.isInteger(m.num) ? ` del pad ${m.num + 1}` : ''} no es naranja (--cue-loop)`)
+          }
+        }
+        afirmar(new Set(v.marcas.filter((m) => m.tipo === 'cue').map((m) => m.fondo)).size === 3, `los tres hot cues tienen que tener tres colores distintos: ${json(v.marcas)}`)
+        // La onda: los puntos de /preview, en el tramo del audio sobre el eje de la biblioteca.
+        afirmar(v.svg && v.svg.vb === `0 0 ${prev.data.puntos} 24`, `la onda no tiene los ${prev.data.puntos} puntos de /preview: ${json(v.svg)}`)
+        afirmar(Math.abs(v.svg.ancho - Math.min(1, prev.data.duracion_audio / dur)) < 0.01, `la onda ocupa ${v.svg.ancho} del ancho y el audio dura ${prev.data.duracion_audio} de ${dur} s`)
+        const g = prev.data.bandas.graves
+        const sinGraves = g.map((x, i) => (x === 0 ? i : -1)).filter((i) => i >= 0)
+        const fuertes = g.map((x, i) => (x >= 0.25 ? i : -1)).filter((i) => i >= 0)
+        afirmar(fuertes.length > 0, 'el tema generado no tiene graves en /preview')
+        afirmar(fuertes.every((i) => v.svg.graves.includes(i)), 'hay columnas con graves fuertes en /preview sin barra en la vista previa')
+        afirmar(sinGraves.every((i) => !v.svg.graves.includes(i)), 'hay barras de graves donde /preview dice 0 (onda inventada)')
+        // Teclado: foco + Enter abre el editor D en ESTE tema; Esc devuelve el foco a la vista previa.
+        await page.evaluate((rid) => document.querySelector(`.pv[data-pv="${rid}"]`).focus(), t.rid)
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent).catch(() => null), (x) => x && x.startsWith(t.item.titulo), 'Enter en la vista previa no abrió el editor D de «Con grilla»')
+        await esperarOnda(page, t.item.titulo)
+        await cerrarEditorD(page)
+        await hasta(() => page.evaluate(() => document.activeElement?.dataset?.pv ?? null), (x) => x === t.rid, 'al cerrar, el foco no volvió a la vista previa')
+      })
+    }],
+
+    ['preview (f62): lo que se marca en el editor D llega a la vista previa al cerrar, y también lo que se guarda DESPUÉS de cerrar', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Sin grilla']
+        const pedidosMarcas = []
+        let demorar = false
+        await interceptar(page, async (req) => {
+          const ruta = new URL(req.url()).pathname === rutaMarcas(t.rid)
+          if (ruta && req.method() === 'GET') pedidosMarcas.push(Date.now())
+          if (!demorar || req.method() !== 'POST' || !ruta) return false
+          demorar = false
+          // Vuelve DESPUÉS de la relectura que hace la playlist al cerrar el editor.
+          await new Promise((res) => setTimeout(res, 2000))
+          await req.continue()
+          return true
+        })
+        await abrirPlaylist(page, ctx)
+        await hasta(() => leerPreview(page, t.rid), (x) => x && x.fase === 'ok' && x.marcas.length === 0, 'la vista previa de «Sin grilla» no cargó (sin marcas)')
+        // Clic (mouse) en la vista previa: abre ESE tema.
+        await page.click(`.pv[data-pv="${t.rid}"]`)
+        await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent).catch(() => null), (x) => x && x.startsWith(t.item.titulo), 'el clic no abrió el editor D de «Sin grilla»')
+        await esperarOnda(page, t.item.titulo)
+        await page.focus('.edd-onda')
+        const r1 = await teclaQueGuarda(page, '1')
+        igual(r1.status, 201, 'el hot cue A no se guardó')
+        await cerrarEditorD(page)
+        const comoApi = async (n) => {
+          const m = await marcasApi(ctx, t.rid)
+          return hasta(() => leerPreview(page, t.rid), (x) => x && x.fase === 'ok' && m.length === n && x.marcas.length === n
+            && m.every((a) => x.marcas.some((p) => p.id === a.id)), `la vista previa no muestra las ${n} marcas de la API (${json(m.map((a) => a.id))})`)
+        }
+        let v = await comoApi(1)
+        igual([v.label, v.marcas[0].fondo], [`Marcar cues de «${t.item.titulo}» (1 hot cue)`, v.colores.cues[0]], 'el hot cue nuevo no está con el color del pad A')
+        // Tarde: el POST vuelve 2 s después de cerrar; la relectura del cierre no lo ve.
+        await page.click(`.pv[data-pv="${t.rid}"]`)
+        await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+        await esperarOnda(page, 'Sin grilla (2)')
+        await page.focus('.edd-onda')
+        demorar = true
+        const post = page.waitForResponse((x) => x.request().method() === 'POST' && new URL(x.url()).pathname === rutaMarcas(t.rid), { timeout: ESPERA_MS })
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('2')
+        await page.keyboard.press('Escape')
+        await hasta(() => page.$('.edd'), (x) => !x, 'Esc tenía que cerrar (la escritura todavía no volvió)')
+        const antes = pedidosMarcas.length
+        igual((await post).status(), 201, 'el POST demorado tenía que guardarse')
+        v = await comoApi(2)
+        afirmar(pedidosMarcas.length > antes, 'la vista previa no volvió a leer las marcas cuando el cambio tardío se confirmó')
+        igual(v.label, `Marcar cues de «${t.item.titulo}» (2 hot cues)`, 'el resumen no cuenta el hot cue que se guardó tarde')
+      })
+    }],
+
+    ['preview (f62): solo se piden las filas a la vista; sin archivo no hay onda inventada; una onda que no se lee lo dice', async (page, ctx) => {
+      await conEditor(ctx, async ({ pid, por }) => {
+        const pedidos = []     // `${tipo} ${rid}` de /preview y /marcas, en orden
+        const sinArchivo = por['Sin BPM']
+        const roto = por['Sin grilla']
+        await interceptar(page, async (req) => {
+          const u = new URL(req.url())
+          const m = /^\/api\/radio\/tracks\/([0-9a-f]{16})\/(preview|marcas)$/.exec(u.pathname)
+          if (m && req.method() === 'GET') {
+            pedidos.push(`${m[2]} ${m[1]}`)
+            if (m[2] === 'preview' && m[1] === roto.rid) {
+              await req.respond({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'no pude leer el audio para dibujar la onda: prueba' }) })
+              return true
+            }
+          }
+          // La playlist como la manda la API, con un tema que dice «no encuentro el archivo».
+          if (u.pathname === `/api/playlists/${pid}` && req.method() === 'GET') {
+            const r = await apiPedir(ctx, u.pathname)
+            for (const it of r.data.data.items) if (it.analisis?.radio_id === sinArchivo.rid) it.archivo_estado = 'no-encontrado'
+            await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(r.data) })
+            return true
+          }
+          return false
+        })
+        await page.setViewport({ width: 1440, height: 420 })
+        await abrirPlaylist(page, ctx)
+        await page.evaluate(() => window.scrollTo(0, 0))
+        const filas = () => page.evaluate(() => [...document.querySelectorAll('.results-crate .trk')].map((r) => {
+          const p = r.querySelector('.pv, .pv-vacio')
+          const b = p.getBoundingClientRect()
+          return { titulo: r.querySelector('.trk-title').textContent, rid: p.dataset.pv ?? null, visible: b.bottom > 0 && b.top < innerHeight,
+            vacia: p.classList.contains('pv-vacio') ? p.textContent : null, onda: Boolean(p.querySelector('svg')) }
+        }))
+        // Una vuelta de red: lo que se fuera a pedir ya salió.
+        const f0 = await hasta(filas, (f) => f.length === 3, 'la playlist no muestra sus 3 temas')
+        await page.evaluate(() => fetch('/api/playlists').then((r) => r.text()))
+        const fuera = f0.filter((f) => !f.visible && f.rid)
+        afirmar(fuera.length > 0, `todas las filas están a la vista: el caso no probaría la carga perezosa (${json(f0)})`)
+        igual(pedidos.filter((p) => fuera.some((f) => p.endsWith(f.rid))), [], 'se pidió la onda o las marcas de filas que no están a la vista')
+        // Sin archivo: el lugar lo dice y no se pide nada de ese tema.
+        const sa = f0.find((f) => f.titulo === sinArchivo.item.titulo)
+        igual([sa.vacia, sa.onda, sa.rid], ['sin archivo', false, null], 'el tema sin archivo tiene que decir «sin archivo», sin onda')
+        // De a una: cada fila que entra en pantalla pide SU onda y SUS marcas, una vez.
+        for (const f of f0.filter((x) => x.rid)) {
+          await page.evaluate((rid) => document.querySelector(`.pv[data-pv="${rid}"]`).scrollIntoView({ block: 'center' }), f.rid)
+          await hasta(async () => pedidos.filter((p) => p.endsWith(f.rid)).sort(), (p) => json(p) === json([`marcas ${f.rid}`, `preview ${f.rid}`]),
+            `«${f.titulo}» entró en pantalla y no pidió su onda y sus marcas (una vez cada una)`)
+        }
+        igual(pedidos.filter((p) => p.endsWith(sinArchivo.rid)), [], 'se pidió la onda del tema sin archivo')
+        // La onda que no se lee: «sin onda» con el motivo, y nada dibujado.
+        const r = await hasta(() => leerPreview(page, roto.rid), (x) => x && x.fase === 'error', 'la vista previa con /preview en 422 no dijo nada')
+        afirmar(r.texto === 'sin onda' && r.title.includes('no pude leer el audio para dibujar la onda: prueba') && !r.svg,
+          `la onda que no se lee tiene que decir «sin onda» con el motivo, sin dibujo: ${json(r)}`)
+        // Volver a pasar por una fila ya cargada no la vuelve a pedir.
+        const n = pedidos.length
+        await page.evaluate(() => window.scrollTo(0, 0))
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        await page.evaluate(() => fetch('/api/playlists').then((x) => x.text()))
+        igual(pedidos.length, n, 'una fila ya cargada volvió a pedir su onda o sus marcas')
+      })
+    }],
+
     ['editor D (f54): desde la playlist, BPM/key de la API, onda de 3 bandas con el kick en los graves, grilla de la API y zoom → rango', async (page, ctx) => {
       await conEditor(ctx, async ({ por }) => {
         const t = por['Con grilla']
