@@ -547,6 +547,28 @@ export function beatsLoop(entrada, salida, periodo) {
 
 // ---------------------------------------------------------------- pedidos del dueño (f54)
 
+// La X para quitar una marca mal puesta (pedido del dueño): el nombre accesible del botón y el
+// aviso después de quitarla. «Quitar hot cue A en 0:59.576», «Quitar loop 0:59.576 a 1:01.231»,
+// «Quitar memory cue en 0:05.000»; con nombre, entre comillas; un hot loop dice su pad.
+function queEs(m) {
+  const nom = typeof m.nombre === 'string' && m.nombre.trim() ? ` «${m.nombre.trim()}»` : ''
+  if (m.tipo === 'cue') return { art: 'el', txt: `hot cue ${letraPad(m.num)}${nom}`, cuando: fmtTiempo(m.inicio) }
+  if (m.tipo === 'memory') return { art: 'la', txt: `memory cue${nom}`, cuando: fmtTiempo(m.inicio) }
+  return { art: 'el', txt: `loop${letraPad(m.num) ? ` del pad ${letraPad(m.num)}` : ''}${nom}`, cuando: `${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}` }
+}
+export function etiquetaQuitar(m) {
+  const q = queEs(m)
+  return `Quitar ${q.txt}${m.tipo === 'loop' ? ' ' : ' en '}${q.cuando}`
+}
+export function avisoQuitado(m) {
+  const q = queEs(m)
+  return `Quité ${q.art} ${q.txt} (${q.cuando}). Ctrl+Z lo vuelve a poner.`
+}
+export function avisoNoQuitado(m) {
+  const q = queEs(m)
+  return `⚠ No pude quitar ${q.art} ${q.txt} (${q.cuando}): no se guardó (el motivo está en el aviso).`
+}
+
 // Tolerancia para «ya hay una marca ahí»: ±50 ms (apretar C diez veces llenaba los 8 pads con
 // cues en el MISMO tiempo).
 export const TOLERANCIA_MARCA_S = 0.05

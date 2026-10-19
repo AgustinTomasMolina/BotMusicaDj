@@ -7,7 +7,7 @@ import {
   anchoZoom, ventana, tiempoDeXV, tramoPedido, alcanza, columnas,
   historialVacio, registrar, deshacer, rehacer, reemplazarId, opConId, cuerpoCrear, diferencia, clasificarFalla, yaHecha,
   contarIguales, cerrarPaso, marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda,
-  agruparIguales, repetidas, grillaAnclada, rescatarHechas,
+  agruparIguales, repetidas, grillaAnclada, rescatarHechas, etiquetaQuitar, avisoQuitado, avisoNoQuitado,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, temaVigente, beatsLoop,
 } from '../editorD'
 import { usePlayer } from '../player/context'
@@ -148,6 +148,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const [confirmaRep, setConfirmaRep] = useState(false) // «Borrar repetidos» pidiendo confirmación
   const [noGuarda, setNoGuarda] = useState(false)       // este navegador no deja guardar el ajuste
   const [, setPulso] = useState(0)                      // re-render para correr la cola de Ctrl+Z
+  const quitando = useRef(new Set())                    // ids con un DELETE en vuelo (ver borrar)
+  // Pantalla táctil: la X de las banderas se ve siempre (no hay hover) y ocupa su lugar.
+  const [tactil] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia) && window.matchMedia('(hover: none)').matches)
   const [loopBeats, setLoopBeats] = useState(4)
   const [loopPad, setLoopPad] = useState(false)
   const [arrastre, setArrastre] = useState(null)    // {id, borde, t}
@@ -647,13 +650,27 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     hecho({ tipo: 'cambiar', id: m.id, antes, despues }, r)
     return r.data
   }
+  // Quitar una marca: lo usan Mayús + clic / Mayús + número, la X del pad, la de la bandera y la
+  // de la lista (el mismo camino: historial, reconciliación, Ctrl+Z la vuelve a poner igual).
+  // Una marca que ya se está quitando no se vuelve a pedir: un hot loop tiene X en su pad Y en
+  // su bandera, y dos clics seguidos no pueden mandar dos DELETE.
   const borrar = async (m) => {
-    const iguales = contarIguales(m, marcas)
-    const r = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
-    if (!r.ok) return null
-    hecho({ tipo: 'borrar', marca: m, iguales }, r)
-    setAviso(`Borraste ${nombreD(m)}. Ctrl+Z lo vuelve a poner.`)
-    return r.data
+    if (quitando.current.has(m.id)) return null
+    quitando.current.add(m.id)
+    try {
+      const iguales = contarIguales(m, marcas)
+      const ep = epoca.current
+      const r = await conEstado(`Borrar ${nombreD(m)}`, (tid) => borrarMarca(tid, m.id))
+      if (!r.ok) {
+        if (ep === epoca.current && r.tipo !== 'ajeno') setAviso(avisoNoQuitado(m))
+        return null
+      }
+      hecho({ tipo: 'borrar', marca: m, iguales }, r)
+      setAviso(avisoQuitado(m))
+      return r.data
+    } finally {
+      quitando.current.delete(m.id)
+    }
   }
   // Cambiar el tipo: se crea la marca nueva y RECIÉN después se borra la vieja (si la nueva
   // no se pudo crear, no se perdió nada). Un solo paso para deshacer. Si mientras tanto se
@@ -1201,8 +1218,12 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       // Un grupo de repetidas (×n) va antes que una suelta del mismo tipo: es una anomalía a la vista.
       const prio = m.id === sel ? -0.5 : (m.tipo === 'cue' || (m.tipo === 'loop' && Number.isInteger(m.num)) ? 0 : m.tipo === 'loop' ? 1 : 2) - (n > 1 ? 0.25 : 0)
       const extraN = n > 1 ? medirTexto(`×${n}`) + 8 : 0
+      // La X (quitar): con mouse aparece encima del borde derecho al pasar o con foco (no ensancha
+      // la bandera); en pantalla táctil se ve siempre y ocupa su lugar (26 px). Un grupo «×n» no
+      // tiene X: sus marcas son indistinguibles (se quitan desde la lista o con «Borrar repetidos»).
+      const extraX = tactil && n === 1 ? 26 : 0
       return { id: m.id, m, ids, n, x: (pos / 100) * anchoPx, der: pos > 60, prioridad: prio, carril: prio <= 0 ? 0 : 1,
-        ancho: Math.min(180, Math.max(24, medir(textoBandera(m)) + extraN + 30)), anchoMin: Math.max(24, medir(textoCorto(m)) + extraN + 30) }
+        ancho: Math.min(180 + extraX, Math.max(24, medir(textoBandera(m)) + extraN + extraX + 30)), anchoMin: Math.max(24, medir(textoCorto(m)) + extraN + extraX + 30) }
     })
     if (loopIn !== null && loopIn >= v.desde && loopIn <= v.hasta) {
       const pos = pct(loopIn)
@@ -1299,19 +1320,29 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
           <div className="edd-regla mono" aria-hidden="true">
             {regla.map((r) => <span key={r.t} className={pct(r.t) > 90 ? 'is-fin' : ''} style={{ left: `${pct(r.t)}%` }}>{r.txt}</span>)}
           </div>
-          <div className="edd-flags" aria-hidden="true">
-            {banderas.map(({ id: bid, m, n, der, ancho, anchoMin, fila, corta, tapadas }) => (
-              <span key={bid} data-id={m.tipo === 'pend' ? undefined : m.id} data-fila={fila} data-n={n}
-                className={`edd-flag ${m.tipo === 'pend' ? 'cue-loop' : claseMarca(m)} is-${m.tipo}${der ? ' is-der' : ''}${m.id === sel ? ' is-sel' : ''}`}
-                style={{ left: `${Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))}%`, top: `${fila * 25}px`, maxWidth: `${corta ? anchoMin : ancho}px` }}
-                title={m.tipo === 'pend' ? 'Entrada del loop marcada: falta la salida (O)'
-                  : `${marcaAria(m)}${n > 1 ? ` · ${n} iguales encimadas` : ''}${tapadas.length ? ` · y ${tapadas.length} más acá: ${tapadas.map((x) => textoBandera(x.m)).join(', ')}` : ''} (arrastrá para moverla)`}
-                onPointerDown={(e) => { if (m.tipo !== 'pend') empezarArrastre(e, m, 'inicio') }}>
-                {corta ? textoCorto(m) : textoBandera(m)}
-                {n > 1 && <b className="edd-flag-n">×{n}</b>}
-                {tapadas.length > 0 && <span className="edd-flag-mas">+{tapadas.length}</span>}
-              </span>
-            ))}
+          {/* Sin aria-hidden en el contenedor: adentro van las X (botones). El texto de cada
+              bandera sí va oculto al lector (la misma información está en la lista). */}
+          <div className="edd-flags">
+            {banderas.map(({ id: bid, m, n, der, ancho, anchoMin, fila, corta, tapadas }) => {
+              const conX = m.tipo !== 'pend' && n === 1
+              return (
+                <span key={bid} data-id={m.tipo === 'pend' ? undefined : m.id} data-fila={fila} data-n={n}
+                  className={`edd-flag ${m.tipo === 'pend' ? 'cue-loop' : claseMarca(m)} is-${m.tipo}${der ? ' is-der' : ''}${m.id === sel ? ' is-sel' : ''}${conX ? ' con-x' : ''}`}
+                  style={{ left: `${Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))}%`, top: `${fila * 25}px`, maxWidth: `${corta ? anchoMin : ancho}px` }}
+                  title={m.tipo === 'pend' ? 'Entrada del loop marcada: falta la salida (O)'
+                    : `${marcaAria(m)}${n > 1 ? ` · ${n} iguales encimadas (se quitan desde la lista o con «Borrar repetidos»)` : ''}${tapadas.length ? ` · y ${tapadas.length} más acá: ${tapadas.map((x) => textoBandera(x.m)).join(', ')} (la X quita solo esta)` : ''} (arrastrá para moverla)`}
+                  onPointerDown={(e) => { if (m.tipo !== 'pend') empezarArrastre(e, m, 'inicio') }}>
+                  <span className="edd-flag-txt" aria-hidden="true">{corta ? textoCorto(m) : textoBandera(m)}</span>
+                  {n > 1 && <b className="edd-flag-n" aria-hidden="true">×{n}</b>}
+                  {tapadas.length > 0 && <span className="edd-flag-mas" aria-hidden="true">+{tapadas.length}</span>}
+                  {conX && (
+                    <button type="button" className="edd-x edd-x-flag" aria-label={etiquetaQuitar(m)} title={etiquetaQuitar(m)}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); borrar(m) }} />
+                  )}
+                </span>
+              )
+            })}
           </div>
           <div className={`edd-onda${grillaVisible && eg.atenuada ? ' is-atenuada' : ''}`} ref={ondaRef} role="slider" tabIndex={0}
             aria-label={`Posición en ${track ? track.titulo : 'el tema'}`}
@@ -1520,8 +1551,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
                 const etiqueta = !m ? `Pad ${letra} vacío: fijar un hot cue en el cursor`
                   : loop ? `Pad ${letra}: loop de ${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}${m.nombre ? `, ${m.nombre}` : ''}. Ir al loop`
                     : `Pad ${letra}: hot cue en ${fmtTiempo(m.inicio)}${m.nombre ? `, ${m.nombre}` : ', sin nombre'}. Ir al cue`
+                // Cada pad en un contenedor: la X (quitar) es un botón HERMANO del pad (un botón no
+                // puede ir adentro de otro), en la esquina de arriba a la derecha.
                 return (
-                  <button key={letra} type="button" data-pad={n} aria-keyshortcuts={String(n + 1)}
+                  <div key={letra} className={`edd-pad-w${m ? ' is-lleno' : ''}`}>
+                  <button type="button" data-pad={n} aria-keyshortcuts={String(n + 1)}
                     className={`edd-pad ${m ? `is-lleno ${claseMarca(m)}` : `is-vacio cue-c${n + 1}`}${loop ? ' is-loop' : ''}${m && m.id === sel ? ' is-sel' : ''}`}
                     aria-label={etiqueta} title={etiqueta}
                     onClick={(e) => tocarPad(n, { borrarlo: e.shiftKey })}>
@@ -1533,6 +1567,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
                     </span>
                     <Kbd>{n + 1}</Kbd>
                   </button>
+                  {m && (
+                    <button type="button" className={`edd-x edd-x-pad ${claseMarca(m)}`} data-x-pad={n} aria-label={etiquetaQuitar(m)} title={etiquetaQuitar(m)}
+                      onClick={(e) => { e.stopPropagation(); borrar(m) }} />
+                  )}
+                  </div>
                 )
               })}
             </div>
@@ -1558,7 +1597,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
                       <span className={`edd-fila-n${m.nombre ? '' : ' edd-sin-nombre'}`}>{m.nombre || 'sin nombre'}</span>
                       <button type="button" className="btn btn-secondary edd-btn edd-editar" aria-expanded={abiertaEsta}
                         aria-label={`Editar ${nombreD(m)}`} onClick={() => setAbierta(abiertaEsta ? null : m.id)}>{abiertaEsta ? 'Listo' : 'Editar'}</button>
-                      <button type="button" className="btn btn-secondary edd-btn edd-borrar" onClick={() => borrar(m)} aria-label={`Borrar ${nombreD(m)}`}>Borrar</button>
+                      <button type="button" className="edd-x edd-x-fila edd-borrar" onClick={() => borrar(m)} aria-label={etiquetaQuitar(m)} title={etiquetaQuitar(m)} />
                     </div>
                     {abiertaEsta && (
                       <div className="edd-fila-ed">

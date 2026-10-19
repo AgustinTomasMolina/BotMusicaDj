@@ -2100,3 +2100,36 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   /* La lista: el nombre en su propia línea, debajo del tiempo (antes se escondía). */
   .edd-fila-n{display:block;grid-column:2/-1;grid-row:2;white-space:normal;overflow-wrap:anywhere}
 }
+
+/* ---- la X para quitar una marca mal puesta (pedido del dueño): pads, banderas y lista ---- */
+/* Un botón propio, oscuro con la cruz clara (≥ 4,5:1 sobre su fondo, sea cual sea el color de la
+   marca), de 24 × 24 o más; la cruz va por CSS y el nombre accesible es su aria-label. */
+.edd-x{appearance:none;-webkit-appearance:none;margin:0;padding:0;border:0;cursor:pointer;display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:6px;background:#161826;color:#eef0f6;font:700 12px/1 var(--font-body)}
+.edd-x::before{content:"✕"}
+.edd-x:hover{background:#2c2f44;color:#fff}
+.edd-x:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px}
+/* Pads: el pad y su X en un contenedor; la X arriba a la derecha, el número de tecla corrido. */
+.edd-pad-w{position:relative;min-width:0;display:flex}
+.edd-pad-w>.edd-pad{flex:1 1 auto;width:100%}
+.edd-pad-w.is-lleno>.edd-pad{padding-right:36px}
+.edd-x-pad{position:absolute;top:5px;right:5px;box-shadow:0 0 0 1px var(--cue-c)}
+/* El número de tecla, debajo de la X (la X arriba, el número abajo, la misma columna): el nombre
+   conserva su ancho. */
+.edd-pad-w.is-lleno>.edd-pad{position:relative}
+.edd-pad-w.is-lleno>.edd-pad .edd-kbd{position:absolute;right:9px;bottom:5px}
+/* Lista: la X al alcance directo, del alto de la fila. */
+.edd-x-fila{width:44px;height:44px;border-radius:8px;background:transparent;border:1px solid var(--color-neutral-600);color:var(--color-text);font-size:14px}
+.edd-x-fila:hover{background:transparent;color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 55%,transparent)}
+/* Banderas: discreta. Con mouse aparece al pasar o con foco, ENCIMA del borde derecho (no
+   ensancha la bandera ni mueve los carriles); en pantalla táctil se ve siempre y tiene su lugar. */
+.edd-x-flag{position:absolute;top:0;right:0;height:24px;width:24px;border-radius:0 5px 5px 0;opacity:0;pointer-events:none}
+.edd-flag.is-der .edd-x-flag{border-radius:0}
+.edd-flag:hover .edd-x-flag,.edd-x-flag:focus-visible{opacity:1;pointer-events:auto}
+@media (hover:none){
+  .edd-flag.con-x{padding-right:28px}
+  .edd-x-flag{opacity:1;pointer-events:auto}
+}
+@media (max-width:640px){
+  .edd-x-pad{top:50%;right:4px;width:44px;height:44px;transform:translateY(-50%);border-radius:8px}
+  .edd-pad-w.is-lleno>.edd-pad{padding-right:54px}
+}

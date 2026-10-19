@@ -16,7 +16,7 @@ import {
   historialVacio, registrar, deshacer, rehacer, reemplazarId, inversa, cuerpoCrear, diferencia,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
   clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
-  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia,
+  marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia, etiquetaQuitar, avisoQuitado, avisoNoQuitado,
   temaVigente, beatsLoop,
 } from '../src/editorD.js'
 
@@ -620,4 +620,18 @@ test('rescatarHechas (I-1): un Ctrl+Z rechazado a medias deja lo guardado en el 
   assert.deepEqual(deshacer(r).aplicar, { tipo: 'grupo', ops: [{ tipo: 'borrar', marca: { ...mem, id: 15 } }], tid: 'a1' },
     'el próximo Ctrl+Z saca la memory que quedó guardada')
   assert.deepEqual(rescatarHechas(sin, [], []), sin, 'sin nada hecho, nada que rescatar')
+})
+
+test('la X para quitar: nombre accesible y aviso, con pad, nombre y tiempos (pedido del dueño)', () => {
+  const cue = { id: 1, tipo: 'cue', num: 0, inicio: 59.576, fin: null, nombre: null }
+  assert.equal(etiquetaQuitar(cue), 'Quitar hot cue A en 0:59.576')
+  assert.equal(avisoQuitado(cue), 'Quité el hot cue A (0:59.576). Ctrl+Z lo vuelve a poner.')
+  assert.equal(avisoNoQuitado(cue), '⚠ No pude quitar el hot cue A (0:59.576): no se guardó (el motivo está en el aviso).')
+  const mem = { id: 2, tipo: 'memory', num: null, inicio: 5, fin: null, nombre: 'Drop' }
+  assert.equal(etiquetaQuitar(mem), 'Quitar memory cue «Drop» en 0:05.000')
+  assert.equal(avisoQuitado(mem), 'Quité la memory cue «Drop» (0:05.000). Ctrl+Z lo vuelve a poner.')
+  const loop = { id: 3, tipo: 'loop', num: null, inicio: 59.576, fin: 61.231, nombre: '  ' }
+  assert.equal(etiquetaQuitar(loop), 'Quitar loop 0:59.576 a 1:01.231', 'un nombre en blanco no se dice')
+  assert.equal(etiquetaQuitar({ ...loop, num: 1, nombre: 'Intro' }), 'Quitar loop del pad B «Intro» 0:59.576 a 1:01.231')
+  assert.equal(avisoQuitado({ ...loop, num: 1 }), 'Quité el loop del pad B (0:59.576 a 1:01.231). Ctrl+Z lo vuelve a poner.')
 })

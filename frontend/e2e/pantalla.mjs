@@ -5165,7 +5165,7 @@ function casosF54() {
         demorar.DELETE = false
         await gracia()
         igual(await marcasApi(ctx, t1.rid), [], 'el DELETE tardío igual tenía que borrar el cue en SU tema (el 1)')
-        igual(await avisoEd(), '', 'el aviso «Borraste…» del tema 1 apareció en el tema 2')
+        igual(await avisoEd(), '', 'el aviso «Quité…» del tema 1 apareció en el tema 2')
         let desde = escrituras.length
         await ctrlZ()
         await hasta(avisoEd, (x) => x === 'No hay nada para deshacer.', 'en el tema 2 no hay nada para deshacer')
@@ -5226,7 +5226,7 @@ function casosF54() {
         Object.assign(demorar, { DELETE: false, ms: 1500 })
         await gracia()
         igual(await marcasApi(ctx, t3.rid), [], 'el DELETE tardío igual tenía que borrar el cue')
-        igual(await avisoEd(), '', 'el aviso «Borraste…» de la visita anterior apareció al volver al mismo tema')
+        igual(await avisoEd(), '', 'el aviso «Quité…» de la visita anterior apareció al volver al mismo tema')
         // Pero la lista sí muestra lo que el server tiene (el cue ya no está): se relee.
         await filasComoApi(page, ctx, t3.rid, 'al volver al mismo tema, la lista no muestra lo que hizo el pedido tardío')
         desde = escrituras.length
@@ -6620,6 +6620,145 @@ function casosF54() {
           igual(bajos, [], `a ${w} px hay botones del dock de menos de 44 px`)
           igual(await page.evaluate(() => document.documentElement.scrollWidth), w, `a ${w} px no puede haber scroll horizontal`)
         }
+      })
+    }],
+    ['editor D (f54): la X quita la marca mal puesta — desde el pad, la bandera y la lista: un DELETE, aviso, Ctrl+Z la devuelve igual y Ctrl+Y la vuelve a quitar; no mueve el cabezal', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const P = (await onda3Api(ctx, t.rid)).grilla.periodo_s
+        const cue = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 1, num: 0, nombre: 'Primer cue' })).data.marca
+        const mem = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'memory', inicio: 3 })).data.marca
+        const finLoop = Math.round((5 + 4 * P) * 1000) / 1000
+        const hot = (await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'loop', inicio: 5, fin: finLoop, num: 1, nombre: 'Intro' })).data.marca
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        await page.keyboard.press('ArrowRight')
+        await page.keyboard.press('ArrowRight')
+        const cabezal = () => page.$eval('.edd-onda', (o) => o.getAttribute('aria-valuetext'))
+        const antes = await cabezal()
+        const escr = pedidosDeMarcas(page)
+        const aviso = () => page.$eval('.edd-aviso', (e) => e.textContent)
+        const sinVuelo = () => hasta(() => page.$eval('.edd-estado', (e) => e.textContent), (s) => !s.includes('Guardando'), 'el estado no terminó de guardar')
+
+        // (1) Desde el pad A: un DELETE, el aviso, la marca se va y el cabezal no se mueve.
+        igual(await page.$eval('.edd-x-pad[data-x-pad="0"]', (b) => b.getAttribute('aria-label')), 'Quitar hot cue A «Primer cue» en 0:01.000', 'aria-label de la X del pad A')
+        await page.click('.edd-x-pad[data-x-pad="0"]')
+        await hasta(aviso, (x) => x === 'Quité el hot cue A «Primer cue» (0:01.000). Ctrl+Z lo vuelve a poner.', 'la X del pad no avisó')
+        await sinVuelo()
+        igual(escr, [`DELETE ${rutaMarcas(t.rid)}/${cue.id}`], 'la X del pad tenía que mandar UN DELETE y nada más')
+        igual(await cabezal(), antes, 'la X del pad movió el cabezal')
+        igual(await page.$('.edd-pad[data-pad="0"].is-vacio') !== null, true, 'el pad A tenía que quedar vacío')
+        igual(await page.$('.edd-x-pad[data-x-pad="0"]'), null, 'un pad vacío no tiene X')
+        // Ctrl+Z la devuelve con su pad, color y nombre; Ctrl+Y la vuelve a quitar.
+        await page.focus('.edd-onda')
+        const z = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([z.status, z.data.marca.tipo, z.data.marca.num, z.data.marca.inicio, z.data.marca.nombre], [201, 'cue', 0, 1, 'Primer cue'], 'Ctrl+Z no devolvió el hot cue A como estaba')
+        await hasta(() => page.$eval('.edd-pad[data-pad="0"]', (b) => [b.classList.contains('cue-c1'), b.querySelector('.edd-pad-nom')?.textContent]), (v) => v[0] && v[1] === 'Primer cue', 'el pad A no volvió con su color y su nombre')
+        const y = await conTecla(page, ['Control', 'y'], 'DELETE')
+        igual([y.status, (y.data.marcas || []).some((m) => m.id === z.data.marca.id)], [200, false], 'Ctrl+Y no volvió a quitar el hot cue A')
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+        const cueVuelta = (await hasta(() => marcasApi(ctx, t.rid), (ms) => ms.some((m) => m.tipo === 'cue'), 'el segundo Ctrl+Z no devolvió el cue')).find((m) => m.tipo === 'cue')
+        await sinVuelo()
+
+        // (2) Desde la bandera de la memory: discreta (no se ve hasta pasar el mouse), un DELETE, no arrastra ni selecciona.
+        const flagMem = `.edd-flag[data-id="${mem.id}"]`
+        igual(await page.$eval(`${flagMem} .edd-x-flag`, (b) => getComputedStyle(b).opacity), '0', 'la X de la bandera se tiene que ver solo al pasar el mouse (o con foco)')
+        await page.hover(flagMem)
+        await hasta(() => page.$eval(`${flagMem} .edd-x-flag`, (b) => getComputedStyle(b).opacity), (o) => o === '1', 'al pasar el mouse la X de la bandera no apareció')
+        escr.length = 0
+        await page.click(`${flagMem} .edd-x-flag`)
+        await hasta(aviso, (x) => x === 'Quité la memory cue (0:03.000). Ctrl+Z lo vuelve a poner.', 'la X de la bandera no avisó')
+        await sinVuelo()
+        igual(escr, [`DELETE ${rutaMarcas(t.rid)}/${mem.id}`], 'la X de la bandera tenía que mandar UN DELETE (sin arrastrar: ningún PATCH)')
+        igual(await cabezal(), antes, 'la X de la bandera movió el cabezal')
+        igual(await page.$$eval('.edd-flag.is-sel, .edd-mk-loop.is-sel', (x) => x.length), 0, 'la X de la bandera seleccionó una marca')
+
+        // (3) El hot loop tiene X en su pad B y en su bandera: las dos juntas son UN pedido.
+        escr.length = 0
+        await page.evaluate((id) => {
+          document.querySelector('.edd-x-pad[data-x-pad="1"]').click()
+          document.querySelector(`.edd-flag[data-id="${id}"] .edd-x-flag`).click()
+        }, hot.id)
+        await hasta(aviso, (x) => x.startsWith('Quité el loop del pad B «Intro»'), 'la X del hot loop no avisó')
+        await sinVuelo()
+        await new Promise((r) => setTimeout(r, 300))
+        igual(escr, [`DELETE ${rutaMarcas(t.rid)}/${hot.id}`], 'las X del pad y de la bandera del MISMO hot loop mandaron más de un pedido')
+        await page.focus('.edd-onda')
+        const zl = await conTecla(page, ['Control', 'z'], 'POST')
+        igual([zl.data.marca.tipo, zl.data.marca.num, zl.data.marca.nombre, zl.data.marca.inicio, zl.data.marca.fin], ['loop', 1, 'Intro', 5, finLoop], 'Ctrl+Z no devolvió el hot loop como estaba')
+        await sinVuelo()
+
+        // (4) Desde la lista: la X al alcance directo (sin abrir «Editar»).
+        escr.length = 0
+        igual(await page.$eval(`.edd-fila[data-id="${cueVuelta.id}"] .edd-borrar`, (b) => b.getAttribute('aria-label')), 'Quitar hot cue A «Primer cue» en 0:01.000', 'aria-label de la X de la lista')
+        await page.click(`.edd-fila[data-id="${cueVuelta.id}"] .edd-borrar`)
+        await hasta(aviso, (x) => x.startsWith('Quité el hot cue A'), 'la X de la lista no avisó')
+        await sinVuelo()
+        igual(escr, [`DELETE ${rutaMarcas(t.rid)}/${cueVuelta.id}`], 'la X de la lista tenía que mandar UN DELETE')
+        await filasComoApi(page, ctx, t.rid, 'después de quitar desde la lista')
+      })
+    }],
+
+    ['editor D (f54): la X con el servidor caído (500) avisa ⚠ y la marca sigue; contraste, objetivo táctil, foco y sin solaparse a 1440 y 400 px', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        // Los 8 pads llenos (los 8 colores, con el H blanco, el B verde y el D amarillo).
+        for (let n = 0; n < 8; n++) await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 1 + n * 0.9, num: n, nombre: `Cue ${n + 1}` })
+        let fallar = 0
+        await interceptar(page, async (req) => {
+          if (fallar <= 0 || req.method() !== 'DELETE') return false
+          fallar -= 1
+          await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada' }) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        // 500: el aviso lo dice y la marca sigue.
+        fallar = 1
+        await page.click('.edd-x-pad[data-x-pad="7"]')
+        const av = await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x.startsWith('⚠ No pude quitar'), 'la X con un 500 no avisó')
+        afirmar(av.startsWith('⚠ No pude quitar el hot cue H «Cue 8» (0:07.300): no se guardó'), `aviso de la falla: ${json(av)}`)
+        igual((await marcasApi(ctx, t.rid)).length, 8, 'con el 500 la marca tenía que seguir')
+        igual(await page.$('.edd-pad[data-pad="7"].is-lleno') !== null, true, 'el pad H tenía que seguir lleno')
+
+        // Contraste de la cruz sobre su fondo (≥ 4,5:1) en cada pad y bandera, y tamaño (≥ 24 × 24).
+        const medir = () => page.$$eval('.edd-x', (xs) => xs.map((x) => {
+          const rgb = (s) => (s.match(/[\d.]+/g) || []).map(Number)
+          const lum = ([r, g, b]) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b) }
+          const cs = getComputedStyle(x)
+          const fondo = rgb(cs.backgroundColor)
+          const cruz = rgb(getComputedStyle(x, '::before').color || cs.color)
+          const [a, b] = [lum(cruz), lum(fondo.length === 4 && fondo[3] === 0 ? [11, 12, 18] : fondo)].sort((p, q) => q - p)
+          const r = x.getBoundingClientRect()
+          return { q: x.getAttribute('aria-label'), ratio: Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100, w: Math.round(r.width), h: Math.round(r.height) }
+        }))
+        const xs = await medir()
+        afirmar(xs.length >= 8 + 8, `faltan X (pads + lista): ${xs.length}`)
+        for (const x of xs) {
+          afirmar(x.ratio >= 4.5, `la cruz de «${x.q}» tiene contraste ${x.ratio}:1 (mínimo 4,5)`)
+          afirmar(x.w >= 24 && x.h >= 24, `«${x.q}» mide ${x.w}×${x.h} (mínimo 24 × 24)`)
+        }
+        // Foco con teclado: la X de una bandera se ve con foco (sin mouse).
+        const flag = await page.$eval('.edd-flag.con-x', (f) => f.dataset.id)
+        await page.keyboard.press('Shift')                // la última interacción es de teclado
+        await page.focus(`.edd-flag[data-id="${flag}"] .edd-x-flag`)
+        await hasta(() => page.$eval(`.edd-flag[data-id="${flag}"] .edd-x-flag`, (b) => [getComputedStyle(b).opacity, getComputedStyle(b).outlineStyle]), (v) => v[0] === '1' && v[1] !== 'none',
+          'con foco de teclado la X de la bandera no se ve o no tiene foco visible')
+        // La X del pad no tapa el tiempo ni el número de tecla.
+        const choques = async () => page.$$eval('.edd-pad-w.is-lleno', (ws) => ws.flatMap((w) => {
+          const x = w.querySelector('.edd-x-pad').getBoundingClientRect()
+          return [...w.querySelectorAll('.edd-pad-tiempo, .edd-pad-nom, .edd-kbd')].filter((e) => window.__visible(e)).map((e) => e.getBoundingClientRect())
+            .filter((r) => r.width > 0 && !(r.right <= x.left || r.left >= x.right || r.bottom <= x.top || r.top >= x.bottom))
+            .map(() => w.querySelector('.edd-pad').dataset.pad)
+        }))
+        igual(await choques(), [], 'a 1440 la X del pad tapa el tiempo, el nombre o el número de tecla')
+        igual(await page.evaluate(() => [document.documentElement.scrollWidth, document.querySelector('.edd-fondo').scrollWidth <= document.querySelector('.edd-fondo').clientWidth]), [1440, true], 'a 1440 la X agregó scroll horizontal')
+        // 400 px: la X del pad de 44 de alto, sin solaparse ni scroll horizontal.
+        await page.setViewport({ width: 400, height: 800 })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const padX = await page.$$eval('.edd-x-pad', (bs) => bs.map((b) => Math.round(b.getBoundingClientRect().height)))
+        afirmar(padX.length === 8 && padX.every((h) => h >= 44), `a 400 px la X de los pads tiene que tener 44 de alto: ${json(padX)}`)
+        igual(await choques(), [], 'a 400 la X del pad tapa el tiempo o el nombre')
+        igual(await page.evaluate(() => document.documentElement.scrollWidth), 400, 'a 400 px la X agregó scroll horizontal')
       })
     }],
   ]
