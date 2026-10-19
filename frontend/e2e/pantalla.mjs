@@ -935,23 +935,10 @@ const tiempoTabla = (s) => {
 }
 const ms3 = (s) => Math.round(s * 1000) / 1000
 
-// La tabla de marcas como se ve, y como tendría que verse según la API.
-const leerTabla = (page) => page.$$eval('.cue-tabla tbody tr[data-id]', (rows) => rows.map((r) => ({
-  id: Number(r.dataset.id), tipo: r.dataset.tipo, tag: r.querySelector('.cue-tag')?.textContent ?? null,
-  tiempos: [...r.querySelectorAll('.cue-in-t')].map((i) => i.value), nombre: r.querySelector('.cue-in-n')?.value ?? null,
-})))
-// La etiqueta: el pad del hot cue (1..8), M, L, o L + pad en un loop que vive en un pad (f51).
-const esperadoTabla = (marcas) => marcas.map((m) => ({
-  id: m.id, tipo: m.tipo,
-  tag: m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : Number.isInteger(m.num) ? `L${m.num + 1}` : 'L',
-  tiempos: [m.inicio, ...(m.tipo === 'loop' ? [m.fin] : [])].map(tiempoTabla), nombre: m.nombre || '',
-}))
-
-const estadoEditor = (page) => page.evaluate(() => document.querySelector('.cue-estado')?.textContent ?? '')
-
-// Radio → set de «Uno» → la fila del tema `titulo` (f50: el editor está en la pestaña «Cues y
-// loops» del detalle, abierta por defecto), y espera a que el editor lo cargue.
-async function abrirEditor(page, ctx, titulo = 'Uno', { navegar = true } = {}) {
+// Radio → set de «Uno» → la fila del tema `titulo`, y espera a que la pestaña «Cues y loops»
+// (abierta por defecto) haya leído sus marcas. f61: ahí hay una lista de solo lectura y el
+// botón que abre el editor D; el editor chico de f48 ya no está en esta pantalla.
+async function abrirDetalle(page, ctx, titulo = 'Uno', { navegar = true } = {}) {
   await abrirRadio(page, ctx, { navegar })
   await elegirSemilla(page, 'Uno')
   await armarSet(page)
@@ -961,9 +948,28 @@ async function abrirEditor(page, ctx, titulo = 'Uno', { navegar = true } = {}) {
   await hasta(() => page.evaluate(() => ({
     titulo: document.querySelector('#r-det-h')?.textContent ?? null,
     pestana: document.querySelector('[role=tab][aria-selected=true]')?.id ?? null,
-    estado: document.querySelector('#r-panel-cues:not([hidden]) .cue-estado')?.textContent ?? '',
-  })), (v) => v.titulo === titulo && v.pestana === 'r-tab-cues' && /guardadas en la biblioteca/.test(v.estado),
-  `el editor no terminó de abrir «${titulo}» en la pestaña «Cues y loops»`)
+    leida: Boolean(document.querySelector('#r-panel-cues:not([hidden]) .rdet-abrir'))
+      && !/Leyendo las marcas/.test(document.querySelector('#r-panel-cues')?.textContent ?? ''),
+  })), (v) => v.titulo === titulo && v.pestana === 'r-tab-cues' && v.leida,
+  `el detalle no terminó de abrir «${titulo}» en la pestaña «Cues y loops»`)
+}
+
+// Abre el editor D desde un botón del detalle y espera la onda (el mismo editor de Mis
+// playlists: diálogo .edd con el título del track).
+async function abrirEditorDDesde(page, boton, titulo) {
+  await page.click(boton)
+  await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+  await hasta(() => page.evaluate(() => ({
+    titulo: document.querySelector('#edd-titulo')?.textContent ?? '',
+    msg: document.querySelector('.edd-msg')?.textContent ?? null,
+    estado: document.querySelector('.edd-grilla-estado')?.textContent ?? null,
+  })), (v) => v.titulo.startsWith(titulo) && !v.msg && v.estado && !v.estado.includes('Leyendo'),
+  `el editor D no abrió «${titulo}» con su onda`, 20000)
+}
+async function cerrarEditorD(page) {
+  await page.focus('.edd-onda')
+  await page.keyboard.press('Escape')
+  await hasta(() => page.$('.edd').then((e) => e === null), (v) => v, 'Escape no cerró el editor D')
 }
 
 // Aprieta una tecla y espera la escritura que tiene que disparar (POST/PATCH/DELETE).
@@ -980,301 +986,6 @@ const pedidosDeMarcas = (page) => {
   return lista
 }
 
-const CASOS_CUES = [
-
-  ['cues: C, M e I/O con el teclado → la tabla dice los tiempos de la API, y después de recargar siguen', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    await abrirEditor(page, ctx)
-    const cab = await page.evaluate(() => window.__detalle().chips)
-    igual(cab[0], bpm1(uno.bpm), 'el BPM del detalle no es el de la API, con un decimal')
-    const atajos = await page.$eval('.cue-atajos', (p) => p.textContent)
-    afirmar(atajos.includes(`El beat sale del BPM medido (${bpm1(uno.bpm)})`), `el editor no dice de qué BPM sale el beat: ${json(atajos)}`)
-    const beat = 60 / uno.bpm          // el ±1 beat sale del BPM MEDIDO
-    await page.focus('.cue-wave')
-    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight')
-    const cue = await teclaQueGuarda(page, 'c')
-    igual([cue.status, cue.data.marca.tipo, cue.data.marca.num, cue.data.marca.inicio], [201, 'cue', 0, ms3(3 * beat)], 'C después de 3 beats: un hot cue 1 en 3 × 60/BPM')
-    for (let i = 0; i < 2; i++) await page.keyboard.press('ArrowRight')
-    const mem = await teclaQueGuarda(page, 'm')
-    igual([mem.status, mem.data.marca.tipo, mem.data.marca.inicio], [201, 'memory', ms3(5 * beat)], 'M después de 5 beats')
-    await page.keyboard.press('ArrowRight')
-    await page.keyboard.press('i')
-    for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight')
-    const loop = await teclaQueGuarda(page, 'o')
-    igual([loop.status, loop.data.marca.tipo, loop.data.marca.inicio, loop.data.marca.fin], [201, 'loop', ms3(6 * beat), ms3(10 * beat)], 'I en el beat 6 y O en el 10')
-    await page.keyboard.press('ArrowLeft')
-    await page.keyboard.press('1')       // ir al hot cue 1: el cursor vuelve a su tiempo
-    const reloj = await page.$eval('.cue-reloj', (e) => e.textContent)
-    const s = cue.data.marca.inicio
-    igual(reloj, `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`, 'la tecla 1 no llevó el cursor al hot cue 1')
-
-    const api_ = await marcasApi(ctx, uno.id)
-    igual(api_.length, 3, 'la API no tiene las 3 marcas')
-    await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)), 'la tabla no es la lista de la API')
-    const estado = await estadoEditor(page)
-    afirmar(/Guardado en la biblioteca/.test(estado) && /1 hot cue, 1 memory, 1 loop/.test(estado), `el indicador no dice que se guardó: ${json(estado)}`)
-    const cuenta = await hasta(() => page.$eval('.rpaso.is-sel .rcues', (e) => e.textContent), (v) => v === '3 cues',
-      'la columna «Cues» de la lista no cuenta las marcas del tema elegido')
-    igual(cuenta, '3 cues', 'la columna «Cues» del tema elegido')
-
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await abrirEditor(page, ctx, 'Uno', { navegar: false })
-    igual(await leerTabla(page), esperadoTabla(await marcasApi(ctx, uno.id)), 'después de recargar la tabla no es la lista de la API')
-  }],
-
-  ['cues (f51): un loop en un pad se lee con su pad, en naranja, y los colores son los de la tabla del motor', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    const loop = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8, num: 2 })).data.marca
-    igual([loop.tipo, loop.num], ['loop', 2], 'la API no creó el hot loop en el pad 3')
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'memory', inicio: 2 })
-    await abrirEditor(page, ctx)
-    const api_ = await marcasApi(ctx, uno.id)
-    igual(api_.map((m) => [m.tipo, m.num]), [['cue', 0], ['loop', 2], ['memory', null]], 'la API no ordena los pads primero')
-    await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)), 'la tabla no es la lista de la API (el hot loop tiene que decir «L3»)')
-    // Los colores pedidos por el dueño (motor/cue_marks.py), escritos acá: pad 1 rojo, el loop
-    // naranja aunque esté en el pad 3 (que sería azul), la memory neutra.
-    const colores = await page.$$eval('.cue-tabla tbody tr[data-id]', (rows) => rows.map((r) => [r.dataset.tipo, getComputedStyle(r.querySelector('.cue-tag')).backgroundColor]))
-    igual(colores, [['cue', 'rgb(255, 77, 90)'], ['loop', 'rgb(255, 154, 46)'], ['memory', 'rgb(242, 243, 248)']], 'los colores de la tabla no son los de la tabla del motor')
-    const bandera = await page.$eval('.cue-mk-loop .cue-flag:not(.is-fin)', (e) => [e.textContent, getComputedStyle(e).backgroundColor])
-    igual(bandera, ['L3', 'rgb(255, 154, 46)'], 'la bandera del hot loop en la onda no dice su pad o no es naranja')
-    // La tecla 3 va al pad 3 aunque lo ocupe un loop; C toma el primer pad LIBRE (el 2), no el del loop.
-    await page.focus('.cue-wave')
-    await page.keyboard.press('3')
-    igual(await page.$eval('.cue-reloj', (e) => e.textContent), '0:04.0', 'la tecla 3 no llevó el cursor a la entrada del hot loop')
-    const cue = await teclaQueGuarda(page, 'c')
-    igual([cue.status, cue.data.marca.tipo, cue.data.marca.num], [201, 'cue', 1], 'C no tomó el primer pad libre (el 2)')
-  }],
-
-  ['cues: borrar pide confirmación y la marca sale de la base', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1.5 })
-    const mem = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'memory', inicio: 2.25, nombre: 'break' })).data.marca
-    await abrirEditor(page, ctx)
-    const pedidos = pedidosDeMarcas(page)
-    await page.click(`.cue-tabla tr[data-id="${mem.id}"] .cue-borrar`)
-    await page.waitForSelector(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`, { timeout: ESPERA_MS })
-    igual(pedidos, [], 'el primer clic en borrar ya borró (tenía que pedir confirmación)')
-    const r = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
-    await page.click(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`)
-    igual((await r).status(), 200, 'estado del DELETE')
-    const api_ = await marcasApi(ctx, uno.id)
-    afirmar(!api_.some((m) => m.id === mem.id), 'la memory sigue en la API')
-    await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)), 'la tabla no es la lista de la API después de borrar')
-  }],
-
-  ['cues: los atajos no se disparan escribiendo el nombre', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    const cue = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })).data.marca
-    await abrirEditor(page, ctx)
-    const pedidos = pedidosDeMarcas(page)
-    const campo = `.cue-tabla tr[data-id="${cue.id}"] .cue-in-n`
-    await page.click(campo)
-    await page.keyboard.type('c m i o 1 8')
-    await page.keyboard.press('Space')
-    await page.keyboard.press('ArrowLeft')
-    // Un pedido posterior propio: si algún atajo hubiera disparado un POST, ya habría salido.
-    await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
-    igual(pedidos, [], 'escribir en el nombre disparó atajos que escribieron en la base')
-    igual(await sonando(page), [], 'la barra espaciadora en el nombre arrancó el audio')
-    igual(await page.$eval(campo, (i) => i.value), 'c m i o 1 8 ', 'las teclas no llegaron al campo')
-    const r = await teclaQueGuarda(page, 'Enter', 'PATCH')
-    igual([r.status, r.data.marca.nombre], [200, 'c m i o 1 8'], 'Enter no guardó el nombre (recortado)')
-    igual((await marcasApi(ctx, uno.id)).map((m) => m.nombre), ['c m i o 1 8'], 'el nombre no quedó en la API')
-  }],
-
-  ['cues: mantener C apretada pone UN hot cue (la tecla repetida no siembra marcas)', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    await abrirEditor(page, ctx)
-    const pedidos = pedidosDeMarcas(page)
-    await page.focus('.cue-wave')
-    const r = page.waitForResponse((x) => x.request().method() === 'POST', { timeout: ESPERA_MS })
-    // keyboard.down sobre una tecla ya apretada manda keydown con repeat=true, como el SO al
-    // mantenerla.
-    for (let i = 0; i < 5; i++) await page.keyboard.down('c')
-    await page.keyboard.up('c')
-    igual((await r).status(), 201, 'el primer keydown no creó el hot cue')
-    await page.evaluate(() => fetch('/api/radio/biblioteca').then((x) => x.text()))
-    igual(pedidos.length, 1, `mantener C apretada mandó ${pedidos.length} pedidos`)
-    igual((await marcasApi(ctx, uno.id)).length, 1, 'la API tiene más de un hot cue')
-  }],
-
-  ['cues: Espacio activa el botón con foco (Cue aquí, Borrar de la confirmación), reproduce en la onda; Shift+C no pone un cue', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    const mem = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'memory', inicio: 2 })).data.marca
-    await abrirEditor(page, ctx)
-    const pedidos = pedidosDeMarcas(page)
-    const sentinela = () => page.evaluate(() => fetch('/api/radio/biblioteca').then((x) => x.text()))
-    // Shift+C: no es un atajo.
-    await page.focus('.cue-wave')
-    await page.keyboard.down('Shift')
-    await page.keyboard.press('KeyC')
-    await page.keyboard.up('Shift')
-    await sentinela()
-    igual(pedidos, [], 'Shift+C escribió en la base')
-    // Espacio en «Cue aquí»: el botón se activa (un POST) y no arranca el audio.
-    await page.focus('.cue-b-cue')
-    let r = page.waitForResponse((x) => x.request().method() === 'POST', { timeout: ESPERA_MS })
-    await page.keyboard.press('Space')
-    igual((await r).status(), 201, 'Espacio en «Cue aquí» no puso el cue')
-    igual(await sonando(page), [], 'Espacio en «Cue aquí» arrancó el audio')
-    // Espacio en «Borrar» de la confirmación: borra, no reproduce.
-    await page.click(`.cue-tabla tr[data-id="${mem.id}"] .cue-borrar`)
-    await page.waitForSelector(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`, { timeout: ESPERA_MS })
-    await page.focus(`.cue-tabla tr[data-id="${mem.id}"] .cue-si`)
-    r = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
-    await page.keyboard.press('Space')
-    igual((await r).status(), 200, 'Espacio en «Borrar» no borró')
-    igual(await sonando(page), [], 'Espacio en «Borrar» arrancó el audio')
-    afirmar(!(await marcasApi(ctx, uno.id)).some((m) => m.id === mem.id), 'la memory sigue en la API')
-    // En la onda, Espacio es reproducir.
-    await page.focus('.cue-wave')
-    await page.keyboard.press('Space')
-    await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${uno.id}`]), 'Espacio en la onda no reprodujo')
-    await page.keyboard.press('Space')
-    await hasta(() => sonando(page), (s) => s.length === 0, 'Espacio otra vez en la onda no pausó')
-  }],
-
-  ['cues: un solo audio (el editor y la barra se ceden el lugar)', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    const lib = await api(ctx, '/api/biblioteca')
-    const unoHome = lib.generos.flatMap((g) => g.tracks).find((t) => t.titulo === 'Uno')
-    await abrirHome(page, ctx)
-    await playEnHome(page, 'Uno')
-    await abrirEditor(page, ctx, 'Uno', { navegar: false })
-    const ver = async () => ({
-      suenan: await sonando(page), barra: (await leerBarra(page))?.estado,
-      editor: await page.$eval('.cue-play', (b) => b.textContent),
-    })
-    await page.focus('.cue-wave')
-    await page.keyboard.press('Space')
-    await hasta(ver, (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && v.barra === 'paused' && /Pausar/.test(v.editor),
-      'Espacio en el editor: tendría que sonar SOLO el editor y la barra quedar en pausa')
-    await page.click('.deck-play')
-    await hasta(ver, (v) => json(v.suenan) === json([`/api/audio/${unoHome.id}`]) && v.barra === 'playing' && /Reproducir/.test(v.editor),
-      'play en la barra: tendría que sonar SOLO la barra y el editor volver a «Reproducir»')
-    await page.focus('.cue-wave')
-    await page.keyboard.press('Space')
-    await hasta(ver, (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && v.barra === 'paused',
-      'Espacio otra vez: la barra no cedió')
-    // Elegir otro track de la lista corta el audio del editor (f50: ya no hay «Volver al set»).
-    await elegirFila(page, 2)
-    await hasta(() => sonando(page), (s) => s.length === 0, 'al elegir otro track el editor siguió sonando')
-    // Y una fila de la radio que arranca pausa al editor (un solo audio también entre los dos
-    // audios de la pantalla).
-    await hasta(() => estadoEditor(page), (v) => /guardadas en la biblioteca/.test(v), 'el editor no cargó el paso 2')
-    await page.focus('.cue-wave')
-    await page.keyboard.press('Space')
-    const dosId = await page.$eval('.rpaso[data-n="2"]', (r) => r.querySelector('.rpaso-titulo').textContent)
-    const dos = (await api(ctx, '/api/radio/biblioteca')).tracks.find((t) => t.titulo === dosId)
-    await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${dos.id}`]), 'Espacio en la onda del paso 2 no lo hizo sonar')
-    await page.click('.rpaso[data-n="1"] .rplay')
-    await hasta(async () => ({ suenan: await sonando(page), editor: await page.$eval('.cue-play', (b) => b.textContent) }),
-      (v) => json(v.suenan) === json([`/api/radio/audio/${uno.id}`]) && /Reproducir/.test(v.editor),
-      'play en una fila con el editor sonando: tendría que sonar SOLO la fila y el editor volver a «Reproducir»')
-  }],
-
-  ['cues: «Guardado» recién con la respuesta; si falla, aviso con «Reintentar»', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    let soltar = null
-    let veces = 0
-    await interceptar(page, (req) => {
-      if (req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
-      veces += 1
-      if (veces === 1) {
-        // El primero se retiene y después se contesta 503 (la base ocupada, simulada).
-        return new Promise((res) => { soltar = () => { req.respond({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'la base está ocupada (simulado)' }) }); res(true) } })
-      }
-      return false
-    })
-    await abrirEditor(page, ctx)
-    await page.focus('.cue-wave')
-    await page.keyboard.press('c')
-    await hasta(() => soltar, (s) => !!s, 'el POST nunca salió')
-    const mientras = await estadoEditor(page)
-    afirmar(/Guardando/.test(mientras) && !/Guardado/.test(mientras), `con el pedido en vuelo el indicador tiene que decir «Guardando…»: ${json(mientras)}`)
-    soltar()
-    const falla = await hasta(() => page.evaluate(() => document.querySelector('.cue-falla')?.textContent ?? null), (v) => !!v, 'un 503 no mostró el aviso de error')
-    afirmar(/No se guardó/.test(falla) && /ocupada \(simulado\)/.test(falla), `el aviso no dice qué pasó: ${json(falla)}`)
-    afirmar(!/Guardado/.test(await estadoEditor(page)), 'con el error, el indicador igual dice «Guardado»')
-    igual(await leerTabla(page), [], 'la tabla muestra una marca que no se guardó')
-    igual(await marcasApi(ctx, uno.id), [], 'la API tiene una marca que tendría que haber fallado')
-    const r = page.waitForResponse((x) => x.request().method() === 'POST', { timeout: ESPERA_MS })
-    await page.click('.cue-reintentar')
-    igual((await r).status(), 201, 'el reintento no guardó')
-    const api_ = await marcasApi(ctx, uno.id)
-    await hasta(() => leerTabla(page), (v) => json(v) === json(esperadoTabla(api_)) && v.length === 1, 'después del reintento la tabla no es la lista de la API')
-    await hasta(() => estadoEditor(page), (v) => /Guardado en la biblioteca/.test(v), 'después del reintento el indicador no dice «Guardado»')
-    igual(await page.$('.cue-falla'), null, 'el aviso de error quedó después de reintentar bien')
-  }],
-
-  ['cues: clic en la onda va a ese punto y arrastrar una marca la mueve al tiempo bajo el mouse', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    const cue = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 30 })).data.marca
-    await abrirEditor(page, ctx)
-    // f50: el editor está en el detalle, que tiene su propio scroll: la onda se trae a la vista.
-    await page.$eval('.cue-wave', (e) => e.scrollIntoView({ block: 'center' }))
-    const caja = await page.$eval('.cue-wave', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })
-    // Clic al 25 % del ancho: el cursor va a 0.25 × la duración de la API.
-    await page.mouse.click(caja.x + caja.w * 0.25, caja.y + caja.h / 2)
-    const t = 0.25 * uno.dur
-    igual(await page.$eval('.cue-reloj', (e) => e.textContent), `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`, 'el clic en la onda no llevó el cursor a ese punto')
-    // Arrastrar la banderita del hot cue 1 hasta el 75 %.
-    const flag = await page.$eval(`.cue-mk .cue-flag`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
-    const destino = caja.x + caja.w * 0.75
-    const r = page.waitForResponse((x) => x.request().method() === 'PATCH', { timeout: ESPERA_MS })
-    await page.mouse.move(flag.x, flag.y)
-    await page.mouse.down()
-    await page.mouse.move(flag.x + 40, flag.y, { steps: 4 })
-    await page.mouse.move(destino, flag.y, { steps: 6 })
-    await page.mouse.up()
-    const res = await r
-    const esperado = ms3(((destino - caja.x) / caja.w) * uno.dur)
-    const movida = (await res.json()).marca
-    igual([res.status(), movida.id], [200, cue.id], 'el arrastre no mandó un PATCH de esa marca')
-    afirmar(Math.abs(movida.inicio - esperado) <= 0.001, `la marca quedó en ${movida.inicio} y el mouse soltó en ${esperado}`)
-    igual((await marcasApi(ctx, uno.id)).map((m) => m.inicio), [movida.inicio], 'la API no tiene la marca movida')
-    await hasta(() => leerTabla(page), (v) => v.length === 1 && v[0].tiempos[0] === tiempoTabla(movida.inicio), 'la tabla no muestra el tiempo nuevo')
-  }],
-
-  ['cues: 400 px sin desborde, con la lista del set arriba del detalle y marcas en los bordes', async (page, ctx) => {
-    const { uno } = await semillaUno(ctx)
-    await limpiarMarcas(ctx, uno.id)
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 0, nombre: 'Un nombre largo para ver que no empuja la tabla' })
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: uno.dur - 2, fin: uno.dur })
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: uno.dur - 0.001, num: 7 })
-    await page.setViewport({ width: 400, height: 860 })
-    await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
-    await abrirEditor(page, ctx)
-    const d = await desbordeDe(page)
-    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `editor a 400 px: hay contenido fuera del ancho: ${json(d)}`)
-    const geo = await page.evaluate(() => {
-      const l = document.querySelector('.rpanel-set').getBoundingClientRect()
-      const m = document.querySelector('.rdet').getBoundingClientRect()
-      return { listaAbajo: l.bottom, detalleArriba: m.top }
-    })
-    afirmar(geo.listaAbajo <= geo.detalleArriba, `a 400 px el detalle (con el editor) tiene que ir debajo de la lista del set: ${json(geo)}`)
-    // `desbordeDe` mira el viewport: un campo que se sale de SU celda y pisa la de al lado
-    // queda adentro de la pantalla y no lo ve. Cada campo y botón tiene que entrar en su celda.
-    const pisados = await page.$$eval('.cue-tabla td', (tds) => tds.flatMap((td) => {
-      const c = td.getBoundingClientRect()
-      return [...td.querySelectorAll('input,button')].filter((e) => {
-        const r = e.getBoundingClientRect()
-        return r.left < c.left - 1 || r.right > c.right + 1
-      }).map((e) => `${e.className} (${Math.round(e.getBoundingClientRect().width)} px en ${Math.round(c.width)})`)
-    }))
-    igual(pisados, [], 'a 400 px hay campos de la tabla que se salen de su celda')
-  }],
-]
-
 /* ---------- Radio DJ en maestro/detalle y volumen (f50) ----------
    Lo esperado sale de la API (/api/radio/set, marcas, conteo, onda) o de la definición que
    pidió el dueño (volumen 45 % por defecto, de a 5 %), escrita acá y no importada del front. */
@@ -1290,14 +1001,12 @@ const geoMD = (page) => page.evaluate(() => {
   return { lista: { izq: l.left, der: l.right, arriba: l.top, abajo: l.bottom }, det: { izq: d.left, der: d.right, arriba: d.top, abajo: d.bottom } }
 })
 
-// Lo que muestra el control de volumen del editor y el de la barra, y a cuánto suena cada audio.
+// Lo que muestra el control de volumen de la barra y a cuánto suena cada audio (barra y editor D).
 const leerVolumenes = (page) => page.evaluate(() => {
-  const r = document.querySelector('.cue-vol .vol-range')
   const barra = document.querySelector('.deck-range-vol')
   const audioBarra = [...window.__medios].find((m) => /\/api\/audio\//.test(m.currentSrc || m.src))
-  const audioEditor = document.querySelector('.cue-ed audio')
+  const audioEditor = document.querySelector('.edd audio')
   return {
-    editor: r ? { valor: r.value, role: r.getAttribute('role'), label: r.getAttribute('aria-label'), now: r.getAttribute('aria-valuenow'), texto: r.getAttribute('aria-valuetext'), min: r.getAttribute('aria-valuemin'), max: r.getAttribute('aria-valuemax') } : null,
     barra: barra ? barra.value : null,
     audioEditor: audioEditor ? { volumen: Math.round(audioEditor.volume * 100) / 100, mudo: audioEditor.muted } : null,
     audioBarra: audioBarra ? Math.round(audioBarra.volume * 100) / 100 : null,
@@ -1365,9 +1074,9 @@ const CASOS_F50 = [
     await esperar(ns[0], 'Flecha arriba en la primera fila no se tiene que mover')
   }],
 
-  ['radio (f50): pestañas con flechas; «Onda avanzada» deshabilitada no se activa; «Información» = la API', async (page, ctx) => {
+  ['radio (f50/f61): pestañas con flechas; «Onda avanzada» abre el editor D del track; «Información» = la API', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
-    await abrirEditor(page, ctx)
+    await abrirDetalle(page, ctx)
     const tabs = () => page.evaluate(() => ({
       lista: document.querySelector('[role=tablist]')?.getAttribute('aria-label') ?? null,
       tabs: [...document.querySelectorAll('[role=tablist] [role=tab]')].map((t) => ({
@@ -1379,27 +1088,33 @@ const CASOS_F50 = [
     }))
     const t0 = await tabs()
     igual(t0.tabs.map((t) => [t.id, t.sel, t.dis, t.controla, t.tab]), [
-      ['r-tab-cues', 'true', null, 'r-panel-cues', 0], ['r-tab-info', 'false', null, 'r-panel-info', -1], ['r-tab-onda', 'false', 'true', null, -1],
-    ], 'las pestañas al abrir: «Cues y loops» elegida, una sola parada de Tab, la tercera deshabilitada')
-    afirmar(/próximamente/.test(t0.tabs[2].texto), `la deshabilitada no dice «próximamente»: ${json(t0.tabs[2].texto)}`)
-    igual(t0.paneles, [{ id: 'r-panel-cues', por: 'r-tab-cues', visible: true }, { id: 'r-panel-info', por: 'r-tab-info', visible: false }], 'los paneles al abrir')
+      ['r-tab-cues', 'true', null, 'r-panel-cues', 0], ['r-tab-info', 'false', null, 'r-panel-info', -1], ['r-tab-onda', 'false', null, 'r-panel-onda', -1],
+    ], 'las pestañas al abrir: «Cues y loops» elegida, una sola parada de Tab, las tres habilitadas')
+    igual(t0.tabs.map((t) => t.texto), ['Cues y loops', 'Información', 'Onda avanzada'], 'los nombres de las pestañas (sin «próximamente»)')
+    igual(t0.paneles, [{ id: 'r-panel-cues', por: 'r-tab-cues', visible: true }, { id: 'r-panel-info', por: 'r-tab-info', visible: false }, { id: 'r-panel-onda', por: 'r-tab-onda', visible: false }], 'los paneles al abrir')
     const elegida = (t) => t.tabs.find((x) => x.sel === 'true')?.id
     await page.focus('#r-tab-cues')
     await page.keyboard.press('ArrowRight')
     let t = await hasta(tabs, (v) => elegida(v) === 'r-tab-info' && v.foco === 'r-tab-info', 'Flecha derecha no pasó a «Información»')
-    igual(t.paneles.map((p) => p.visible), [false, true], 'con «Información» elegida se ve su panel y no el del editor')
+    igual(t.paneles.map((p) => p.visible), [false, true, false], 'con «Información» elegida se ve su panel y no los otros')
     await page.keyboard.press('ArrowRight')
-    await hasta(tabs, (v) => elegida(v) === 'r-tab-cues' && v.foco === 'r-tab-cues', 'Flecha derecha desde «Información» tiene que saltear la deshabilitada y volver a la primera')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-onda' && v.foco === 'r-tab-onda', 'Flecha derecha desde «Información» no pasó a «Onda avanzada»')
+    await page.keyboard.press('ArrowRight')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-cues' && v.foco === 'r-tab-cues', 'Flecha derecha desde la última no dio la vuelta a la primera')
     await page.keyboard.press('ArrowLeft')
-    await hasta(tabs, (v) => elegida(v) === 'r-tab-info' && v.foco === 'r-tab-info', 'Flecha izquierda desde la primera no dio la vuelta a «Información»')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-onda' && v.foco === 'r-tab-onda', 'Flecha izquierda desde la primera no dio la vuelta a «Onda avanzada»')
     await page.keyboard.press('Home')
     await hasta(tabs, (v) => elegida(v) === 'r-tab-cues', 'Inicio no fue a la primera')
     await page.keyboard.press('End')
-    await hasta(tabs, (v) => elegida(v) === 'r-tab-info', 'Fin no fue a la última habilitada')
-    // La deshabilitada no se activa con el mouse.
-    await page.click('#r-tab-onda')
+    await hasta(tabs, (v) => elegida(v) === 'r-tab-onda', 'Fin no fue a la última')
+    // «Onda avanzada» abre el editor D de ESTE track (el mismo de Mis playlists).
     t = await tabs()
-    igual([elegida(t), t.paneles.map((p) => p.visible)], ['r-tab-info', [false, true]], 'un clic en «Onda avanzada» cambió de pestaña')
+    igual(t.paneles.map((p) => p.visible), [false, false, true], 'con «Onda avanzada» elegida se ve su panel')
+    await abrirEditorDDesde(page, '#r-panel-onda .rdet-abrir-onda', 'Uno')
+    igual(await page.$eval('.edd', (d) => [d.getAttribute('aria-modal'), d.querySelectorAll('.edd-sel option').length]), ['true', 1],
+      'el editor D desde el set: modal y con UN tema (el elegido)')
+    await cerrarEditorD(page)
+    await page.click('#r-tab-info')
     // «Información»: lo que la API de marcas dice del archivo y la duración del audio de /onda.
     const x = (await apiPedir(ctx, rutaMarcas(uno.id))).data.track
     const onda = (await apiPedir(ctx, `/api/radio/tracks/${uno.id}/onda`)).data
@@ -1423,8 +1138,8 @@ const CASOS_F50 = [
     afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
     for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
     const segundo = set.pasos[1].track
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8 })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1, nombre: 'Drop' })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8, num: 2 })
     await apiPedir(ctx, rutaMarcas(segundo.id), 'POST', { tipo: 'memory', inicio: 2 })
     const conteos = []
     page.on('request', (q) => { if (new URL(q.url()).pathname === '/api/radio/marcas/conteo') conteos.push(q.url()) })
@@ -1443,28 +1158,166 @@ const CASOS_F50 = [
       document.body.appendChild(probe)
       const gris = getComputedStyle(probe).color
       probe.remove()
-      return [...document.querySelectorAll('.rpaso .rcues')].map((e) => ({ texto: e.textContent, gris: getComputedStyle(e).color === gris }))
+      return [...document.querySelectorAll('.rpaso .c-cues .rcues')].map((e) => ({ texto: e.textContent, gris: getComputedStyle(e).color === gris }))
     })
     igual(colores.map((c) => c.gris), esperado.map((e) => e === 'sin cues'), '«sin cues» en gris y los conteos no')
     await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
     igual(conteos.length, 1, `un set pidió ${conteos.length} veces /api/radio/marcas/conteo`)
     const ids = new URL(conteos[0]).searchParams.get('ids').split(',')
     igual(ids, set.pasos.map((p) => p.track.id), 'el pedido de conteos no lleva los ids del set, en orden')
-    // Poner un cue en el editor actualiza la columna sin volver a pedir los conteos.
-    await hasta(() => estadoEditor(page), (v) => /guardadas en la biblioteca/.test(v), 'el editor no cargó «Uno»')
-    await page.focus('.cue-wave')
-    await teclaQueGuarda(page, 'c')
+    // «Cues y loops» lista lo que tiene la base (solo lectura), en orden de tiempo.
+    // f51: el hot loop se lee con su pad (L3) y en naranja; el hot cue en el rojo del pad 1;
+    // el tiempo en m:ss.d (el loop con «→ fin»), el nombre si tiene, y el tipo para el lector.
+    const listaRO = () => page.$$eval('#r-panel-cues .rdet-marca', (li) => li.map((x) => {
+      const pad = x.querySelector('.rdet-marca-pad')
+      return { pad: pad.textContent, color: getComputedStyle(pad).backgroundColor, t: x.querySelector('.mono').textContent,
+        nombre: x.querySelector('.rdet-marca-n')?.textContent ?? null, lector: x.querySelector('.sr-only')?.textContent ?? null }
+    }))
+    const ro = await hasta(listaRO, (v) => v.length === 2, 'la lista de «Cues y loops» no tiene las dos marcas de la API')
+    igual(ro.map(({ lector, ...x }) => x), [  // eslint-disable-line no-unused-vars
+      { pad: '1', color: 'rgb(255, 77, 90)', t: mmssd(1), nombre: 'Drop' },
+      { pad: 'L3', color: 'rgb(255, 154, 46)', t: `${mmssd(4)} → ${mmssd(8)}`, nombre: null },
+    ], 'la lista de «Cues y loops» no dice lo de la API (pad, color de la tabla del motor, tiempos y nombre)')
+    afirmar(/hot cue 1/.test(ro[0].lector) && /loop del pad 3/.test(ro[1].lector), `el lector no anuncia el tipo de cada marca: ${json(ro.map((x) => x.lector))}`)
+    // Poner un cue en el editor D actualiza la columna y la lista al cerrar, sin volver a pedir los conteos.
+    await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+    await page.focus('.edd-onda')
+    await teclaQueGuarda(page, '2')
+    await cerrarEditorD(page)
     const n = (await marcasApi(ctx, uno.id)).length
-    await hasta(() => page.$eval('.rpaso[data-n="1"] .rcues', (e) => e.textContent), (v) => v === cuesTexto(n), 'la columna no se actualizó después de poner un cue')
+    igual(n, 3, 'el pad 2 del editor D no quedó en la base')
+    await hasta(() => page.$eval('.rpaso[data-n="1"] .c-cues .rcues', (e) => e.textContent), (v) => v === cuesTexto(n), 'la columna no se actualizó después de poner un cue')
+    await hasta(() => page.$$eval('#r-panel-cues .rdet-marca', (li) => li.length), (v) => v === n, 'la lista de «Cues y loops» no se releyó al cerrar el editor')
     await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
     igual(conteos.length, 1, 'poner un cue volvió a pedir todos los conteos')
     for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
   }],
 
-  ['volumen (f50): 45 % por defecto, mueve el <audio> del editor y el de la barra (un solo volumen) y se acuerda al recargar', async (page, ctx) => {
+  ['radio (f61): un cue que se guarda DESPUÉS de cerrar el editor D aparece en la columna «Cues» y en la lista sin volver a elegir la fila', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
     await limpiarMarcas(ctx, uno.id)
-    const marca = (await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })).data.marca
+    let demorar = false
+    let demorarGet = false
+    await interceptar(page, async (req) => {
+      const ruta = new URL(req.url()).pathname === rutaMarcas(uno.id)
+      // La relectura del cierre sale antes que el POST vuelva y llega DESPUÉS (con la lista
+      // vieja): la lectura que dispara el aviso tardío tiene que reemplazarla.
+      if (demorarGet && ruta && req.method() === 'GET') {
+        demorarGet = false
+        // La foto de la base de ESTE momento (antes del POST), entregada 3 s después.
+        const foto = await apiPedir(ctx, rutaMarcas(uno.id))
+        await new Promise((res) => setTimeout(res, 3000))
+        await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(foto.data) })
+        return true
+      }
+      if (!demorar || req.method() !== 'POST' || !ruta) return false
+      demorar = false
+      // Más tarde que la relectura que hace el detalle al cerrar.
+      await new Promise((res) => setTimeout(res, 1500))
+      await req.continue()
+      return true
+    })
+    try {
+      await abrirDetalle(page, ctx)
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      demorar = true
+      const post = page.waitForResponse((x) => x.request().method() === 'POST' && new URL(x.url()).pathname === rutaMarcas(uno.id), { timeout: ESPERA_MS })
+      await page.keyboard.press('1')
+      demorarGet = true
+      await page.keyboard.press('Escape')
+      await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no volvió)')
+      igual((await post).status(), 201, 'el POST demorado tenía que guardarse')
+      // Que la relectura vieja (demorada) ya haya llegado antes de mirar el final.
+      await new Promise((res) => setTimeout(res, 3500))
+      const n = (await marcasApi(ctx, uno.id)).length
+      igual(n, 1, 'el cue no quedó en la base')
+      const fila = await page.$eval('.rpaso.is-sel', (e) => e.dataset.n)
+      await hasta(() => page.evaluate((k) => ({
+        col: document.querySelector(`.rpaso[data-n="${k}"] .c-cues .rcues`)?.textContent ?? null,
+        lista: document.querySelectorAll('#r-panel-cues .rdet-marca').length,
+      }), fila), (v) => v.col === cuesTexto(n) && v.lista === n,
+      'lo que se guardó después de cerrar no llegó a la columna «Cues» ni a la lista')
+    } finally {
+      await limpiarMarcas(ctx, uno.id)
+    }
+  }],
+
+  ['radio (f61): un cambio de tipo y su Ctrl+Z que terminan DESPUÉS de cerrar el editor D dejan en el set las marcas de la base', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    let demorar = false
+    let demorarDelete = false
+    await interceptar(page, async (req) => {
+      // El DELETE directo de después de cerrar vuelve más tarde que la relectura que dispara el POST.
+      if (demorarDelete && req.method() === 'DELETE') { demorarDelete = false; await new Promise((res) => setTimeout(res, 1200)); await req.continue(); return true }
+      if (!demorar || req.method() !== 'POST' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
+      demorar = false
+      await new Promise((res) => setTimeout(res, 1500))   // más tarde que la relectura del cierre
+      await req.continue()
+      return true
+    })
+    // Lo que muestra el set de ESE track: la columna «Cues» y los rótulos de la lista.
+    const delSet = () => page.evaluate(() => ({
+      col: document.querySelector('.rpaso.is-sel .c-cues .rcues')?.textContent ?? null,
+      lista: [...document.querySelectorAll('#r-panel-cues .rdet-marca-pad')].map((e) => e.textContent),
+    }))
+    const comoLaBase = async (que) => {
+      const api_ = await marcasApi(ctx, uno.id)
+      const esperado = { col: cuesTexto(api_.length), lista: api_.sort((a, b) => a.inicio - b.inicio).map((m) => (m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : 'L')) }
+      await hasta(delSet, (v) => json(v) === json(esperado), `${que}: el set no muestra lo que tiene la base (${json(esperado)})`)
+      return api_
+    }
+    const cerrar = async () => {
+      await page.keyboard.press('Escape')
+      await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no volvió)')
+    }
+    try {
+      await abrirDetalle(page, ctx)
+      // 1) memory → hot cue, con el POST demorado y Esc enseguida: el DELETE de la vieja sale
+      //    después de cerrar (directo, fuera del historial).
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      const mem = (await teclaQueGuarda(page, 'm')).data.marca
+      await page.waitForSelector(`.edd-fila[data-id="${mem.id}"] .edd-editar`, { timeout: ESPERA_MS })
+      await page.click(`.edd-fila[data-id="${mem.id}"] .edd-editar`)
+      await page.waitForSelector(`.edd-fila[data-id="${mem.id}"] select.edd-tipo`, { timeout: ESPERA_MS })
+      demorar = true
+      demorarDelete = true
+      const borra = page.waitForResponse((x) => x.request().method() === 'DELETE' && new URL(x.url()).pathname.startsWith(rutaMarcas(uno.id)), { timeout: ESPERA_MS })
+      await page.select(`.edd-fila[data-id="${mem.id}"] select.edd-tipo`, 'cue')
+      await page.focus('.edd-onda')
+      await cerrar()
+      igual((await borra).status(), 200, 'el borrado de la memory vieja tenía que salir y guardarse')
+      const tras1 = await comoLaBase('cambio de tipo terminado después de cerrar')
+      igual(tras1.map((m) => m.tipo), ['cue'], 'en la base tiene que quedar solo el hot cue')
+      // 2) Ctrl+Z de un cambio de tipo con el POST demorado y Esc apenas sale: lo que falta del
+      //    grupo (borrar el cue) se termina en el tema de origen, ya cerrado.
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      const m2 = (await teclaQueGuarda(page, 'm')).data.marca
+      await page.click(`.edd-fila[data-id="${m2.id}"] .edd-editar`)
+      await page.waitForSelector(`.edd-fila[data-id="${m2.id}"] select.edd-tipo`, { timeout: ESPERA_MS })
+      const delete2 = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
+      await page.select(`.edd-fila[data-id="${m2.id}"] select.edd-tipo`, 'cue')
+      await delete2
+      await hasta(async () => (await marcasApi(ctx, uno.id)).map((m) => m.tipo).sort(), (v) => json(v) === json(['cue', 'cue']), 'el cambio de tipo no terminó')
+      await page.focus('.edd-onda')
+      demorar = true
+      const sale = page.waitForRequest((q) => q.method() === 'POST' && new URL(q.url()).pathname === rutaMarcas(uno.id), { timeout: ESPERA_MS })
+      const borra2 = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
+      await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+      await sale
+      await cerrar()
+      igual((await borra2).status(), 200, 'el resto del Ctrl+Z (borrar el cue) tenía que guardarse después de cerrar')
+      const tras2 = await comoLaBase('Ctrl+Z terminado después de cerrar')
+      igual(tras2.map((m) => m.tipo).sort(), ['cue', 'memory'], 'el Ctrl+Z tenía que dejar la memory en lugar del segundo cue')
+    } finally {
+      await limpiarMarcas(ctx, uno.id)
+    }
+  }],
+
+  ['volumen (f50/f61): 45 % por defecto en la barra y en el <audio> del editor D abierto desde el set; un solo volumen que se acuerda al recargar', async (page, ctx) => {
     await abrirHome(page, ctx)
     // El perfil de Chrome es el mismo para toda la corrida: se arranca sin nada guardado.
     await page.evaluate(() => localStorage.removeItem('musiflix.volumen'))
@@ -1472,47 +1325,21 @@ const CASOS_F50 = [
     await page.waitForSelector('.lib-card', { timeout: ESPERA_MS })
     try {
       await playEnHome(page, 'Uno')
-      await abrirEditor(page, ctx, 'Uno', { navegar: false })
+      await abrirDetalle(page, ctx, 'Uno', { navegar: false })
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
       let v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor && x.audioBarra !== null, 'no están los dos audios')
-      igual(v, {
-        editor: { valor: '45', role: 'slider', label: 'Volumen', now: '45', texto: '45 %', min: '0', max: '100' },
-        barra: '45', audioEditor: { volumen: 0.45, mudo: false }, audioBarra: 0.45, guardado: null,
-      }, 'sin nada guardado el volumen tiene que ser 45 % en el editor, en la barra y en los dos audios')
-      // ↑ con el foco en la onda: +5 % cada vez, en todos lados, y se guarda.
-      await page.focus('.cue-wave')
-      await page.keyboard.press('ArrowUp')
-      await page.keyboard.press('ArrowUp')
-      v = await hasta(() => leerVolumenes(page), (x) => x.editor.valor === '55', 'dos ↑ en la onda no subieron el volumen a 55 %')
-      igual([v.editor.now, v.editor.texto, v.barra, v.audioEditor.volumen, v.audioBarra, v.guardado], ['55', '55 %', '55', 0.55, 0.55, '0.55'],
-        'el volumen después de dos ↑: el mismo en el editor, la barra, los dos audios y lo guardado')
-      // Con un modificador o escribiendo, ↑ ↓ no son del volumen.
-      await page.keyboard.down('Shift')
-      await page.keyboard.press('ArrowUp')
-      await page.keyboard.up('Shift')
-      await page.click(`.cue-tabla tr[data-id="${marca.id}"] .cue-in-n`)
-      // Solo ↑ (un ↑ y un ↓ se anularían y el caso no vería nada).
-      await page.keyboard.press('ArrowUp')
-      await page.keyboard.press('ArrowUp')
-      await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
-      igual((await leerVolumenes(page)).editor.valor, '55', 'Shift+↑ o ↑ ↓ escribiendo el nombre cambiaron el volumen')
-      await page.focus('.cue-wave')
-      await page.keyboard.press('ArrowDown')
-      await hasta(() => leerVolumenes(page), (x) => x.editor.valor === '50' && x.audioEditor.volumen === 0.5 && x.audioBarra === 0.5, '↓ en la onda no bajó a 50 %')
-      // Silencio: el botón del editor silencia los dos (el de la barra dice lo mismo).
-      await page.click('.cue-vol .vol-mute')
-      v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor.mudo, 'Silenciar no silenció el audio del editor')
-      igual([v.editor.valor, v.editor.texto, v.barra, v.audioBarra], ['0', 'Silenciado', '0', 0], 'silenciado: los dos controles en 0 y la barra muda')
-      igual(await page.$eval('.deck .deck-vol button', (b) => b.getAttribute('aria-pressed')), 'true', 'la barra no se enteró del silencio')
-      await page.click('.cue-vol .vol-mute')
-      await hasta(() => leerVolumenes(page), (x) => !x.audioEditor.mudo && x.editor.valor === '50' && x.audioBarra === 0.5, 'Activar sonido no volvió a 50 %')
-      // Recargar: se acuerda.
+      igual([v.barra, v.audioEditor, v.audioBarra, v.guardado], ['45', { volumen: 0.45, mudo: false }, 0.45, null],
+        'sin nada guardado el volumen tiene que ser 45 % en la barra y en los dos audios')
+      await cerrarEditorD(page)
+      // Lo guardado manda: al recargar, el editor D suena a ese volumen.
+      await page.evaluate(() => localStorage.setItem('musiflix.volumen', '0.3'))
       await page.reload({ waitUntil: 'domcontentloaded' })
-      await abrirEditor(page, ctx, 'Uno', { navegar: false })
-      v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor, 'después de recargar no está el editor')
-      igual([v.editor.valor, v.audioEditor.volumen, v.guardado], ['50', 0.5, '0.5'], 'después de recargar el volumen no es el que quedó')
+      await abrirDetalle(page, ctx, 'Uno', { navegar: false })
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      v = await hasta(() => leerVolumenes(page), (x) => x.audioEditor, 'después de recargar no está el editor D')
+      igual([v.audioEditor.volumen, v.guardado], [0.3, '0.3'], 'después de recargar el editor D no suena al volumen guardado')
     } finally {
       await page.evaluate(() => localStorage.removeItem('musiflix.volumen')).catch(() => {})
-      await limpiarMarcas(ctx, uno.id)
     }
   }],
 
@@ -1568,7 +1395,7 @@ const CASOS_F50 = [
     afirmar(barras.length === fin.length && barras.every((n) => n > 0), `alguna miniondita quedó sin barras: ${json(barras)}`)
   }],
 
-  ['radio (f50): elegir una fila con el mouse o Enter lleva el foco a la onda y C pone un cue; con ↑ ↓ el foco se queda en la lista', async (page, ctx) => {
+  ['radio (f50/f61): elegir una fila con el mouse o Enter lleva el foco a «Editar cues y loops» y Enter abre el editor D de ESE track; con ↑ ↓ el foco se queda en la lista', async (page, ctx) => {
     const { uno } = await semillaUno(ctx)
     const set = await api(ctx, `/api/radio/set?playlist=${ctx.base.radio_playlist}&track=${encodeURIComponent(uno.id)}`)
     afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
@@ -1578,37 +1405,36 @@ const CASOS_F50 = [
       await abrirRadio(page, ctx)
       await elegirSemilla(page, 'Uno')
       await armarSet(page)
-      const ayuda = await page.$eval('.cue-atajos', (p) => p.textContent)
-      afirmar(/atajos actúan con el foco en el editor/.test(ayuda), `la ayuda no dice dónde actúan los atajos: ${json(ayuda)}`)
       const foco = () => page.evaluate(() => ({
-        onda: document.activeElement?.classList.contains('cue-wave') ?? false,
+        boton: document.activeElement?.classList.contains('rdet-abrir') ?? false,
         fila: document.activeElement?.classList.contains('rpaso-sel') ? document.activeElement.dataset.n : null,
         titulo: document.querySelector('#r-det-h')?.textContent ?? null,
-        estado: document.querySelector('#r-panel-cues .cue-estado')?.textContent ?? '',
       }))
-      // Con el mouse: el foco termina en la onda del editor del track elegido.
+      // Con el mouse: el foco termina en el botón del editor del track elegido.
       await page.click(`.rpaso-sel[data-n="${p2.n}"]`)
-      await hasta(foco, (v) => v.onda && v.titulo === p2.track.titulo && /guardadas en la biblioteca/.test(v.estado),
-        'elegí una fila con el mouse y el foco no pasó a la onda de su editor')
-      // …y C pone el cue en ESE track (sin tocar nada más), y Espacio reproduce (no re-elige).
-      const cue = await teclaQueGuarda(page, 'c')
-      igual([cue.status, cue.data.marca.tipo], [201, 'cue'], 'C después de elegir con el mouse')
+      await hasta(foco, (v) => v.boton && v.titulo === p2.track.titulo, 'elegí una fila con el mouse y el foco no pasó a «Editar cues y loops»')
+      // …Enter abre el editor D de ESE track y un pad queda en ESE track.
+      await page.keyboard.press('Enter')
+      await hasta(() => page.$eval('#edd-titulo', (h) => h.textContent).catch(() => ''), (v) => v.startsWith(p2.track.titulo), 'Enter no abrió el editor D del track elegido')
+      await hasta(() => page.evaluate(() => ({ msg: document.querySelector('.edd-msg')?.textContent ?? null, e: document.querySelector('.edd-grilla-estado')?.textContent ?? '' })),
+        (v) => !v.msg && v.e && !v.e.includes('Leyendo'), 'la onda del editor D no cargó', 20000)
+      await page.focus('.edd-onda')
+      const cue = await teclaQueGuarda(page, '1')
+      igual([cue.status, cue.data.marca.tipo], [201, 'cue'], 'el pad 1 en el editor D abierto desde el set')
       igual((await marcasApi(ctx, p2.track.id)).length, 1, 'el cue no quedó en el track elegido')
-      await page.keyboard.press('Space')
-      await hasta(() => sonando(page), (s) => json(s) === json([`/api/radio/audio/${p2.track.id}`]), 'Espacio después de elegir con el mouse no reprodujo el track')
-      await page.keyboard.press('Space')
+      await cerrarEditorD(page)
       // Con Enter sobre una fila: lo mismo.
       await page.focus(`.rpaso-sel[data-n="${p3.n}"]`)
       await page.keyboard.press('Enter')
-      await hasta(foco, (v) => v.onda && v.titulo === p3.track.titulo, 'Enter sobre una fila no llevó el foco a la onda de su editor')
+      await hasta(foco, (v) => v.boton && v.titulo === p3.track.titulo, 'Enter sobre una fila no llevó el foco a «Editar cues y loops»')
       // Con ↑ ↓ el foco se queda en la lista (para seguir recorriéndola).
       await page.focus(`.rpaso-sel[data-n="${p3.n}"]`)
       await page.keyboard.press('ArrowUp')
       let v = await hasta(foco, (x) => x.fila === String(p2.n) && x.titulo === p2.track.titulo, 'Flecha arriba no pasó a la fila anterior')
-      afirmar(!v.onda, 'con Flecha arriba el foco se fue al editor')
+      afirmar(!v.boton, 'con Flecha arriba el foco se fue al editor')
       await page.keyboard.press('ArrowDown')
       v = await hasta(foco, (x) => x.fila === String(p3.n), 'Flecha abajo no volvió a la fila siguiente')
-      afirmar(!v.onda, 'con Flecha abajo el foco se fue al editor')
+      afirmar(!v.boton, 'con Flecha abajo el foco se fue al editor')
     } finally {
       await limpiarMarcas(ctx, p2.track.id)
     }
@@ -1690,7 +1516,7 @@ const CASOS_F50 = [
       await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(cuerpo) })
       return true
     })
-    await abrirEditor(page, ctx)
+    await abrirDetalle(page, ctx)
     await page.click('#r-tab-info')
     const info = await hasta(() => page.evaluate(() => {
       const dl = document.querySelector('#r-panel-info .rinfo-dl')
@@ -1702,14 +1528,17 @@ const CASOS_F50 = [
     igual([info.Licencia, info.Origen], ['no declarado', 'no declarado'], 'sin licencia ni origen tiene que decir «no declarado»')
   }],
 
-  ['400 px (f50): el detalle va debajo de la lista; pestañas, editor e «Información» sin desborde', async (page, ctx) => {
+  ['400 px (f50/f61): el detalle va debajo de la lista; las tres pestañas sin desborde', async (page, ctx) => {
     await page.setViewport({ width: 400, height: 860 })
-    await abrirEditor(page, ctx)
+    await abrirDetalle(page, ctx)
     await hasta(() => page.evaluate(() => document.documentElement.clientWidth), (w) => w <= 400, 'el viewport no pasó a 400 px')
     const g = await geoMD(page)
     afirmar(g.det.arriba >= g.lista.abajo, `a 400 px el detalle tiene que ir debajo de la lista: ${json(g)}`)
     let d = await desbordeDe(page)
-    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `400 px con el editor: ${json(d)}`)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `400 px con «Cues y loops»: ${json(d)}`)
+    await page.click('#r-tab-onda')
+    d = await desbordeDe(page)
+    afirmar(d.scroll <= d.ancho && d.fuera.length === 0, `400 px con «Onda avanzada»: ${json(d)}`)
     await page.click('#r-tab-info')
     await page.waitForSelector('#r-panel-info .rinfo-dl', { timeout: ESPERA_MS })
     d = await desbordeDe(page)
@@ -2229,7 +2058,6 @@ const CASOS = [
 
   ...CASOS_SETS,
 
-  ...CASOS_CUES,
 
   ...CASOS_F50,
 
@@ -4098,10 +3926,23 @@ function casosF53() {
         await page.focus('button[aria-label="Ponerle género a «Repetido»"]')
         await page.keyboard.press('Enter')
         await page.waitForSelector('input[aria-label="Género de «Repetido»"]', { timeout: ESPERA_MS })
+        // f61: editando, el campo no es una caja de formulario (sin borde ni fondo de campo) y el
+        // foco de teclado se ve (anillo); el objetivo táctil sigue de 44 px.
+        const campo = await page.$eval('input[aria-label="Género de «Repetido»"]', (i) => {
+          const c = getComputedStyle(i)
+          return { borde: c.borderTopWidth, fondo: c.backgroundColor, anillo: c.outlineStyle !== 'none' && parseFloat(c.outlineWidth) >= 2, alto: Math.round(i.getBoundingClientRect().height) }
+        })
+        igual(campo, { borde: '0px', fondo: 'rgba(0, 0, 0, 0)', anillo: true, alto: 44 }, 'el campo del género se ve como una caja o sin anillo de foco')
         await page.keyboard.type('Acid')
         await page.keyboard.press('Enter')
         await hasta(async () => (await itemsApi(ctx, pidPeak)).find((i) => i.titulo === 'Repetido').genero, (g) => g === 'Acid', 'el género no llegó a la API')
         await esperarFilas(page, ctx, pidPeak, 'la fila no muestra el género nuevo')
+        // En reposo, el género es texto como BPM y KEY pero sin caja: ni fondo ni borde.
+        const reposo = await page.$$eval('.results-crate .mb-genero', (bs) => bs.filter((b) => b !== document.activeElement).map((b) => {
+          const c = getComputedStyle(b.querySelector('b'))
+          return [c.backgroundColor, c.boxShadow]
+        }))
+        afirmar(reposo.length > 0 && reposo.every(([f, sh]) => f === 'rgba(0, 0, 0, 0)' && sh === 'none'), `el género en reposo tiene caja: ${json(reposo)}`)
         await hasta(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null), (v) => v && v.startsWith('Género de «Repetido»: Acid'), 'el foco no volvió al botón del género')
         igual(await page.$('.crate-genero'), null, 'con todos los temas con género, el aviso «sin género» tiene que irse')
         igual(await chicos(page, '.crate-accion, .crate-head .crate-actions .btn, .mb-genero, .results-crate .trk-status .btn, .results-crate .trk-acts .btn, .crate-analisis .btn'), [],
