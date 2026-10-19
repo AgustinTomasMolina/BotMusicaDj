@@ -104,7 +104,8 @@ function ListaMarcas({ datos, id }) {
         <li key={m.id} className="rdet-marca">
           <span className={`rdet-marca-pad ${claseMarca(m)}`} aria-hidden="true">{textoMarca(m)}</span>
           <span className="mono">{fmtTiempo(m.inicio, 1)}{m.tipo === 'loop' && m.fin != null ? ` → ${fmtTiempo(m.fin, 1)}` : ''}</span>
-          <span className="rdet-marca-n">{m.nombre || <span className="sr-only">{nombreMarca(m)}</span>}</span>
+          <span className="sr-only">{nombreMarca(m)}{m.nombre ? ': ' : ''}</span>
+          {m.nombre && <span className="rdet-marca-n">{m.nombre}</span>}
         </li>
       ))}
     </ul>
@@ -124,6 +125,14 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   const avisos = useRef(onConteo)
   avisos.current = onConteo
   const idSel = paso && paso.track.en_biblioteca !== false ? paso.track.id : null
+
+  const idSelRef = useRef(idSel)
+  idSelRef.current = idSel
+  const alCambioTardio = (tid, marcas) => {
+    const ms = Array.isArray(marcas) ? marcas : []
+    avisos.current?.(tid, ms.length, ms)
+    if (tid === idSelRef.current) setDatos((d) => (d && d.id === tid && !d.error ? { ...d, marcas: ms } : d))
+  }
 
   useEffect(() => {
     if (idSel === null || idSel === undefined) { setDatos(null); return undefined }
@@ -148,10 +157,10 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   useEffect(() => {
     if (!focoEditor) return
     const raiz = raizRef.current
-    const onda = raiz && raiz.querySelector('#r-panel-cues:not([hidden]) .rdet-abrir')
-    if (!onda) return
+    const boton = raiz && raiz.querySelector('#r-panel-cues:not([hidden]) .rdet-abrir')
+    if (!boton) return
     const alCostado = getComputedStyle(raiz).position === 'sticky'
-    onda.focus({ preventScroll: !alCostado })
+    boton.focus({ preventScroll: !alCostado })
   }, [focoEditor])
 
   if (!paso) {
@@ -163,6 +172,8 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   }
   const t = paso.track
   const falta = t.en_biblioteca === false
+  // El tema con la forma que pide el editor D; null (sin id o fuera de la biblioteca) = no se abre.
+  const tema = temaDeTrack(t)
 
   const elegir = (k, foco = false) => {
     const p = PESTANAS.find((x) => x.k === k)
@@ -222,7 +233,7 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
           ? <p className="rnota">{SIN_AUDIO}</p>
           : <>
               <ListaMarcas datos={datos} id={t.id} />
-              <button type="button" className="btn btn-primary rdet-abrir" onClick={() => setEditor(true)}>Editar cues y loops</button>
+              <button type="button" className="btn btn-primary rdet-abrir" disabled={!tema} onClick={() => setEditor(true)}>Editar cues y loops</button>
             </>}
       </div>
       <div role="tabpanel" id="r-panel-info" aria-labelledby="r-tab-info" className="rdet-panel" hidden={tab !== 'info'}>
@@ -233,13 +244,16 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
           ? <p className="rnota">{SIN_AUDIO}</p>
           : <>
               <p className="rnota">La onda en tres bandas (graves, medios, agudos) con la grilla de beats, el zoom y los loops: se abre en el editor completo.</p>
-              <button type="button" className="btn btn-primary rdet-abrir-onda" onClick={() => setEditor(true)}>Abrir la onda avanzada</button>
+              <button type="button" className="btn btn-primary rdet-abrir-onda" disabled={!tema} onClick={() => setEditor(true)}>Abrir la onda avanzada</button>
             </>}
       </div>
 
-      {editor && !falta && (
-        <EditorCues temas={[temaDeTrack(t)]} inicial={t.id}
+      {editor && tema && (
+        <EditorCues temas={[tema]} inicial={tema.analisis.radio_id}
           // Una escritura que vuelve con error DESPUÉS de cerrar el editor: si no, nadie se entera.
+          // Y una que vuelve bien después de cerrar: la lista y la columna «Cues» la muestran
+          // (la relectura del cierre pudo llegar antes que ella).
+          onCambioTardio={alCambioTardio}
           onFallaTardia={(texto) => toast.danger({ title: 'Un cambio de cues no se guardó', body: `${texto} Abrí el editor de nuevo para ver lo que quedó.` })}
           onClose={(r) => {
             setEditor(false)

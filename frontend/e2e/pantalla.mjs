@@ -1139,8 +1139,8 @@ const CASOS_F50 = [
     afirmar(set.pasos.length >= 3, 'el set de juguete tiene menos de 3 pasos')
     for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
     const segundo = set.pasos[1].track
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1 })
-    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8 })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'cue', inicio: 1, nombre: 'Drop' })
+    await apiPedir(ctx, rutaMarcas(uno.id), 'POST', { tipo: 'loop', inicio: 4, fin: 8, num: 2 })
     await apiPedir(ctx, rutaMarcas(segundo.id), 'POST', { tipo: 'memory', inicio: 2 })
     const conteos = []
     page.on('request', (q) => { if (new URL(q.url()).pathname === '/api/radio/marcas/conteo') conteos.push(q.url()) })
@@ -1167,8 +1167,19 @@ const CASOS_F50 = [
     const ids = new URL(conteos[0]).searchParams.get('ids').split(',')
     igual(ids, set.pasos.map((p) => p.track.id), 'el pedido de conteos no lleva los ids del set, en orden')
     // «Cues y loops» lista lo que tiene la base (solo lectura), en orden de tiempo.
-    const listaRO = () => page.$$eval('#r-panel-cues .rdet-marca', (li) => li.map((x) => x.querySelector('.rdet-marca-pad').textContent))
-    await hasta(listaRO, (v) => json(v) === json(['1', 'L']), 'la lista de «Cues y loops» no es la de la API (cue en 1 s, loop en 4 s)')
+    // f51: el hot loop se lee con su pad (L3) y en naranja; el hot cue en el rojo del pad 1;
+    // el tiempo en m:ss.d (el loop con «→ fin»), el nombre si tiene, y el tipo para el lector.
+    const listaRO = () => page.$$eval('#r-panel-cues .rdet-marca', (li) => li.map((x) => {
+      const pad = x.querySelector('.rdet-marca-pad')
+      return { pad: pad.textContent, color: getComputedStyle(pad).backgroundColor, t: x.querySelector('.mono').textContent,
+        nombre: x.querySelector('.rdet-marca-n')?.textContent ?? null, lector: x.querySelector('.sr-only')?.textContent ?? null }
+    }))
+    const ro = await hasta(listaRO, (v) => v.length === 2, 'la lista de «Cues y loops» no tiene las dos marcas de la API')
+    igual(ro.map(({ lector, ...x }) => x), [  // eslint-disable-line no-unused-vars
+      { pad: '1', color: 'rgb(255, 77, 90)', t: mmssd(1), nombre: 'Drop' },
+      { pad: 'L3', color: 'rgb(255, 154, 46)', t: `${mmssd(4)} → ${mmssd(8)}`, nombre: null },
+    ], 'la lista de «Cues y loops» no dice lo de la API (pad, color de la tabla del motor, tiempos y nombre)')
+    afirmar(/hot cue 1/.test(ro[0].lector) && /loop del pad 3/.test(ro[1].lector), `el lector no anuncia el tipo de cada marca: ${json(ro.map((x) => x.lector))}`)
     // Poner un cue en el editor D actualiza la columna y la lista al cerrar, sin volver a pedir los conteos.
     await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
     await page.focus('.edd-onda')
@@ -1181,6 +1192,41 @@ const CASOS_F50 = [
     await page.evaluate(() => fetch('/api/radio/biblioteca').then((r) => r.text()))
     igual(conteos.length, 1, 'poner un cue volvió a pedir todos los conteos')
     for (const p of set.pasos) await limpiarMarcas(ctx, p.track.id)
+  }],
+
+  ['radio (f61): un cue que se guarda DESPUÉS de cerrar el editor D aparece en la columna «Cues» y en la lista sin volver a elegir la fila', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    let demorar = false
+    await interceptar(page, async (req) => {
+      if (!demorar || req.method() !== 'POST' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
+      demorar = false
+      // Más tarde que la relectura que hace el detalle al cerrar.
+      await new Promise((res) => setTimeout(res, 1500))
+      await req.continue()
+      return true
+    })
+    try {
+      await abrirDetalle(page, ctx)
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      demorar = true
+      const post = page.waitForResponse((x) => x.request().method() === 'POST' && new URL(x.url()).pathname === rutaMarcas(uno.id), { timeout: ESPERA_MS })
+      await page.keyboard.press('1')
+      await page.keyboard.press('Escape')
+      await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no volvió)')
+      igual((await post).status(), 201, 'el POST demorado tenía que guardarse')
+      const n = (await marcasApi(ctx, uno.id)).length
+      igual(n, 1, 'el cue no quedó en la base')
+      const fila = await page.$eval('.rpaso.is-sel', (e) => e.dataset.n)
+      await hasta(() => page.evaluate((k) => ({
+        col: document.querySelector(`.rpaso[data-n="${k}"] .c-cues .rcues`)?.textContent ?? null,
+        lista: document.querySelectorAll('#r-panel-cues .rdet-marca').length,
+      }), fila), (v) => v.col === cuesTexto(n) && v.lista === n,
+      'lo que se guardó después de cerrar no llegó a la columna «Cues» ni a la lista')
+    } finally {
+      await limpiarMarcas(ctx, uno.id)
+    }
   }],
 
   ['volumen (f50/f61): 45 % por defecto en la barra y en el <audio> del editor D abierto desde el set; un solo volumen que se acuerda al recargar', async (page, ctx) => {

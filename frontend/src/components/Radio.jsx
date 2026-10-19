@@ -21,7 +21,7 @@ import Detalle from './RadioDetalle'
    pantalla quedan las playlists de siempre (el rail de la app) con el estado de la biblioteca
    del motor; arriba, cómo se arma el set (semilla, controles, sets guardados); al centro la
    lista del set (RadioLista.jsx) y a la derecha el detalle del track elegido con su porqué y
-   las pestañas (RadioDetalle.jsx: el editor de cues de f48 vive ahí).
+   las pestañas (RadioDetalle.jsx: las marcas del track y, desde f61, la entrada al editor D).
 
    REGLA DE LA PANTALLA (spec §6: un dato que miente es peor que uno ausente): acá NO se
    calcula nada. El BPM, las dos notaciones de la key, el `?` de confianza, la energía, el
@@ -870,8 +870,8 @@ export default function Radio({ onBiblioteca, playlistId = null, pick, onAbrirPl
   const [armaAbierta, setArmaAbierta] = useState(true)
   useEffect(() => { setArmaAbierta(!vistaActual) }, [claveVista]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // `alEditor`: la fila se eligió con el mouse o con Enter → el foco pasa a la onda del editor
-  // (sus atajos actúan con el foco adentro). Con ↑ ↓ el foco se queda en la lista.
+  // `alEditor`: la fila se eligió con el mouse o con Enter → el foco pasa al botón «Editar cues
+  // y loops» del detalle (Enter abre el editor D). Con ↑ ↓ el foco se queda en la lista.
   const [focoEditor, setFocoEditor] = useState(0)
   const elegirFila = (n, { alEditor = false } = {}) => {
     setSelN(n)

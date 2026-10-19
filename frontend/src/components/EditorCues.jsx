@@ -114,7 +114,7 @@ function CampoNombre({ valor, etiqueta, max, onCommit }) {
 const Kbd = ({ children }) => <kbd className="edd-kbd">{children}</kbd>
 
 /* ---------- la pantalla ---------- */
-export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
+export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onCambioTardio }) {
   const [idx, setIdx] = useState(() => Math.max(0, temas.findIndex((t) => t.analisis?.radio_id === inicial)))
   const tema = temas[idx] || null
   const id = tema ? tema.analisis.radio_id : null
@@ -185,6 +185,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   const cerrado = useRef(false)
   const tardia = useRef(onFallaTardia)
   tardia.current = onFallaTardia
+  // f61: y lo que vuelve después de cerrar y SÍ se guardó, con la lista del servidor (tid,
+  // marcas): quien abrió el editor actualiza lo que muestra (el set de la Radio).
+  const cambioTardio = useRef(onCambioTardio)
+  cambioTardio.current = onCambioTardio
   // Cambios de tipo que quedaron a medias en un tema que ya no estaba abierto: tid → [textos].
   // Se muestran al volver a ese tema (con su lista recién leída del servidor).
   const pendientesDe = useRef(new Map())
@@ -497,6 +501,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       if (cerrado.current) {
         // El editor ya se cerró: si falló, que la playlist lo diga (nadie más se va a enterar).
         if (!ok) tardia.current?.(`${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}`)
+        else cambioTardio.current?.(tid, r.data.marcas)
       } else if (tid === idRef.current) {
         // Se fue y se volvió al MISMO tema (A → B → A): no se toca el historial de esta visita,
         // pero la lista sí tiene que mostrar lo que el server ya tiene.
