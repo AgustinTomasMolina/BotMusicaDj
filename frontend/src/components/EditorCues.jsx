@@ -273,10 +273,20 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   }, [id])
 
   // Al cerrar: el audio no queda sonando y lo que esté en vuelo ya no es de esta pantalla.
+  // f61: si lo desmonta quien lo abrió (otro track elegido en el set) sin pasar por `cerrar`,
+  // los cambios sin confirmar se avisan igual por `onFallaTardia` (no se pierden en silencio).
+  const porCerrar = useRef(false)
+  const sinConfirmarRef = useRef([])
   useEffect(() => {
     cerrado.current = false
     const a = audioRef.current          // el <audio> es el mismo toda la vida del editor
-    return () => { cerrado.current = true; epoca.current += 1; a?.pause() }
+    return () => {
+      cerrado.current = true; epoca.current += 1; a?.pause()
+      const textos = sinConfirmarRef.current
+      if (!porCerrar.current && textos.length) {
+        tardia.current?.(`${textos.length} cambio${textos.length === 1 ? '' : 's'} sin confirmar al cerrar el editor: no sé si quedaron guardados. ${textos.join(' ')}`)
+      }
+    }
   }, [])
 
   // El ajuste de la grilla se guarda en este navegador, por tema. Recién pasado de tema, el
@@ -462,9 +472,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
 
   // f61: con el editor ya cerrado, una lista del servidor que vuelve de una escritura se le pasa
   // a quien lo abrió (`onCambioTardio`). Mismo orden que `ponerLista`: una respuesta pedida antes
-  // que la última avisada no la pisa.
+  // que la última avisada no la pisa, pero igual se avisa que hubo un cambio (sin lista: `null`),
+  // para que quien lo abrió vuelva a leer el servidor.
   const avisarTardio = (tid, marcas, seq) => {
-    if (!cerrado.current || !Array.isArray(marcas) || seq < lista.current.aplicada) return
+    if (!cerrado.current || !Array.isArray(marcas)) return
+    if (seq < lista.current.aplicada) { cambioTardio.current?.(tid, null); return }
     lista.current.aplicada = seq
     cambioTardio.current?.(tid, marcas)
   }
@@ -1040,6 +1052,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       setAviso(`Hay ${sinConfirmar} cambio${sinConfirmar === 1 ? '' : 's'} sin confirmar: no sé si quedaron guardados. «Volver a leer del servidor» lo averigua; Esc otra vez (o Cerrar) cierra igual.`)
       return
     }
+    porCerrar.current = true
     onClose(sinConfirmar > 0 ? { sinConfirmar, textos: fallas.filter((f) => !f.reconciliada).map((f) => f.texto) } : undefined)
   }
   const irTema = (k) => {
@@ -1187,6 +1200,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   const zooms = eg.hay ? ZOOM_COMPASES : ZOOM_SEGUNDOS
   const hora = estado.hora ? estado.hora.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
   const sinConfirmar = fallas.filter((f) => !f.reconciliada).length
+  sinConfirmarRef.current = fallas.filter((f) => !f.reconciliada).map((f) => f.texto)
   // Mientras haya escrituras o relecturas en vuelo, el estado no afirma que la lista sea la
   // del servidor (auditoría f54).
   const pendientes = vuelo.current.n > 0 || releyendo > 0

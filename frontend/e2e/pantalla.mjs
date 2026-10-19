@@ -1197,8 +1197,20 @@ const CASOS_F50 = [
     const { uno } = await semillaUno(ctx)
     await limpiarMarcas(ctx, uno.id)
     let demorar = false
+    let demorarGet = false
     await interceptar(page, async (req) => {
-      if (!demorar || req.method() !== 'POST' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
+      const ruta = new URL(req.url()).pathname === rutaMarcas(uno.id)
+      // La relectura del cierre sale antes que el POST vuelva y llega DESPUÉS (con la lista
+      // vieja): la lectura que dispara el aviso tardío tiene que reemplazarla.
+      if (demorarGet && ruta && req.method() === 'GET') {
+        demorarGet = false
+        // La foto de la base de ESTE momento (antes del POST), entregada 3 s después.
+        const foto = await apiPedir(ctx, rutaMarcas(uno.id))
+        await new Promise((res) => setTimeout(res, 3000))
+        await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(foto.data) })
+        return true
+      }
+      if (!demorar || req.method() !== 'POST' || !ruta) return false
       demorar = false
       // Más tarde que la relectura que hace el detalle al cerrar.
       await new Promise((res) => setTimeout(res, 1500))
@@ -1212,9 +1224,12 @@ const CASOS_F50 = [
       demorar = true
       const post = page.waitForResponse((x) => x.request().method() === 'POST' && new URL(x.url()).pathname === rutaMarcas(uno.id), { timeout: ESPERA_MS })
       await page.keyboard.press('1')
+      demorarGet = true
       await page.keyboard.press('Escape')
       await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no volvió)')
       igual((await post).status(), 201, 'el POST demorado tenía que guardarse')
+      // Que la relectura vieja (demorada) ya haya llegado antes de mirar el final.
+      await new Promise((res) => setTimeout(res, 3500))
       const n = (await marcasApi(ctx, uno.id)).length
       igual(n, 1, 'el cue no quedó en la base')
       const fila = await page.$eval('.rpaso.is-sel', (e) => e.dataset.n)

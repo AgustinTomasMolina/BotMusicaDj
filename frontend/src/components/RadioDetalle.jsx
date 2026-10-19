@@ -129,10 +129,12 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   const idSelRef = useRef(idSel)
   idSelRef.current = idSel
   const alCambioTardio = (tid, marcas) => {
-    const ms = Array.isArray(marcas) ? marcas : []
-    avisos.current?.(tid, ms.length, ms)
+    // Sin lista (una respuesta más vieja que la ya avisada): no se inventa una vacía, solo se relee.
+    if (Array.isArray(marcas)) {
+      avisos.current?.(tid, marcas.length, marcas)
+      if (tid === idSelRef.current) setDatos((d) => (d && d.id === tid && !d.error ? { ...d, marcas } : d))
+    }
     if (tid === idSelRef.current) {
-      setDatos((d) => (d && d.id === tid && !d.error ? { ...d, marcas: ms } : d))
       // Y una lectura nueva: si una relectura más vieja seguía en vuelo, la de ahora la reemplaza.
       setRelee((x) => x + 1)
     }
