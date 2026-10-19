@@ -111,6 +111,9 @@ export function ondaPreview(data, dur) {
 // y el audio que no decodifica (422: no cambia mientras el archivo no cambie, y volver a pedirlo
 // es volver a decodificar). Un 404 (el archivo se movió), un 409 o un 5xx son pasajeros: no se
 // guardan y la fila vuelve a pedir cuando entra otra vez en pantalla.
+// El 422 queda guardado hasta recargar la página: si el dueño reemplaza el archivo por uno que
+// sí decodifica, el servidor lo vuelve a decodificar (su caché se invalida por tamaño y fecha),
+// pero esta fila no lo vuelve a pedir hasta entonces.
 export const guardarOnda = (r) => Boolean(r) && (r.ok === true || r.status === 422)
 
 // Qué respuestas de /marcas se guardan: solo las que trajeron el track y la lista con la base

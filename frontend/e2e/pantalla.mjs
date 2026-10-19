@@ -4701,6 +4701,7 @@ function casosF54() {
         igual(e1.label, `Marcar cues de «${ocupado.item.titulo}» (marcas sin leer)`, 'con la base ocupada no se pueden contar las marcas')
         afirmar(e1.desc.includes('Sin onda: La biblioteca está ocupada.') && e1.desc.includes('Sin marcas: La biblioteca está ocupada.'),
           `la descripción accesible no dice por qué no hay onda ni marcas: ${json(e1.desc)}`)
+        afirmar(!e1.desc.includes('..'), `la descripción accesible repite el punto final: ${json(e1.desc)}`)
         // Se va de la pantalla y vuelve: se piden otra vez y ahora llegan.
         await page.evaluate(() => window.scrollTo(0, 0))
         if ((await leerOcupado()).visible) await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
@@ -4710,6 +4711,42 @@ function casosF54() {
         const e2 = await hasta(leerOcupado, (x) => x.fase === 'ok' && x.onda, 'al volver a la pantalla, la onda no se volvió a pedir')
         igual([e2.label, e2.desc], [`Marcar cues de «${ocupado.item.titulo}» (sin marcas)`, null], 'al volver, las marcas tenían que leerse y los avisos irse')
         igual(pedidos.sort(), ['marcas', 'marcas', 'preview', 'preview'], 'cada cosa pasajera se tenía que pedir otra vez, una sola vez')
+      })
+    }],
+
+    ['preview (f62, re-auditoría): una onda y unas marcas que llegan con la fila fuera de pantalla se dibujan al volver, sin pedirlas otra vez', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        const r0 = await apiPedir(ctx, rutaMarcas(t.rid), 'POST', { tipo: 'cue', inicio: 30, num: 1 })
+        afirmar(r0.status === 201, `no pude crear la marca: ${json(r0)}`)
+        const retenidos = []     // pedidos de la fila retenidos hasta que la fila se va
+        const pedidos = []
+        await interceptar(page, (req) => {
+          const m = /^\/api\/radio\/tracks\/([0-9a-f]{16})\/(preview|marcas)$/.exec(new URL(req.url()).pathname)
+          if (!m || req.method() !== 'GET' || m[1] !== t.rid) return false
+          pedidos.push(m[2])
+          return new Promise((res) => { retenidos.push({ que: m[2], soltar: () => { req.continue().catch(() => {}); res(true) } }) })
+        })
+        await page.setViewport({ width: 1440, height: 420 })
+        await abrirPlaylist(page, ctx)
+        const pv = `.pv[data-pv="${t.rid}"]`
+        const visible = () => page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight }, pv)
+        await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center' }), pv)
+        await hasta(async () => retenidos.map((x) => x.que).sort(), (q) => json(q) === json(['marcas', 'preview']), 'la fila a la vista no pidió su onda y sus marcas')
+        // Se va de la pantalla con los dos pedidos en vuelo; recién ahí contestan.
+        await page.evaluate(() => window.scrollTo(0, 0))
+        if (await visible()) await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        afirmar(!(await visible()), 'no pude sacar la fila de la pantalla')
+        const llegan = ['preview', 'marcas'].map((q) => page.waitForResponse((x) => new URL(x.url()).pathname === `/api/radio/tracks/${t.rid}/${q}`, { timeout: ESPERA_MS }))
+        for (const x of retenidos.splice(0)) x.soltar()
+        await Promise.all(llegan)
+        await page.evaluate(() => fetch('/api/playlists').then((x) => x.text()))
+        // Vuelve: lo que llegó mientras no estaba se dibuja, sin otro pedido.
+        await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center' }), pv)
+        const v = await hasta(() => leerPreview(page, t.rid), (x) => x && x.fase === 'ok' && x.svg && x.marcas.length === 1,
+          'al volver a la pantalla, la onda y las marcas que llegaron mientras no estaba no se dibujaron')
+        igual(v.marcas[0].fondo, v.colores.cues[1], 'el hot cue del pad B no tiene su color')
+        igual(pedidos.sort(), ['marcas', 'preview'], 'lo que ya había llegado se volvió a pedir')
       })
     }],
 

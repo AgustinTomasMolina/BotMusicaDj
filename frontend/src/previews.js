@@ -8,6 +8,9 @@
 //   cambia al marcar cues.
 // - Las marcas (/marcas, solo la base): por `id#versión`. Cuando el editor D cambia algo, la
 //   playlist sube la versión y la fila las vuelve a leer; la onda no se vuelve a pedir.
+// - Pendiente (auditoría f62, punto 6): la onda se guarda solo por `radio_id`. Si el archivo se
+//   reemplaza (mismo id, otro audio), la fila sigue mostrando la onda vieja hasta recargar la
+//   página; el servidor sí recalcula (su caché se invalida por tamaño y fecha).
 // - Lo pasajero (404, 409, 5xx, base ocupada) NO se guarda (`guardarOnda`, `guardarMarcas`):
 //   la fila lo vuelve a pedir cuando entra otra vez en pantalla.
 import { getMarcas, getPreview } from './api'

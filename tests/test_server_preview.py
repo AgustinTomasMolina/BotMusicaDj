@@ -166,8 +166,8 @@ def test_no_depende_de_la_base_ocupada(client, biblioteca, server, monkeypatch):
 
 
 def test_como_mucho_dos_lecturas_de_bandas_a_la_vez(server, biblioteca, monkeypatch):
-    """La primera lectura de un tema decodifica el archivo entero: entre /onda3 y /preview nunca
-    hay más de 2 a la vez, aunque lleguen 6 pedidos juntos."""
+    """La primera lectura de un tema decodifica el archivo entero: las vistas previas nunca leen
+    más de 2 a la vez, aunque lleguen 6 pedidos juntos."""
     import asyncio
     import threading
     import time
@@ -190,8 +190,40 @@ def test_como_mucho_dos_lecturas_de_bandas_a_la_vez(server, biblioteca, monkeypa
     ruta = str(biblioteca["rutas"]["uno.wav"])
 
     async def seis():
-        return await asyncio.gather(*(server._onda3_bandas(ruta) for _ in range(6)))
+        return await asyncio.gather(*(server._onda3_bandas(ruta, con_turno=True) for _ in range(6)))
 
     res = asyncio.run(seis())
     assert all(err is None and leidas is not None for leidas, err in res), res
     assert pico[0] == server._BANDAS_A_LA_VEZ == 2, f"hubo {pico[0]} lecturas a la vez"
+
+
+def test_el_editor_no_espera_el_turno_de_las_filas(client, biblioteca, server):
+    """Con los 2 turnos ocupados (dos filas decodificando), /onda3 (el editor D) contesta igual y
+    /preview espera hasta que se libera uno."""
+    import threading
+
+    rid = biblioteca["ids"]["uno.wav"]
+    assert client.get(f"/api/radio/tracks/{rid}/preview").status_code == 200   # índice cargado
+    for _ in range(server._BANDAS_A_LA_VEZ):
+        server._bandas_turno.acquire()
+    liberados = False
+    try:
+        res = {}
+        editor = threading.Thread(target=lambda: res.update(onda3=client.get(f"/api/radio/tracks/{rid}/onda3")))
+        fila = threading.Thread(target=lambda: res.update(preview=client.get(f"/api/radio/tracks/{rid}/preview")))
+        editor.start()
+        fila.start()
+        editor.join(timeout=20)
+        assert not editor.is_alive(), "/onda3 quedó esperando el turno de las filas"
+        assert res["onda3"].status_code == 200, res["onda3"].text
+        fila.join(timeout=0.5)
+        assert fila.is_alive(), "/preview no esperó el turno con los dos ocupados"
+        for _ in range(server._BANDAS_A_LA_VEZ):
+            server._bandas_turno.release()
+        liberados = True
+        fila.join(timeout=20)
+        assert not fila.is_alive() and res["preview"].status_code == 200
+    finally:
+        if not liberados:
+            for _ in range(server._BANDAS_A_LA_VEZ):
+                server._bandas_turno.release()

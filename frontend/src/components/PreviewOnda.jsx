@@ -55,7 +55,14 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
     const io = new IntersectionObserver((entradas) => {
       const visible = entradas.some((e) => e.isIntersecting)
       if (visible) {
-        if (!cargadorPreviews.guardado(id) && !pOnda) {
+        // Lo que llegó (y quedó guardado) mientras la fila estaba fuera de pantalla: el pedido
+        // que ya había salido terminó, pero su espera se había soltado y nadie lo dibujó.
+        const cOnda = cargadorPreviews.guardado(id)
+        const cMarcas = cargadorMarcasPreview.guardado(clave)
+        if (cOnda) setOnda({ ...desdeOnda(cOnda), id })
+        if (cMarcas) setMarcas(desdeMarcas(cMarcas))
+        if (cOnda && cMarcas) { io.disconnect(); return }
+        if (!cOnda && !pOnda) {
           const p = cargadorPreviews.cargar(id)
           pOnda = p
           p.promesa.then((r) => {
@@ -63,7 +70,7 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
             if (vivo) { setOnda({ ...desdeOnda(r), id }); if (listo()) io.disconnect() }
           }, () => { if (pOnda === p) pOnda = null; if (vivo) setOnda({ fase: 'error', motivo: 'sin conexión con el servidor' }) })
         }
-        if (!cargadorMarcasPreview.guardado(clave) && !pMarcas) {
+        if (!cMarcas && !pMarcas) {
           const p = cargadorMarcasPreview.cargar(clave)
           pMarcas = p
           p.promesa.then((r) => {
@@ -95,9 +102,11 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
   const motivoOnda = onda.fase === 'error' ? onda.motivo : sinDibujo ? 'sin duración' : null
   // Las marcas que no se pudieron leer no se cuentan con el resumen viejo de la playlist.
   const resumen = ok ? resumenMarcas(marcas.marcas) : marcas.fase === 'error' ? 'marcas sin leer' : resumenBase || null
+  // El motivo del servidor ya puede terminar en punto («La biblioteca está ocupada.»).
+  const frase = (t) => `${String(t).trim().replace(/[.\s]+$/, '')}.`
   const avisos = [
-    motivoOnda ? `Sin onda: ${motivoOnda}.` : null,
-    marcas.fase === 'error' ? `Sin marcas: ${marcas.motivo}.` : null,
+    motivoOnda ? `Sin onda: ${frase(motivoOnda)}` : null,
+    marcas.fase === 'error' ? `Sin marcas: ${frase(marcas.motivo)}` : null,
     lista.some((m) => m.fuera) ? 'Hay marcas después del final del tema (el archivo cambió): se ven pegadas al borde.' : null,
   ].filter(Boolean)
   const fase = motivoOnda ? 'error' : dibujo ? 'ok' : 'cargando'

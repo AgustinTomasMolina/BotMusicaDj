@@ -3580,13 +3580,14 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
             "grilla": g, "cache": de_cache}
 
 
-# f62 (auditoría): como mucho 2 lecturas de bandas a la vez entre /onda3 y /preview. La
-# primera lectura de un tema decodifica el archivo entero; en la PC del dueño, con poca
-# memoria, la pantalla ya pide de a dos, pero nada impedía que otra pestaña (o el editor D más
-# las filas) sumaran más. Es un semáforo de HILOS y no de asyncio: la espera pasa adentro del
-# hilo de `to_thread`, así sirve igual con cualquier event loop (uvicorn, cada TestClient).
-# Límite conocido: una lectura que sale de la caché también espera turno detrás de dos
-# decodificaciones largas.
+# f62 (auditoría): como mucho 2 lecturas de bandas a la vez para las vistas previas de las
+# filas (/preview). La primera lectura de un tema decodifica el archivo entero; en la PC del
+# dueño, con poca memoria, la pantalla ya pide de a dos, pero nada impedía que otra pestaña
+# sumara más. /onda3 (el editor D) NO pasa por el turno: el tema que el dueño abrió no espera
+# detrás de dos filas. Es un semáforo de HILOS y no de asyncio: la espera pasa adentro del hilo
+# de `to_thread`, así sirve igual con cualquier event loop (uvicorn, cada TestClient).
+# Límite conocido: una lectura de /preview que sale de la caché también espera turno detrás de
+# dos decodificaciones largas.
 _BANDAS_A_LA_VEZ = 2
 _bandas_turno = threading.BoundedSemaphore(_BANDAS_A_LA_VEZ)
 
@@ -3598,13 +3599,21 @@ def _bandas_con_turno(ruta: str, carpeta: Path):
         return cached_bandas(ruta, carpeta)
 
 
-async def _onda3_bandas(ruta: str) -> tuple[tuple | None, JSONResponse | None]:
+def _bandas_sin_turno(ruta: str, carpeta: Path):
+    from motor.bandas import cached_bandas
+
+    return cached_bandas(ruta, carpeta)
+
+
+async def _onda3_bandas(ruta: str, con_turno: bool = False) -> tuple[tuple | None, JSONResponse | None]:
     """`((bandas, de_cache), None)` o `(None, respuesta de error)`: la lectura (cacheada) de las
-    3 bandas y sus errores, compartida por /onda3 y /preview, de a `_BANDAS_A_LA_VEZ`."""
+    3 bandas y sus errores, compartida por /onda3 y /preview. Con `con_turno` (/preview), de a
+    `_BANDAS_A_LA_VEZ`; /onda3 lee sin esperar turno."""
     from motor.bandas import UnreadableAudio
 
+    leer = _bandas_con_turno if con_turno else _bandas_sin_turno
     try:
-        return await asyncio.to_thread(_bandas_con_turno, ruta, Path(db.DATA_DIR) / "peaks"), None
+        return await asyncio.to_thread(leer, ruta, Path(db.DATA_DIR) / "peaks"), None
     except FileNotFoundError:
         return None, JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
                                             f"base lo tiene en {ruta}. Se movió, o la base se escaneó "
@@ -3646,7 +3655,12 @@ async def radio_preview(track_id: str, puntos: str | None = None):
     """`bandas` trae `puntos` valores por banda (0..1, relativos dentro del track, como /onda3)
     del audio entero; con menos cuadros de 10 ms que puntos, vienen los cuadros tal cual y
     `puntos` dice cuántos. `duracion_audio` es la del audio DECODIFICADO: la pantalla ubica las
-    marcas con la duración de la base y la onda con esta, sin estirar ninguna."""
+    marcas con la duración de la base y la onda con esta, sin estirar ninguna.
+
+    Pendiente (auditoría f62, punto 4): la ruta sale solo del índice `_radio_audio`
+    (`_marcas_ruta`); a diferencia de /onda3, no se confirma que el track siga en la base del
+    motor (un scan que lo sacó entre medio). No inventa nada (lee el archivo que el índice
+    tiene), pero puede dibujar la onda de un track que la base ya no lista."""
     if puntos is None:
         n = _PREVIEW_PUNTOS_DEFECTO
     elif _RE_ONDA3_PUNTOS.fullmatch(puntos) and 1 <= int(puntos) <= _PREVIEW_PUNTOS_MAX:
@@ -3660,7 +3674,7 @@ async def radio_preview(track_id: str, puntos: str | None = None):
         return error
     from motor.bandas import BANDAS, tramo
 
-    leidas, error = await _onda3_bandas(ruta)
+    leidas, error = await _onda3_bandas(ruta, con_turno=True)
     if error is not None:
         return error
     b, de_cache = leidas
