@@ -4638,6 +4638,156 @@ function casosF54() {
       })
     }],
 
+    ['editor D (f63): el loop activo suena solo el loop (salta de la salida a la entrada), R y «Loop activo» salen y vuelven, un clic afuera sale, borrarlo / Ctrl+Z / pasar de tema lo limpian', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        await abrirEditorD(page, ctx, t.item.titulo)
+        // Cada `currentTime = x` que hace la página, con dónde estaba el audio en ese instante: así
+        // se mide cuánto se pasó de la salida cada salto (la precisión del loop).
+        await page.evaluate(() => {
+          const d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime')
+          window.__saltos = []
+          window.__currentTimeOriginal = d
+          Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', {
+            configurable: true,
+            get() { return d.get.call(this) },
+            set(v) { window.__saltos.push({ antes: d.get.call(this), a: v, sonando: !this.paused }); d.set.call(this, v) },
+          })
+        })
+        const boton = () => page.$eval('.edd-reloop', (b) => ({ pressed: b.getAttribute('aria-pressed'), disabled: b.getAttribute('aria-disabled'), atajo: b.getAttribute('aria-keyshortcuts') }))
+        const activoEnOnda = () => page.evaluate(() => ({
+          banda: [...document.querySelectorAll('.edd-mk-loop.is-activo')].map((e) => Number(e.dataset.id)),
+          bandera: [...document.querySelectorAll('.edd-flag.is-activo')].map((e) => Number(e.dataset.id)),
+        }))
+        const audioT = () => page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.currentTime ?? null)
+        // currentTime del audio que suena, en cada cuadro durante `ms`.
+        const muestrear = (ms) => page.evaluate((dur) => new Promise((res) => {
+          const a = [...window.__medios].find((m) => !m.paused)
+          if (!a) { res(null); return }
+          const out = []
+          const t0 = performance.now()
+          const f = () => { out.push(a.currentTime); if (performance.now() - t0 < dur) requestAnimationFrame(f); else res(out) }
+          requestAnimationFrame(f)
+        }), ms)
+        const play = async () => {
+          await page.focus('.edd-onda')
+          await page.keyboard.press('Space')
+          await hasta(() => sonando(page), (s) => s.length === 1, 'Espacio no hizo sonar el tema')
+        }
+        const pausa = async () => {
+          await page.focus('.edd-onda')
+          await page.keyboard.press('Space')
+          await hasta(() => sonando(page), (s) => s.length === 0, 'Espacio no pausó')
+        }
+
+        igual(await boton(), { pressed: 'false', disabled: 'true', atajo: 'R' }, 'sin loop, «Loop activo» tiene que estar apagado y deshabilitado (con su atajo R)')
+        // Un loop de 4 beats (L) a 8 beats del principio: queda ACTIVO y el cursor en su entrada.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('Home')
+        for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowRight')
+        const cre = await conTecla(page, ['l'], 'POST')
+        igual(cre.status, 201, 'L no creó el loop')
+        const lp = cre.data.marca
+        const largo = lp.fin - lp.inicio
+        afirmar(lp.tipo === 'loop' && largo > 1.5 && largo < 2.2, `el loop de 4 beats a 128 BPM tiene que durar ~1,875 s: ${json(lp)}`)
+        await hasta(boton, (b) => b.pressed === 'true' && b.disabled === null, 'el loop recién creado no quedó activo (aria-pressed)')
+        igual(await activoEnOnda(), { banda: [lp.id], bandera: [lp.id] }, 'la banda y la bandera del loop activo no están resaltadas')
+
+        // Play: durante más de 2 vueltas el audio no sale de [entrada, salida] y vuelve a la entrada.
+        await play()
+        const m1 = await muestrear(Math.round(largo * 2.6 * 1000))
+        afirmar(m1 && m1.length > 30, `no pude muestrear el audio: ${json(m1)}`)
+        const fuera = m1.filter((x) => x < lp.inicio - 0.03 || x > lp.fin + 0.03)
+        igual(fuera, [], `con el loop activo el audio salió de [${lp.inicio}, ${lp.fin}]`)
+        const vueltas = m1.filter((x, i) => i > 0 && x < m1[i - 1] - largo / 2).length
+        afirmar(vueltas >= 2, `en ${(largo * 2.6).toFixed(1)} s el loop tenía que volver a la entrada al menos 2 veces: ${vueltas} (min ${Math.min(...m1)}, max ${Math.max(...m1)})`)
+        // La precisión: cuánto se pasó de la salida el audio en cada salto (+ tarde, − antes).
+        const saltos = (await page.evaluate(() => window.__saltos)).filter((s) => s.sonando && s.antes > lp.inicio + largo / 2 && s.a < lp.inicio + largo / 2)
+        afirmar(saltos.length >= 2, `no hubo saltos de la salida a la entrada: ${json(await page.evaluate(() => window.__saltos))}`)
+        const err = saltos.map((s) => (s.antes - lp.fin) * 1000)
+        const prom = err.reduce((x, y) => x + y, 0) / err.length
+        console.log(`    [f63] salto del loop: ${err.length} saltos, error ${Math.min(...err).toFixed(1)} … ${Math.max(...err).toFixed(1)} ms (promedio ${prom.toFixed(1)} ms) respecto de la salida`)
+        afirmar(err.every((e) => Math.abs(e) < 30), `el salto tiene que caer a menos de 30 ms de la salida: ${json(err.map((e) => Math.round(e * 10) / 10))}`)
+        // El salto conserva lo que se pasó: cae en la entrada + lo pasado (el beat no se corre).
+        for (const s of saltos) afirmar(Math.abs(s.a - (lp.inicio + Math.max(0, s.antes - lp.fin))) < 0.002, `el salto no conservó lo que se pasó de la salida: ${json(s)}`)
+
+        // «Loop activo» (el botón): sale del loop y la reproducción sigue más allá de la salida.
+        await page.click('.edd-reloop')
+        igual((await boton()).pressed, 'false', 'el botón no salió del loop (aria-pressed)')
+        igual(await activoEnOnda(), { banda: [], bandera: [] }, 'fuera del loop la banda sigue resaltada')
+        await hasta(audioT, (x) => x !== null && x > lp.fin + 0.3, 'al salir del loop la reproducción no pasó la salida', largo * 1000 + 4000)
+        // R: lo vuelve a activar (vuelve a la entrada) y otra vez suena solo el loop.
+        await page.focus('.edd-onda')
+        await page.keyboard.press('r')
+        igual((await boton()).pressed, 'true', 'R no volvió a activar el loop')
+        const m2 = await muestrear(Math.round(largo * 1.5 * 1000))
+        igual(m2.filter((x) => x < lp.inicio - 0.03 || x > lp.fin + 0.03), [], 'después de R el audio salió del loop')
+        afirmar(m2.some((x, i) => i > 0 && x < m2[i - 1] - largo / 2), 'después de R el loop no volvió a la entrada')
+        // R otra vez: sale.
+        await page.keyboard.press('r')
+        igual((await boton()).pressed, 'false', 'R no salió del loop')
+        await hasta(audioT, (x) => x !== null && x > lp.fin + 0.3, 'al salir con R la reproducción no pasó la salida', largo * 1000 + 4000)
+        // Un clic afuera del loop (en la vista general, al 80 % del tema) sale del loop.
+        await page.keyboard.press('r')
+        igual((await boton()).pressed, 'true', 'R no volvió a activar el loop (antes del clic afuera)')
+        const g = await page.$eval('.edd-gen', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width * 0.8, y: r.top + r.height / 2 } })
+        await page.mouse.click(g.x, g.y)
+        igual((await boton()).pressed, 'false', 'un clic afuera del loop no salió del loop')
+        await hasta(audioT, (x) => x !== null && x > 70, 'el clic en la vista general no movió el audio')
+        await pausa()
+
+        // Su fila de la lista (el rótulo) lo activa y lleva el cursor a la entrada.
+        await page.click(`.edd-fila[data-id="${lp.id}"] .edd-tag`)
+        igual((await boton()).pressed, 'true', 'tocar la fila del loop no lo activó')
+        igual(await reloj(page), tiempoTabla(lp.inicio), 'tocar la fila del loop no llevó el cursor a su entrada')
+        // Borrarlo (la X de su fila) lo limpia: no queda nada para activar.
+        const del = page.waitForResponse((r) => r.request().method() === 'DELETE', { timeout: ESPERA_MS })
+        await page.click(`.edd-fila[data-id="${lp.id}"] .edd-borrar`)
+        igual((await del).status(), 200, 'la X no borró el loop')
+        await hasta(boton, (b) => b.pressed === 'false' && b.disabled === 'true', 'borrar el loop activo no lo limpió')
+        // Ctrl+Z lo vuelve a poner (otro id), pero no lo vuelve a activar.
+        const vuelve = await conTecla(page, ['Control', 'z'], 'POST')
+        igual(vuelve.status, 201, 'Ctrl+Z no volvió a poner el loop')
+        igual(await boton(), { pressed: 'false', disabled: 'true', atajo: 'R' }, 'el loop recreado por Ctrl+Z no tiene que quedar activo')
+        // Ctrl+Z de la CREACIÓN de un loop lo limpia: crear otro (L, activo) y deshacerlo.
+        await page.focus('.edd-onda')
+        for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowRight')
+        const cre2 = await conTecla(page, ['l'], 'POST')
+        igual(cre2.status, 201, 'L no creó el segundo loop')
+        await hasta(boton, (b) => b.pressed === 'true', 'el segundo loop no quedó activo')
+        const des = await conTecla(page, ['Control', 'z'], 'DELETE')
+        igual(des.status, 200, 'Ctrl+Z no deshizo la creación del loop')
+        await hasta(boton, (b) => b.pressed === 'false' && b.disabled === 'true', 'deshacer la creación del loop activo no lo limpió')
+        // El pad: un hot loop se activa desde su pad; pasar de tema lo limpia.
+        await page.click('.edd-pads-box .edd-snap input[type=checkbox]')
+        await page.focus('.edd-onda')
+        const cre3 = await conTecla(page, ['l'], 'POST')
+        igual(cre3.data.marca.num, 0, 'el hot loop no fue al pad A')
+        await page.click('.edd-reloop')
+        igual((await boton()).pressed, 'false', 'el botón no salió del hot loop')
+        await page.click('.edd-pad[data-pad="0"]')
+        igual((await boton()).pressed, 'true', 'tocar el pad del hot loop no lo activó')
+        igual(await page.$eval('.edd-pad[data-pad="0"]', (p) => p.classList.contains('is-activo')), true, 'el pad del loop activo no está resaltado')
+        // Pasar de tema lo limpia en el MISMO render en que la pantalla empieza a leer el tema nuevo
+        // (no recién cuando llega su lista): se anota aria-pressed cuando aparece «Leyendo el audio…».
+        await page.evaluate(() => {
+          window.__reloopAlCambiar = null
+          const obs = new MutationObserver(() => {
+            if (document.querySelector('.edd-msg')?.textContent?.includes('Leyendo')) {
+              window.__reloopAlCambiar = document.querySelector('.edd-reloop')?.getAttribute('aria-pressed') ?? 'sin botón'
+              obs.disconnect()
+            }
+          })
+          obs.observe(document.querySelector('.edd'), { subtree: true, childList: true, characterData: true, attributes: true })
+        })
+        await pasarTema(page, 'PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === por['Sin grilla'].item.titulo, 'AvPág no pasó de tema')
+        igual(await page.evaluate(() => window.__reloopAlCambiar), 'false', 'al pasar de tema el loop del tema anterior siguió activo mientras se leía el nuevo')
+        await hasta(boton, (b) => b.pressed === 'false' && b.disabled === 'true', 'pasar de tema no limpió el loop activo')
+        await page.evaluate(() => { Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', window.__currentTimeOriginal) })
+      })
+    }],
+
     ['editor D (f54): se reproduce con el audio local y el cabezal va con el audio; teclado, foco, Esc devuelve el foco, 44 px y 400 px', async (page, ctx) => {
       await conEditor(ctx, async ({ pid, por }) => {
         const t = por['Con grilla']

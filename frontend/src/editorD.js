@@ -396,7 +396,7 @@ function activable(target) {
 // La acción de una tecla en el editor D, o null. `e`: KeyboardEvent (o algo con key, code...).
 //   play · beat(dir) · fino(dir) · pad(num) · borrarPad(num) · cue · memory · loopIn · loopOut ·
 //   loopBeats · zoom(dir) · grilla · medioBeat · snap · ancla (K: marcar un kick) · soloGraves (B) ·
-//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar
+//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar · reloop (R: activar / salir del loop, f63)
 export function atajoD(e) {
   if (!e || e.isComposing) return null
   const k = e.key
@@ -435,6 +435,7 @@ export function atajoD(e) {
     case 'q': return { tipo: 'snap' }
     case 'k': return { tipo: 'ancla' }
     case 'b': return { tipo: 'soloGraves' }
+    case 'r': return { tipo: 'reloop' }
     default: return null
   }
 }
@@ -700,4 +701,77 @@ export function grillaAnclada(g, bpm, ancla) {
   const fase = ((ancla % p) + p) % p
   return { estimada: false, anclada: true, periodo_s: p, primer_beat_s: Math.round(fase * 1e6) / 1e6, compas_ref: ancla,
     beats_por_compas: 4, confianza: 1, concentracion: 1, motivo: null }
+}
+
+// ---------------------------------------------------------------- el loop sonando (f63)
+// Pedido del dueño: con un loop marcado, apretar play y escuchar SOLO ese loop repitiéndose,
+// para juzgarlo de oído. Como un CDJ: hay un «loop activo»; mientras suena, al llegar a la
+// salida el cabezal vuelve a la entrada. Es solo reproducción: no toca las marcas ni el server.
+//
+// El editor reproduce con un <audio> (no hay Web Audio ni buffer decodificado), así que el salto
+// es un `currentTime = entrada`. `timeupdate` llega cada ~250 ms (un loop de 1 beat a 128 BPM
+// dura 469 ms): no sirve. El editor mira `currentTime` en cada cuadro (requestAnimationFrame) y,
+// cuando falta menos de LOOP_ANTICIPO_S para la salida, programa el salto con un timer para el
+// instante justo. El salto conserva lo que se pasó (`a` = entrada + lo que se pasó de la
+// salida): el beat no se corre aunque el salto llegue unos ms tarde.
+
+export const LOOP_TOLERANCIA_S = 0.001
+export const LOOP_ANTICIPO_S = 0.05
+
+export const loopInactivo = () => ({ id: null, activo: false })
+
+// Qué hacer con el cabezal en `t` y el loop activo `loop` ({inicio, fin}, o null):
+//   { accion: 'saltar', a }     llegó (o se pasó de) la salida: ir a `a`
+//   { accion: 'esperar', en_s } falta `en_s` (≤ anticipo) para la salida: programar el salto
+//   { accion: 'nada' }          lejos de la salida, antes de la entrada, o sin loop
+export function envolverLoop(t, loop, anticipo = LOOP_ANTICIPO_S) {
+  const nada = { accion: 'nada' }
+  if (!loop || !finito(t) || !finito(loop.inicio) || !finito(loop.fin)) return nada
+  const largo = loop.fin - loop.inicio
+  if (!(largo > 0)) return nada
+  // Antes de la entrada el loop todavía no empezó (como en un CDJ: engancha al entrar).
+  if (t < loop.inicio - LOOP_TOLERANCIA_S) return nada
+  if (t >= loop.fin - LOOP_TOLERANCIA_S) {
+    const pasado = Math.max(0, t - loop.fin)
+    return { accion: 'saltar', a: Math.round((loop.inicio + (pasado % largo)) * 1e6) / 1e6 }
+  }
+  const falta = loop.fin - t
+  return finito(anticipo) && falta <= anticipo ? { accion: 'esperar', en_s: Math.round(falta * 1e6) / 1e6 } : nada
+}
+
+// ¿`t` está adentro del loop (entrada y salida incluidas)?
+export const adentroDelLoop = (t, loop) => Boolean(loop) && finito(t) && finito(loop.inicio) && finito(loop.fin)
+  && t >= loop.inicio - LOOP_TOLERANCIA_S && t <= loop.fin + LOOP_TOLERANCIA_S
+
+// El loop activo después de un evento. `estado`: { id, activo } (`id` = la marca del último loop
+// activado: salir del loop lo deja, para volver a activarlo con R como el «reloop» de un CDJ).
+//   { tipo: 'crear', marca }   se creó un loop (I/O o L): queda activo
+//   { tipo: 'elegir', marca }  se eligió una marca (su pad, su bandera, su fila): si es un loop,
+//                              queda activo (el editor lleva el cursor a su entrada)
+//   { tipo: 'alternar' }       el botón «Loop activo» / R: salir, o volver a activarlo
+//   { tipo: 'salir' }
+//   { tipo: 'ir', t, loop }    el cursor fue a `t` (clic en la onda, flechas, otro pad): afuera
+//                              del loop (`loop` = {inicio, fin} del activo), sale del loop
+//   { tipo: 'lista', marcas }  la lista del servidor cambió: si el loop ya no está (se borró, o
+//                              Ctrl+Z deshizo su creación), no queda nada activo
+//   { tipo: 'limpiar' }        se pasó de tema o se cerró el editor
+export function transicionLoop(estado, ev) {
+  const e = estado && 'id' in estado ? estado : loopInactivo()
+  if (!ev) return e
+  switch (ev.tipo) {
+    case 'crear':
+    case 'elegir':
+      return ev.marca && ev.marca.tipo === 'loop' && ev.marca.id !== undefined && ev.marca.id !== null
+        ? { id: ev.marca.id, activo: true } : e
+    case 'alternar': return e.id === null ? e : { id: e.id, activo: !e.activo }
+    case 'salir': return e.activo ? { id: e.id, activo: false } : e
+    case 'ir': return e.activo && ev.loop && !adentroDelLoop(ev.t, ev.loop) ? { id: e.id, activo: false } : e
+    case 'lista': {
+      if (e.id === null) return e
+      const sigue = (Array.isArray(ev.marcas) ? ev.marcas : []).some((m) => m.id === e.id && m.tipo === 'loop')
+      return sigue ? e : loopInactivo()
+    }
+    case 'limpiar': return loopInactivo()
+    default: return e
+  }
 }
