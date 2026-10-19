@@ -131,8 +131,15 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
   const alCambioTardio = (tid, marcas) => {
     const ms = Array.isArray(marcas) ? marcas : []
     avisos.current?.(tid, ms.length, ms)
-    if (tid === idSelRef.current) setDatos((d) => (d && d.id === tid && !d.error ? { ...d, marcas: ms } : d))
+    if (tid === idSelRef.current) {
+      setDatos((d) => (d && d.id === tid && !d.error ? { ...d, marcas: ms } : d))
+      // Y una lectura nueva: si una relectura más vieja seguía en vuelo, la de ahora la reemplaza.
+      setRelee((x) => x + 1)
+    }
   }
+
+  // Otro track (o ninguno): el editor del anterior no queda «abierto» para reaparecer solo.
+  useEffect(() => { setEditor(false) }, [idSel])
 
   useEffect(() => {
     if (idSel === null || idSel === undefined) { setDatos(null); return undefined }

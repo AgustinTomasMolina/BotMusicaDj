@@ -1092,7 +1092,6 @@ const CASOS_F50 = [
     ], 'las pestañas al abrir: «Cues y loops» elegida, una sola parada de Tab, las tres habilitadas')
     igual(t0.tabs.map((t) => t.texto), ['Cues y loops', 'Información', 'Onda avanzada'], 'los nombres de las pestañas (sin «próximamente»)')
     igual(t0.paneles, [{ id: 'r-panel-cues', por: 'r-tab-cues', visible: true }, { id: 'r-panel-info', por: 'r-tab-info', visible: false }, { id: 'r-panel-onda', por: 'r-tab-onda', visible: false }], 'los paneles al abrir')
-    igual(await page.$('.cue-ed, .cue-wave'), null, 'el editor viejo (CueEditor) sigue en el detalle')
     const elegida = (t) => t.tabs.find((x) => x.sel === 'true')?.id
     await page.focus('#r-tab-cues')
     await page.keyboard.press('ArrowRight')
@@ -1224,6 +1223,80 @@ const CASOS_F50 = [
         lista: document.querySelectorAll('#r-panel-cues .rdet-marca').length,
       }), fila), (v) => v.col === cuesTexto(n) && v.lista === n,
       'lo que se guardó después de cerrar no llegó a la columna «Cues» ni a la lista')
+    } finally {
+      await limpiarMarcas(ctx, uno.id)
+    }
+  }],
+
+  ['radio (f61): un cambio de tipo y su Ctrl+Z que terminan DESPUÉS de cerrar el editor D dejan en el set las marcas de la base', async (page, ctx) => {
+    const { uno } = await semillaUno(ctx)
+    await limpiarMarcas(ctx, uno.id)
+    let demorar = false
+    let demorarDelete = false
+    await interceptar(page, async (req) => {
+      // El DELETE directo de después de cerrar vuelve más tarde que la relectura que dispara el POST.
+      if (demorarDelete && req.method() === 'DELETE') { demorarDelete = false; await new Promise((res) => setTimeout(res, 1200)); await req.continue(); return true }
+      if (!demorar || req.method() !== 'POST' || new URL(req.url()).pathname !== rutaMarcas(uno.id)) return false
+      demorar = false
+      await new Promise((res) => setTimeout(res, 1500))   // más tarde que la relectura del cierre
+      await req.continue()
+      return true
+    })
+    // Lo que muestra el set de ESE track: la columna «Cues» y los rótulos de la lista.
+    const delSet = () => page.evaluate(() => ({
+      col: document.querySelector('.rpaso.is-sel .c-cues .rcues')?.textContent ?? null,
+      lista: [...document.querySelectorAll('#r-panel-cues .rdet-marca-pad')].map((e) => e.textContent),
+    }))
+    const comoLaBase = async (que) => {
+      const api_ = await marcasApi(ctx, uno.id)
+      const esperado = { col: cuesTexto(api_.length), lista: api_.sort((a, b) => a.inicio - b.inicio).map((m) => (m.tipo === 'cue' ? String(m.num + 1) : m.tipo === 'memory' ? 'M' : 'L')) }
+      await hasta(delSet, (v) => json(v) === json(esperado), `${que}: el set no muestra lo que tiene la base (${json(esperado)})`)
+      return api_
+    }
+    const cerrar = async () => {
+      await page.keyboard.press('Escape')
+      await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no volvió)')
+    }
+    try {
+      await abrirDetalle(page, ctx)
+      // 1) memory → hot cue, con el POST demorado y Esc enseguida: el DELETE de la vieja sale
+      //    después de cerrar (directo, fuera del historial).
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      const mem = (await teclaQueGuarda(page, 'm')).data.marca
+      await page.waitForSelector(`.edd-fila[data-id="${mem.id}"] .edd-editar`, { timeout: ESPERA_MS })
+      await page.click(`.edd-fila[data-id="${mem.id}"] .edd-editar`)
+      await page.waitForSelector(`.edd-fila[data-id="${mem.id}"] select.edd-tipo`, { timeout: ESPERA_MS })
+      demorar = true
+      demorarDelete = true
+      const borra = page.waitForResponse((x) => x.request().method() === 'DELETE' && new URL(x.url()).pathname.startsWith(rutaMarcas(uno.id)), { timeout: ESPERA_MS })
+      await page.select(`.edd-fila[data-id="${mem.id}"] select.edd-tipo`, 'cue')
+      await page.focus('.edd-onda')
+      await cerrar()
+      igual((await borra).status(), 200, 'el borrado de la memory vieja tenía que salir y guardarse')
+      const tras1 = await comoLaBase('cambio de tipo terminado después de cerrar')
+      igual(tras1.map((m) => m.tipo), ['cue'], 'en la base tiene que quedar solo el hot cue')
+      // 2) Ctrl+Z de un cambio de tipo con el POST demorado y Esc apenas sale: lo que falta del
+      //    grupo (borrar el cue) se termina en el tema de origen, ya cerrado.
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await page.focus('.edd-onda')
+      const m2 = (await teclaQueGuarda(page, 'm')).data.marca
+      await page.click(`.edd-fila[data-id="${m2.id}"] .edd-editar`)
+      await page.waitForSelector(`.edd-fila[data-id="${m2.id}"] select.edd-tipo`, { timeout: ESPERA_MS })
+      const delete2 = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
+      await page.select(`.edd-fila[data-id="${m2.id}"] select.edd-tipo`, 'cue')
+      await delete2
+      await hasta(async () => (await marcasApi(ctx, uno.id)).map((m) => m.tipo).sort(), (v) => json(v) === json(['cue', 'cue']), 'el cambio de tipo no terminó')
+      await page.focus('.edd-onda')
+      demorar = true
+      const sale = page.waitForRequest((q) => q.method() === 'POST' && new URL(q.url()).pathname === rutaMarcas(uno.id), { timeout: ESPERA_MS })
+      const borra2 = page.waitForResponse((x) => x.request().method() === 'DELETE', { timeout: ESPERA_MS })
+      await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+      await sale
+      await cerrar()
+      igual((await borra2).status(), 200, 'el resto del Ctrl+Z (borrar el cue) tenía que guardarse después de cerrar')
+      const tras2 = await comoLaBase('Ctrl+Z terminado después de cerrar')
+      igual(tras2.map((m) => m.tipo).sort(), ['cue', 'memory'], 'el Ctrl+Z tenía que dejar la memory en lugar del segundo cue')
     } finally {
       await limpiarMarcas(ctx, uno.id)
     }

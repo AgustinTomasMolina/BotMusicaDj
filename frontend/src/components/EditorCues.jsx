@@ -460,6 +460,15 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   //   respuesta se perdió, se puede reintentar sin duplicar marcas.
   const vigente = (tid, ep) => ep === epoca.current && tid === idRef.current
 
+  // f61: con el editor ya cerrado, una lista del servidor que vuelve de una escritura se le pasa
+  // a quien lo abrió (`onCambioTardio`). Mismo orden que `ponerLista`: una respuesta pedida antes
+  // que la última avisada no la pisa.
+  const avisarTardio = (tid, marcas, seq) => {
+    if (!cerrado.current || !Array.isArray(marcas) || seq < lista.current.aplicada) return
+    lista.current.aplicada = seq
+    cambioTardio.current?.(tid, marcas)
+  }
+
   const ponerLista = (tid, nuevas, seq) => {
     if (tid !== idRef.current || seq < lista.current.aplicada) return false
     lista.current.aplicada = seq
@@ -501,7 +510,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (cerrado.current) {
         // El editor ya se cerró: si falló, que la playlist lo diga (nadie más se va a enterar).
         if (!ok) tardia.current?.(`${que}: no se guardó. ${r ? motivoDe(r) : CONEXION}`)
-        else cambioTardio.current?.(tid, r.data.marcas)
+        else avisarTardio(tid, r.data.marcas, seq)
       } else if (tid === idRef.current) {
         // Se fue y se volvió al MISMO tema (A → B → A): no se toca el historial de esta visita,
         // pero la lista sí tiene que mostrar lo que el server ya tiene.
@@ -557,6 +566,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       return
     }
     const cc = [...cambios]
+    let seqReal = null                // el orden de la última escritura que trajo `real`
     for (const o of resto) {
       let x = o
       for (const [a, b] of cc) x = opConId(x, a, b)
@@ -566,18 +576,22 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
         continue
       }
       let r = null
+      const seq = ++lista.current.seq
       try {
         r = x.tipo === 'crear' ? await crearMarca(origen.tid, cuerpoCrear(x.marca))
           : x.tipo === 'borrar' ? await borrarMarca(origen.tid, x.marca.id)
             : await cambiarMarca(origen.tid, x.id, x.despues)
       } catch { r = null }
       if (!(r && r.ok)) {
+        // Lo que sí se guardó antes de la falla también llega a quien abrió el editor.
+        if (seqReal !== null) avisarTardio(origen.tid, real, seqReal)
         avisarAMedias(origen, `«${origen.titulo}»: ${que} quedó a medias al pasar de tema (${r ? motivoDe(r) : CONEXION}). Revisá sus marcas.`)
         return
       }
       if (x.tipo === 'crear' && r.data?.marca) cc.push([x.marca.id, r.data.marca.id])
-      if (Array.isArray(r.data?.marcas)) real = r.data.marcas
+      if (Array.isArray(r.data?.marcas)) { real = r.data.marcas; seqReal = seq }
     }
+    if (seqReal !== null) avisarTardio(origen.tid, real, seqReal)
     if (idRef.current === origen.tid && !cerrado.current) releer(origen.tid)
   }
 
@@ -704,7 +718,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     if (!r1.ok) {
       // Se creó la nueva con otro tema abierto: se termina en el tema de ORIGEN (borrar la vieja).
       if (r1.tipo === 'ajeno' && r1.servidor) {
-        borrarMarca(r1.tid, m.id).then((x) => { if (!(x && x.ok)) aMedias() }).catch(aMedias)
+        const seq = ++lista.current.seq
+        borrarMarca(r1.tid, m.id).then((x) => {
+          if (!(x && x.ok)) { aMedias(); return }
+          avisarTardio(r1.tid, x.data?.marcas, seq)
+        }).catch(aMedias)
       }
       return
     }
