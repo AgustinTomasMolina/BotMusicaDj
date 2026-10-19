@@ -237,6 +237,26 @@ def test_flac_que_se_corta_a_mitad_es_422(client, biblioteca):
     assert r.status_code == 422 and "se corta o está dañado" in r.json()["error"], r.text
 
 
+def test_un_bug_del_calculo_es_422_sin_culpar_al_archivo(client, biblioteca, monkeypatch, caplog):
+    """H8d (como en /onda): un error del cálculo propio (acá, `mezcla_mono` roto) sobre un WAV
+    sano no es 500 ni dice que el archivo no se pudo leer como si fuera culpa suya: el
+    mensaje lo aclara y el detalle, con la traza, va al log."""
+    import logging
+
+    def roto(*a, **k):
+        raise ValueError("bug del cálculo")
+
+    monkeypatch.setattr(mb, "mezcla_mono", roto)
+    with caplog.at_level(logging.WARNING, logger="bot_web"):
+        r = client.get(_url(biblioteca))
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert "dañado" not in error and "se corta" not in error, error
+    assert "no necesariamente el archivo" in error and "ValueError" in error, error
+    (registro,) = [x for x in caplog.records if "calculando la onda" in x.getMessage()]
+    assert registro.exc_info is not None and "bug del cálculo" in str(registro.exc_info[1])
+
+
 def test_sin_base_utilizable_es_409(client, biblioteca, server, monkeypatch):
     """El BPM de la grilla sale de la base: si está ocupada (un scan) es 409 con el motivo,
     no un 200 sin grilla que la pantalla leería como «este tema no tiene grilla»."""

@@ -203,6 +203,10 @@ def test_crear_cambiar_y_borrar_queda_en_la_base(client, biblioteca):
     ({"tipo": "loop", "inicio": 1, "fin": 1e306}, "fuera de rango"),
     ({"tipo": "memory", "inicio": 1, "nombre": "a\u200bb"}, "invisibles"),
     ({"tipo": "memory", "inicio": 1, "nombre": "\ufeffintro"}, "invisibles"),
+    # H10 de la segunda auditor\u00eda: solo unidores (ZWJ / ZWNJ) eran 201 y un nombre vac\u00edo.
+    ({"tipo": "memory", "inicio": 1, "nombre": "\u200d"}, "ning\u00fan car\u00e1cter visible"),
+    ({"tipo": "memory", "inicio": 1, "nombre": "\u200c\u200d" * 32}, "ning\u00fan car\u00e1cter visible"),
+    ({"tipo": "cue", "inicio": 86400.0004}, "86400.0004 s es m\u00e1s que 24 horas"),
     ({"tipo": "cue", "inicio": 1, "num": 8}, "de 0 a 7"),
     ({"tipo": "cue", "inicio": 1, "num": "1"}, "de 0 a 7"),
     ({"tipo": "memory", "inicio": 1, "num": 2}, "una memory cue no lleva pad"),
@@ -435,13 +439,24 @@ def test_onda_de_un_flac_que_falla_a_mitad_es_422_y_no_500(client, biblioteca, c
 
 _VENENOS = {"PEAKS_NULL": ("peaks", [None] * 1000), "PEAKS_NAN": ("peaks", [float("nan")] * 1000),
             "PEAKS_ANIDADOS": ("peaks", [[1]] * 1000), "PEAKS_TEXTO": ("peaks", ["x"] * 1000),
-            "DUR_TEXTO": ("duration_s", "abc"), "SR_CERO": ("sample_rate", 0)}
+            "DUR_TEXTO": ("duration_s", "abc"), "SR_CERO": ("sample_rate", 0),
+            # H9 de la segunda auditoría: picos válidos, uno de menos o de más (se devolvían
+            # con `bins: 999` si la validación fuera `len >= 1`).
+            "PEAKS_999": ("peaks", lambda v: v[:-1]), "PEAKS_1001": ("peaks", lambda v: [*v, 0.5]),
+            # H8: un entero de 400 dígitos es JSON válido y OverflowError en `math.isfinite`.
+            "DUR_400_DIGITOS": ("duration_s", 10 ** 400)}
+# H8: JSON tan anidado que `json.loads` tira RecursionError (el de 100 mil niveles ni se
+# parsea: es más grande que cualquier caché que escribe el módulo).
+_CRUDOS = {"null": "null", "[]": "[]", '"x"': '"x"', "JSON_5K_NIVELES": "[" * 5000,
+           "JSON_100K_NIVELES": "[" * 100_000}
 
 
-@pytest.mark.parametrize("veneno", ["null", "[]", '"x"', *_VENENOS])
+@pytest.mark.parametrize("veneno", [*_CRUDOS, *_VENENOS])
 def test_una_cache_envenenada_se_rehace_y_no_es_500(client, server, biblioteca, veneno):
     """H3: un JSON que parsea pero no es lo que se escribió se recalcula: ni 500 ni una onda
-    falsa. Lo esperado es la primera respuesta, calculada del archivo."""
+    falsa. Lo esperado es la primera respuesta, calculada del archivo. Y la caché queda
+    corregida (H8: antes un 422 cortaba antes de recalcular y el track quedaba en 422 para
+    siempre)."""
     import json
 
     url = f"/api/radio/tracks/{biblioteca['ids']['uno.wav']}/onda"
@@ -450,12 +465,78 @@ def test_una_cache_envenenada_se_rehace_y_no_es_500(client, server, biblioteca, 
     if veneno in _VENENOS:
         j = json.loads(archivo.read_text(encoding="utf-8"))
         clave, valor = _VENENOS[veneno]
-        j[clave] = valor
+        j[clave] = valor(j[clave]) if callable(valor) else valor
         archivo.write_text(json.dumps(j), encoding="utf-8")
     else:
-        archivo.write_text(veneno, encoding="utf-8")
+        archivo.write_text(_CRUDOS[veneno], encoding="utf-8")
+    r = client.get(url)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert (d["cache"], d["bins"], d["picos"], d["duracion_audio"]) == \
+        (False, 1000, bueno["picos"], bueno["duracion_audio"])
     r = client.get(url)
     assert r.status_code == 200, r.text
     d = r.json()
     assert (d["cache"], d["picos"], d["duracion_audio"]) == \
-        (False, bueno["picos"], bueno["duracion_audio"])
+        (True, bueno["picos"], bueno["duracion_audio"]), "la caché envenenada no se reescribió"
+
+
+def _picos_esperados(ruta):
+    """Oráculo de la onda (ver `test_la_onda_es_la_del_archivo_y_se_cachea`)."""
+    y, _ = sf.read(str(ruta), dtype="float32", always_2d=True)
+    amp = np.abs(y).max(axis=1)
+    bordes = [-((-k * len(amp)) // 1000) for k in range(1001)]
+    return [round(float(amp[a:b].max()), 5) for a, b in zip(bordes[:-1], bordes[1:], strict=True)]
+
+
+@pytest.mark.parametrize("veces", [1, 10 ** 6])
+def test_onda_con_la_cache_bloqueada_es_200(client, server, biblioteca, monkeypatch, veces):
+    """H11: en Windows, `os.replace` sobre el JSON que otro hilo está leyendo tira
+    PermissionError. Antes era un 409 que tiraba los picos ya calculados. Una vez: el reintento
+    escribe la caché. Siempre: la caché no se escribe, pero el pedido da los picos igual."""
+    import os
+
+    import motor.peaks as peaks_mod
+
+    real, llamadas = os.replace, []
+
+    def falso(a, b):
+        llamadas.append(b)
+        if len(llamadas) <= veces:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(b))
+        return real(a, b)
+
+    monkeypatch.setattr(os, "replace", falso)
+    monkeypatch.setattr(peaks_mod, "REPLACE_ESPERA_S", 0.0)
+    url = f"/api/radio/tracks/{biblioteca['ids']['uno.wav']}/onda"
+    r = client.get(url)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert (d["cache"], d["picos"]) == (False, _picos_esperados(biblioteca["rutas"]["uno.wav"]))
+    carpeta = server.db.DATA_DIR / "peaks"
+    assert list(carpeta.glob("*.tmp")) == [], "quedó el .tmp"
+    otra = client.get(url).json()
+    # Con un fallo, el reintento escribió la caché; con todos, no hay caché de dónde salir.
+    assert otra["cache"] is (veces == 1), otra["cache"]
+    assert otra["picos"] == d["picos"]
+
+
+def test_un_bug_del_calculo_es_422_sin_culpar_al_archivo(client, biblioteca, monkeypatch, caplog):
+    """H8: un error del cálculo propio (acá, `_acumular` roto) sobre un WAV sano no es 500, y
+    tampoco dice que el archivo "se corta o está dañado": el detalle, con la traza, va al log."""
+    import logging
+
+    import motor.peaks as peaks_mod
+
+    def roto(*a, **k):
+        raise ValueError("bug del cálculo")
+
+    monkeypatch.setattr(peaks_mod, "_acumular", roto)
+    with caplog.at_level(logging.WARNING, logger="bot_web"):
+        r = client.get(f"/api/radio/tracks/{biblioteca['ids']['uno.wav']}/onda")
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert "dañado" not in error and "se corta" not in error, error
+    assert "no necesariamente el archivo" in error and "ValueError" in error, error
+    (registro,) = [x for x in caplog.records if "calculando la onda" in x.getMessage()]
+    assert registro.exc_info is not None and "bug del cálculo" in str(registro.exc_info[1])

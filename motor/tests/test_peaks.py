@@ -6,6 +6,7 @@ silencio. El valor esperado de cada bin sale de un cálculo independiente sobre 
 entero con `soundfile.read` (el máximo de |muestra| por tramo, con numpy a secas), no del código
 bajo prueba, que lee por bloques.
 """
+import json
 import os
 import sys
 import tracemalloc
@@ -193,11 +194,10 @@ def test_wav_truncado_no_dibuja_silencio_inventado(audio, tmp_path):
     assert p.peaks[:44].max() == 0.0 and p.peaks[45:88].min() > 0 and p.peaks[90:].max() == 0.0
 
 
-def test_ffmpeg_que_estima_de_mas_se_relee(audio, monkeypatch):
-    """Por el camino de ffmpeg (MP3/M4A) la duración es una ESTIMACIÓN. Un decodificador falso
-    que dice 60 s y entrega los 30 del archivo: los bins se reparten sobre lo entregado (si no,
-    la mitad de la onda sería un silencio que no existe). En esta PC no hay ffmpeg, por eso el
-    decodificador es falso; los datos son los del WAV."""
+def _ffmpeg_falso(audio: Path, monkeypatch) -> None:
+    """Fuerza el camino de ffmpeg con un `LectorPCM` falso que entrega los datos del WAV y DICE
+    durar el doble (como un MP3/M4A, cuya duración es una estimación). En esta PC no hay
+    ffmpeg, por eso el decodificador es falso; los datos son los del WAV."""
     import motor.decodificar as dec
 
     y, sr = sf.read(str(audio), dtype="int16", always_2d=True)
@@ -218,6 +218,13 @@ def test_ffmpeg_que_estima_de_mas_se_relee(audio, monkeypatch):
 
     monkeypatch.setattr(peaks_mod, "_con_soundfile", lambda *a, **k: None)
     monkeypatch.setattr(dec, "LectorPCM", lambda _ruta: Falso())
+
+
+def test_ffmpeg_que_estima_de_mas_se_relee(audio, monkeypatch):
+    """Por el camino de ffmpeg (MP3/M4A) la duración es una ESTIMACIÓN. Un decodificador falso
+    que dice 60 s y entrega los 30 del archivo: los bins se reparten sobre lo entregado (si no,
+    la mitad de la onda sería un silencio que no existe)."""
+    _ffmpeg_falso(audio, monkeypatch)
     p = compute_peaks(audio, bins=BINS)
     assert p.duration_s == 30.0, p.duration_s
     # int16 → /32768: el mismo valor que lee soundfile en float32 del PCM_16.
@@ -233,27 +240,160 @@ def test_muestras_nan_son_audio_ilegible(tmp_path):
         compute_peaks(ruta)
 
 
-@pytest.mark.parametrize("veneno", ["null", "[]", '{"peaks": [[1]]}', "PICOS_NULL", "PICOS_ANIDADOS",
-                                    "PICOS_NEGATIVOS", "DUR_TEXTO", "SR_FLOAT"])
-def test_una_cache_con_otra_forma_se_rehace(audio, tmp_path, veneno):
-    import json
+@pytest.mark.parametrize("camino", ["soundfile", "ffmpeg"])
+def test_un_bug_del_calculo_no_se_disfraza_de_archivo_danado(audio, monkeypatch, camino):
+    """H8 de la segunda auditoría: el try de la lectura envolvía también `_acumular`, así que un
+    ValueError del cálculo propio salía como UnreadableAudio "el archivo se corta o está
+    dañado" (o "no se pudo decodificar"). El archivo es un WAV sano: el error tiene que salir
+    como lo que es."""
+    if camino == "ffmpeg":
+        _ffmpeg_falso(audio, monkeypatch)
 
+    def roto(*a, **k):
+        raise ValueError("bug del cálculo")
+
+    monkeypatch.setattr(peaks_mod, "_acumular", roto)
+    with pytest.raises(ValueError, match="bug del cálculo"):
+        compute_peaks(audio, bins=BINS)
+
+
+def _dur_enorme(j):
+    j["duration_s"] = 10 ** 400          # JSON válido; math.isfinite tira OverflowError
+    return json.dumps(j)
+
+
+_VENENOS = {
+    "PICOS_NULL": lambda j: json.dumps({**j, "peaks": [None] * BINS}),
+    "PICOS_ANIDADOS": lambda j: json.dumps({**j, "peaks": [[1]] * BINS}),
+    "PICOS_NEGATIVOS": lambda j: json.dumps({**j, "peaks": [-1.0] * BINS}),
+    "DUR_TEXTO": lambda j: json.dumps({**j, "duration_s": "abc"}),
+    "SR_FLOAT": lambda j: json.dumps({**j, "sample_rate": 22050.5}),
+    # H9: picos válidos pero uno de menos o de más; antes nada detectaba `len == bins`.
+    "PICOS_DE_MENOS": lambda j: json.dumps({**j, "peaks": j["peaks"][:-1]}),
+    "PICOS_DE_MAS": lambda j: json.dumps({**j, "peaks": [*j["peaks"], 0.5]}),
+    # H8: eran un 422 permanente (la caché envenenada no se reescribía nunca).
+    "DUR_400_DIGITOS": _dur_enorme,
+    "JSON_5K_NIVELES": lambda j: "[" * 5000,       # entra en el tope: RecursionError al parsear
+    "JSON_100K_NIVELES": lambda j: "[" * 100_000,  # no entra en el tope: ni se parsea
+}
+
+
+@pytest.mark.parametrize("veneno", ["null", "[]", '{"peaks": [[1]]}', *_VENENOS])
+def test_una_cache_con_otra_forma_se_rehace(audio, tmp_path, veneno):
     cache = tmp_path / "peaks"
     bueno, _ = cached_peaks(audio, cache, bins=BINS)
     (archivo,) = list(cache.glob("*.json"))
     j = json.loads(archivo.read_text(encoding="utf-8"))
-    cambios = {"PICOS_NULL": ("peaks", [None] * BINS), "PICOS_ANIDADOS": ("peaks", [[1]] * BINS),
-               "PICOS_NEGATIVOS": ("peaks", [-1.0] * BINS), "DUR_TEXTO": ("duration_s", "abc"),
-               "SR_FLOAT": ("sample_rate", 22050.5)}
-    if veneno in cambios:
-        j[cambios[veneno][0]] = cambios[veneno][1]
-        archivo.write_text(json.dumps(j), encoding="utf-8")
-    else:
-        archivo.write_text(veneno, encoding="utf-8")
+    archivo.write_text(_VENENOS[veneno](j) if veneno in _VENENOS else veneno, encoding="utf-8")
     p, de_cache = cached_peaks(audio, cache, bins=BINS)
     assert de_cache is False
     np.testing.assert_array_equal(p.peaks, bueno.peaks)
     assert (p.duration_s, p.sample_rate, p.channels) == (30.0, SR, 2)
+    # Y la caché quedó corregida: la próxima vez sale de ahí, con los mismos valores.
+    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is True, "la caché envenenada no se reescribió"
+    np.testing.assert_array_equal(p.peaks, bueno.peaks)
+    assert p.duration_s == 30.0
+
+
+def test_una_cache_mas_grande_que_la_que_escribimos_no_se_lee(audio, tmp_path):
+    """El tope de tamaño: una caché con la firma y los picos correctos pero inflada (acá con
+    espacios, JSON válido) más allá de lo que puede escribir `cached_peaks` no se parsea; se
+    rehace. Así un archivo enorme en la carpeta de la caché no se carga entero en memoria."""
+    cache = tmp_path / "peaks"
+    bueno, _ = cached_peaks(audio, cache, bins=BINS)
+    (archivo,) = list(cache.glob("*.json"))
+    texto = archivo.read_text(encoding="utf-8")
+    tope = peaks_mod._tope_bytes(BINS, os.path.normcase(os.path.abspath(audio)))
+    assert len(texto) < tope, "el tope no deja pasar ni la caché que escribe el propio módulo"
+    archivo.write_text(texto + " " * tope, encoding="utf-8")
+    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is False, "leyó una caché más grande que el tope"
+    np.testing.assert_array_equal(p.peaks, bueno.peaks)
+    assert archivo.stat().st_size == len(texto.encode("utf-8")), "no reescribió la caché"
+
+
+def _replace_que_falla(monkeypatch, veces: int) -> list:
+    """`os.replace` que tira PermissionError las primeras `veces` (como en Windows cuando otro
+    hilo tiene abierto el JSON). Devuelve la lista de llamadas."""
+    real = os.replace
+    llamadas = []
+
+    def falso(a, b):
+        llamadas.append((a, b))
+        if len(llamadas) <= veces:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(b))
+        return real(a, b)
+
+    monkeypatch.setattr(os, "replace", falso)
+    monkeypatch.setattr(peaks_mod, "REPLACE_ESPERA_S", 0.0)
+    return llamadas
+
+
+def test_un_replace_que_falla_una_vez_se_reintenta(audio, tmp_path, monkeypatch):
+    """H11: la carrera lector/escritor de Windows. El reintento escribe la caché."""
+    cache = tmp_path / "peaks"
+    llamadas = _replace_que_falla(monkeypatch, veces=1)
+    p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is False and len(llamadas) == 2
+    np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-5)
+    assert list(cache.glob("*.tmp")) == [], "quedó el .tmp"
+    p2, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is True, "el reintento no dejó escrita la caché"
+    np.testing.assert_array_equal(p2.peaks, p.peaks)
+
+
+def _aviso_de_cache(caplog, cache: Path):
+    """El ÚNICO aviso de "no se pudo guardar la caché" que dejó `motor.peaks`, y que nombra el
+    archivo de la caché (dentro de `cache`). No fallar hacia afuera no puede ser callarse."""
+    avisos = [r for r in caplog.records
+              if r.name == "motor.peaks" and "no se pudo guardar la caché" in r.getMessage()]
+    assert len(avisos) == 1, [r.getMessage() for r in caplog.records]
+    assert avisos[0].levelname == "WARNING" and str(cache) in avisos[0].getMessage()
+    return avisos[0]
+
+
+def test_si_la_cache_no_se_puede_escribir_igual_devuelve_los_picos(audio, tmp_path, monkeypatch,
+                                                                   caplog):
+    """H11: un fallo al ESCRIBIR la caché no tira el pedido ni los picos ya calculados (antes
+    el PermissionError salía como 409 "no pude leer el archivo"). Pero queda en el log."""
+    import logging
+
+    cache = tmp_path / "peaks"
+    llamadas = _replace_que_falla(monkeypatch, veces=10 ** 6)
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is False
+    np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-5)
+    assert (p.duration_s, p.sample_rate, p.channels) == (30.0, SR, 2)
+    assert len(llamadas) == peaks_mod.REPLACE_INTENTOS
+    assert sorted(x.name for x in cache.iterdir()) == [], "quedó el .tmp o una caché a medias"
+    assert "El proceso no tiene acceso al archivo" in _aviso_de_cache(caplog, cache).getMessage()
+
+
+def test_carpeta_de_cache_imposible_igual_devuelve_los_picos(audio, tmp_path, caplog):
+    """Si ni se puede crear la carpeta de la caché (acá es un archivo), los picos salen igual,
+    y el log lo dice."""
+    import logging
+
+    cache = tmp_path / "peaks"
+    cache.write_text("no soy una carpeta", encoding="utf-8")
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        p, de_cache = cached_peaks(audio, cache, bins=BINS)
+    assert de_cache is False
+    np.testing.assert_allclose(p.peaks, _oraculo(audio, BINS), atol=1e-5)
+    assert cache.read_text(encoding="utf-8") == "no soy una carpeta"
+    _aviso_de_cache(caplog, cache)
+
+
+def test_un_replace_que_falla_una_vez_no_avisa(audio, tmp_path, monkeypatch, caplog):
+    """El reintento que sale bien no es un fallo: no ensucia el log."""
+    import logging
+
+    _replace_que_falla(monkeypatch, veces=1)
+    with caplog.at_level(logging.WARNING, logger="motor.peaks"):
+        cached_peaks(audio, tmp_path / "peaks", bins=BINS)
+    assert [r.getMessage() for r in caplog.records if r.name == "motor.peaks"] == []
 
 
 def test_la_cache_tiene_tope_y_poda_lo_menos_usado(tmp_path):
