@@ -106,3 +106,26 @@ export function ondaPreview(data, dur) {
   for (const k of BANDAS_PREVIEW) trazos[k] = trazoBanda(b[k].slice(0, t.picos), k)
   return { ancho: t.ancho, puntos: t.picos, trazos }
 }
+
+// Qué respuestas de /preview se guardan en la caché de la fila (f62, auditoría): la onda (200)
+// y el audio que no decodifica (422: no cambia mientras el archivo no cambie, y volver a pedirlo
+// es volver a decodificar). Un 404 (el archivo se movió), un 409 o un 5xx son pasajeros: no se
+// guardan y la fila vuelve a pedir cuando entra otra vez en pantalla.
+export const guardarOnda = (r) => Boolean(r) && (r.ok === true || r.status === 422)
+
+// Qué respuestas de /marcas se guardan: solo las que trajeron el track y la lista con la base
+// utilizable (`estado: 'ok'`). Un 200 con la base ocupada (un scan) no se guarda.
+export const guardarMarcas = (r) => Boolean(r) && r.ok === true && Boolean(r.data) && r.data.estado === 'ok'
+  && Boolean(r.data.track) && Array.isArray(r.data.marcas)
+
+// El texto del lugar de la onda cuando no hay nada que dibujar, según el estado del tema
+// (`estadoTema(...).clave`) y si tiene archivo en esta PC.
+export function textoSinOnda(clave, conArchivo) {
+  if (!conArchivo) return 'sin archivo'
+  switch (clave) {
+    case 'analizando': return 'analizando'
+    case 'en-cola': return 'en cola'
+    case 'fallo': return 'falló'
+    default: return 'sin analizar'
+  }
+}

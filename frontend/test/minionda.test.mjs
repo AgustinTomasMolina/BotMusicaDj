@@ -138,3 +138,18 @@ test('la caché guarda como mucho `max` temas y descarta el que se usó hace má
   await c.cargar('c').promesa           // entra c: sale b
   assert.deepEqual([c.guardado('a'), c.guardado('b'), c.guardado('c')], [{ id: 'a' }, undefined, { id: 'c' }])
 })
+
+test('guardarSi: lo que no se guarda (un 409 pasajero) se entrega igual y el próximo cargar vuelve a pedir', async () => {
+  const { pedir, contestar, pendientes } = pedidosManuales()
+  const c = crearCargador({ pedir, concurrencia: 2, guardarSi: (r) => r.ok })
+  const a = c.cargar('x')
+  await tick()
+  await contestar('x', { ok: false, status: 409 })
+  assert.deepEqual(await a.promesa, { ok: false, status: 409 })
+  assert.equal(c.guardado('x'), undefined, 'un 409 no se guarda')
+  c.cargar('x')
+  await new Promise((res) => setTimeout(res, 0))
+  assert.equal(pendientes.length, 1, 'el segundo cargar tenía que volver a pedir')
+  await contestar('x', { ok: true, id: 'x' })
+  assert.deepEqual(c.guardado('x'), { ok: true, id: 'x' }, 'lo que sí pasa guardarSi se guarda')
+})

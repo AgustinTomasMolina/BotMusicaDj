@@ -8,18 +8,20 @@
 //   cambia al marcar cues.
 // - Las marcas (/marcas, solo la base): por `id#versión`. Cuando el editor D cambia algo, la
 //   playlist sube la versión y la fila las vuelve a leer; la onda no se vuelve a pedir.
+// - Lo pasajero (404, 409, 5xx, base ocupada) NO se guarda (`guardarOnda`, `guardarMarcas`):
+//   la fila lo vuelve a pedir cuando entra otra vez en pantalla.
 import { getMarcas, getPreview } from './api'
 import { crearCargador } from './minionda'
-import { PUNTOS_PREVIEW } from './previewOnda'
+import { PUNTOS_PREVIEW, guardarMarcas, guardarOnda } from './previewOnda'
 
 export const CONCURRENCIA_PREVIEW = 2
 
 export const cargadorPreviews = crearCargador({
-  pedir: (id) => getPreview(id, PUNTOS_PREVIEW), concurrencia: CONCURRENCIA_PREVIEW, max: 96,
+  pedir: (id) => getPreview(id, PUNTOS_PREVIEW), concurrencia: CONCURRENCIA_PREVIEW, max: 96, guardarSi: guardarOnda,
 })
 
 export const claveMarcas = (id, version) => `${id}#${version}`
 
 export const cargadorMarcasPreview = crearCargador({
-  pedir: (clave) => getMarcas(clave.slice(0, clave.indexOf('#'))), concurrencia: CONCURRENCIA_PREVIEW, max: 96,
+  pedir: (clave) => getMarcas(clave.slice(0, clave.indexOf('#'))), concurrencia: CONCURRENCIA_PREVIEW, max: 96, guardarSi: guardarMarcas,
 })

@@ -3580,13 +3580,31 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
             "grilla": g, "cache": de_cache}
 
 
+# f62 (auditoría): como mucho 2 lecturas de bandas a la vez entre /onda3 y /preview. La
+# primera lectura de un tema decodifica el archivo entero; en la PC del dueño, con poca
+# memoria, la pantalla ya pide de a dos, pero nada impedía que otra pestaña (o el editor D más
+# las filas) sumaran más. Es un semáforo de HILOS y no de asyncio: la espera pasa adentro del
+# hilo de `to_thread`, así sirve igual con cualquier event loop (uvicorn, cada TestClient).
+# Límite conocido: una lectura que sale de la caché también espera turno detrás de dos
+# decodificaciones largas.
+_BANDAS_A_LA_VEZ = 2
+_bandas_turno = threading.BoundedSemaphore(_BANDAS_A_LA_VEZ)
+
+
+def _bandas_con_turno(ruta: str, carpeta: Path):
+    from motor.bandas import cached_bandas
+
+    with _bandas_turno:
+        return cached_bandas(ruta, carpeta)
+
+
 async def _onda3_bandas(ruta: str) -> tuple[tuple | None, JSONResponse | None]:
     """`((bandas, de_cache), None)` o `(None, respuesta de error)`: la lectura (cacheada) de las
-    3 bandas y sus errores, compartida por /onda3 y /preview."""
-    from motor.bandas import UnreadableAudio, cached_bandas
+    3 bandas y sus errores, compartida por /onda3 y /preview, de a `_BANDAS_A_LA_VEZ`."""
+    from motor.bandas import UnreadableAudio
 
     try:
-        return await asyncio.to_thread(cached_bandas, ruta, Path(db.DATA_DIR) / "peaks"), None
+        return await asyncio.to_thread(_bandas_con_turno, ruta, Path(db.DATA_DIR) / "peaks"), None
     except FileNotFoundError:
         return None, JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
                                             f"base lo tiene en {ruta}. Se movió, o la base se escaneó "

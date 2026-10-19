@@ -163,3 +163,35 @@ def test_no_depende_de_la_base_ocupada(client, biblioteca, server, monkeypatch):
     monkeypatch.setattr(server, "_usar_store_motor",
                         lambda accion: (None, "base-ocupada", "La biblioteca está ocupada."))
     assert client.get(url).status_code == 200
+
+
+def test_como_mucho_dos_lecturas_de_bandas_a_la_vez(server, biblioteca, monkeypatch):
+    """La primera lectura de un tema decodifica el archivo entero: entre /onda3 y /preview nunca
+    hay más de 2 a la vez, aunque lleguen 6 pedidos juntos."""
+    import asyncio
+    import threading
+    import time
+
+    activos, pico, lock = [0], [0], threading.Lock()
+    real = mb.cached_bandas
+
+    def lenta(ruta, carpeta):
+        with lock:
+            activos[0] += 1
+            pico[0] = max(pico[0], activos[0])
+        try:
+            time.sleep(0.15)
+            return real(ruta, carpeta)
+        finally:
+            with lock:
+                activos[0] -= 1
+
+    monkeypatch.setattr(mb, "cached_bandas", lenta)
+    ruta = str(biblioteca["rutas"]["uno.wav"])
+
+    async def seis():
+        return await asyncio.gather(*(server._onda3_bandas(ruta) for _ in range(6)))
+
+    res = asyncio.run(seis())
+    assert all(err is None and leidas is not None for leidas, err in res), res
+    assert pico[0] == server._BANDAS_A_LA_VEZ == 2, f"hubo {pico[0]} lecturas a la vez"

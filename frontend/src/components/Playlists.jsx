@@ -18,6 +18,7 @@ import {
 } from '../playlistImport'
 import EditorCues from './EditorCues'
 import PreviewOnda, { PreviewVacia } from './PreviewOnda'
+import { textoSinOnda } from '../previewOnda'
 import ExportRekordbox from './ExportRekordbox'
 
 /* Iconos inline (Phosphor-ish) */
@@ -586,7 +587,7 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     {st.clave === 'analizado' && conArchivo && it.analisis?.radio_id
                       ? <PreviewOnda id={it.analisis.radio_id} titulo={it.titulo} version={versionDe(it.analisis.radio_id)}
                         resumenBase={textoMarcas(it.analisis?.marcas)} onAbrir={() => setCuesDe(it.analisis.radio_id)} />
-                      : <PreviewVacia texto={conArchivo ? 'sin analizar' : 'sin archivo'} />}
+                      : <PreviewVacia texto={textoSinOnda(st.clave, conArchivo)} marcas={it.analisis?.marcas} />}
                     {it.formato && !it.local && <span className="mb"><b>{it.formato.toUpperCase()}</b></span>}
                     <GeneroTema it={it} onGuardar={(g) => guardarGenero(it, g)} />
                   </div>

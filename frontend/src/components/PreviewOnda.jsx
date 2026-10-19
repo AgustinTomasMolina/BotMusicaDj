@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ALTO_PREVIEW, BANDAS_PREVIEW, durEje, marcasEnOnda, ondaPreview, resumenMarcas } from '../previewOnda'
 import { cargadorMarcasPreview, cargadorPreviews, claveMarcas } from '../previews'
+import { puntosMarcas, textoMarcas } from '../playlistImport'
 
 /* ============================================================================
    La vista previa de la onda en una fila de Mis playlists (f62, la columna «Preview» de
@@ -8,7 +9,9 @@ import { cargadorMarcasPreview, cargadorPreviews, claveMarcas } from '../preview
    SU color (pad, memory, loop). Tocarla abre el editor D en ese tema, como «Marcar cues».
 
    - Se pide SOLO cuando la fila entra en pantalla (IntersectionObserver), por las colas de
-     src/previews.js (de a dos). Si la fila se va antes de su turno, el pedido se suelta.
+     src/previews.js (de a dos). Si la fila se va antes de su turno, el pedido se suelta. Lo
+     que la cola no guarda (un 409, un 5xx, la base ocupada) se vuelve a pedir cuando la fila
+     entra otra vez en pantalla.
    - Nada se inventa (§6): mientras no llega, la caja vacía; si la onda no se pudo leer, «sin
      onda» con el motivo en el título; las marcas, solo las que devolvió la API.
    - `version` cambia cuando el editor D tocó marcas: se vuelven a leer (la onda no).
@@ -46,26 +49,32 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
     let vivo = true
     let pOnda = null
     let pMarcas = null
-    const terminar = () => { if (cargadorPreviews.guardado(id) && cargadorMarcasPreview.guardado(clave)) io.disconnect() }
+    // Ya no hace falta mirar: las dos respuestas quedaron guardadas. Si alguna no se guardó (algo
+    // pasajero), se sigue mirando y se vuelve a pedir cuando la fila entra otra vez en pantalla.
+    const listo = () => Boolean(cargadorPreviews.guardado(id) && cargadorMarcasPreview.guardado(clave))
     const io = new IntersectionObserver((entradas) => {
       const visible = entradas.some((e) => e.isIntersecting)
       if (visible) {
-        if (!yaOnda && !pOnda) {
+        if (!cargadorPreviews.guardado(id) && !pOnda) {
           const p = cargadorPreviews.cargar(id)
           pOnda = p
-          p.promesa.then((r) => { if (vivo) { setOnda({ ...desdeOnda(r), id }); terminar() } },
-            () => { if (vivo && pOnda === p) { pOnda = null; setOnda({ fase: 'error', motivo: 'sin conexión con el servidor' }) } })
+          p.promesa.then((r) => {
+            if (pOnda === p) pOnda = null
+            if (vivo) { setOnda({ ...desdeOnda(r), id }); if (listo()) io.disconnect() }
+          }, () => { if (pOnda === p) pOnda = null; if (vivo) setOnda({ fase: 'error', motivo: 'sin conexión con el servidor' }) })
         }
-        if (!yaMarcas && !pMarcas) {
+        if (!cargadorMarcasPreview.guardado(clave) && !pMarcas) {
           const p = cargadorMarcasPreview.cargar(clave)
           pMarcas = p
-          p.promesa.then((r) => { if (vivo) { setMarcas(desdeMarcas(r)); terminar() } },
-            () => { if (vivo && pMarcas === p) { pMarcas = null; setMarcas({ fase: 'error', motivo: 'sin conexión con el servidor' }) } })
+          p.promesa.then((r) => {
+            if (pMarcas === p) pMarcas = null
+            if (vivo) { setMarcas(desdeMarcas(r)); if (listo()) io.disconnect() }
+          }, () => { if (pMarcas === p) pMarcas = null; if (vivo) setMarcas({ fase: 'error', motivo: 'sin conexión con el servidor' }) })
         }
       } else {
         // Se fue de la pantalla: lo que todavía no salió se saca de la cola.
-        if (pOnda && !cargadorPreviews.guardado(id)) { pOnda.cancelar(); pOnda = null }
-        if (pMarcas && !cargadorMarcasPreview.guardado(clave)) { pMarcas.cancelar(); pMarcas = null }
+        if (pOnda) { pOnda.cancelar(); pOnda = null }
+        if (pMarcas) { pMarcas.cancelar(); pMarcas = null }
       }
     })
     io.observe(el)
@@ -80,18 +89,25 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
   const dur = ok ? durEje(marcas.track, durAudio) : marcas.fase === 'error' ? durAudio : 0
   const dibujo = onda.fase === 'ok' && dur > 0 ? ondaPreview(onda.data, dur) : null
   const lista = ok ? marcasEnOnda(marcas.marcas, dur) : []
-  const resumen = ok ? resumenMarcas(marcas.marcas) : resumenBase || null
+  // Llegó la onda y las marcas ya se resolvieron, pero no hay qué dibujar (sin duración en la
+  // biblioteca ni en el audio, o sin puntos): se dice, no queda «cargando» para siempre.
+  const sinDibujo = onda.fase === 'ok' && marcas.fase !== 'cargando' && !dibujo
+  const motivoOnda = onda.fase === 'error' ? onda.motivo : sinDibujo ? 'sin duración' : null
+  // Las marcas que no se pudieron leer no se cuentan con el resumen viejo de la playlist.
+  const resumen = ok ? resumenMarcas(marcas.marcas) : marcas.fase === 'error' ? 'marcas sin leer' : resumenBase || null
   const avisos = [
-    onda.fase === 'error' ? `Sin onda: ${onda.motivo}` : null,
-    marcas.fase === 'error' ? `Sin marcas: ${marcas.motivo}` : null,
+    motivoOnda ? `Sin onda: ${motivoOnda}.` : null,
+    marcas.fase === 'error' ? `Sin marcas: ${marcas.motivo}.` : null,
     lista.some((m) => m.fuera) ? 'Hay marcas después del final del tema (el archivo cambió): se ven pegadas al borde.' : null,
   ].filter(Boolean)
-  const fase = onda.fase === 'error' ? 'error' : dibujo ? 'ok' : 'cargando'
+  const fase = motivoOnda ? 'error' : dibujo ? 'ok' : 'cargando'
+  const idAvisos = useId()
 
   return (
     <button type="button" ref={ref} className={`pv is-${fase}`} data-pv={id}
       data-dur={dur > 0 ? dur : undefined}
       aria-label={`Marcar cues de «${titulo}»${resumen ? ` (${resumen})` : ''}`}
+      aria-describedby={avisos.length ? idAvisos : undefined}
       title={avisos.length ? avisos.join(' ') : resumen ? `${resumen}. Abrir el editor de cues` : 'Abrir el editor de cues'}
       onClick={onAbrir}>
       <span className="pv-caja" aria-hidden="true">
@@ -107,12 +123,28 @@ export default function PreviewOnda({ id, titulo, version = 0, resumenBase, onAb
             style={m.width === null ? { left: `${m.left}%` } : { left: `${m.left}%`, width: `${m.width}%` }} />
         ))}
       </span>
+      {/* Los avisos también para el lector de pantalla (descripción del botón), no solo en el title. */}
+      {avisos.length > 0 && <span id={idAvisos} className="pv-avisos" hidden>{avisos.join(' ')}</span>}
     </button>
   )
 }
 
 // El lugar de la vista previa cuando no hay nada que dibujar: el tema no tiene archivo en esta
-// PC o el motor todavía no lo analizó. Texto apagado, nunca una onda de mentira.
-export function PreviewVacia({ texto }) {
-  return <span className="pv-vacio"><span className="pv-caja">{texto}</span></span>
+// PC o el motor todavía no lo analizó (`texto` lo dice: «sin archivo», «sin analizar»,
+// «analizando», «en cola», «falló»). Texto apagado, nunca una onda de mentira. Si el tema ya
+// tiene marcas (importadas de Rekordbox, f56), van los puntos de color y cuántas de cada una:
+// sin onda no se pueden ubicar, pero no se esconden.
+export function PreviewVacia({ texto, marcas }) {
+  const puntos = puntosMarcas(marcas)
+  return (
+    <span className="pv-vacio">
+      <span className="pv-caja">{texto}</span>
+      {puntos.length > 0 && (
+        <span className="cue-puntos">
+          <span aria-hidden="true">{puntos.map((p, i) => <i key={i} className={p.clase} />)}</span>
+          <span className="cue-puntos-txt">{textoMarcas(marcas)}</span>
+        </span>
+      )}
+    </span>
+  )
 }

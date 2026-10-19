@@ -6,7 +6,7 @@
 // Uso (desde frontend/):  npm run test:unidad
 import { test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { durEje, marcasEnOnda, resumenMarcas, trazoBanda, ondaPreview, PUNTOS_PREVIEW } from '../src/previewOnda.js'
+import { durEje, marcasEnOnda, resumenMarcas, trazoBanda, ondaPreview, PUNTOS_PREVIEW, guardarOnda, guardarMarcas, textoSinOnda } from '../src/previewOnda.js'
 import { getPreview } from '../src/api.js'
 
 const cue = (id, num, inicio) => ({ id, tipo: 'cue', num, inicio, fin: null })
@@ -105,4 +105,28 @@ test('getPreview pide /preview con los puntos de la fila', async () => {
   await getPreview('0123456789abcdef', PUNTOS_PREVIEW)
   await getPreview('abc')
   assert.deepEqual(pedidas, ['/api/radio/tracks/0123456789abcdef/preview?puntos=160', '/api/radio/tracks/abc/preview'])
+})
+
+test('guardarOnda: se guardan la onda y el 422 (no decodifica); 404, 409, 5xx y sin red se vuelven a pedir', () => {
+  assert.equal(guardarOnda({ ok: true, status: 200, data: {} }), true)
+  assert.equal(guardarOnda({ ok: false, status: 422, data: {} }), true)
+  for (const status of [404, 409, 500, 503]) assert.equal(guardarOnda({ ok: false, status, data: {} }), false, String(status))
+  assert.equal(guardarOnda(undefined), false)
+})
+
+test('guardarMarcas: solo con la base utilizable y la lista; «base ocupada» (200 sin track) no se guarda', () => {
+  assert.equal(guardarMarcas({ ok: true, data: { estado: 'ok', track: { dur: 1 }, marcas: [] } }), true)
+  assert.equal(guardarMarcas({ ok: true, data: { estado: 'base-ocupada', track: null, marcas: [] } }), false)
+  assert.equal(guardarMarcas({ ok: true, data: { estado: 'base-ocupada', track: { dur: 1 }, marcas: [] } }), false, 'con la base ocupada no se guarda aunque venga un track')
+  assert.equal(guardarMarcas({ ok: false, status: 404, data: { error: 'x' } }), false)
+  assert.equal(guardarMarcas({ ok: true, data: { estado: 'ok', track: { dur: 1 } } }), false)
+})
+
+test('textoSinOnda: dice por qué no hay onda según el estado del tema', () => {
+  assert.equal(textoSinOnda('pendiente', true), 'sin analizar')
+  assert.equal(textoSinOnda('analizando', true), 'analizando')
+  assert.equal(textoSinOnda('en-cola', true), 'en cola')
+  assert.equal(textoSinOnda('fallo', true), 'falló')
+  assert.equal(textoSinOnda('analizado', false), 'sin archivo')
+  assert.equal(textoSinOnda('no-encontrado', false), 'sin archivo')
 })

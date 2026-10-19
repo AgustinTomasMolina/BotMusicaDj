@@ -4622,6 +4622,97 @@ function casosF54() {
       })
     }],
 
+    ['preview (f62, auditoría): sin analizar con marcas importadas muestra el estado y los puntos; un 409 y la base ocupada no quedan pegados', async (page, ctx) => {
+      await conEditor(ctx, async ({ pid, por }) => {
+        const pendiente = por['Con grilla']      // se ve «pendiente», con marcas reales en la base
+        const analizando = por['Sin BPM']
+        const ocupado = por['Sin grilla']        // /preview 409 y /marcas «base ocupada» la primera vez
+        for (const m of [{ tipo: 'cue', inicio: 1, num: 0 }, { tipo: 'cue', inicio: 2, num: 1 }, { tipo: 'loop', inicio: 4, fin: 6, num: 2 }]) {
+          const r = await apiPedir(ctx, rutaMarcas(pendiente.rid), 'POST', m)
+          afirmar(r.status === 201, `no pude crear la marca ${json(m)}: ${json(r)}`)
+        }
+        const pedidos = []
+        let ocupadaPreview = true
+        let ocupadaMarcas = true
+        await interceptar(page, async (req) => {
+          const u = new URL(req.url())
+          const m = /^\/api\/radio\/tracks\/([0-9a-f]{16})\/(preview|marcas)$/.exec(u.pathname)
+          if (m && req.method() === 'GET' && m[1] === ocupado.rid) {
+            pedidos.push(m[2])
+            if (m[2] === 'preview' && ocupadaPreview) {
+              ocupadaPreview = false
+              await req.respond({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'La biblioteca está ocupada.' }) })
+              return true
+            }
+            if (m[2] === 'marcas' && ocupadaMarcas) {
+              ocupadaMarcas = false
+              // Lo que contesta el server con la base ocupada (un scan): 200 sin track.
+              await req.respond({ status: 200, contentType: 'application/json',
+                body: JSON.stringify({ configurada: true, estado: 'base-ocupada', motivo: 'La biblioteca está ocupada.', track: null, marcas: [], limites: null }) })
+              return true
+            }
+          }
+          // La playlist como la manda la API, con un tema «pendiente» y otro «analizando».
+          if (u.pathname === `/api/playlists/${pid}` && req.method() === 'GET') {
+            const r = await apiPedir(ctx, u.pathname)
+            for (const it of r.data.data.items) {
+              if (it.analisis?.radio_id === pendiente.rid) it.analisis.estado = 'pendiente'
+              if (it.analisis?.radio_id === analizando.rid) it.analisis.estado = 'analizando'
+            }
+            await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(r.data) })
+            return true
+          }
+          return false
+        })
+        const items = (await api(ctx, `/api/playlists/${pid}`)).data.items
+        const mPend = items.find((i) => i.analisis?.radio_id === pendiente.rid).analisis.marcas
+        igual([mPend.pads, mPend.memory, mPend.loop], [[0, 1], 0, 1], 'la API no cuenta las marcas creadas')
+        await page.setViewport({ width: 1440, height: 420 })
+        await abrirPlaylist(page, ctx)
+        const fila = (titulo) => page.evaluate((t) => {
+          const r = [...document.querySelectorAll('.results-crate .trk')].find((x) => x.querySelector('.trk-title')?.textContent === t)
+          const v = r?.querySelector('.pv-vacio')
+          const color = (n) => { const e = document.createElement('i'); e.style.color = `var(${n})`; document.body.appendChild(e); const c = getComputedStyle(e).color; e.remove(); return c }
+          return v ? {
+            texto: v.querySelector('.pv-caja')?.textContent ?? null,
+            marcas: v.querySelector('.cue-puntos-txt')?.textContent ?? null,
+            puntos: [...v.querySelectorAll('.cue-puntos i')].map((i) => getComputedStyle(i).backgroundColor),
+            ocultos: [...v.querySelectorAll('.cue-puntos i')].every((i) => i.closest('[aria-hidden="true"]')),
+            esperados: [color('--cue-1'), color('--cue-2'), color('--cue-loop')],
+            pv: Boolean(r.querySelector('.pv')),
+          } : null
+        }, titulo)
+        // Sin analizar, con marcas importadas: el estado Y cuántas de cada una, con sus colores.
+        const fp = await hasta(() => fila(pendiente.item.titulo), (x) => x && x.marcas, 'la fila sin analizar no muestra sus marcas')
+        igual([fp.texto, fp.marcas, fp.puntos, fp.ocultos, fp.pv], ['sin analizar', '2 hot cues, 1 loop', fp.esperados, true, false],
+          'la fila sin analizar tiene que decir su estado y sus marcas (2 hot cues, 1 loop) con los colores de pad y loop')
+        const fa = await fila(analizando.item.titulo)
+        igual([fa.texto, fa.marcas], ['analizando', null], 'la fila que se está analizando tiene que decir «analizando»')
+        // El 409 y la base ocupada: se dicen (también al lector de pantalla) y no se cuentan las marcas viejas.
+        const pv = `.pv[data-pv="${ocupado.rid}"]`
+        await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center' }), pv)
+        const leerOcupado = () => page.evaluate((s) => {
+          const b = document.querySelector(s)
+          const d = document.getElementById(b.getAttribute('aria-describedby') || '')
+          return { fase: (b.className.match(/\bis-(\w+)/) || [])[1], label: b.getAttribute('aria-label'), desc: d ? d.textContent : null,
+            onda: Boolean(b.querySelector('svg')), visible: (() => { const r = b.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight })() }
+        }, pv)
+        const e1 = await hasta(leerOcupado, (x) => x.fase === 'error' && x.desc, 'con /preview en 409 la fila no dijo nada')
+        igual(e1.label, `Marcar cues de «${ocupado.item.titulo}» (marcas sin leer)`, 'con la base ocupada no se pueden contar las marcas')
+        afirmar(e1.desc.includes('Sin onda: La biblioteca está ocupada.') && e1.desc.includes('Sin marcas: La biblioteca está ocupada.'),
+          `la descripción accesible no dice por qué no hay onda ni marcas: ${json(e1.desc)}`)
+        // Se va de la pantalla y vuelve: se piden otra vez y ahora llegan.
+        await page.evaluate(() => window.scrollTo(0, 0))
+        if ((await leerOcupado()).visible) await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        afirmar(!(await leerOcupado()).visible, 'no pude sacar la fila de la pantalla')
+        await page.evaluate(() => fetch('/api/playlists').then((x) => x.text()))
+        await page.evaluate((s) => document.querySelector(s).scrollIntoView({ block: 'center' }), pv)
+        const e2 = await hasta(leerOcupado, (x) => x.fase === 'ok' && x.onda, 'al volver a la pantalla, la onda no se volvió a pedir')
+        igual([e2.label, e2.desc], [`Marcar cues de «${ocupado.item.titulo}» (sin marcas)`, null], 'al volver, las marcas tenían que leerse y los avisos irse')
+        igual(pedidos.sort(), ['marcas', 'marcas', 'preview', 'preview'], 'cada cosa pasajera se tenía que pedir otra vez, una sola vez')
+      })
+    }],
+
     ['editor D (f54): desde la playlist, BPM/key de la API, onda de 3 bandas con el kick en los graves, grilla de la API y zoom → rango', async (page, ctx) => {
       await conEditor(ctx, async ({ por }) => {
         const t = por['Con grilla']
