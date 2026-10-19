@@ -54,6 +54,12 @@ const coma = (x, d = 2) => Number(x).toFixed(d).replace('.', ',')
 const fmtBeats = (b) => (Number.isInteger(b) ? String(b) : coma(b, 1))
 // Concordancia: «1 memory cue repetida» (la memory es femenina en todo el editor).
 const REPETIDO = { cue: 'repetido', memory: 'repetida', loop: 'repetido' }
+// Al pasar de tema con Ctrl+Z / Ctrl+Y esperando su turno: qué no se aplicó y en qué tema.
+const avisoColaDescartada = (es) => {
+  const cual = es.length > 1 ? `los ${es.length} Ctrl+Z / Ctrl+Y en cola no se aplicaron`
+    : es[0].dir < 0 ? 'el Ctrl+Z en cola no se deshizo' : 'el Ctrl+Y en cola no se rehizo'
+  return `«${es[0].titulo}»: ${cual} porque pasaste de tema.`
+}
 
 function motivoDe(r) {
   const d = (r && r.data) || {}
@@ -209,6 +215,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     // (la época ya subió en irTema, en el mismo instante del cambio)
     vuelo.current.n = 0
     ocupado.current = false
+    // Los Ctrl+Z / Ctrl+Y que esperaban su turno en el tema anterior no se aplican acá: se dice
+    // (como con una creación en cola), no se pierden en silencio.
+    const descartados = cola.current
     cola.current = []
     listaServidor.current = []
     creaciones.current = { n: 0, p: Promise.resolve() }
@@ -227,7 +236,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     setSel(null)
     setAbierta(null)
     setConfirmaRep(false)
-    setAviso('')
+    setAviso(descartados.length ? avisoColaDescartada(descartados) : '')
     const pend = pendientesDe.current.get(id) || []
     pendientesDe.current.delete(id)
     setFallas(pend.map((texto) => ({ id: ++fallaSeq.current, texto, reconciliada: true })))
@@ -528,8 +537,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
 
   // Lo que falta de un paso del historial cuando se pasó de tema en el medio (Ctrl+Z y AvPág
   // seguidos, o un grupo cortado a la mitad): se termina contra el tema de ORIGEN, sin tocar la
-  // pantalla del nuevo (no pasa por conEstado). Como deshacer, primero relee y saltea lo que
-  // ya está hecho (yaHecha): no duplica. Si algo falla, se avisa como «a medias».
+  // pantalla del nuevo (no pasa por `conEstado`). Como deshacer, primero relee y saltea lo que
+  // ya está hecho (`yaHecha`): no duplica. Si algo falla, se avisa como «a medias».
   const terminarEnOrigen = async (origen, resto, cambios, que) => {
     const leer = async () => {
       try { const g = await getMarcas(origen.tid); return g && g.ok && Array.isArray(g.data?.marcas) ? g.data.marcas : null } catch { return null }
@@ -695,7 +704,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     }
     // Detrás de una creación en vuelo (C y Ctrl+Z enseguida, auditoría f54 I-3): espera a que se
     // registre, así deshace ESA creación y no la anterior (y no se pierde el futuro).
-    if (ocupado.current || creaciones.current.n > 0) { cola.current.push(dir); return }
+    // Cada uno en cola recuerda la última creación que tenía delante (`tras`): si esa creación no
+    // se guardó, un Ctrl+Z no tiene nada que deshacer y NO se aplica al paso anterior.
+    if (ocupado.current || creaciones.current.n > 0) {
+      const q = creaciones.current
+      cola.current.push({ dir, titulo: tema ? tema.titulo : 'otro tema', tras: q.n > 0 ? q.ultima : null })
+      return
+    }
     const paso = dir < 0 ? deshacer(historial) : rehacer(historial)
     if (!paso) { setAviso(dir < 0 ? 'No hay nada para deshacer.' : 'No hay nada para rehacer.'); return }
     // Defensa en profundidad (ver `aplicarPaso`): un paso de otro tema no se aplica nunca acá.
@@ -716,7 +731,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     const que = dir < 0 ? 'Deshacer' : 'Rehacer'
     const desenlace = r.ok ? 'ok' : r.tipo === 'rechazo' ? 'rechazo' : 'reintentable'
     // Rechazado A MEDIAS (auditoría f54, I-1): lo que sí se aplicó está en el servidor y no puede
-    // quedar fuera del historial; va como un paso propio (rescatarHechas) que Ctrl+Z saca.
+    // quedar fuera del historial; va como un paso propio (`rescatarHechas`) que Ctrl+Z saca.
     const rescate = !r.ok && r.tipo === 'rechazo' && r.parcial && r.hechas && r.hechas.length > 0
     setHistorial((h) => {
       const x = remapear(cerrarPaso(h, original, dir, desenlace))
@@ -744,7 +759,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   // aplicó su resultado: así ve el historial actual).
   useEffect(() => {
     if (ocupado.current || creaciones.current.n > 0 || !cola.current.length) return
-    correrHistorial(cola.current.shift())
+    const e = cola.current.shift()
+    // La creación que tenía delante falló (500, sin red, «ya hay uno ahí»): no se registró, así
+    // que un Ctrl+Z desharía el paso ANTERIOR. Se descarta y se dice (reauditoría f54).
+    if (e.dir < 0 && e.tras && e.tras.creo === false) {
+      setAviso(`No había nada que deshacer: ${e.tras.que} no se guardó.`)
+      return
+    }
+    correrHistorial(e.dir)
   })
 
   /* ---------- poner marcas ---------- */
@@ -799,10 +821,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
   // Una creación por vez (crítica de f54, P0-2): la que se aprieta mientras otra viaja espera su
   // turno y se decide con la lista que devolvió la anterior (el pad libre, «ya hay una ahí»). El
   // tiempo es el del momento en que se apretó. Si mientras tanto se cambió de tema, no se crea.
-  const enCola = (fn) => {
+  // `que` («el hot cue», «la memory», «el loop»): para decir qué no se guardó (ver la cola de Ctrl+Z).
+  const enCola = (fn, que) => {
     const ep = epoca.current
     const q = creaciones.current                    // la cola de ESTE tema (otro tema, otra cola)
     const titulo = tema ? tema.titulo : 'otro tema'
+    const registro = { que, creo: undefined }       // se completa cuando la creación termina
+    q.ultima = registro
     const correr = () => {
       // Esperaba su turno y mientras tanto se pasó de tema: no se crea en el tema nuevo (el
       // tiempo y los pads eran del anterior), y se dice.
@@ -817,6 +842,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     q.n += 1
     const siguiente = (q.n === 1 ? Promise.resolve(correr()) : q.p.then(correr))
       .catch(() => null)
+      .then((d) => { registro.creo = Boolean(d); return d })
       .finally(() => {
         q.n -= 1
         // Un Ctrl+Z que esperaba detrás de las creaciones: un render para que lo corra el efecto.
@@ -834,7 +860,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       const n = num === undefined ? padLibre(listaServidor.current) : num
       if (n === null) { setAviso('⚠ Los 8 pads (A–H) están ocupados: borrá uno o movelo.'); return null }
       return crearAvisando({ tipo: 'cue', inicio: t, num: n }, `Hot cue ${letraPad(n)} en ${fmtTiempo(t)}`)
-    })
+    }, 'el hot cue')
   }
   const ponerMemory = () => {
     if (!track) return null
@@ -842,7 +868,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
     return enCola(async () => {
       if (yaHay('memory', t)) return null
       return crearAvisando({ tipo: 'memory', inicio: t }, `Memory cue en ${fmtTiempo(t)}`)
-    })
+    }, 'la memory')
   }
   const ponerLoopIn = () => {
     if (!track) return
@@ -877,7 +903,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       const d = await crearAvisando(c, `Loop ${fmtTiempo(entrada)} → ${fmtTiempo(t)}`)
       if (d) setLoopIn((x) => (x === entrada ? null : x))
       return d
-    })
+    }, 'el loop')
   }
   const ponerLoopBeats = () => {
     if (!track) return null
@@ -891,7 +917,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia }) {
       const c = cuerpoLoop(t, fin)
       if (c.error) { setAviso(c.error); return null }
       return crearAvisando(c, `Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
-    })
+    }, 'el loop')
   }
   const tocarPad = (num, { borrarlo = false } = {}) => {
     const m = marcaDelPad(marcas, num)

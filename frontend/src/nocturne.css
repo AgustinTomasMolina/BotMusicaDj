@@ -2087,7 +2087,11 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-loop-fin{right:-12px;width:24px;padding:0 8px;box-sizing:border-box;background-clip:content-box}
 @media (max-width:640px){
   .edd-dock{display:flex;flex-direction:column;gap:6px;position:sticky;bottom:0;z-index:6;margin:0 -12px -12px;padding:8px 12px 10px;background:var(--color-bg);border-top:1px solid var(--color-divider);box-shadow:0 -6px 16px rgba(0,0,0,.45)}
-  .edd-dock .edd-marcar{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+  /* 8 columnas: los 4 de marcar de a 2; «Loop N beats» y el selector de a 3 (así entra «16 beats»
+     a 360 px); Deshacer y Rehacer de a 1, nunca por debajo de 44 px. */
+  .edd-dock .edd-marcar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr)) repeat(2,minmax(44px,1fr));gap:6px}
+  .edd-dock .edd-marcar>:nth-child(-n+4){grid-column:span 2}
+  .edd-dock .edd-loopb,.edd-dock .edd-loopn-l{grid-column:span 3}
   .edd-dock .edd-marcar .edd-btn{min-width:0;padding:4px 6px;font-size:13px;line-height:1.15;white-space:normal;justify-content:center;text-align:center}
   .edd-dock .edd-kbd{display:none}
   .edd-dock .edd-loopn-l,.edd-dock .edd-loopn{min-width:0;width:100%;min-height:44px}

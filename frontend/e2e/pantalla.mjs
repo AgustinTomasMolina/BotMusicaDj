@@ -6530,5 +6530,97 @@ function casosF54() {
         afirmar(ley.includes('golpes de graves (detectados, no son beats)'), `la leyenda no dice qué son los golpes: ${json(ley)}`)
       })
     }],
+    ['editor D (f54): Ctrl+Z en cola detrás de una creación que FALLA (500 y sin red) no deshace el paso anterior y lo dice', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        let modo = null                               // '500' | 'red' | null
+        await interceptar(page, async (req) => {
+          if (!modo || req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
+          const m = modo
+          modo = null
+          await new Promise((r) => setTimeout(r, 600))
+          if (m === 'red') await req.abort('failed')
+          else await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada' }) })
+          return true
+        })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual(mem.status, 201, 'M no creó la memory')
+        await filasComoApi(page, ctx, t.rid, 'con la memory')
+        for (const caso of ['500', 'red']) {
+          const escr = pedidosDeMarcas(page)
+          modo = caso
+          await page.keyboard.press('ArrowRight')
+          await page.keyboard.press('ArrowRight')
+          await page.keyboard.press('c')                 // el POST falla a los 600 ms
+          await new Promise((r) => setTimeout(r, 100))
+          await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')
+          await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x === 'No había nada que deshacer: el hot cue no se guardó.',
+            `(${caso}) el Ctrl+Z en cola detrás del hot cue que falló no lo dijo`)
+          await new Promise((r) => setTimeout(r, 500))
+          igual(escr.filter((x) => !x.startsWith('POST')), [], `(${caso}) el Ctrl+Z en cola mandó algo (deshizo el paso anterior)`)
+          igual((await marcasApi(ctx, t.rid)).map((m) => [m.id, m.tipo]), [[mem.data.marca.id, 'memory']], `(${caso}) la memory anterior tenía que seguir`)
+          igual(await page.$eval('.edd-marcar button[aria-keyshortcuts="Control+Z"]', (b) => b.disabled), false, `(${caso}) el paso de la memory tenía que seguir en el historial`)
+        }
+      })
+    }],
+
+    ['editor D (f54): AvPág con un Ctrl+Z en cola no lo pierde en silencio: el tema nuevo dice que no se deshizo', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const A = por['Con grilla']
+        const B = por['Sin grilla']
+        let demorar = 0
+        await interceptar(page, async (req) => {
+          if (demorar <= 0 || req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
+          demorar -= 1
+          await new Promise((r) => setTimeout(r, 1500))
+          await req.continue()
+          return true
+        })
+        await abrirEditorD(page, ctx, A.item.titulo)
+        await page.focus('.edd-onda')
+        const escr = pedidosDeMarcas(page)
+        demorar = 1
+        await page.keyboard.press('c')                   // POST demorado 1,5 s
+        await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control')   // en cola
+        await page.keyboard.press('PageDown')
+        await hasta(() => page.$eval('#edd-titulo', (h) => h.firstChild.textContent), (v) => v === B.item.titulo, 'AvPág no pasó a B')
+        await hasta(() => page.$eval('.edd-aviso', (e) => e.textContent), (x) => x === `«${A.item.titulo}»: el Ctrl+Z en cola no se deshizo porque pasaste de tema.`,
+          'el Ctrl+Z en cola se descartó en silencio al pasar de tema')
+        await hasta(() => escr.length, (n) => n === 1, 'no salió el POST del cue')
+        await new Promise((r) => setTimeout(r, 1800))
+        igual(escr.filter((x) => x.startsWith('DELETE')), [], 'el Ctrl+Z en cola no puede aplicarse en ningún tema')
+        igual((await marcasApi(ctx, A.rid)).map((m) => m.tipo), ['cue'], 'el cue se crea en A (su tema)')
+        igual(await page.$eval('.edd-aviso', (e) => e.textContent), `«${A.item.titulo}»: el Ctrl+Z en cola no se deshizo porque pasaste de tema.`, 'el aviso tiene que quedar')
+      })
+    }],
+
+    ['editor D (f54): en el celular (400×800 y 360×640) el selector «N beats» del dock se lee entero y los botones siguen de 44 px', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        for (const [w, h] of [[400, 800], [360, 640]]) {
+          await page.setViewport({ width: w, height: h })
+          await abrirEditorD(page, ctx, por['Con grilla'].item.titulo)
+          for (const n of ['4', '16']) {
+            await page.select('.edd-dock .edd-loopn', n)
+            const m = await page.$eval('.edd-dock .edd-loopn', (s) => {
+              const cs = getComputedStyle(s)
+              const c = document.createElement('canvas').getContext('2d')
+              c.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+              const texto = s.options[s.selectedIndex].text
+              // El select es nativo: Chrome dibuja la flecha (~20 px) DENTRO de la caja de contenido,
+              // así que al texto le queda el ancho menos los dos paddings y la flecha.
+              const libre = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 20
+              return { texto, mide: Math.ceil(c.measureText(texto).width), libre: Math.floor(libre), alto: Math.round(s.getBoundingClientRect().height) }
+            })
+            afirmar(m.mide <= m.libre, `a ${w} px «${m.texto}» no entra en el selector: mide ${m.mide} px y hay ${m.libre}`)
+            afirmar(m.alto >= 44, `a ${w} px el selector mide ${m.alto} px de alto`)
+          }
+          const bajos = await page.$$eval('.edd-dock .edd-marcar button', (bs) => bs.map((b) => [b.getAttribute('aria-label') || b.textContent.trim(), Math.round(b.getBoundingClientRect().height), Math.round(b.getBoundingClientRect().width)]).filter(([, hh, ww]) => hh < 44 || ww < 44))
+          igual(bajos, [], `a ${w} px hay botones del dock de menos de 44 px`)
+          igual(await page.evaluate(() => document.documentElement.scrollWidth), w, `a ${w} px no puede haber scroll horizontal`)
+        }
+      })
+    }],
   ]
 }

@@ -503,8 +503,8 @@ export function descartarPaso(h, dir, hechas = [], cambios = []) {
 
 // Lo que un paso rechazado A MEDIAS alcanzó a guardar, al final del pasado como un grupo propio
 // (con el id nuevo de lo recreado y sin duplicar lo que ya crea otro paso: ver descartarPaso).
-// h es el historial SIN el paso (en el editor, cerrarPaso(h, original, dir, 'rechazo') sobre
-// el historial actual); 	id, el tema del paso.
+// `h` es el historial SIN el paso (en el editor, `cerrarPaso(h, original, dir, 'rechazo')` sobre
+// el historial actual); `tid`, el tema del paso.
 export function rescatarHechas(h, hechas = [], cambios = [], tid = undefined) {
   let out = h
   for (const [viejo, nuevo] of cambios) out = reemplazarId(out, viejo, nuevo)
@@ -576,7 +576,7 @@ export function agruparIguales(marcas) {
 // Marcas REPETIDAS para «Borrar repetidos»: del mismo tipo en el mismo tiempo (±50 ms, como el
 // freno de duplicados; un loop, con la misma salida). Para los hot cues no importa el pad: seis
 // cues en 1:15.439 en los pads C–H son el mismo cue repetido. Queda UNA por grupo:
-// - la que el dueño trabajó (marcaPropia: con nombre, o un loop / memory en un pad) antes que
+// - la que el dueño trabajó (`marcaPropia`: con nombre, o un loop / memory en un pad) antes que
 //   una suelta sin nombre, aunque la suelta sea más vieja (auditoría f54, M-1: se borraba el hot
 //   loop con nombre del pad A por ser más nuevo que un loop suelto idéntico);
 // - entre iguales en eso, la más vieja (id más bajo).
