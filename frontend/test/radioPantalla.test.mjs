@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   textoCues, textoEnergia, siguienteFila, siguienteTab, textoPool, etiquetaMotivo, generoDe, textoAnalizando,
-  resumenMarcas,
+  resumenMarcas, temaDeTrack,
 } from '../src/radioPantalla.js'
 
 const ceros = { otro_genero: 0, sin_genero: 0, sin_archivo: 0, analizando: 0, sin_analizar: 0, fallo_analisis: 0, no_es_track: 0, duplicado: 0 }
@@ -84,4 +84,22 @@ test('siguienteTab: ← → dan la vuelta y saltean la deshabilitada', () => {
   assert.equal(siguienteTab(TABS, 'cues', 'End'), 'info', 'Fin va a la última HABILITADA')
   assert.equal(siguienteTab(TABS, 'cues', 'ArrowDown'), null)
   assert.equal(siguienteTab([{ k: 'x', off: true }], 'x', 'ArrowRight'), null)
+})
+
+test('temaDeTrack (f61): el track de un paso del set con la forma que pide el editor D', () => {
+  const t = { id: 42, titulo: 'Tema A', artista: 'Artista B', bpm: 128.0, en_biblioteca: true }
+  assert.deepEqual(temaDeTrack(t), {
+    id: 42, titulo: 'Tema A', artista: 'Artista B', analisis: { radio_id: 42, estado: 'analizado' },
+  })
+  // Sin artista ni título: cadenas vacías, nunca undefined (el editor arma «artista — título»).
+  assert.deepEqual(temaDeTrack({ id: 7 }), { id: 7, titulo: '', artista: '', analisis: { radio_id: 7, estado: 'analizado' } })
+  // El id 0 es un id válido.
+  assert.equal(temaDeTrack({ id: 0, titulo: 'x' }).analisis.radio_id, 0)
+})
+
+test('temaDeTrack (f61): fuera de la biblioteca o sin id no hay tema para editar', () => {
+  assert.equal(temaDeTrack({ id: 3, titulo: 'x', en_biblioteca: false }), null)
+  assert.equal(temaDeTrack({ titulo: 'x' }), null)
+  assert.equal(temaDeTrack({ id: null }), null)
+  assert.equal(temaDeTrack(null), null)
 })

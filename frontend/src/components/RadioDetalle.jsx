@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { fmtTiempo } from '../cues'
+import { getMarcas } from '../api'
+import { claseMarca, fmtTiempo, nombreMarca, textoMarca } from '../cues'
 import { cargadorOndas } from '../ondas'
-import { siguienteTab, textoEnergia } from '../radioPantalla'
+import { siguienteTab, temaDeTrack, textoEnergia } from '../radioPantalla'
+import { useToast } from '../toast.jsx'
 import { fmtDur } from '../utils'
 import Cover from './Cover'
-import CueEditor from './CueEditor'
+import EditorCues from './EditorCues'
 import { CeldaKey } from './RadioLista'
 
 /* ============================================================================
@@ -15,10 +17,11 @@ import { CeldaKey } from './RadioLista'
      energía del motor (percentil del anterior → percentil de este). No hay puntajes
      inventados, ni «% de match», ni género: el motor multiplica compatibilidad por encaje y la
      biblioteca no tiene género.
-   - Pestañas (patrón tablist): «Cues y loops» (el editor de f48), «Información» (lo que la
-     biblioteca del motor sabe del archivo) y las que vienen, deshabilitadas.
-   - El editor queda montado al pasar a «Información» (el audio y lo que se estaba editando no
-     se pierden); se cambia de tema eligiendo otra fila.
+   - Pestañas (patrón tablist): «Cues y loops» (la lista de marcas, solo lectura, con el botón
+     que abre el editor D), «Información» (lo que la biblioteca del motor sabe del archivo) y
+     «Onda avanzada» (la entrada al editor D de este track: onda en 3 bandas, grilla, loops).
+   - f61: el editor chico de f48 (CueEditor) salió de esta pantalla a pedido del dueño; se edita
+     con el mismo editor D que abre «Marcar cues» en Mis playlists.
    ========================================================================== */
 
 // Licencia y origen son opcionales (decisión del dueño, 2026-10-09): sin valor, «no declarado».
@@ -26,12 +29,14 @@ import { CeldaKey } from './RadioLista'
 // defensa para una respuesta sin el dato: nunca se dibuja un vacío ni un valor inventado.
 const declarado = (v) => (typeof v === 'string' && v.trim() ? v : 'no declarado')
 
+const SIN_AUDIO = 'Este archivo ya no está en la biblioteca del motor: no hay audio ni duración contra los cuales marcar.'
+
 const fmtBpm = (v) => (v === null || v === undefined ? null : Number(v).toFixed(1))
 
 const PESTANAS = [
   { k: 'cues', label: 'Cues y loops' },
   { k: 'info', label: 'Información' },
-  { k: 'onda', label: 'Onda avanzada', off: true },
+  { k: 'onda', label: 'Onda avanzada' },
 ]
 
 /* ---------- «Información»: lo que la biblioteca del motor sabe de este archivo ---------- */
@@ -86,21 +91,64 @@ function Informacion({ paso, datos }) {
   )
 }
 
+/* ---------- «Cues y loops»: las marcas del track, solo lectura ---------- */
+function ListaMarcas({ datos, id }) {
+  const d = datos && datos.id === id ? datos : null
+  if (!d) return <p className="rnota">Leyendo las marcas…</p>
+  if (d.error) return <p className="rnota rnota-err" role="alert">{d.error}</p>
+  const ms = Array.isArray(d.marcas) ? [...d.marcas].sort((a, b) => a.inicio - b.inicio) : []
+  if (!ms.length) return <p className="rnota">Este track todavía no tiene cues ni loops.</p>
+  return (
+    <ul className="rdet-marcas" aria-label="Marcas del track">
+      {ms.map((m) => (
+        <li key={m.id} className="rdet-marca">
+          <span className={`rdet-marca-pad ${claseMarca(m)}`} aria-hidden="true">{textoMarca(m)}</span>
+          <span className="mono">{fmtTiempo(m.inicio, 1)}{m.tipo === 'loop' && m.fin != null ? ` → ${fmtTiempo(m.fin, 1)}` : ''}</span>
+          <span className="rdet-marca-n">{m.nombre || <span className="sr-only">{nombreMarca(m)}</span>}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export default function Detalle({ paso, anterior, leyenda, calificar, notaCalificar, onConteo, focoEditor = 0 }) {
   const [tab, setTab] = useState('cues')
-  // Lo que la API de marcas dijo del tema abierto en el editor (para «Información»).
+  const toast = useToast()
+  // Lo que la API de marcas dijo del track elegido: {id, track, marcas} | {id, error}. Lo usan
+  // la lista de «Cues y loops» e «Información».
   const [datos, setDatos] = useState(null)
+  const [editor, setEditor] = useState(false)   // el editor D abierto
+  const [relee, setRelee] = useState(0)          // al cerrar el editor se vuelven a leer las marcas
   const tabsRef = useRef(null)
   const raizRef = useRef(null)
+  const avisos = useRef(onConteo)
+  avisos.current = onConteo
+  const idSel = paso && paso.track.en_biblioteca !== false ? paso.track.id : null
 
-  // Una fila elegida con el mouse o con Enter: el foco va a la onda del editor (si la pestaña
-  // «Cues y loops» está a la vista), así C, M, I/O y Espacio actúan enseguida. Con el detalle al
+  useEffect(() => {
+    if (idSel === null || idSel === undefined) { setDatos(null); return undefined }
+    let vivo = true
+    getMarcas(idSel)
+      .then((r) => {
+        if (!vivo) return
+        if (r.ok && r.data && r.data.track) {
+          setDatos({ ...r.data, id: idSel })
+          // El conteo de la columna «Cues» del set sigue a lo que dice el servidor.
+          avisos.current?.(idSel, (r.data.marcas || []).length, r.data.marcas || [])
+        } else setDatos({ id: idSel, error: r.ok ? (r.data?.motivo || 'El servidor no devolvió el track.') : 'No se pudieron leer las marcas.' })
+      })
+      .catch(() => vivo && setDatos({ id: idSel, error: 'Sin conexión con el servidor.' }))
+    return () => { vivo = false }
+  }, [idSel, relee])
+
+  // Una fila elegida con el mouse o con Enter: el foco va al botón que abre el editor D (si la
+  // pestaña «Cues y loops» está a la vista), así Enter lo abre enseguida. Con el detalle al
   // costado (pegajoso) puede desplazarse adentro del panel; apilado (teléfono), la página no
-  // salta hasta el editor.
+  // salta.
   useEffect(() => {
     if (!focoEditor) return
     const raiz = raizRef.current
-    const onda = raiz && raiz.querySelector('#r-panel-cues:not([hidden]) .cue-wave')
+    const onda = raiz && raiz.querySelector('#r-panel-cues:not([hidden]) .rdet-abrir')
     if (!onda) return
     const alCostado = getComputedStyle(raiz).position === 'sticky'
     onda.focus({ preventScroll: !alCostado })
@@ -164,19 +212,45 @@ export default function Detalle({ paso, anterior, leyenda, calificar, notaCalifi
             aria-selected={tab === p.k} aria-controls={p.off ? undefined : `r-panel-${p.k}`}
             aria-disabled={p.off || undefined} tabIndex={tab === p.k ? 0 : -1}
             onClick={() => elegir(p.k)}>
-            <span>{p.label}</span>{p.off && <span className="rtab-pronto"><span className="sr-only">, </span>próximamente</span>}
+            <span>{p.label}</span>
           </button>
         ))}
       </div>
 
       <div role="tabpanel" id="r-panel-cues" aria-labelledby="r-tab-cues" className="rdet-panel" hidden={tab !== 'cues'}>
         {falta
-          ? <p className="rnota">Este archivo ya no está en la biblioteca del motor: no hay audio ni duración contra los cuales marcar.</p>
-          : <CueEditor trackId={t.id} titulo={t.titulo} onConteo={onConteo} onDatos={(id, d) => setDatos(d)} />}
+          ? <p className="rnota">{SIN_AUDIO}</p>
+          : <>
+              <ListaMarcas datos={datos} id={t.id} />
+              <button type="button" className="btn btn-primary rdet-abrir" onClick={() => setEditor(true)}>Editar cues y loops</button>
+            </>}
       </div>
       <div role="tabpanel" id="r-panel-info" aria-labelledby="r-tab-info" className="rdet-panel" hidden={tab !== 'info'}>
         {tab === 'info' && <Informacion paso={paso} datos={datos} />}
       </div>
+      <div role="tabpanel" id="r-panel-onda" aria-labelledby="r-tab-onda" className="rdet-panel" hidden={tab !== 'onda'}>
+        {falta
+          ? <p className="rnota">{SIN_AUDIO}</p>
+          : <>
+              <p className="rnota">La onda en tres bandas (graves, medios, agudos) con la grilla de beats, el zoom y los loops: se abre en el editor completo.</p>
+              <button type="button" className="btn btn-primary rdet-abrir-onda" onClick={() => setEditor(true)}>Abrir la onda avanzada</button>
+            </>}
+      </div>
+
+      {editor && !falta && (
+        <EditorCues temas={[temaDeTrack(t)]} inicial={t.id}
+          // Una escritura que vuelve con error DESPUÉS de cerrar el editor: si no, nadie se entera.
+          onFallaTardia={(texto) => toast.danger({ title: 'Un cambio de cues no se guardó', body: `${texto} Abrí el editor de nuevo para ver lo que quedó.` })}
+          onClose={(r) => {
+            setEditor(false)
+            setRelee((x) => x + 1)
+            // Cerró con cambios sin confirmar: el aviso no se pierde con el editor (f54).
+            if (r && r.sinConfirmar) {
+              toast.danger({ title: `${r.sinConfirmar} cambio${r.sinConfirmar === 1 ? '' : 's'} de cues sin confirmar`,
+                body: `No sé si quedaron guardados: abrí el editor de nuevo para ver lo que tiene el servidor. ${r.textos.join(' ')}` })
+            }
+          }} />
+      )}
     </aside>
   )
 }

@@ -1691,10 +1691,23 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .trk-estado.t-error{color:var(--color-danger)}
 .trk-archivo{color:var(--color-neutral-300)}
 .mb-fuente{font-size:10.5px;color:var(--color-neutral-300)}
-.mb-genero{cursor:pointer;font:inherit;border:0}
-.mb-genero:hover{box-shadow:inset 0 0 0 1px var(--color-accent)}
-.mb-genero.is-vacio b{color:var(--color-neutral-300);font-family:var(--font-body)}
-.mb-genero-in{width:120px;min-height:24px;height:24px;padding:0 6px;font-size:12px}
+/* Género (f53, f61): se lee como un dato más de la fila (texto, sin caja); el borde sutil
+   aparece recién con el mouse encima o el foco. Editando, el campo sigue siendo texto en línea
+   con un subrayado: nada de caja de formulario adentro de la tarjeta. */
+.mb-genero{cursor:pointer;font:inherit;font-size:11px;border:0;background:transparent;box-shadow:none;transition:box-shadow .14s var(--ease)}
+.mb-genero:hover{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 18%,transparent)}
+.mb-genero:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+.mb-genero b{font-family:var(--font-body);font-weight:500;color:var(--color-neutral-200)}
+.mb-genero.is-vacio b{color:var(--color-neutral-500);font-weight:400}
+.input.mb-genero-in{width:120px;min-height:22px;height:22px;padding:0 7px;border:0;border-radius:5px;font-size:11px;font-family:var(--font-body);color:var(--color-text);background:linear-gradient(var(--color-accent),var(--color-accent)) no-repeat left 7px top calc(50% + 9px)/calc(100% - 14px) 1px;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 12%,transparent)}
+.input.mb-genero-in:focus{outline:none}
+.input.mb-genero-in:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+/* Lista de marcas (solo lectura) en «Cues y loops» del detalle de la Radio (f61). */
+.rdet-marcas{list-style:none;margin:0 0 var(--space-3);padding:0;display:flex;flex-direction:column;gap:4px}
+.rdet-marca{display:flex;align-items:center;gap:var(--space-2);min-width:0;font-size:12px}
+.rdet-marca-pad{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 4px;border-radius:4px;font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--color-bg,#000);background:var(--cue-c)}
+.rdet-marca-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-neutral-300)}
+.rdet-abrir,.rdet-abrir-onda{min-height:44px}
 .cue-puntos{display:inline-flex;align-items:center;gap:6px;padding:0 2px;font-size:11px;color:var(--color-neutral-300)}
 .cue-puntos>span[aria-hidden]{display:inline-flex;align-items:center;gap:3px}
 .cue-puntos>span>i{width:8px;height:8px;border-radius:50%;background:var(--cue-c)}
@@ -1901,11 +1914,13 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .imp-dialog .btn,.imp-dialog .rtab,.imp-carpeta,.imp-check,.pl-rail-importar,
 .crate-analisis .btn,.crate-genero .btn,.crate-genero .input,.crate-head .crate-actions .btn,
 .results-crate .trk-status .btn,.results-crate .trk-acts .btn{min-height:44px;min-width:44px}
-.mb-genero-in{min-height:44px;height:44px}
+/* El campo mide 44 px pero se ve del alto de los chips: el subrayado y el borde sutil van
+   pegados al texto (no a los bordes del objetivo táctil). */
+.input.mb-genero-in{min-height:44px;height:44px;box-shadow:none}
 .mb.mb-genero{height:auto;min-height:44px;min-width:44px;padding:0;background:transparent;box-shadow:none}
-.mb-genero b{display:inline-flex;align-items:center;height:22px;padding:0 7px;border-radius:5px;background:var(--color-well);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 7%,transparent)}
+.mb-genero b{display:inline-flex;align-items:center;height:22px;padding:0 7px;border-radius:5px;background:transparent;box-shadow:none;transition:box-shadow .14s var(--ease)}
 .mb-genero:hover{box-shadow:none}
-.mb-genero:hover b{box-shadow:inset 0 0 0 1px var(--color-accent)}
+.mb-genero:hover b,.mb-genero:focus-visible b{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 18%,transparent)}
 .crate-accion[aria-disabled=true]{cursor:not-allowed;background:var(--color-well);border-color:var(--color-divider)}
 /* Diálogo «Exportar a Rekordbox (con cues)» (f56). Objetivos de 44 px y sin desborde a 400 px. */
 .rbx-dialog{width:min(560px,100%);max-height:calc(100vh - 2*var(--space-4));overflow:auto;display:flex;flex-direction:column;gap:var(--space-3)}

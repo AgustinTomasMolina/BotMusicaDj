@@ -100,6 +100,20 @@ export function generoDe(radioPlaylist, semilla) {
 // escribir (el editor): la MISMA cuenta que `server._marcas_por_clase` (pads = los `num` de los
 // hot cues, en orden; memory y loops contados). Así, después de poner un cue, los puntos se
 // actualizan sin volver a pedir los conteos de todo el set.
+// f61: el editor D (EditorCues) recibe temas con la forma de un item de playlist
+// (`analisis.radio_id` es el id del motor). El track de un paso del set ya ES del motor: su `id`
+// va como `radio_id`. Un track que ya no está en la biblioteca no tiene audio: null.
+export function temaDeTrack(t) {
+  if (!t || t.en_biblioteca === false) return null
+  if (t.id === null || t.id === undefined || t.id === '') return null
+  return {
+    id: t.id,
+    titulo: t.titulo || '',
+    artista: t.artista || '',
+    analisis: { radio_id: t.id, estado: 'analizado' },
+  }
+}
+
 export function resumenMarcas(lista) {
   const ms = Array.isArray(lista) ? lista : []
   if (!ms.length) return { total: 0, pads: [], memory: 0, loop: 0 }
