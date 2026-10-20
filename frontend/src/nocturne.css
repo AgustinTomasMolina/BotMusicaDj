@@ -2065,10 +2065,10 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 }
 /* ---- f63: el loop activo (suena solo el loop): naranja más fuerte en la banda, su bandera, ---- */
 /* ---- su pad, su fila y el botón «Loop activo». ---- */
-:root{--cue-loop-activo:#ff7a00;--edd-loop-activo-fondo:rgba(255,122,0,.34)}
+:root{--cue-loop-activo:#ff7a00;--edd-loop-activo-fondo:rgba(255,122,0,.34);--edd-activo-borde:var(--color-text)}
 .edd-mk-loop.is-activo{box-shadow:inset 4px 0 0 var(--cue-loop-activo),inset -4px 0 0 var(--cue-loop-activo),-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
 .edd-mk-loop.is-activo::before{height:8px;background:var(--cue-loop-activo)}
-.edd-flag.is-loop.is-activo{background:var(--cue-loop-activo);outline:2px solid #fff;outline-offset:1px}
+.edd-flag.is-loop.is-activo{background:var(--cue-loop-activo);outline:2px solid var(--edd-activo-borde);outline-offset:1px}
 .edd-pad.is-activo{box-shadow:0 0 0 3px var(--cue-loop-activo)}
 /* En la lista el rótulo sigue en el naranja de los loops (el color de la tabla del motor): el activo lleva un anillo. */
 .edd-tag.is-loop.is-activo{box-shadow:0 0 0 2px var(--color-bg),0 0 0 4px var(--cue-loop-activo)}

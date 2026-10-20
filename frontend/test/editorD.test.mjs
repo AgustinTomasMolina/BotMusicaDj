@@ -18,6 +18,7 @@ import {
   clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
   marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia, etiquetaQuitar, avisoQuitado, avisoNoQuitado,
   temaVigente, beatsLoop, envolverLoop, adentroDelLoop, transicionLoop, loopInactivo, LOOP_ANTICIPO_S,
+  loopMuyCorto, proximoChequeoMs, LOOP_MIN_S, LOOP_PISO_MS, LOOP_SONDEO_MS,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -714,4 +715,42 @@ test('atajo R: activar / salir del loop (sin modificadores)', () => {
   assert.deepEqual(atajoD({ key: 'R', target: { tagName: 'DIV' } }), { tipo: 'reloop' }, 'con Bloq Mayús')
   assert.equal(atajoD({ key: 'r', ctrlKey: true }), null, 'Ctrl+R es del navegador')
   assert.equal(atajoD({ key: 'r', target: { tagName: 'INPUT', type: 'text' } }), null, 'escribiendo un nombre')
+})
+
+/* ---------- f63 (auditoría): loops cortísimos y el ciclo sin requestAnimationFrame ---------- */
+
+test('loop de 1 ms: envolverLoop no salta (con la tolerancia, «llegó a la salida» sería siempre cierto)', () => {
+  assert.deepEqual(envolverLoop(10, { inicio: 10, fin: 10.001 }), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(10.001, { inicio: 10, fin: 10.001 }), { accion: 'nada' })
+})
+
+test('loop de 10 ms: envolverLoop salta, pero es demasiado corto para activarse (mínimo 20 ms)', () => {
+  assert.deepEqual(envolverLoop(10.01, { inicio: 10, fin: 10.01 }), { accion: 'saltar', a: 10 })
+  assert.equal(LOOP_MIN_S, 0.02)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.01 }), true)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.001 }), true)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.02 }), false, '20 ms justos ya suenan')
+  assert.equal(loopMuyCorto({ inicio: 10, fin: null }), true)
+  const corto = { id: 5, tipo: 'loop', inicio: 10, fin: 10.01 }
+  assert.deepEqual(transicionLoop(loopInactivo(), { tipo: 'crear', marca: corto }), { id: null, activo: false })
+  assert.deepEqual(transicionLoop({ id: 3, activo: true }, { tipo: 'elegir', marca: corto }), { id: 3, activo: true }, 'elegir uno corto no cambia el activo')
+  // R sobre un loop que quedó corto (se le movió la salida): no se activa; salir sí se puede.
+  assert.deepEqual(transicionLoop({ id: 5, activo: false }, { tipo: 'alternar', marca: corto }), { id: 5, activo: false })
+  assert.deepEqual(transicionLoop({ id: 5, activo: true }, { tipo: 'alternar', marca: corto }), { id: 5, activo: false })
+  assert.deepEqual(transicionLoop({ id: 7, activo: false }, { tipo: 'alternar', marca: { id: 7, tipo: 'loop', inicio: 10, fin: 11.875 } }), { id: 7, activo: true })
+})
+
+test('sin requestAnimationFrame: el próximo chequeo cae 25 ms antes de la salida, entre 10 y 250 ms', () => {
+  assert.equal(LOOP_PISO_MS, 10)
+  assert.equal(LOOP_SONDEO_MS, 250)
+  // Recién saltado a la entrada de un loop de 1,875 s: falta mucho → sondeo de 250 ms.
+  assert.equal(proximoChequeoMs(10, L4), 250)
+  // Faltan 125 ms: vuelve a mirar en 100 ms (adentro de los 50 ms del anticipo, donde se programa el salto justo).
+  assert.equal(proximoChequeoMs(11.75, L4), 100)
+  assert.equal(proximoChequeoMs(11.75, L4, 2), 50, 'a doble velocidad, la mitad')
+  // Ya adentro del anticipo, o pasado: el piso.
+  assert.equal(proximoChequeoMs(11.86, L4), 10)
+  assert.equal(proximoChequeoMs(12.5, L4), 10)
+  assert.equal(proximoChequeoMs(11.75, null), null)
+  assert.equal(proximoChequeoMs(Number.NaN, L4), null)
 })

@@ -714,11 +714,37 @@ export function grillaAnclada(g, bpm, ancla) {
 // cuando falta menos de LOOP_ANTICIPO_S para la salida, programa el salto con un timer para el
 // instante justo. El salto conserva lo que se pasó (`a` = entrada + lo que se pasó de la
 // salida): el beat no se corre aunque el salto llegue unos ms tarde.
+//
+// Con la pestaña oculta o la ventana minimizada el navegador NO corre requestAnimationFrame
+// (auditoría f63): el ciclo vive también con timers solos (cada salto re-arma el timer de la
+// próxima salida, y mientras tanto se sondea cada LOOP_SONDEO_MS) y con un `timeupdate` del
+// <audio> como red. Chrome en segundo plano frena los timers a ~1 por segundo: el salto llega
+// tarde (lo que se pasó de la salida se conserva con el módulo, el beat no se corre), pero el
+// audio no sigue de largo.
 
 export const LOOP_TOLERANCIA_S = 0.001
 export const LOOP_ANTICIPO_S = 0.05
+// El loop más corto que se activa: debajo de 20 ms no hay un loop para escuchar (es un zumbido
+// de saltos) y el <audio> no llega a sonar entre salto y salto.
+export const LOOP_MIN_S = 0.02
+export const LOOP_PISO_MS = 10
+export const LOOP_SONDEO_MS = 250
 
 export const loopInactivo = () => ({ id: null, activo: false })
+
+// ¿El loop es demasiado corto para sonar (menos de LOOP_MIN_S)? Sin tiempos válidos, también.
+export const loopMuyCorto = (m) => !m || !finito(m.inicio) || !finito(m.fin) || m.fin - m.inicio < LOOP_MIN_S - 1e-9
+
+// En cuántos ms volver a mirar el loop activo cuando no hay requestAnimationFrame: para caer
+// un poco antes de la salida (adentro del anticipo, donde se programa el salto justo), nunca
+// antes de LOOP_PISO_MS ni más tarde que LOOP_SONDEO_MS (si el dueño mueve la salida mientras
+// tanto, el sondeo la ve). `ritmo`: playbackRate. null sin loop.
+export function proximoChequeoMs(t, loop, ritmo = 1) {
+  if (!loop || !finito(t) || !finito(loop.fin)) return null
+  const r = finito(ritmo) && ritmo > 0 ? ritmo : 1
+  const ms = ((loop.fin - t - LOOP_ANTICIPO_S / 2) * 1000) / r
+  return Math.round(Math.min(LOOP_SONDEO_MS, Math.max(LOOP_PISO_MS, ms)))
+}
 
 // Qué hacer con el cabezal en `t` y el loop activo `loop` ({inicio, fin}, o null):
 //   { accion: 'saltar', a }     llegó (o se pasó de) la salida: ir a `a`
@@ -728,7 +754,8 @@ export function envolverLoop(t, loop, anticipo = LOOP_ANTICIPO_S) {
   const nada = { accion: 'nada' }
   if (!loop || !finito(t) || !finito(loop.inicio) || !finito(loop.fin)) return nada
   const largo = loop.fin - loop.inicio
-  if (!(largo > 0)) return nada
+  // Más corto que la tolerancia de los dos lados, «llegó a la salida» sería siempre cierto.
+  if (!(largo >= 2 * LOOP_TOLERANCIA_S)) return nada
   // Antes de la entrada el loop todavía no empezó (como en un CDJ: engancha al entrar).
   if (t < loop.inicio - LOOP_TOLERANCIA_S) return nada
   if (t >= loop.fin - LOOP_TOLERANCIA_S) {
@@ -748,8 +775,10 @@ export const adentroDelLoop = (t, loop) => Boolean(loop) && finito(t) && finito(
 //   { tipo: 'crear', marca }   se creó un loop (I/O o L): queda activo
 //   { tipo: 'elegir', marca }  se eligió una marca (su pad, su bandera, su fila): si es un loop,
 //                              queda activo (el editor lleva el cursor a su entrada)
-//   { tipo: 'alternar' }       el botón «Loop activo» / R: salir, o volver a activarlo
+//   { tipo: 'alternar', marca } el botón «Loop activo» / R: salir, o volver a activarlo (`marca`:
+//                              el loop, para no activar uno demasiado corto)
 //   { tipo: 'salir' }
+// Un loop de menos de LOOP_MIN_S (`loopMuyCorto`) nunca se activa: el editor lo avisa.
 //   { tipo: 'ir', t, loop }    el cursor fue a `t` (clic en la onda, flechas, otro pad): afuera
 //                              del loop (`loop` = {inicio, fin} del activo), sale del loop
 //   { tipo: 'lista', marcas }  la lista del servidor cambió: si el loop ya no está (se borró, o
@@ -761,9 +790,12 @@ export function transicionLoop(estado, ev) {
   switch (ev.tipo) {
     case 'crear':
     case 'elegir':
-      return ev.marca && ev.marca.tipo === 'loop' && ev.marca.id !== undefined && ev.marca.id !== null
+      return ev.marca && ev.marca.tipo === 'loop' && ev.marca.id !== undefined && ev.marca.id !== null && !loopMuyCorto(ev.marca)
         ? { id: ev.marca.id, activo: true } : e
-    case 'alternar': return e.id === null ? e : { id: e.id, activo: !e.activo }
+    case 'alternar':
+      if (e.id === null) return e
+      if (!e.activo && ev.marca && loopMuyCorto(ev.marca)) return e
+      return { id: e.id, activo: !e.activo }
     case 'salir': return e.activo ? { id: e.id, activo: false } : e
     case 'ir': return e.activo && ev.loop && !adentroDelLoop(ev.t, ev.loop) ? { id: e.id, activo: false } : e
     case 'lista': {
