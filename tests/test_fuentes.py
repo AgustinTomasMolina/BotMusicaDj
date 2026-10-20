@@ -102,6 +102,17 @@ def test_identidad_rechaza_el_original_cuando_se_pide_el_extended():
     assert m.motivo == "Deezer solo tiene otra versión de este tema"
 
 
+def test_identidad_rechaza_la_radio_edit_aunque_dure_igual():
+    # `pick_track_evidencia` la acepta por la regla de la Radio Edit por duración (210 s = 210,4 s);
+    # para MEDIR no: el tema pedido no dice Radio Edit y Deezer sí.
+    import track_identity
+    pool = [{"title": "Marea Baja (Radio Edit)", "artist": {"name": "Nadia Vellum"}, "duration": 210}]
+    elegido, _ = track_identity.pick_track_evidencia(lecturas("Marea Baja", "Nadia Vellum")[0], pool, 210.4, audio_exacto=True)
+    assert elegido is pool[0], "precondición: la regla de la Radio Edit la acepta; si no, este test no prueba nada"
+    m = reg_deezer().find_preview(lecturas("Marea Baja", "Nadia Vellum"), 210.4)
+    assert (m.track, m.motivo) == (None, "Deezer solo tiene otra versión de este tema")
+
+
 def test_identidad_rechaza_si_la_duracion_no_cuadra():
     # 262 s contra 240 s: 9 %, dentro de `duraciones_cuadran` (±max(10 s, 10 %)) pero fuera de la
     # tolerancia de la medición (±max(5 s, 3 %) = ±7,9 s).
@@ -113,6 +124,13 @@ def test_identidad_rechaza_si_la_duracion_no_cuadra():
 def test_identidad_acepta_la_duracion_dentro_de_la_tolerancia():
     m = reg_deezer().find_preview(lecturas("Sal", "Nadia Vellum"), 246.5)
     assert m.track is not None and m.track.id == "900000401", m.motivo
+
+
+def test_identidad_en_un_tema_corto_manda_el_piso_de_5_s():
+    # 124,5 s contra 120 s: 4,5 s, más que el 3 % (3,7 s) pero dentro del piso de 5 s
+    # (redondeo de Deezer + silencio del upload); 126 s (6 s) ya no.
+    assert reg_deezer().find_preview(lecturas("Chispa", "Nadia Vellum"), 124.5).track.id == "900000601"
+    assert reg_deezer().find_preview(lecturas("Chispa", "Nadia Vellum"), 126.0).track is None
 
 
 def test_identidad_sin_resultados():

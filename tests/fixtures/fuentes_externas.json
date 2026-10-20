@@ -46,6 +46,26 @@
       ],
       "total": 1
     },
+    "artist:\"Nadia Vellum\" track:\"marea baja\"": {
+      "data": [
+        {"id": 900000501, "readable": true, "title": "Marea Baja (Radio Edit)", "title_short": "Marea Baja", "title_version": "(Radio Edit)",
+         "link": "https://www.deezer.com/track/900000501", "duration": 210, "rank": 500,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/marea-baja-radio.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000006, "title": "Marea Baja"}, "type": "track"}
+      ],
+      "total": 1
+    },
+    "artist:\"Nadia Vellum\" track:\"chispa\"": {
+      "data": [
+        {"id": 900000601, "readable": true, "title": "Chispa", "title_short": "Chispa", "title_version": "",
+         "link": "https://www.deezer.com/track/900000601", "duration": 120, "rank": 400,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/chispa.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000007, "title": "Chispa"}, "type": "track"}
+      ],
+      "total": 1
+    },
     "cuota": {"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}}
   },
   "jamendo_busqueda": {
