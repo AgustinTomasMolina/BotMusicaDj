@@ -4,7 +4,8 @@ Jamendo (búsqueda y descarga, solo con clave).
 Sin red: las respuestas de Deezer y Jamendo están armadas a mano con la FORMA de sus APIs
 (`fixtures/fuentes_externas.json`), con artistas y títulos ficticios. Lo esperado de la
 identidad sale de la regla escrita en `fuentes/registro.py` (misma versión, artista en común,
-duración a ±max(5 s, 3 %)), no del código bajo prueba. El BPM del plan B de la medición sale
+las dos duraciones conocidas, y el upload hasta max(5 s, 3 %) más largo o max(5 s, 1 %) más
+corto que la fuente), no del código bajo prueba. El BPM del plan B de la medición sale
 del generador sintético (`motor.sintetico.click_track`), medido por el camino real.
 """
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -132,10 +134,11 @@ def test_identidad_acepta_la_duracion_dentro_de_la_tolerancia():
 
 
 def test_identidad_rechaza_un_upload_acelerado():
-    # 291 s contra 300 s: −3 %, el mismo master acelerado (~+3,8 BPM a 128). Con ±3 % simétrico
-    # entraba y se medía el BPM de otra cosa; más corto solo tolera max(5 s, 1 %) = 5 s.
-    m = reg_deezer().find_preview(lecturas("Ola Quieta", "Nadia Vellum"), 291.0)
-    assert (m.track, m.motivo) == (None, "Deezer tiene un tema con ese nombre pero dura distinto (300 s contra 291 s): no lo mido")
+    # 293 s contra 300 s: −2,3 %, el mismo master acelerado (~+3 BPM a 128). La regla simétrica
+    # vieja, ±max(5 s, 3 % de 293) = ±8,8 s, lo aceptaba y se medía el BPM de otra cosa; más corto
+    # ahora solo tolera max(5 s, 1 % de 300) = 5 s.
+    m = reg_deezer().find_preview(lecturas("Ola Quieta", "Nadia Vellum"), 293.0)
+    assert (m.track, m.motivo) == (None, "Deezer tiene un tema con ese nombre pero dura distinto (300 s contra 293 s): no lo mido")
     assert reg_deezer().find_preview(lecturas("Ola Quieta", "Nadia Vellum"), 308.0).track.id == "900000701", \
         "el mismo tema 8 s más largo (silencio al final) sí"
 
@@ -294,9 +297,8 @@ def jamendo(http=None, stream=None, clave=CLAVE):
     return JamendoProvider(client_id=clave, http_get=http or FakeJamendo(), http_stream=stream)
 
 
-def test_jamendo_sin_clave_no_rompe_y_lo_dice(caplog, monkeypatch):
-    monkeypatch.delenv("JAMENDO_CLIENT_ID", raising=False)
-    http = FakeJamendo()
+def test_jamendo_sin_clave_no_rompe_y_lo_dice(caplog):
+    http = FakeJamendo()                       # sin JAMENDO_CLIENT_ID: lo saca el conftest
     reg = registro.Registry([DeezerProvider(http_get=FakeDeezer()), JamendoProvider(http_get=http)])
     with caplog.at_level(logging.INFO, logger="bot_web"):
         assert [p.name for p in reg.enabled()] == ["deezer"]
@@ -844,3 +846,45 @@ def test_default_arma_un_solo_registro_con_dos_hilos_a_la_vez(monkeypatch):
         h.join(5)
     assert len(armados) == 1, f"se armaron {len(armados)} registros"
     assert len(vistos) == 3 and all(v is vistos[0] for v in vistos)
+
+
+def test_default_registra_deezer_y_jamendo(monkeypatch):
+    # La composición REAL de la app (sin el registro vacío del conftest). Jamendo se registra
+    # siempre; sin clave queda registrado pero apagado.
+    monkeypatch.setattr(registro, "_default", None)
+    reg = registro.default()
+    assert reg.names() == ["deezer", "jamendo"]
+    assert [p.name for p in reg.enabled()] == ["deezer"], "sin JAMENDO_CLIENT_ID, Jamendo no está habilitado"
+
+
+def test_publicar_con_link_y_un_part_que_no_se_puede_borrar(tmp_path, monkeypatch, caplog):
+    # Camino POSIX (`os.link` + borrar el .part), también en Windows/NTFS, que tiene hard links.
+    # Si el link salió y borrar el .part falla, el tema está publicado y entero: no es un error.
+    import fuentes.jamendo as jm
+    monkeypatch.setattr(jm, "_RENAME_SIN_PISAR", False)
+    part = tmp_path / "Campo.mp3.part"
+    part.write_bytes(b"audio completo")
+    borrar_de_verdad = os.unlink
+
+    def unlink_que_falla(p, *a, **k):
+        if Path(p) == part:
+            raise PermissionError("en uso")
+        return borrar_de_verdad(p, *a, **k)
+    monkeypatch.setattr(os, "unlink", unlink_que_falla)
+    with caplog.at_level(logging.WARNING, logger="bot_web"):
+        final = jm._publicar(part, tmp_path, "Campo", ".mp3")
+    assert final == tmp_path / "Campo.mp3" and final.read_bytes() == b"audio completo"
+    assert part.exists(), "el .part que no se pudo borrar queda (no se borra otra cosa en su lugar)"
+    assert "no pude borrar «Campo.mp3.part»" in caplog.text
+
+
+def test_publicar_con_link_borra_el_part_y_no_pisa(tmp_path, monkeypatch):
+    import fuentes.jamendo as jm
+    monkeypatch.setattr(jm, "_RENAME_SIN_PISAR", False)
+    (tmp_path / "Campo.mp3").write_bytes(b"del usuario")
+    part = tmp_path / "Campo.mp3.part"
+    part.write_bytes(b"audio completo")
+    final = jm._publicar(part, tmp_path, "Campo", ".mp3")
+    assert (final.name, final.read_bytes()) == ("Campo (2).mp3", b"audio completo")
+    assert (tmp_path / "Campo.mp3").read_bytes() == b"del usuario"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo (2).mp3", "Campo.mp3"]

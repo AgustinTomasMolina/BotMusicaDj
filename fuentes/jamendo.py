@@ -239,7 +239,7 @@ def _publicar(part: Path, dest: Path, stem: str, ext: str) -> Path:
         if p.exists():
             continue
         try:
-            if os.name == "nt":
+            if _RENAME_SIN_PISAR:
                 os.rename(part, p)
             else:
                 try:
@@ -251,8 +251,18 @@ def _publicar(part: Path, dest: Path, stem: str, ext: str) -> Path:
                         continue
                     os.rename(part, p)
                     return p
-                os.unlink(part)
+                try:
+                    os.unlink(part)
+                except OSError as e:
+                    # El tema YA está publicado y entero (`p` es un link al mismo contenido): no
+                    # se falla la descarga por un .part que no se pudo borrar; se avisa y queda.
+                    logger.warning(f"⚠️ Jamendo: bajado «{p.name}», pero no pude borrar «{part.name}» "
+                                   f"({type(e).__name__}); se puede borrar a mano.")
             return p
         except FileExistsError:
             continue
     raise ProviderError("Jamendo", "no encontré un nombre libre para el archivo")
+
+
+# En Windows `os.rename` ya falla si el destino existe; en el resto pisa, y se usa `os.link`.
+_RENAME_SIN_PISAR = os.name == "nt"

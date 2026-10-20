@@ -250,9 +250,8 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
     validado), y se mide por el MISMO camino que el tramo de SoundCloud: `decodificar_mp3` +
     `analizar_senal`. El resultado sale marcado `preview` (la pantalla dice "Medido en
     preview") y `preview_fuente` (de quién es ese preview). Una falla de red al bajarlo es
-    `AnalisisError` con el motivo ("Deezer no entregó el preview"), no un error genérico."""
-    import requests
-
+    `AnalisisError` con el motivo ("Deezer no entregó el preview"), no un error genérico
+    (`except OSError` alcanza: `requests.RequestException` hereda de OSError)."""
     import soundcloud_station as sc
     import source_audio as sa
 
@@ -267,7 +266,7 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
         up = sa._open_upstream(m.track.preview_url, {}, tuple(getattr(prov, "preview_hosts", ())))
     except sa.SourceAudioError as e:
         raise AnalisisError(f"{motivo_sc} {m.display}: {e.message}") from e
-    except (requests.RequestException, OSError) as e:
+    except OSError as e:
         raise AnalisisError(f"{motivo_sc} {m.display} no entregó el preview.") from e
     try:
         if up.status_code != 200:
@@ -279,7 +278,7 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
                 break
             partes.append(trozo)
         data = b"".join(partes)
-    except (requests.RequestException, OSError) as e:
+    except OSError as e:
         raise AnalisisError(f"{motivo_sc} {m.display} no entregó el preview.") from e
     finally:
         up.close()
