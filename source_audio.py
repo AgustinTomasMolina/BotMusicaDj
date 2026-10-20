@@ -117,7 +117,9 @@ def canonical_url(source: str, ref: str) -> str | None:
     return None
 
 
-def host_allowed(url: str) -> bool:
+def host_allowed(url: str, suffixes: tuple = _ALLOWED_HOST_SUFFIXES) -> bool:
+    # f64: `suffixes` deja usar la MISMA validación para otra CDN (el preview de Deezer, las
+    # descargas de Jamendo) sin sumarlas a las de la barra, que siguen siendo solo estas dos.
     # Dos cerrojos contra la diferencia de parsers: `urlparse` (que valida) y urllib3 (con el
     # que `requests` se CONECTA) no cortan la autoridad igual. Con
     # "https://127.0.0.1\.googlevideo.com/x", `urlparse` ve un host que termina en el sufijo
@@ -132,7 +134,7 @@ def host_allowed(url: str) -> bool:
     host = (u.hostname or "").lower()
     return u.scheme == "https" and not u.username and not u.password and u.port in (None, 443) \
         and _HOST_DNS.fullmatch(host) is not None and host_conexion == host \
-        and any(host.endswith(s) and len(host) > len(s) for s in _ALLOWED_HOST_SUFFIXES)
+        and any(host.endswith(s) and len(host) > len(s) for s in suffixes)
 
 
 def _expiry(url: str) -> float:
@@ -302,13 +304,13 @@ async def resolve(source: str, url: str) -> Resolved:
 _RANGE = re.compile(r"bytes=(\d{0,15})-(\d{0,15})")
 
 
-def _open_upstream(url: str, headers: dict):
+def _open_upstream(url: str, headers: dict, suffixes: tuple = _ALLOWED_HOST_SUFFIXES):
     """GET a la CDN siguiendo redirecciones A MANO (cada salto validado). Devuelve la
     respuesta de requests en modo stream; el que llama la cierra."""
     import requests
 
     for _ in range(_MAX_REDIRECTS + 1):
-        if not host_allowed(url):
+        if not host_allowed(url, suffixes):
             raise SourceAudioError("La fuente redirigió el audio a un lugar que no reconozco; no lo sigo.", 502)
         r = requests.get(url, headers=headers, stream=True, timeout=UPSTREAM_TIMEOUT, allow_redirects=False)
         if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):

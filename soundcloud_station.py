@@ -406,6 +406,23 @@ def station_for(api: SoundCloudApi, track_id: str) -> tuple[dict | None, list]:
     return seed, items
 
 
+def cached_track(track_id: str) -> dict | None:
+    """El tema (como lo dejó `map_track`) de una Station que está en la caché, o None (f64).
+
+    La medición de la Station (`station_mezcla`) recibe solo el id; para buscar el preview del
+    tema en otra fuente necesita título, uploader y duración, y los toma de acá: de lo que
+    SoundCloud mandó, nunca de lo que diga el cliente."""
+    now = time.monotonic()
+    with _cache_lock:
+        for t0, seed, items in _cache.values():
+            if now - t0 >= CACHE_TTL_S:
+                continue
+            for m in ([seed] if seed else []) + items:
+                if m.get("video_id") == track_id:
+                    return dict(m)
+    return None
+
+
 _default_api: SoundCloudApi | None = None
 
 

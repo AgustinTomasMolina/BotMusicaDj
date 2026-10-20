@@ -44,7 +44,7 @@ from fastapi.staticfiles import StaticFiles
 import db
 import jobs
 import track_identity
-from fuente_errores import FuenteError, FuenteNoConfigurada
+from fuente_errores import FuenteCaida, FuenteError, FuenteNoConfigurada
 from search_agent import SearchAgent
 from recommendation_agent import RecommendationAgent
 from scrapers import FUENTES_SCRAPER
@@ -184,6 +184,66 @@ def _buscar_mix_fuentes(q: str, limite: int) -> tuple[list, bool]:
     return mezcla, not fallidas
 
 
+class _Fallida(str):
+    """El nombre de una fuente que falló (es un str: `fallidas` sigue siendo una lista de nombres
+    para todos los que la leen) + `http`, el código si la fuente CONTESTÓ con un error HTTP (f64).
+    Sin eso un 498 o un 429 se contaba como "No contestó a tiempo", que es falso: contestó, y
+    bloqueó."""
+
+    http: int | None = None
+
+    def __new__(cls, nombre: str, http: int | None = None):
+        s = super().__new__(cls, nombre)
+        s.http = http
+        return s
+
+
+def _http_status(e: BaseException) -> int | None:
+    """El código HTTP de error de una excepción de fuente, si lo hay: `requests.HTTPError`
+    (`response.status_code`, el `raise_for_status` de los scrapers), spotipy (`http_status`) o
+    un `fuentes.base.ProviderBlocked` (`status`), mirando también la cadena `__cause__`."""
+    vistos = 0
+    while e is not None and vistos < 6:
+        vistos += 1
+        for code in (getattr(getattr(e, "response", None), "status_code", None),
+                     getattr(e, "http_status", None), getattr(e, "status", None)):
+            if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599:
+                return code
+        e = e.__cause__ or e.__context__
+    return None
+
+
+def _fuentes_externas():
+    """El registro de fuentes enchufables (f64; aparte para que los tests pongan uno de juguete)."""
+    from fuentes import registro
+
+    return registro.default()
+
+
+_JAMENDO_URL = re.compile(r"https://(?:www\.)?jamendo\.com/track/([1-9][0-9]{0,15})(?:[/?#].*)?")
+
+
+def _buscar_jamendo(q: str, limit: int = 10) -> list:
+    """Jamendo como una plataforma más de la búsqueda (f64), con la forma de los demás
+    resultados. Sin clave: `FuenteNoConfigurada` (no se buscó ahí); caída o bloqueo:
+    `FuenteCaida` con el motivo real (el código HTTP viaja en la causa)."""
+    from fuentes.base import MissingKey, ProviderError
+
+    try:
+        tracks = _fuentes_externas().search("jamendo", q, limit)
+    except MissingKey as e:
+        raise FuenteNoConfigurada(e.motivo) from None
+    except ProviderError as e:
+        raise FuenteCaida(e.motivo) from e
+    return [{
+        "titulo": t.title, "artista": t.artist, "duracion": t.duration_s or 0,
+        # La url es la canónica del tema (de ahí sale el id al bajar); `origen`, la que dio Jamendo.
+        "url": f"https://www.jamendo.com/track/{t.id}", "stream_url": t.preview_url,
+        "fuente": "jamendo", "id": t.id, "thumbnail": None,
+        "licencia": t.license, "origen": t.origin, "descargable": t.downloadable,
+    } for t in tracks]
+
+
 def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[list, list, list]:
     """(mezcla, nombres de las fuentes que fallaron o no contestaron a tiempo, nombres de las
     que no están configuradas). Una fuente caída SEÑALA el error (`fuente_errores.FuenteCaida`
@@ -199,6 +259,7 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
         ("hitplayer", lambda: FUENTES_SCRAPER[1][1](q, limit=por_fuente)),
         ("spotify", lambda: search_agent.buscar_en_spotify(q, limit=por_fuente)),
         ("soundcloud", lambda: search_agent.buscar_en_soundcloud(q, limit=por_fuente)),
+        ("jamendo", lambda: _buscar_jamendo(q, limit=por_fuente)),     # f64: solo con clave
     ]
     if fuentes is not None:
         tareas = [(n, fn) for n, fn in tareas if n in fuentes]
@@ -223,13 +284,13 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
-                fallidas.append(nombre)
+                fallidas.append(_Fallida(nombre, _http_status(e)))
     finally:
         # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
         ex.shutdown(wait=False, cancel_futures=True)
 
     # Orden de intercalado: primero las que se reproducen/descargan directo
-    orden = ["youtube", "ligaudio", "hitplayer", "soundcloud", "spotify"]
+    orden = ["youtube", "ligaudio", "hitplayer", "soundcloud", "spotify", "jamendo"]
     grupos = [resultados.get(n, []) for n in orden]
 
     mezcla, i = [], 0
@@ -1063,10 +1124,14 @@ def _versiones_de(tema: dict, formato: str) -> dict:
     finally:
         ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola y queda en caché
 
-    if fallidas:
+    # f64: la que contestó con un error HTTP no "no contestó": bloqueó, y se dice con el código.
+    caidas = [f for f in fallidas if not getattr(f, "http", None)]
+    if caidas:
         # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
-        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in fallidas))
+        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in caidas))
         motivos.append(f"No contestó a tiempo: {nombres}")
+    for nombre, http in dict.fromkeys((_SOURCE_NAMES.get(f, f), f.http) for f in fallidas if getattr(f, "http", None)):
+        motivos.append(f"{nombre} bloqueó (HTTP {http})")
     # Con la versión de SoundCloud sola NO se agrega ningún motivo (decisión del dueño, f40): la
     # pastilla de SoundCloud ya dice que es la única, y "No lo encontré en otras plataformas" era
     # ruido. Tampoco "Sin configurar: Spotify" (no buscar ahí no es algo que el DJ tenga que leer
@@ -1156,6 +1221,24 @@ def _descargar_directo(url: str, titulo: str) -> dict:
 
     ok = destino.exists() and destino.stat().st_size > 0
     return {"ok": ok, "archivo": destino.name}
+
+
+def _descargar_jamendo(url: str, nombre: str) -> dict:
+    """Un tema de Jamendo a downloads/ por su proveedor (f64): el id sale de la url canónica
+    (`https://www.jamendo.com/track/<id>`), nunca se baja una url que mande el cliente.
+    {ok: True, archivo} o {ok: False, mensaje} con el motivo real (sin clave, no permite
+    descargar, no contestó, bloqueó)."""
+    from fuentes.base import ProviderError
+
+    m = _JAMENDO_URL.fullmatch(url or "")
+    if not m:
+        return {"ok": False, "mensaje": "No sé qué tema de Jamendo es (link inválido)."}
+    try:
+        ruta = _fuentes_externas().download("jamendo", m.group(1), DOWNLOADS_DIR, stem=_safe_name(nombre))
+    except ProviderError as e:
+        logger.error(f"❌ Jamendo: {e.motivo}")
+        return {"ok": False, "mensaje": f"{e.motivo}."}
+    return {"ok": True, "archivo": ruta.name}
 
 
 def _tiene_ffmpeg() -> bool:
@@ -1493,16 +1576,22 @@ def _procesar_descarga(payload: dict, titulo: str, artista: str, fuente: str, ur
                        formato: str, nombre: str, destino: dict | None) -> dict:
     logger.info(f"📥 Descargando: {titulo} — {artista} [{fuente}] como {formato.upper()}")
 
-    # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg)
-    if fuente in ("ligaudio", "hitplayer") and url:
-        if not _url_http(url):           # f40-r2: requests/ffmpeg solo con http(s)
-            logger.error("❌ Descarga directa: la URL no es http(s).")
-            return {"exito": False, "mensaje": "La URL del MP3 no es válida."}
-        try:
-            res = _descargar_directo(url, nombre)
-        except Exception as e:
-            logger.error(f"❌ Error en descarga directa: {e}")
-            return {"exito": False, "mensaje": str(e)}
+    # Fuentes con MP3 directo: bajamos el archivo tal cual (sin yt-dlp ni ffmpeg). f64: Jamendo
+    # también, pero por su proveedor (que vuelve a preguntar si el autor permite bajarlo).
+    if (fuente in ("ligaudio", "hitplayer") and url) or fuente == "jamendo":
+        if fuente == "jamendo":
+            res = _descargar_jamendo(url, nombre)
+            if not res.get("ok"):
+                return {"exito": False, "mensaje": res["mensaje"]}
+        else:
+            if not _url_http(url):           # f40-r2: requests/ffmpeg solo con http(s)
+                logger.error("❌ Descarga directa: la URL no es http(s).")
+                return {"exito": False, "mensaje": "La URL del MP3 no es válida."}
+            try:
+                res = _descargar_directo(url, nombre)
+            except Exception as e:
+                logger.error(f"❌ Error en descarga directa: {e}")
+                return {"exito": False, "mensaje": str(e)}
         if res["ok"]:
             logger.info(f"✅ Descargado: {res['archivo']}")
             if destino and (fallo := _verificar_bajado(res["archivo"], payload, destino)):

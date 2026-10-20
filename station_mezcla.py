@@ -233,10 +233,86 @@ def analizar_senal(y: np.ndarray) -> dict:
     }
 
 
+def _registro():
+    """El registro de fuentes externas (aparte para que los tests pongan uno de juguete)."""
+    from fuentes import registro
+
+    return registro.default()
+
+
+def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict]:
+    """Plan B (f64): SoundCloud no dio un audio medible → el preview de 30 s de otra fuente
+    (hoy Deezer), SOLO si la regla de identidad confirma que es el mismo tema
+    (`fuentes.registro.match_preview`). Si no, `AnalisisError` con el motivo de SoundCloud y
+    el de la fuente: el tema queda "?" (nunca se mide otro tema).
+
+    El preview se baja a un temporal (con tope de bytes y host validado) que se borra siempre,
+    y se mide por el MISMO camino que el tramo de SoundCloud: `decodificar_mp3` +
+    `analizar_senal`. El resultado sale marcado `preview` (la pantalla dice "Medido en
+    preview") y `preview_fuente` (de quién es ese preview)."""
+    import os
+    import tempfile
+    from contextlib import suppress
+
+    import soundcloud_station as sc
+    import source_audio as sa
+
+    meta = sc.cached_track(sc_id)
+    if not meta or not meta.get("titulo"):
+        raise AnalisisError(motivo_sc)
+    m = _registro().find_preview(sc._lecturas(meta["titulo"], meta.get("artista") or ""), meta.get("duracion"))
+    if m.track is None:
+        raise AnalisisError(f"{motivo_sc} {m.motivo}.")
+    prov = _registro().get(m.track.source)
+    ruta = None
+    try:
+        try:
+            up = sa._open_upstream(m.track.preview_url, {}, tuple(getattr(prov, "preview_hosts", ())))
+        except sa.SourceAudioError as e:
+            raise AnalisisError(f"{motivo_sc} {m.display}: {e.message}") from e
+        try:
+            if up.status_code != 200:
+                raise AnalisisError(f"{motivo_sc} {m.display} bloqueó el preview (HTTP {up.status_code}).")
+            fd, ruta = tempfile.mkstemp(suffix=".mp3", prefix="musiflix-preview-")
+            total = 0
+            with os.fdopen(fd, "wb") as f:
+                for trozo in up.iter_content(64 * 1024):
+                    total += len(trozo)
+                    if total > _BYTES_MAX:
+                        break
+                    f.write(trozo)
+        finally:
+            up.close()
+        with open(ruta, "rb") as f:
+            data = f.read()
+        try:
+            y = decodificar_mp3(data)
+        except AnalisisError as e:
+            raise AnalisisError(f"{motivo_sc} El preview de {m.display} no se pudo decodificar.") from e
+    finally:
+        if ruta:
+            with suppress(OSError):
+                os.remove(ruta)
+    logger.info(f"🎯 Station: {sc_id} medido en el preview de {m.display} ({m.track.source}:{m.track.id}, {m.grado}).")
+    return y, {
+        "preview": True,
+        "preview_fuente": m.display,
+        "preview_ref": f"{m.track.source}:{m.track.id}",
+        "motivo_preview": (f"Medido en el preview de 30 s de {m.display} («{m.track.artist} — {m.track.title}»): "
+                           f"{motivo_sc}"),
+        "duracion": meta.get("duracion"),
+        "tramo_inicio_s": 0.0,
+        "tramo_s": round(y.size / _SR_DESTINO, 1),
+    }
+
+
 def _analizar_sync(sc_id: str) -> dict:
     t0 = time.perf_counter()
     try:
-        y, info = _bajar_tramo(sc_id)
+        try:
+            y, info = _bajar_tramo(sc_id)
+        except AnalisisError as e:
+            y, info = _bajar_preview_externo(sc_id, str(e))
         t1 = time.perf_counter()
         r = {**analizar_senal(y), **info, "ok": True,
              "segundos_audio": round(t1 - t0, 2), "segundos_medir": round(time.perf_counter() - t1, 2)}

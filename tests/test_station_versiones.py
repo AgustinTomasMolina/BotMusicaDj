@@ -603,6 +603,47 @@ def test_un_scraper_caido_de_verdad_llega_como_no_contesto(env, monkeypatch):
     assert r["motivo"] == "No contestó a tiempo: MP3"
 
 
+# f64: una plataforma que CONTESTÓ con un error HTTP no "no contestó a tiempo": bloqueó.
+class _Rechazo:
+    def __init__(self, status):
+        self.status_code, self.text = status, ""
+
+    def raise_for_status(self):
+        import requests
+        raise requests.HTTPError(f"{self.status_code} Client Error", response=self)
+
+
+def _caida_por_http(status, fuente="YouTube"):
+    """Una `FuenteCaida` como la levantan `search_agent`/`scrapers`: con la causa encadenada."""
+    from fuente_errores import FuenteCaida
+    try:
+        _Rechazo(status).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        try:
+            raise FuenteCaida(f"{fuente}: HTTPError") from e
+        except FuenteCaida as caida:
+            return caida
+
+
+def test_un_scraper_que_contesta_498_dice_bloqueo(env, monkeypatch):
+    import scrapers
+    monkeypatch.setattr(scrapers.requests, "get", lambda *a, **k: _Rechazo(498))
+    monkeypatch.setattr(env.server, "FUENTES_SCRAPER", scrapers.FUENTES_SCRAPER)
+    r = env.versiones(B_WITH_U)
+    assert r["fallidas"] == ["ligaudio", "hitplayer"]
+    assert r["motivo"] == "MP3 bloqueó (HTTP 498)"
+
+
+def test_bloqueo_y_caida_se_dicen_por_separado(env, client):
+    env.resultados(youtube=_caida_por_http(429), spotify=RuntimeError("spotify roto"))
+    r = env.versiones(B_WITH_U)
+    assert r["fallidas"] == ["youtube", "spotify"]
+    assert r["motivo"] == "No contestó a tiempo: Spotify. YouTube bloqueó (HTTP 429)"
+    env.server._MIX_CACHE.clear()
+    d = client.post("/api/versiones", json=cuerpo()).json()
+    assert (d["fallidas"], d["motivo"]) == (["youtube", "spotify"], r["motivo"]), "por la API llega igual (nombres, no objetos)"
+
+
 def test_motivo_texto_ilegible_y_no_busca(env):
     r = env.versiones(dict(B_WITH_U, titulo="???", artista=""))
     assert r["motivo"] == "No pude leer artista y título de este tema para buscarlo en otras plataformas"

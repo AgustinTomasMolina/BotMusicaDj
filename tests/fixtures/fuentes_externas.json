@@ -1,0 +1,73 @@
+{
+  "_nota": "f64: respuestas ARMADAS A MANO con la forma de la API pública de Deezer (/search) y de la API v3 de Jamendo (/tracks/). Artistas, títulos e ids son ficticios (ningún dato personal real). `deezer_por_q` es la respuesta por consulta exacta.",
+  "deezer_por_q": {
+    "artist:\"Nadia Vellum\" track:\"faro lento\"": {
+      "data": [
+        {"id": 900000101, "readable": true, "title": "Faro Lento", "title_short": "Faro Lento", "title_version": "",
+         "link": "https://www.deezer.com/track/900000101", "duration": 312, "rank": 1000,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/faro-lento.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000001, "title": "Mareas"}, "type": "track"},
+        {"id": 900000102, "readable": true, "title": "Faro Lento (Kessler Remix)", "title_short": "Faro Lento", "title_version": "(Kessler Remix)",
+         "link": "https://www.deezer.com/track/900000102", "duration": 318, "rank": 900,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/faro-lento-remix.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000002, "title": "Mareas Remixes"}, "type": "track"}
+      ],
+      "total": 2
+    },
+    "artist:\"Nadia Vellum\" track:\"hilo rojo\"": {
+      "data": [
+        {"id": 900000201, "readable": true, "title": "Hilo Rojo (Kessler Remix)", "title_short": "Hilo Rojo", "title_version": "(Kessler Remix)",
+         "link": "https://www.deezer.com/track/900000201", "duration": 401, "rank": 800,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/hilo-rojo-remix.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000003, "title": "Hilo Rojo"}, "type": "track"}
+      ],
+      "total": 1
+    },
+    "artist:\"Tomas Brisa\" track:\"luz de puerto\"": {
+      "data": [
+        {"id": 900000301, "readable": true, "title": "Luz de Puerto", "title_short": "Luz de Puerto", "title_version": "",
+         "link": "https://www.deezer.com/track/900000301", "duration": 280, "rank": 700,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/luz-de-puerto.mp3",
+         "artist": {"id": 7000003, "name": "Bruno Calma", "type": "artist"},
+         "album": {"id": 8000004, "title": "Puertos"}, "type": "track"}
+      ],
+      "total": 1
+    },
+    "artist:\"Nadia Vellum\" track:\"sal\"": {
+      "data": [
+        {"id": 900000401, "readable": true, "title": "Sal", "title_short": "Sal", "title_version": "",
+         "link": "https://www.deezer.com/track/900000401", "duration": 240, "rank": 600,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/sal.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000005, "title": "Sal"}, "type": "track"}
+      ],
+      "total": 1
+    },
+    "cuota": {"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}}
+  },
+  "jamendo_busqueda": {
+    "headers": {"status": "success", "code": 0, "error_message": "", "warnings": "", "results_count": 3},
+    "results": [
+      {"id": "1500001", "name": "Campo Abierto", "duration": 254, "artist_id": "350001", "artist_name": "Coro de Niebla",
+       "album_name": "Llanura", "license_ccurl": "http://creativecommons.org/licenses/by-sa/3.0/",
+       "position": 1, "releasedate": "2020-05-01", "image": "https://usercontent.jamendo.com?type=album&id=1&width=300",
+       "audio": "https://prod-1.storage.jamendo.com/?trackid=1500001&format=mp31",
+       "audiodownload": "https://prod-1.storage.jamendo.com/download/track/1500001/mp32/",
+       "shorturl": "https://jamen.do/t/1500001", "shareurl": "https://www.jamendo.com/track/1500001",
+       "audiodownload_allowed": true},
+      {"id": "1500002", "name": "Campo Cerrado", "duration": 198, "artist_id": "350001", "artist_name": "Coro de Niebla",
+       "album_name": "Llanura", "license_ccurl": "http://creativecommons.org/licenses/by-nc-nd/3.0/",
+       "audio": "https://prod-1.storage.jamendo.com/?trackid=1500002&format=mp31",
+       "audiodownload": "https://prod-1.storage.jamendo.com/download/track/1500002/mp32/",
+       "shareurl": "https://www.jamendo.com/track/1500002",
+       "audiodownload_allowed": false},
+      {"id": "1500003", "name": "Campo Sin Datos", "duration": 0, "artist_name": "Coro de Niebla",
+       "audio": "https://prod-1.storage.jamendo.com/?trackid=1500003&format=mp31",
+       "audiodownload": "https://prod-1.storage.jamendo.com/download/track/1500003/mp32/",
+       "audiodownload_allowed": "true"}
+    ]
+  }
+}

@@ -10,7 +10,7 @@ const vite = await createServer({
   server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom',
 })
 after(() => vite.close())
-const { ordenVisible, filaMezcla, medidoTexto, cargarAnalisis, refsAnalisis, estadoMedicion, aclaracionOrden } = await vite.ssrLoadModule('/src/stationMezcla.js')
+const { ordenVisible, filaMezcla, medidoTexto, medidoTitulos, cargarAnalisis, refsAnalisis, estadoMedicion, aclaracionOrden } = await vite.ssrLoadModule('/src/stationMezcla.js')
 
 const grupos = ['11', '22', '33', '44'].map((id) => ({ base: { video_id: id } }))
 const mezcla = {
@@ -49,6 +49,18 @@ test('lo medido: BPM con un decimal, key con "?" si es dudosa, "?" si no se pudo
   assert.deepEqual(medidoTexto({ ok: true, bpm: 127.94, key: '8A', key_dudosa: true }), { bpm: '127.9', key: '8A?' })
   assert.deepEqual(medidoTexto({ ok: false, motivo: 'x', bpm: 120 }), { bpm: '?', key: '?' })
   assert.deepEqual(medidoTexto(null), { bpm: '?', key: '?' })
+})
+
+// f64: un preview de OTRA fuente (Deezer) lo dice con su nombre; sin fuente, el texto de siempre.
+test('tooltips de lo medido: el preview de Deezer se nombra', () => {
+  const deezer = { ok: true, bpm: 128, preview: true, preview_fuente: 'Deezer', motivo_preview: 'Medido en el preview de 30 s de Deezer («A — B»): SoundCloud no dio audio.' }
+  assert.deepEqual(medidoTitulos(deezer), { bpm: deezer.motivo_preview, preview: 'El BPM y la key salen del preview de 30 s de Deezer' })
+  assert.deepEqual(medidoTitulos({ ok: true, bpm: 128, preview: true }),
+    { bpm: 'Medido sobre el preview de 30 s (no se sabe si vale para el tema entero)', preview: 'El BPM y la key salen del preview de 30 s' })
+  assert.deepEqual(medidoTitulos({ ok: true, bpm: 128, preview: false, tramo_s: 139.6 }), { bpm: 'Medido sobre 140 s del audio', preview: undefined })
+  assert.deepEqual(medidoTitulos({ ok: false, motivo: 'SoundCloud solo HLS. Deezer no tiene este tema.' }),
+    { bpm: 'SoundCloud solo HLS. Deezer no tiene este tema.', preview: undefined })
+  assert.deepEqual(medidoTitulos(null), { bpm: 'No se pudo analizar', preview: undefined })
 })
 
 test('cargarAnalisis: como mucho `concurrencia` pedidos a la vez, y onFin al terminar todos', async () => {

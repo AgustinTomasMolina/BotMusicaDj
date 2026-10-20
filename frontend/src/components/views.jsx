@@ -7,7 +7,7 @@ import Cover from './Cover'
 import { usePlayer } from '../player/context'
 import { fromLibrary, fromResult, fmtBpm } from '../player/track'
 import { IconDownload, IconActivity, IconCompare, IconRadioTower, IconLock, IconPlus } from './icons'
-import { ordenVisible, filaMezcla, medidoTexto, estadoMedicion, aclaracionOrden } from '../stationMezcla'
+import { ordenVisible, filaMezcla, medidoTexto, medidoTitulos, estadoMedicion, aclaracionOrden } from '../stationMezcla'
 
 // fuente → clase de plataforma de Nocturne (define el color --pf del chip)
 const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
@@ -205,11 +205,11 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
             si la key es dudosa). El BPM de metadata se rotula como tal: no es una medición (§6). */}
         {esMedida && (med
           ? <>
-            <span className="mb mb-medido" title={medido.ok ? `Medido sobre ${medido.preview ? 'el preview de 30 s (no se sabe si vale para el tema entero)' : `${Math.round(medido.tramo_s || 0)} s del audio`}` : (medido.motivo || 'No se pudo analizar')}>
+            <span className="mb mb-medido" title={medidoTitulos(medido).bpm}>
               <span className="mb-label">BPM medido</span><b>{med.bpm}</b></span>
             <span className="mb mb-key mb-medido" title={medido.ok && medido.key_dudosa ? 'Key dudosa: los tramos del tema no votaron todos lo mismo' : undefined}>
               <span className="mb-label">KEY medida</span><b>{med.key}</b></span>
-            {medido.ok && medido.preview && <span className="mb mb-warn" title="El BPM y la key salen del preview de 30 s"><b>Medido en preview</b></span>}
+            {medido.ok && medido.preview && <span className="mb mb-warn" title={medidoTitulos(medido).preview}><b>Medido en preview</b></span>}
           </>
           : <span className="mb mb-medido"><span className="mb-label">BPM medido</span><b>…</b></span>)}
         {bpm && <span className="mb"><span className="mb-label">{esMedida ? 'BPM meta' : 'BPM'}</span><b>{bpm}</b></span>}
