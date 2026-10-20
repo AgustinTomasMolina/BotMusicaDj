@@ -188,14 +188,35 @@ class _Fallida(str):
     """El nombre de una fuente que falló (es un str: `fallidas` sigue siendo una lista de nombres
     para todos los que la leen) + `http`, el código si la fuente CONTESTÓ con un error HTTP (f64).
     Sin eso un 498 o un 429 se contaba como "No contestó a tiempo", que es falso: contestó, y
-    bloqueó."""
+    bloqueó. `bloqueo`: la fuente rechazó el pedido aunque sin código HTTP (un
+    `fuentes.base.ProviderBlocked` sin status: cuota, "status: failed" de Jamendo); `detalle`
+    es lo que dice ese rechazo ("código 5")."""
 
     http: int | None = None
+    bloqueo: bool = False
+    detalle: str = ""
 
-    def __new__(cls, nombre: str, http: int | None = None):
+    def __new__(cls, nombre: str, http: int | None = None, bloqueo: bool = False, detalle: str = ""):
         s = super().__new__(cls, nombre)
         s.http = http
+        s.bloqueo = bool(bloqueo or http)
+        s.detalle = detalle
         return s
+
+
+def _fallida_de(nombre: str, e: BaseException) -> _Fallida:
+    """La `_Fallida` de una excepción: con su código HTTP, o marcada como bloqueo si en la cadena
+    de causas hay un `ProviderBlocked` (sin código), o como caída si no es ninguna de las dos."""
+    from fuentes.base import ProviderBlocked
+
+    http = _http_status(e)
+    x, vistos = e, 0
+    while x is not None and vistos < 6 and not isinstance(x, ProviderBlocked):
+        vistos += 1
+        x = x.__cause__ or x.__context__
+    if isinstance(x, ProviderBlocked):
+        return _Fallida(nombre, http, True, x.detail)
+    return _Fallida(nombre, http)
 
 
 def _http_status(e: BaseException) -> int | None:
@@ -229,8 +250,11 @@ def _buscar_jamendo(q: str, limit: int = 10) -> list:
     `FuenteCaida` con el motivo real (el código HTTP viaja en la causa)."""
     from fuentes.base import MissingKey, ProviderError
 
+    reg = _fuentes_externas()
+    if reg.get("jamendo") is None:          # un registro sin Jamendo: no se busca ahí, no es una caída
+        raise FuenteNoConfigurada("Jamendo no está registrado")
     try:
-        tracks = _fuentes_externas().search("jamendo", q, limit)
+        tracks = reg.search("jamendo", q, limit)
     except MissingKey as e:
         raise FuenteNoConfigurada(e.motivo) from None
     except ProviderError as e:
@@ -284,7 +308,7 @@ def _mix_fuentes(q: str, limite: int, fuentes: tuple | None = None) -> tuple[lis
             except Exception as e:
                 logger.warning(f"⚠️ Fuente '{nombre}' falló: {e}")
                 resultados[nombre] = []
-                fallidas.append(_Fallida(nombre, _http_status(e)))
+                fallidas.append(_fallida_de(nombre, e))
     finally:
         # Sin esperar a la que cuelga: su hilo termina solo (cada fuente tiene su timeout de red).
         ex.shutdown(wait=False, cancel_futures=True)
@@ -786,7 +810,25 @@ _SC_PAUSE_S = 60.0
 _sc_pause_until = 0.0
 _SC_URL = re.compile(r"https://(?:soundcloud\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+|api\.soundcloud\.com/tracks/[0-9]{1,20})")
 _SOURCE_NAMES = {"youtube": "YouTube", "ligaudio": "MP3", "hitplayer": "MP3",
-                 "spotify": "Spotify", "soundcloud": "SoundCloud"}
+                 "spotify": "Spotify", "soundcloud": "SoundCloud", "jamendo": "Jamendo"}
+
+
+def _motivos_fallidas(fallidas: list) -> list[str]:
+    """Lo que se le dice al usuario de las fuentes que fallaron (f64): las que no contestaron, en
+    una línea ("No contestó a tiempo: YouTube, MP3"); las que CONTESTARON con un rechazo, cada una
+    con el suyo ("YouTube bloqueó (HTTP 429)", "Jamendo bloqueó (código 5)"). Un bloqueo nunca
+    se cuenta como "no contestó"."""
+    out = []
+    caidas = [f for f in fallidas if not getattr(f, "bloqueo", False)]
+    if caidas:
+        # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
+        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in caidas))
+        out.append(f"No contestó a tiempo: {nombres}")
+    for nombre, http, detalle in dict.fromkeys(
+            (_SOURCE_NAMES.get(f, f), f.http, f.detalle) for f in fallidas if getattr(f, "bloqueo", False)):
+        por_que = f"HTTP {http}" if http else detalle
+        out.append(f"{nombre} bloqueó ({por_que})" if por_que else f"{nombre} bloqueó")
+    return out
 
 
 def _url_http(u) -> bool:
@@ -1124,14 +1166,7 @@ def _versiones_de(tema: dict, formato: str) -> dict:
     finally:
         ex.shutdown(wait=False, cancel_futures=True)   # la que cuelga termina sola y queda en caché
 
-    # f64: la que contestó con un error HTTP no "no contestó": bloqueó, y se dice con el código.
-    caidas = [f for f in fallidas if not getattr(f, "http", None)]
-    if caidas:
-        # dict.fromkeys: dos MP3 que no contestaron dicen "MP3" una sola vez (f38).
-        nombres = ", ".join(dict.fromkeys(_SOURCE_NAMES.get(f, f) for f in caidas))
-        motivos.append(f"No contestó a tiempo: {nombres}")
-    for nombre, http in dict.fromkeys((_SOURCE_NAMES.get(f, f), f.http) for f in fallidas if getattr(f, "http", None)):
-        motivos.append(f"{nombre} bloqueó (HTTP {http})")
+    motivos.extend(_motivos_fallidas(fallidas))
     # Con la versión de SoundCloud sola NO se agrega ningún motivo (decisión del dueño, f40): la
     # pastilla de SoundCloud ya dice que es la única, y "No lo encontré en otras plataformas" era
     # ruido. Tampoco "Sin configurar: Spotify" (no buscar ahí no es algo que el DJ tenga que leer

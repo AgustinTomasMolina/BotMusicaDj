@@ -19,7 +19,9 @@ congeladas:
 2. Encima, la versión del elegido tiene que ser IGUAL a la del tema (`Identity.version`): la
    regla de la Radio Edit por duración (`_edicion_por_duracion`) acepta otra etiqueta y acá
    no se acepta: un "Radio Edit" no se mide en nombre del original, ni un remix, ni un Extended.
-3. Con las dos duraciones conocidas, tienen que cuadrar a ±max(5 s, 3 %) (`TOLERANCIA_*`).
+3. Las DOS duraciones tienen que conocerse (si falta una, no se mide) y cuadrar: el upload
+   puede durar hasta max(5 s, 3 %) MÁS que la fuente, pero solo max(5 s, 1 %) MENOS (más corto
+   puede ser el mismo master acelerado: ver `duracion_cuadra`). `TOLERANCIA_*`.
    La duración que cuenta es la del TEMA que informa la fuente, no la del preview (30 s).
    Por qué esa tolerancia: Deezer redondea a segundos y un upload de SoundCloud del mismo
    master suele diferir en 1-3 s de silencio; 3 % deja a un tema de 6 min en ±11 s. La de
@@ -30,6 +32,7 @@ congeladas:
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,11 +51,20 @@ from .base import (
 logger = logging.getLogger("bot_web")
 
 TOLERANCIA_S = 5.0
-TOLERANCIA_REL = 0.03
+TOLERANCIA_REL = 0.03          # upload MÁS LARGO que la fuente (silencio al final, una intro)
+TOLERANCIA_REL_CORTO = 0.01    # upload MÁS CORTO: puede estar acelerado (pitch) → casi nada
 
 
 def duracion_cuadra(tema_s: float, fuente_s: float) -> bool:
-    return abs(tema_s - fuente_s) <= max(TOLERANCIA_S, TOLERANCIA_REL * tema_s)
+    """¿La duración del upload (`tema_s`) es la del tema de la fuente (`fuente_s`)?
+
+    Asimétrica (auditoría f64): un upload más CORTO que la fuente puede ser el mismo master
+    acelerado — 291 s contra 300 s es un +3 % de tempo, ~3,8 BPM a 128 — y medirlo daría el BPM
+    de OTRA cosa; ahí solo se tolera max(5 s, 1 %), lo que cubre el redondeo de Deezer y un
+    silencio recortado. Más LARGO suele ser silencio o cola agregados al final: max(5 s, 3 %)."""
+    if tema_s < fuente_s:
+        return fuente_s - tema_s <= max(TOLERANCIA_S, TOLERANCIA_REL_CORTO * fuente_s)
+    return tema_s - fuente_s <= max(TOLERANCIA_S, TOLERANCIA_REL * fuente_s)
 
 
 @dataclass(frozen=True)
@@ -95,7 +107,12 @@ def match_preview(lecturas: list, duration_s, candidates: list[SourceTrack], dis
             motivo = f"{display} solo tiene otra versión de este tema"
             continue
         st: SourceTrack = best["_st"]
-        if dur is not None and st.duration_s is not None and not duracion_cuadra(dur, st.duration_s):
+        fuente_s = track_identity.duration_or_none(st.duration_s, st.source)
+        if dur is None or fuente_s is None:
+            # Sin las dos duraciones no hay forma de descartar un upload acelerado u otra edición.
+            motivo = f"{display} tiene el tema pero no puedo comparar la duración: no lo mido"
+            continue
+        if not duracion_cuadra(dur, fuente_s):
             motivo = (f"{display} tiene un tema con ese nombre pero dura distinto "
                       f"({st.duration_s:.0f} s contra {dur:.0f} s): no lo mido")
             continue
@@ -206,14 +223,16 @@ class Registry:
 
 
 _default: Registry | None = None
+_default_lock = threading.Lock()
 
 
 def default() -> Registry:
     """El registro de la app: Deezer (siempre) y Jamendo (habilitado solo con su clave).
     Se arma al primer uso, después de que `server` cargó el .env."""
     global _default
-    if _default is None:
-        from .deezer import DeezerProvider
-        from .jamendo import JamendoProvider
-        _default = Registry([DeezerProvider(), JamendoProvider()])
-    return _default
+    with _default_lock:      # dos hilos al primer uso no arman dos registros (ni dos avisos)
+        if _default is None:
+            from .deezer import DeezerProvider
+            from .jamendo import JamendoProvider
+            _default = Registry([DeezerProvider(), JamendoProvider()])
+        return _default

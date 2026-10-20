@@ -10,8 +10,11 @@ Descarga:
 - solo si `audiodownload_allowed` es true, y se vuelve a preguntar a la API justo antes (no se
   confía en lo que mande el cliente);
 - el host del archivo tiene que ser de Jamendo (https, `*.jamendo.com`);
-- se baja a `<nombre>.part` y al terminar se renombra de forma atómica sobre un nombre que se
-  RESERVÓ antes (creado en exclusiva): nunca se pisa un archivo que ya estaba;
+- se baja a `<nombre>.mp3.part`, creado en EXCLUSIVA (es la reserva del nombre), y al terminar
+  se publica con una operación atómica que FALLA si el destino ya existe (`_publicar`): nunca
+  se pisa un archivo que ya estaba. Si el proceso se corta a la mitad, lo único que queda es
+  ese `.part` (que nadie confunde con un tema), nunca un `.mp3` vacío: por eso no hace falta
+  un barrido al arrancar, que tendría que adivinar qué `.part` son nuestros;
 - como mucho `MAX_DESCARGAS` a la vez (semáforo) y con tope de tiempo y de tamaño.
 """
 from __future__ import annotations
@@ -140,21 +143,17 @@ class JamendoProvider(ExternalAudioSourceProvider):
         if not self._turnos.acquire(timeout=_ESPERA_TURNO_S):
             raise ProviderTimeout(self.display)
         try:
-            final = _reservar(dest, safe_stem(stem or f"{t.title} - {t.artist}".strip(" -")), ".mp3")
-            try:
-                self._bajar(url, final)
-            except BaseException:
-                with suppress(OSError):
-                    final.unlink()          # era la reserva vacía: nadie más la usa
-                raise
+            base = safe_stem(stem or f"{t.title} - {t.artist}".strip(" -"))
+            part, fd = _reservar_part(dest, base, ".mp3")
+            final = self._bajar(url, part, fd, dest, base, ".mp3")
         finally:
             self._turnos.release()
         logger.info(f"⬇️  Jamendo: bajado «{final.name}» ({t.license}).")
         return final
 
-    def _bajar(self, url: str, final: Path) -> None:
-        part = final.with_name(final.name + ".part")
-        fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0))
+    def _bajar(self, url: str, part: Path, fd: int, dest: Path, base: str, ext: str) -> Path:
+        """Baja a `part` (ya creado en exclusiva, abierto en `fd`) y lo publica con nombre libre.
+        Ante cualquier falla borra SOLO ese `.part`, que es nuestro."""
         try:
             with os.fdopen(fd, "wb") as f:
                 total, t0 = 0, time.monotonic()
@@ -167,7 +166,7 @@ class JamendoProvider(ExternalAudioSourceProvider):
                     f.write(trozo)
             if total == 0:
                 raise ProviderError(self.display, "el archivo vino vacío")
-            os.replace(part, final)      # atómico; `final` es la reserva propia (vacía)
+            return _publicar(part, dest, base, ext)
         except BaseException:
             with suppress(OSError):
                 part.unlink()
@@ -207,18 +206,53 @@ class JamendoProvider(ExternalAudioSourceProvider):
         raise ProviderError(self.display, "demasiadas redirecciones")
 
 
-def _reservar(dest: Path, stem: str, ext: str) -> Path:
-    """Crea en EXCLUSIVA un archivo vacío con un nombre libre («x.mp3», «x (2).mp3»…) y lo
-    devuelve: lo que ya existía (de otra descarga o del usuario) no se toca nunca. También se
-    saltea un nombre cuyo `.part` exista (otra descarga en curso)."""
+def _nombres(dest: Path, stem: str, ext: str):
+    """«x.mp3», «x (2).mp3», «x (3).mp3»… (el sufijo entra en los 60 de `safe_stem`)."""
     for k in range(1, 1000):
-        name = f"{stem}{ext}" if k == 1 else f"{stem[:54].rstrip()} ({k}){ext}"
-        p = dest / name
-        if p.with_name(p.name + ".part").exists():
+        yield dest / (f"{stem}{ext}" if k == 1 else f"{stem[:54].rstrip()} ({k}){ext}")
+
+
+def _reservar_part(dest: Path, stem: str, ext: str) -> tuple[Path, int]:
+    """Crea en EXCLUSIVA «<nombre libre>.part» y devuelve (ruta, fd abierto para escribir). Se
+    saltea un nombre cuyo final ya existe (del usuario u otra descarga) o cuyo `.part` existe
+    (otra descarga en curso, o un resto de una cortada: no se toca, no es seguro que sea nuestro)."""
+    for p in _nombres(dest, stem, ext):
+        if p.exists():
             continue
+        part = p.with_name(p.name + ".part")
         try:
-            os.close(os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL))
+            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0))
         except FileExistsError:
             continue
-        return p
+        return part, fd
+    raise ProviderError("Jamendo", "no encontré un nombre libre para el archivo")
+
+
+def _publicar(part: Path, dest: Path, stem: str, ext: str) -> Path:
+    """Renombra `part` a un nombre final libre SIN pisar nunca: en Windows `os.rename` falla si
+    el destino existe; en el resto, `os.link` (atómico, falla si existe) y después se borra el
+    `.part`. Si entre la reserva y el final alguien creó ese nombre, se prueba el siguiente.
+    Sin hard links (un disco FAT, uno de red): se comprueba que no exista y se renombra; ahí
+    queda una ventana mínima, que es lo mejor que ese disco permite."""
+    preferido = part.with_name(part.name.removesuffix(".part"))
+    for p in [preferido, *(q for q in _nombres(dest, stem, ext) if q != preferido)]:
+        if p.exists():
+            continue
+        try:
+            if os.name == "nt":
+                os.rename(part, p)
+            else:
+                try:
+                    os.link(part, p)
+                except FileExistsError:
+                    raise
+                except OSError:
+                    if p.exists():
+                        continue
+                    os.rename(part, p)
+                    return p
+                os.unlink(part)
+            return p
+        except FileExistsError:
+            continue
     raise ProviderError("Jamendo", "no encontré un nombre libre para el archivo")

@@ -246,13 +246,12 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
     (`fuentes.registro.match_preview`). Si no, `AnalisisError` con el motivo de SoundCloud y
     el de la fuente: el tema queda "?" (nunca se mide otro tema).
 
-    El preview se baja a un temporal (con tope de bytes y host validado) que se borra siempre,
-    y se mide por el MISMO camino que el tramo de SoundCloud: `decodificar_mp3` +
+    El preview se baja EN MEMORIA, como el tramo de `_bajar_tramo` (con tope de bytes y host
+    validado), y se mide por el MISMO camino que el tramo de SoundCloud: `decodificar_mp3` +
     `analizar_senal`. El resultado sale marcado `preview` (la pantalla dice "Medido en
-    preview") y `preview_fuente` (de quién es ese preview)."""
-    import os
-    import tempfile
-    from contextlib import suppress
+    preview") y `preview_fuente` (de quién es ese preview). Una falla de red al bajarlo es
+    `AnalisisError` con el motivo ("Deezer no entregó el preview"), no un error genérico."""
+    import requests
 
     import soundcloud_station as sc
     import source_audio as sa
@@ -264,35 +263,30 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
     if m.track is None:
         raise AnalisisError(f"{motivo_sc} {m.motivo}.")
     prov = _registro().get(m.track.source)
-    ruta = None
     try:
-        try:
-            up = sa._open_upstream(m.track.preview_url, {}, tuple(getattr(prov, "preview_hosts", ())))
-        except sa.SourceAudioError as e:
-            raise AnalisisError(f"{motivo_sc} {m.display}: {e.message}") from e
-        try:
-            if up.status_code != 200:
-                raise AnalisisError(f"{motivo_sc} {m.display} bloqueó el preview (HTTP {up.status_code}).")
-            fd, ruta = tempfile.mkstemp(suffix=".mp3", prefix="musiflix-preview-")
-            total = 0
-            with os.fdopen(fd, "wb") as f:
-                for trozo in up.iter_content(64 * 1024):
-                    total += len(trozo)
-                    if total > _BYTES_MAX:
-                        break
-                    f.write(trozo)
-        finally:
-            up.close()
-        with open(ruta, "rb") as f:
-            data = f.read()
-        try:
-            y = decodificar_mp3(data)
-        except AnalisisError as e:
-            raise AnalisisError(f"{motivo_sc} El preview de {m.display} no se pudo decodificar.") from e
+        up = sa._open_upstream(m.track.preview_url, {}, tuple(getattr(prov, "preview_hosts", ())))
+    except sa.SourceAudioError as e:
+        raise AnalisisError(f"{motivo_sc} {m.display}: {e.message}") from e
+    except (requests.RequestException, OSError) as e:
+        raise AnalisisError(f"{motivo_sc} {m.display} no entregó el preview.") from e
+    try:
+        if up.status_code != 200:
+            raise AnalisisError(f"{motivo_sc} {m.display} bloqueó el preview (HTTP {up.status_code}).")
+        partes, total = [], 0
+        for trozo in up.iter_content(64 * 1024):
+            total += len(trozo)
+            if total > _BYTES_MAX:
+                break
+            partes.append(trozo)
+        data = b"".join(partes)
+    except (requests.RequestException, OSError) as e:
+        raise AnalisisError(f"{motivo_sc} {m.display} no entregó el preview.") from e
     finally:
-        if ruta:
-            with suppress(OSError):
-                os.remove(ruta)
+        up.close()
+    try:
+        y = decodificar_mp3(data)
+    except AnalisisError as e:
+        raise AnalisisError(f"{motivo_sc} El preview de {m.display} no se pudo decodificar.") from e
     logger.info(f"🎯 Station: {sc_id} medido en el preview de {m.display} ({m.track.source}:{m.track.id}, {m.grado}).")
     return y, {
         "preview": True,
@@ -301,7 +295,7 @@ def _bajar_preview_externo(sc_id: str, motivo_sc: str) -> tuple[np.ndarray, dict
         "motivo_preview": (f"Medido en el preview de 30 s de {m.display} («{m.track.artist} — {m.track.title}»): "
                            f"{motivo_sc}"),
         "duracion": meta.get("duracion"),
-        "tramo_inicio_s": 0.0,
+        "tramo_inicio_s": None,          # de qué parte del tema sale el preview: no se sabe
         "tramo_s": round(y.size / _SR_DESTINO, 1),
     }
 

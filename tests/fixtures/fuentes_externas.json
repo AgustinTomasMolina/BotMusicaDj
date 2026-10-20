@@ -66,6 +66,26 @@
       ],
       "total": 1
     },
+    "artist:\"Nadia Vellum\" track:\"ola quieta\"": {
+      "data": [
+        {"id": 900000701, "readable": true, "title": "Ola Quieta", "title_short": "Ola Quieta", "title_version": "",
+         "link": "https://www.deezer.com/track/900000701", "duration": 300, "rank": 300,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/ola-quieta.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000008, "title": "Ola Quieta"}, "type": "track"}
+      ],
+      "total": 1
+    },
+    "artist:\"Nadia Vellum\" track:\"sin reloj\"": {
+      "data": [
+        {"id": 900000801, "readable": true, "title": "Sin Reloj", "title_short": "Sin Reloj", "title_version": "",
+         "link": "https://www.deezer.com/track/900000801", "duration": 0, "rank": 200,
+         "preview": "https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/sin-reloj.mp3",
+         "artist": {"id": 7000001, "name": "Nadia Vellum", "type": "artist"},
+         "album": {"id": 8000009, "title": "Sin Reloj"}, "type": "track"}
+      ],
+      "total": 1
+    },
     "cuota": {"error": {"type": "Exception", "message": "Quota limit exceeded", "code": 4}}
   },
   "jamendo_busqueda": {

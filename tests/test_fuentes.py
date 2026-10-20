@@ -122,8 +122,31 @@ def test_identidad_rechaza_si_la_duracion_no_cuadra():
 
 
 def test_identidad_acepta_la_duracion_dentro_de_la_tolerancia():
+    # Deezer 240 s. Más LARGO: hasta max(5 s, 3 %) = 7,2 s (silencio al final).
     m = reg_deezer().find_preview(lecturas("Sal", "Nadia Vellum"), 246.5)
     assert m.track is not None and m.track.id == "900000401", m.motivo
+    # Más CORTO: solo max(5 s, 1 %) = 5 s (redondeo, silencio recortado); 236 s entra, 234 s no.
+    assert reg_deezer().find_preview(lecturas("Sal", "Nadia Vellum"), 236.0).track.id == "900000401"
+    m = reg_deezer().find_preview(lecturas("Sal", "Nadia Vellum"), 234.0)
+    assert (m.track, m.motivo) == (None, "Deezer tiene un tema con ese nombre pero dura distinto (240 s contra 234 s): no lo mido")
+
+
+def test_identidad_rechaza_un_upload_acelerado():
+    # 291 s contra 300 s: −3 %, el mismo master acelerado (~+3,8 BPM a 128). Con ±3 % simétrico
+    # entraba y se medía el BPM de otra cosa; más corto solo tolera max(5 s, 1 %) = 5 s.
+    m = reg_deezer().find_preview(lecturas("Ola Quieta", "Nadia Vellum"), 291.0)
+    assert (m.track, m.motivo) == (None, "Deezer tiene un tema con ese nombre pero dura distinto (300 s contra 291 s): no lo mido")
+    assert reg_deezer().find_preview(lecturas("Ola Quieta", "Nadia Vellum"), 308.0).track.id == "900000701", \
+        "el mismo tema 8 s más largo (silencio al final) sí"
+
+
+@pytest.mark.parametrize("titulo, dur", [("Ola Quieta", None), ("Ola Quieta", 0), ("Ola Quieta", float("nan")),
+                                         ("Ola Quieta", 30.0), ("Sin Reloj", 250.0)])
+def test_identidad_sin_las_dos_duraciones_no_mide(titulo, dur):
+    # Sin la duración del upload (o con el 30,0 de un Go+, que `duration_or_none` anula), o sin la
+    # de Deezer ("Sin Reloj" viene con duration 0), no hay forma de descartar otra edición.
+    m = reg_deezer().find_preview(lecturas(titulo, "Nadia Vellum"), dur)
+    assert (m.track, m.motivo) == (None, "Deezer tiene el tema pero no puedo comparar la duración: no lo mido")
 
 
 def test_identidad_en_un_tema_corto_manda_el_piso_de_5_s():
@@ -324,9 +347,38 @@ def test_jamendo_baja_a_part_y_renombra(tmp_path):
     assert ruta == tmp_path / "Campo Abierto - Coro de Niebla.mp3"
     assert ruta.read_bytes() == bajada.data
     assert bajada.urls == ["https://prod-1.storage.jamendo.com/download/track/1500001/mp32/"]
-    # Mientras bajaba: el .part con lo bajado y el nombre final reservado vacío.
-    assert bajada.durante == [[("Campo Abierto - Coro de Niebla.mp3", 0), ("Campo Abierto - Coro de Niebla.mp3.part", None)]]
+    # Mientras bajaba: SOLO el .part (la reserva del nombre); ningún .mp3 vacío.
+    assert bajada.durante == [[("Campo Abierto - Coro de Niebla.mp3.part", None)]]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo Abierto - Coro de Niebla.mp3"], "quedó un .part"
+
+
+def test_jamendo_un_corte_no_deja_un_mp3_vacio_y_su_resto_no_se_toca(tmp_path):
+    # Un proceso que murió a mitad dejó «Campo.mp3.part»: no es seguro que sea nuestro, no se
+    # borra ni se reusa; la descarga nueva va a «Campo (2).mp3». Y en ningún momento hay un
+    # «Campo.mp3» de 0 bytes que parezca un tema.
+    resto = tmp_path / "Campo.mp3.part"
+    resto.write_bytes(b"resto de una descarga cortada")
+    bajada = Bajada(tmp_path)
+    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo")
+    assert ruta.name == "Campo (2).mp3" and ruta.read_bytes() == bajada.data
+    assert resto.read_bytes() == b"resto de una descarga cortada"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo (2).mp3", "Campo.mp3.part"]
+    assert bajada.durante == [[("Campo (2).mp3.part", None), ("Campo.mp3.part", None)]]
+
+
+def test_jamendo_si_aparece_el_nombre_mientras_baja_no_lo_pisa(tmp_path):
+    # Otro programa crea «Campo.mp3» entre la reserva y el final: se publica en «Campo (2).mp3».
+    class Intrusa(Bajada):
+        def __call__(self, url):
+            for trozo in super().__call__(url):
+                if not (self.dest / "Campo.mp3").exists():
+                    (self.dest / "Campo.mp3").write_bytes(b"de otro programa")
+                yield trozo
+    bajada = Intrusa(tmp_path)
+    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo")
+    assert (tmp_path / "Campo.mp3").read_bytes() == b"de otro programa"
+    assert ruta.name == "Campo (2).mp3" and ruta.read_bytes() == bajada.data
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo (2).mp3", "Campo.mp3"]
 
 
 def test_jamendo_no_pisa_un_archivo_que_ya_estaba(tmp_path):
@@ -392,6 +444,74 @@ def test_jamendo_como_mucho_dos_descargas_a_la_vez(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["t0.mp3", "t1.mp3", "t2.mp3", "t3.mp3"]
 
 
+# --- `_stream` real (con `requests.get` de juguete) y la validación de host -----------------
+
+class RespStream:
+    def __init__(self, status=200, chunks=(), headers=None):
+        self.status_code, self.chunks, self.headers = status, list(chunks), headers or {}
+
+    def iter_content(self, n):
+        yield from self.chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _requests_de_juguete(monkeypatch, respuestas):
+    pedidos = []
+
+    def get(url, **k):
+        pedidos.append(url)
+        return respuestas.pop(0)
+    monkeypatch.setattr(requests, "get", get)
+    return pedidos
+
+
+URL_JAM = "https://prod-1.storage.jamendo.com/download/track/1500001/mp32/"
+
+
+def test_stream_real_baja_y_sigue_una_redireccion_valida(monkeypatch):
+    pedidos = _requests_de_juguete(monkeypatch, [
+        RespStream(302, headers={"Location": "https://prod-2.storage.jamendo.com/x.mp3"}),
+        RespStream(200, [b"ab", b"cd"])])
+    assert b"".join(jamendo()._stream(URL_JAM)) == b"abcd"
+    assert pedidos == [URL_JAM, "https://prod-2.storage.jamendo.com/x.mp3"]
+
+
+def test_stream_real_un_403_es_bloqueo(monkeypatch):
+    _requests_de_juguete(monkeypatch, [RespStream(403)])
+    with pytest.raises(base.ProviderBlocked) as e:
+        list(jamendo()._stream(URL_JAM))
+    assert e.value.motivo == "Jamendo bloqueó (HTTP 403)"
+
+
+def test_stream_real_no_sigue_una_redireccion_a_la_red_local(monkeypatch):
+    pedidos = _requests_de_juguete(monkeypatch, [RespStream(302, headers={"Location": "https://127.0.0.1/robar"})])
+    with pytest.raises(base.DownloadNotAllowed) as e:
+        list(jamendo()._stream(URL_JAM))
+    assert e.value.motivo == "Jamendo redirigió la descarga a un lugar que no reconozco"
+    assert pedidos == [URL_JAM], "se pidió la URL de la red local"
+
+
+@pytest.mark.parametrize("url, ok", [
+    ("https://cdnt-preview.dzcdn.net/api/1/x.mp3", True),
+    ("https://cdns-preview-d.dzcdn.net/stream/x.mp3", True),
+    ("https://evil-dzcdn.net/x.mp3", False),          # termina en "dzcdn.net" pero no es subdominio
+    ("https://dzcdn.net.evil.com/x.mp3", False),
+    ("https://cdns-preview.dzcdn.net:8443/x.mp3", False),
+    ("https://dzcdn.net/x.mp3", False),                # el sufijo solo, sin subdominio
+    ("http://cdnt-preview.dzcdn.net/x.mp3", False),
+    ("https://user@cdnt-preview.dzcdn.net/x.mp3", False),
+])
+def test_host_allowed_con_sufijos_de_deezer(url, ok):
+    import source_audio as sa
+    assert sa.host_allowed(url, DeezerProvider.preview_hosts) is ok
+    assert sa.host_allowed(url) is False, "la CDN de Deezer no entra en las de la barra"
+
+
 # --- plan B de la medición de la Station ---------------------------------------------------
 
 SC_ID = "4100000001"
@@ -411,11 +531,15 @@ def _mp3_sintetico(bpm: float, dur: float = 30.0) -> bytes:
 
 
 class Upstream:
-    def __init__(self, data, status=200):
-        self.data, self.status_code, self.cerrado = data, status, False
+    def __init__(self, data, status=200, corte=None):
+        self.data, self.status_code, self.cerrado, self.corte = data, status, False, corte
+        self.leidos = 0
 
     def iter_content(self, n):
         for k in range(0, len(self.data), n):
+            if self.corte is not None and k:
+                raise self.corte
+            self.leidos += 1
             yield self.data[k:k + n]
 
     def close(self):
@@ -428,14 +552,16 @@ def plan_b(monkeypatch):
 
     import source_audio as sa
 
-    estado = {"pedidos": [], "temporales": [], "meta": dict(META), "data": None}
+    estado = {"pedidos": [], "temporales": [], "meta": dict(META), "data": None, "error": None, "corte": None}
 
     def sin_audio(sc_id):
         raise sm.AnalisisError(MOTIVO_SC)
 
     def upstream(url, headers, suffixes=sa._ALLOWED_HOST_SUFFIXES):
         estado["pedidos"].append((url, suffixes))
-        estado["up"] = Upstream(estado["data"])
+        if estado["error"] is not None:
+            raise estado["error"]
+        estado["up"] = Upstream(estado["data"], corte=estado["corte"])
         return estado["up"]
 
     real_mkstemp = tempfile.mkstemp
@@ -464,7 +590,58 @@ def test_plan_b_mide_el_preview_de_deezer_y_lo_marca(plan_b):
     assert r["key_dudosa"] is True, "30 s no alcanzan para el acuerdo de la key: va con '?'"
     assert plan_b["pedidos"] == [("https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/faro-lento.mp3", (".dzcdn.net",))]
     assert plan_b["up"].cerrado is True
-    assert len(plan_b["temporales"]) == 1 and not plan_b["temporales"][0].exists(), "el temporal del preview quedó en disco"
+    assert plan_b["temporales"] == [], "el preview se baja en memoria: ningún temporal en disco"
+    assert r["tramo_inicio_s"] is None, "de qué parte del tema sale un preview no se sabe: no es 0,0"
+    assert r["duracion"] == META["duracion"]
+
+
+def test_plan_b_sin_duracion_del_tema_no_mide(plan_b):
+    plan_b["meta"] = {k: v for k, v in META.items() if k != "duracion"}
+    r = sm._analizar_sync(SC_ID)
+    assert (r["ok"], r["motivo"]) == (False, f"{MOTIVO_SC} Deezer tiene el tema pero no puedo comparar la duración: no lo mido.")
+    assert plan_b["pedidos"] == []
+
+
+@pytest.mark.parametrize("donde, error", [
+    ("abrir", requests.ConnectionError("sin red")),
+    ("abrir", requests.ReadTimeout("lento")),
+    ("abrir", OSError("disco")),
+    ("leer", requests.ConnectionError("cortó")),
+    ("leer", requests.exceptions.ChunkedEncodingError("cortó")),
+])
+def test_plan_b_una_falla_de_red_dice_que_deezer_no_entrego(plan_b, donde, error):
+    plan_b["data"] = _mp3_sintetico(128.0)            # varios trozos de 64 KB: el corte cae a mitad
+    plan_b["error" if donde == "abrir" else "corte"] = error
+    r = sm._analizar_sync(SC_ID)
+    assert (r["ok"], r["motivo"]) == (False, f"{MOTIVO_SC} Deezer no entregó el preview.")
+    if donde == "leer":
+        assert plan_b["up"].leidos == 1 and plan_b["up"].cerrado is True
+
+
+def test_plan_b_host_rechazado_por_la_validacion_real(monkeypatch):
+    # El camino `SourceAudioError` con el `_open_upstream` REAL (sin el fixture que lo reemplaza):
+    # la url del preview es de otro host.
+    import source_audio as sa
+    monkeypatch.setattr(sm, "_bajar_tramo", lambda sid: (_ for _ in ()).throw(sm.AnalisisError(MOTIVO_SC)))
+    monkeypatch.setattr(sc, "cached_track", lambda sid: dict(META))
+    otra = {"artist:\"Nadia Vellum\" track:\"faro lento\"": json.loads(json.dumps(FX["deezer_por_q"]['artist:"Nadia Vellum" track:"faro lento"']))}
+    otra['artist:"Nadia Vellum" track:"faro lento"']["data"][0]["preview"] = "https://evil-dzcdn.net/faro.mp3"
+    reg = reg_deezer(FakeDeezer(por_q=otra))
+    monkeypatch.setattr(sm, "_registro", lambda: reg)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("se pidió el preview de un host no validado"))
+    r = sm._analizar_sync(SC_ID)
+    assert (r["ok"], r["motivo"]) == (False, f"{MOTIVO_SC} Deezer: La fuente redirigió el audio a un lugar que no reconozco; no lo sigo.")
+    assert sa.host_allowed("https://evil-dzcdn.net/faro.mp3", (".dzcdn.net",)) is False
+
+
+def test_plan_b_respeta_el_tope_de_bytes(plan_b, monkeypatch):
+    plan_b["data"] = _mp3_sintetico(128.0)
+    monkeypatch.setattr(sm, "_BYTES_MAX", 64 * 1024)
+    vistos = {}
+    real = sm.decodificar_mp3
+    monkeypatch.setattr(sm, "decodificar_mp3", lambda data: (vistos.setdefault("n", len(data)), real(data))[1])
+    sm._analizar_sync(SC_ID)
+    assert vistos["n"] <= 64 * 1024, f"se juntaron {vistos['n']} bytes con un tope de {64 * 1024}"
 
 
 def test_plan_b_con_otro_tema_deja_signo_de_pregunta(plan_b):
@@ -493,7 +670,7 @@ def test_plan_b_preview_ilegible_borra_el_temporal(plan_b):
     plan_b["data"] = bytes(range(256)) * 40
     r = sm._analizar_sync(SC_ID)
     assert (r["ok"], r["motivo"]) == (False, f"{MOTIVO_SC} El preview de Deezer no se pudo decodificar.")
-    assert len(plan_b["temporales"]) == 1 and not plan_b["temporales"][0].exists()
+    assert plan_b["temporales"] == []
 
 
 def test_cached_track_lee_la_station_en_cache(monkeypatch):
@@ -617,3 +794,53 @@ def test_server_jamendo_sin_clave_al_bajar(srv, monkeypatch, tmp_path):
     r = srv.procesar_descarga({"titulo": "Campo Abierto", "artista": "Coro de Niebla", "fuente": "jamendo",
                                "url": "https://www.jamendo.com/track/1500001", "formato": "mp3"})
     assert r == {"exito": False, "mensaje": "Jamendo: sin clave."}
+
+
+def test_server_jamendo_bloqueado_sin_codigo_no_es_no_contesto(srv, monkeypatch):
+    # "status: failed" de Jamendo: ProviderBlocked SIN código HTTP. Contestó y rechazó.
+    cuerpo = {"headers": {"status": "failed", "code": 5, "error_message": "x"}}
+    con_registro(monkeypatch, srv, jamendo(FakeJamendo(error=Resp(200, cuerpo))))
+    _, fallidas, _ = srv._mix_fuentes("campo", 12)
+    assert [(f, f.http, f.bloqueo, f.detalle) for f in fallidas] == [("jamendo", None, True, "código 5")]
+    assert srv._motivos_fallidas(fallidas) == ["Jamendo bloqueó (código 5)"]
+
+
+def test_server_motivos_separan_caida_codigo_y_bloqueo_sin_codigo(srv):
+    F = srv._Fallida
+    fallidas = ["youtube", F("ligaudio"), F("spotify", 429), F("jamendo", None, True, "cuota de pedidos agotada")]
+    assert srv._motivos_fallidas(fallidas) == [
+        "No contestó a tiempo: YouTube, MP3", "Spotify bloqueó (HTTP 429)", "Jamendo bloqueó (cuota de pedidos agotada)"]
+    assert srv._motivos_fallidas([F("jamendo", None, True)]) == ["Jamendo bloqueó"]
+    assert srv._motivos_fallidas([]) == []
+
+
+def test_server_registro_sin_jamendo_es_sin_configurar(srv, monkeypatch):
+    con_registro(monkeypatch, srv)                     # registro vacío: no hay Jamendo
+    assert srv._mix_fuentes("campo", 12) == ([], [], ["jamendo"])
+
+
+# --- el registro de la app -----------------------------------------------------------------
+
+def test_los_tests_no_ven_el_registro_real_ni_la_clave():
+    import os
+    assert registro.default().names() == [], "el conftest deja el registro de la app vacío en cada test"
+    assert "JAMENDO_CLIENT_ID" not in os.environ
+
+
+def test_default_arma_un_solo_registro_con_dos_hilos_a_la_vez(monkeypatch):
+    monkeypatch.setattr(registro, "_default", None)
+    armados, real = [], registro.Registry.__init__
+
+    def lento(self, providers=()):
+        armados.append(self)
+        time.sleep(0.2)                                # la ventana en la que entraría el segundo hilo
+        real(self, [])
+    monkeypatch.setattr(registro.Registry, "__init__", lento)
+    vistos = []
+    hilos = [threading.Thread(target=lambda: vistos.append(registro.default())) for _ in range(3)]
+    for h in hilos:
+        h.start()
+    for h in hilos:
+        h.join(5)
+    assert len(armados) == 1, f"se armaron {len(armados)} registros"
+    assert len(vistos) == 3 and all(v is vistos[0] for v in vistos)
