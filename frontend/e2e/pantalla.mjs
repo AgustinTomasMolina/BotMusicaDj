@@ -3332,6 +3332,253 @@ const CASOS = [
     }
   }],
 
+  // ---------------------------------------------------------------------- f66: Jamendo y licencias
+  // Las filas tienen la forma de `server._buscar_jamendo`, el historial la de
+  // `db.listar_historial` y la carpeta vigilada la de `server.vigilancia_estado` (apagada: la
+  // respuesta REAL del server del E2E, que arranca sin MUSIC_WATCH_FOLDER).
+  ['jamendo (f66): la fila dice la licencia (o «no declarado») y sin permiso del artista «Descargar» queda deshabilitado con el motivo; el historial muestra licencia y origen; la carpeta vigilada dice lo que da /api/vigilancia', async (page, ctx) => {
+    const opcion = (extra) => ({ titulo: 'Campo Abierto', artista: 'Coro de Niebla', duracion: 254, fuente: 'jamendo', thumbnail: null,
+      url: 'https://www.jamendo.com/track/1500001', id: '1500001', licencia: 'http://creativecommons.org/licenses/by-sa/3.0/',
+      origen: 'https://www.jamendo.com/track/1500001', descargable: true, ...extra })
+    const grupos = [
+      { opciones: [opcion()] },
+      { opciones: [opcion({ titulo: 'Campo Cerrado', url: 'https://www.jamendo.com/track/1500002', id: '1500002', licencia: 'no declarado', descargable: false })] },
+    ]
+    const ahora = new Date().toISOString()
+    const descargas = [
+      { id: 2, titulo: 'Campo Abierto', artista: 'Coro de Niebla', fuente: 'jamendo', formato: 'mp3', archivo: 'Campo Abierto - Coro de Niebla.mp3',
+        grade: null, color: null, licencia: 'http://creativecommons.org/licenses/by-sa/3.0/', origen: 'https://www.jamendo.com/track/1500001', creado_en: ahora },
+      // Como la mandaba la API antes de f66 (sin los campos): la pantalla no dibuja un vacío.
+      { id: 1, titulo: 'Tema YT', artista: 'Artista Y', fuente: 'youtube', formato: 'wav', archivo: 'Tema YT.wav', grade: 'B', color: null, creado_en: ahora },
+    ]
+    const vigReal = await api(ctx, '/api/vigilancia')
+    afirmar(vigReal.activa === false && vigReal.mensaje, `el server del E2E tenía que arrancar con la carpeta vigilada apagada: ${json(vigReal)}`)
+    let vig = null            // null: contesta el server; si no, esta respuesta
+    let frenoVig = null       // una promesa: hasta que se cumpla, GET /api/vigilancia no contesta
+    let lecturasVig = 0
+    let escanearHtml = false  // true: el POST contesta un 500 de HTML (un server roto, un proxy)
+    let escanear409 = null    // si no es null: el POST contesta 409 con este cuerpo (apagada)
+    let frenoEsc = null       // como frenoVig, para el POST
+    const escaneos = []
+    const bajadas = []        // lo que pidió "Descargar todas" a /api/descargar
+    await interceptar(page, async (req) => {
+      const u = new URL(req.url())
+      const responder = async (body) => { await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }); return true }
+      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos })
+      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+      if (u.pathname === '/api/historial') return responder({ busquedas: [], playlists: [], descargas })
+      if (u.pathname === '/api/descargar') { bajadas.push(JSON.parse(req.postData()).url); return responder({ exito: true, calidad: { grade: 'A' } }) }
+      if (u.pathname === '/api/vigilancia') {
+        lecturasVig++
+        if (frenoVig) await frenoVig
+        if (vig) return responder(vig)
+      }
+      if (u.pathname === '/api/vigilancia/escanear') {
+        escaneos.push(req.method())
+        if (frenoEsc) await frenoEsc
+        if (escanear409) { await req.respond({ status: 409, contentType: 'application/json', body: JSON.stringify(escanear409) }); return true }
+        if (escanearHtml) { await req.respond({ status: 500, contentType: 'text/html', body: '<html><body><h1>Internal Server Error</h1></body></html>' }); return true }
+        return responder({ exito: true, encolado: true, estado: vig.estado })
+      }
+      if (u.origin !== new URL(ctx.url).origin) { await req.abort(); return true }
+      return false
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    const caja = 'input[aria-label="Buscar una canción, artista o género"]'
+    await page.waitForSelector(caja, { timeout: ESPERA_MS })
+    await page.type(caja, 'campo')
+    await page.keyboard.press('Enter')
+    const filas = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.trk')].map((r) => {
+      const lic = r.querySelector('.trk-meta .mb-lic')
+      const dl = r.querySelector('.trk-acts .btn-dl')
+      return {
+        titulo: r.querySelector('.trk-title')?.textContent ?? null,
+        licencia: lic?.querySelector('b')?.textContent ?? null, licTitulo: lic?.getAttribute('title') ?? null,
+        atenuada: lic ? lic.classList.contains('is-no-declarado') : null,
+        dlDeshabilitado: dl ? dl.disabled : null, dlTitulo: dl?.getAttribute('title') ?? null,
+        nota: r.querySelector('.trk-sin-descarga')?.textContent ?? null,
+        pastillas: [...r.querySelectorAll('.vchip')].map((b) => ({ texto: b.textContent.trim(), color: getComputedStyle(b).getPropertyValue('--pf').trim() })),
+      }
+    })), (v) => v.length === 2, 'no aparecieron las dos filas de Jamendo')
+    igual(filas, [
+      { titulo: 'Campo Abierto', licencia: 'CC BY-SA 3.0', licTitulo: 'Licencia declarada por Jamendo: http://creativecommons.org/licenses/by-sa/3.0/',
+        atenuada: false, dlDeshabilitado: false, dlTitulo: 'Descargar', nota: null, pastillas: [{ texto: 'Jamendo', color: '#e46fbf' }] },
+      { titulo: 'Campo Cerrado', licencia: 'no declarado', licTitulo: 'Jamendo no declara la licencia de este tema',
+        atenuada: true, dlDeshabilitado: true, dlTitulo: 'El artista no habilitó la descarga en Jamendo',
+        nota: 'El artista no habilitó la descarga en Jamendo.', pastillas: [{ texto: 'Jamendo', color: '#e46fbf' }] },
+    ], 'las filas de Jamendo: licencia, color de la plataforma y descarga')
+
+    // "Descargar todas" no intenta la que el artista no dejó bajar, y lo cuenta.
+    await clickTexto(page, 'button', /^Descargar todas/)
+    const finTodas = await hasta(() => botonTodas(page), (t) => /^✓/.test(t || ''), '"Descargar todas" no terminó')
+    igual([bajadas, finTodas], [[grupos[0].opciones[0].url], '✓ 1/1 descargadas · 1 sin descarga habilitada'],
+      '"Descargar todas" con un tema de Jamendo sin permiso de descarga')
+
+    // Historial: licencia y origen de cada descarga.
+    const abrirHistorial = async () => {
+      await page.click('button[aria-label="Menú"]')
+      await esperarCajon(page, '.drawer-left.is-open')
+      afirmar(await page.evaluate(() => { const b = [...document.querySelectorAll('.navitem')].find((x) => x.textContent === 'Historial'); b?.click(); return !!b }),
+        'el menú no tiene "Historial"')
+      await esperarCajon(page, '.drawer-right.is-open')
+    }
+    await abrirHistorial()
+    const hist = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.drawer-right.is-open .hist-item')].map((it) => ({
+      tema: it.querySelector('.truncate')?.textContent ?? null, lic: it.querySelector('.hist-lic')?.textContent ?? null,
+      link: it.querySelector('.hist-lic a')?.getAttribute('href') ?? null,
+    }))), (v) => v.length === descargas.length, 'el historial no mostró las dos descargas')
+    igual(hist, [
+      { tema: 'Campo Abierto — Coro de Niebla', lic: 'Licencia: CC BY-SA 3.0 · Origen: jamendo.com', link: 'https://www.jamendo.com/track/1500001' },
+      { tema: 'Tema YT — Artista Y', lic: 'Licencia: no declarado · Origen: no declarado', link: null },
+    ], 'licencia y origen de cada descarga del historial')
+
+    // Carpeta vigilada apagada: el mensaje de la API (dice cómo prenderla) y nada para escanear.
+    const leerVig = () => page.evaluate(() => {
+      const s = document.querySelector('.drawer-right.is-open .vig')
+      return s ? {
+        estado: s.dataset.estado ?? null, titulo: s.querySelector('.vig-titulo')?.textContent ?? null,
+        partes: [...s.querySelectorAll('.vig-partes')].map((p) => p.textContent), aviso: s.querySelector('.vig-aviso')?.textContent ?? null,
+        boton: s.querySelector('button')?.textContent ?? null, msg: s.querySelector('[role=status]')?.textContent ?? null,
+      } : null
+    })
+    igual(await hasta(leerVig, (v) => v && v.estado, 'no apareció el estado de la carpeta vigilada'),
+      { estado: 'apagada', titulo: vigReal.mensaje, partes: [], aviso: null, boton: null, msg: '' }, 'la carpeta vigilada apagada')
+
+    // Prendida: la carpeta, el último escaneo y los contadores; «Escanear ahora» = un POST.
+    // El escaneo es de este año (del año del reloj): uno de otro año se muestra con el año.
+    vig = { exito: true, activa: true, estado: { carpeta: 'Mis Descargas', alcanzable: true, corriendo: true, procesando: [], pendientes: 2,
+      creciendo: 0, ignorados: 0, procesados: 14, fallidos: 1, ultimos_fallidos: ['roto.mp3'], ultimo_ciclo: `${new Date().getFullYear()}-10-21T09:05:33`,
+      ultimo_error: null, ultimo_reporte: 'revision_vigilada_2026-10-21_090533.html', intervalo_s: 60 } }
+    const cerrarHistorial = async () => {
+      await page.click('.drawer-right.is-open button[aria-label="Cerrar historial"]')
+      await hasta(() => page.evaluate(() => !!document.querySelector('.drawer-right.is-open')), (v) => !v, 'el historial no se cerró')
+    }
+    const leerBusy = () => page.evaluate(() => {
+      const s = document.querySelector('.drawer-right.is-open .vig')
+      return s ? { busy: s.getAttribute('aria-busy'), texto: s.textContent } : null
+    })
+    const LEYENDO = { busy: 'true', texto: 'Leyendo la carpeta vigilada…' }
+    await cerrarHistorial()
+    // Al volver a abrir, mientras el server no contesta: "Leyendo…", no el estado de antes (apagada).
+    let soltarVig
+    let soltarViejo = () => {}
+    let leyendo, trasViejo
+    frenoVig = new Promise((r) => { soltarVig = r })
+    try {
+      const lecturasAlAbrir = lecturasVig
+      await abrirHistorial()
+      leyendo = await leerBusy()
+      // Se cierra con ese GET todavía en vuelo (ya llegó, frenado) y se vuelve a abrir (el GET
+      // nuevo, frenado también): cuando contesta el de antes, esta apertura sigue en "Leyendo…".
+      const lecturasEnVuelo = await hasta(() => lecturasVig, (n) => n > lecturasAlAbrir, 'al abrir no se pidió el estado')
+      await cerrarHistorial()
+      soltarViejo = soltarVig
+      frenoVig = new Promise((r) => { soltarVig = r })
+      await abrirHistorial()
+      await hasta(() => lecturasVig, (n) => n > lecturasEnVuelo, 'al volver a abrir no se pidió el estado otra vez')
+      soltarViejo()
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 400)))   // gracia: la página procesa la respuesta vieja
+      trasViejo = await leerBusy()
+    } finally {
+      frenoVig = null
+      soltarViejo()
+      soltarVig()
+    }
+    igual(leyendo, LEYENDO, 'al volver a abrir se vio el estado de la vez anterior')
+    igual(trasViejo, LEYENDO, 'la respuesta de una apertura anterior (cerrada con el GET en vuelo) pisó a la de ahora')
+    igual(await hasta(leerVig, (v) => v && v.estado === 'activa', 'al volver a abrir, la carpeta vigilada no se leyó otra vez'),
+      { estado: 'activa', titulo: 'Carpeta vigilada «Mis Descargas»',
+        partes: ['último escaneo 21/10 09:05 · 2 pendientes · 14 procesados · 1 fallido', 'Último reporte: revision_vigilada_2026-10-21_090533.html'],
+        aviso: null, boton: 'Escanear ahora', msg: '' }, 'la carpeta vigilada prendida')
+    const lecturasAntes = lecturasVig
+    await page.click('.drawer-right.is-open .vig button')
+    const tras = await hasta(leerVig, (v) => v && v.msg, 'tocar «Escanear ahora» no dijo nada')
+    igual([escaneos, tras.msg], [['POST'], 'Escaneo pedido: arranca en unos segundos.'], '«Escanear ahora» = un POST a /api/vigilancia/escanear')
+    // Unos segundos después se relee el estado y el aviso ya cumplió: se va.
+    const releido = await hasta(leerVig, (v) => v && lecturasVig > lecturasAntes && v.msg === '',
+      'después de releer el estado, «Escaneo pedido» seguía en pantalla', 4000 + ESPERA_MS)
+    igual([lecturasVig - lecturasAntes, releido.estado], [1, 'activa'], 'la relectura después de «Escanear ahora»')
+
+    // Un POST que vuelve con una página de error (no JSON): el server contestó, no "no pude conectar".
+    escanearHtml = true
+    await page.click('.drawer-right.is-open .vig button')
+    const roto = await hasta(leerVig, (v) => v && v.msg, 'un 500 de HTML al escanear no dijo nada')
+    igual([escaneos, roto.msg], [['POST', 'POST'], 'El servidor contestó con un error (HTTP 500).'], '«Escanear ahora» con un 500 de HTML')
+
+    // Lo que sigue prueba que algo NO pasa después de la relectura (4 s en VigilanciaEstado):
+    // la única forma es dejar pasar ese tiempo. `pasadaRelectura` espera 4 s + un margen.
+    const pasadaRelectura = () => page.evaluate(() => new Promise((r) => setTimeout(r, 4000 + 700)))
+    const PEDIDO = 'Escaneo pedido: arranca en unos segundos.'
+    const APAGADA_409 = { exito: false, mensaje: 'La carpeta vigilada está apagada: definí MUSIC_WATCH_FOLDER en el .env y reiniciá el servidor.' }
+    const boton = '.drawer-right.is-open .vig button'
+    escanearHtml = false
+
+    // Un segundo «Escanear ahora» que vuelve con exito:false mientras la relectura del primero
+    // está pendiente: esa relectura ya no corre y el aviso del segundo se queda.
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    escanear409 = APAGADA_409
+    const lecturasPendiente = lecturasVig
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === APAGADA_409.mensaje, 'un 409 al escanear no mostró su mensaje')
+    await pasadaRelectura()
+    igual([(await leerVig())?.msg, lecturasVig - lecturasPendiente], [APAGADA_409.mensaje, 0],
+      'la relectura pendiente del escaneo anterior corrió y borró el aviso del 409')
+
+    // Lo mismo con la relectura YA en vuelo (el GET frenado) cuando se pide el segundo escaneo:
+    // cuando contesta, no borra el aviso del segundo.
+    escanear409 = null
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    const lecturasEnVuelo2 = lecturasVig
+    let soltarRelectura = () => {}
+    let trasRelectura
+    frenoVig = new Promise((r) => { soltarRelectura = r })
+    try {
+      await hasta(() => lecturasVig, (n) => n > lecturasEnVuelo2, 'no se releyó el estado después de «Escanear ahora»', 4000 + ESPERA_MS)
+      escanear409 = APAGADA_409
+      await page.click(boton)
+      await hasta(leerVig, (v) => v && v.msg === APAGADA_409.mensaje, 'un 409 al escanear no mostró su mensaje')
+      frenoVig = null
+      soltarRelectura()
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 400)))   // gracia: la página procesa la relectura
+      trasRelectura = await leerVig()
+    } finally {
+      frenoVig = null
+      soltarRelectura()
+    }
+    igual(trasRelectura?.msg, APAGADA_409.mensaje, 'la relectura del escaneo anterior (en vuelo) borró el aviso del 409')
+
+    // Cerrar el cajón corta todo: ni la relectura que estaba armada ni la de un POST que vuelve
+    // después de cerrar piden el estado con el cajón cerrado.
+    escanear409 = null
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    await cerrarHistorial()                 // con la relectura de ese escaneo armada
+    const lecturasReabrir = lecturasVig
+    await abrirHistorial()
+    await hasta(leerVig, (v) => v && v.estado === 'activa' && lecturasVig > lecturasReabrir, 'al volver a abrir no se leyó el estado')
+    // Desde acá no hay ningún GET legítimo: la relectura armada antes de cerrar (si no se
+    // cancelara) caería dentro de la espera de abajo, y la del POST que vuelve cerrado también.
+    const lecturasCerrado = lecturasVig
+    let soltarEsc = () => {}
+    frenoEsc = new Promise((r) => { soltarEsc = r })
+    try {
+      const escaneosAntes = escaneos.length
+      await page.click(boton)
+      await hasta(() => escaneos.length, (n) => n > escaneosAntes, '«Escanear ahora» no hizo el POST')
+      await cerrarHistorial()               // con el POST en vuelo
+      frenoEsc = null
+      soltarEsc()
+      await pasadaRelectura()
+    } finally {
+      frenoEsc = null
+      soltarEsc()
+    }
+    igual(lecturasVig - lecturasCerrado, 0, 'con el cajón cerrado se volvió a pedir el estado de la carpeta vigilada')
+  }],
+
   // ---------------------------------------------------------------------- f53: importar
   // Al final a propósito: el análisis agrega temas a la base del motor de juguete, y los casos
   // de la radio de arriba comparan contra esa base.

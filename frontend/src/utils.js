@@ -9,15 +9,22 @@ export const fmtDur = (s) => {
 // Nombre de la fila Netflix por fuente
 export const FUENTE_NOMBRES = {
   youtube: '▶ YouTube', soundcloud: '☁ SoundCloud', ligaudio: '⬇ MP3',
-  hitplayer: '⬇ MP3', spotify: '♫ Spotify', deezer: '♫ Deezer',
+  hitplayer: '⬇ MP3', spotify: '♫ Spotify', deezer: '♫ Deezer', jamendo: '♪ Jamendo',
 }
-export const FUENTE_ORDEN = ['youtube', 'soundcloud', 'ligaudio', 'hitplayer', 'spotify', 'deezer']
+// f66: Jamendo (búsqueda y descarga legales, solo con JAMENDO_CLIENT_ID) es una fuente más.
+export const FUENTE_ORDEN = ['youtube', 'soundcloud', 'ligaudio', 'hitplayer', 'spotify', 'deezer', 'jamendo']
 // Nombre corto y color de cada plataforma (chips de opciones en modo lista).
 // Los MP3 directos dicen solo "MP3" (pedido del dueño, f38): el nombre del sitio no se muestra
 // en ningún texto visible; dos versiones MP3 se distinguen por su nota y su posición.
 export const FUENTE_CORTO = {
   youtube: 'YouTube', soundcloud: 'SoundCloud', ligaudio: 'MP3',
-  hitplayer: 'MP3', spotify: 'Spotify', deezer: 'Deezer',
+  hitplayer: 'MP3', spotify: 'Spotify', deezer: 'Deezer', jamendo: 'Jamendo',
+}
+// fuente → clase de plataforma de Nocturne (define el color --pf de las pastillas y de la barra).
+// Era una copia en views.jsx y otra en PlayerBar.jsx; f66 las junta acá para sumar Jamendo una vez.
+export const FUENTE_PF = {
+  youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', deezer: 'pf-sp',
+  ligaudio: 'pf-m1', hitplayer: 'pf-m2', jamendo: 'pf-jm',
 }
 // Nombre de cada versión de una lista (el comparador): la plataforma, y si dos dicen lo mismo
 // (dos MP3), con su número de opción — "MP3 · opción 4" —, el mismo número que usan la fila,
@@ -29,7 +36,7 @@ export function nombresDeVersiones(opciones) {
 }
 export const SRC_COLOR = {
   youtube: '#ff5c5c', soundcloud: '#ff8a3d', ligaudio: '#6fa8ff',
-  hitplayer: '#27d3c4', spotify: '#1ed760', deezer: '#c98bff',
+  hitplayer: '#27d3c4', spotify: '#1ed760', deezer: '#c98bff', jamendo: '#e46fbf',
 }
 
 // Géneros preset (para el filtro de búsqueda). El usuario también puede escribir uno.

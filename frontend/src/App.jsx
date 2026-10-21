@@ -226,7 +226,9 @@ export default function App() {
       if (r.exito) {
         setDl((p) => ({ ...p, [key]: { state: 'ok', calidad: r.calidad, title: '' } }))
         const g = r.calidad?.grade ?? r.item?.grade
-        toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''} · ${(r.item?.formato || formato).toUpperCase()}.` })
+        // El formato del archivo que quedó (lo dice el item; "" = desconocido), no el elegido.
+        const fmt = r.item ? r.item.formato : formato
+        toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''}${fmt ? ` · ${fmt.toUpperCase()}` : ''}.` })
         avisarPlaylists()
         return true
       }

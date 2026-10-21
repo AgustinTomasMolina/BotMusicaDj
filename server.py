@@ -1268,19 +1268,25 @@ def _descargar_directo(url: str, titulo: str) -> dict:
 def _descargar_jamendo(url: str, nombre: str) -> dict:
     """Un tema de Jamendo a downloads/ por su proveedor (f64): el id sale de la url canónica
     (`https://www.jamendo.com/track/<id>`), nunca se baja una url que mande el cliente.
-    {ok: True, archivo} o {ok: False, mensaje} con el motivo real (sin clave, no permite
-    descargar, no contestó, bloqueó)."""
+    {ok: True, archivo, licencia, origen} o {ok: False, mensaje} con el motivo real (sin clave,
+    no permite descargar, no contestó, bloqueó).
+
+    f66: `licencia` y `origen` son los que Jamendo declara para ESE id en la MISMA respuesta con
+    la que el proveedor validó que se puede bajar (`DownloadedTrack.track`: un solo pedido a
+    `/tracks/`), nunca los que mande el cliente; van al historial de descargas. Si Jamendo no
+    los da, el proveedor ya deja «no declarado»."""
     from fuentes.base import ProviderError
 
     m = _JAMENDO_URL.fullmatch(url or "")
     if not m:
         return {"ok": False, "mensaje": "No sé qué tema de Jamendo es (link inválido)."}
     try:
-        ruta = _fuentes_externas().download("jamendo", m.group(1), DOWNLOADS_DIR, stem=_safe_name(nombre))
+        bajado = _fuentes_externas().download("jamendo", m.group(1), DOWNLOADS_DIR, stem=_safe_name(nombre))
     except ProviderError as e:
         logger.error(f"❌ Jamendo: {e.motivo}")
         return {"ok": False, "mensaje": f"{e.motivo}."}
-    return {"ok": True, "archivo": ruta.name}
+    return {"ok": True, "archivo": bajado.path.name,
+            "licencia": bajado.track.license, "origen": bajado.track.origin}
 
 
 def _tiene_ffmpeg() -> bool:
@@ -1473,7 +1479,10 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
     el archivo va a ESE item, por id, y la activa NO se toca: si la activa es otra, se
     ensuciaría con un tema que el usuario no bajó para ella; si es la misma, la búsqueda por
     identidad aproximada de `marcar_descargado` podía agregar un duplicado. `destino` nunca
-    sale del payload del cliente: lo arma el server desde el item guardado."""
+    sale del payload del cliente: lo arma el server desde el item guardado.
+
+    f66: licencia y origen salen de `res` (lo que devolvió la descarga: hoy solo Jamendo los
+    trae), nunca del payload del cliente. Sin ellos, «no declarado» (`db.registrar_descarga`)."""
     cal = calidad or {}
     archivo = res.get("archivo", "")
     ruta = str(DOWNLOADS_DIR / archivo)
@@ -1483,6 +1492,7 @@ def _hist_descarga(res: dict, titulo: str, artista: str, fuente: str, url: str,
         grade=cal.get("grade"), color=cal.get("color"), calidad_txt=cal.get("calidad"),
         bpm=payload.get("bpm"), camelot=payload.get("camelot"),
         genero=payload.get("genero"), thumbnail=payload.get("thumbnail"),
+        licencia=res.get("licencia"), origen=res.get("origen"),
     )
     if destino:
         db.marcar_item_descargado(destino["playlist_id"], destino["item_id"], archivo, ruta,
@@ -1642,7 +1652,11 @@ def _procesar_descarga(payload: dict, titulo: str, artista: str, fuente: str, ur
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
             _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
-            _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad, destino)
+            # f66: acá no se convierte nada, así que el formato que se guarda es el del archivo
+            # que quedó (un .mp3), no el que el usuario eligió para las conversiones (wav…). Un
+            # archivo sin extensión queda con formato "" (desconocido), no con el elegido.
+            real = Path(res["archivo"]).suffix.lstrip(".").lower()
+            _hist_descarga(res, titulo, artista, fuente, url, real, payload, calidad, destino)
             return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                     "archivo": res["archivo"], "calidad": calidad}
         logger.error("❌ La descarga directa no generó archivo.")

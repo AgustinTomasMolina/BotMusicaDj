@@ -59,6 +59,9 @@
   --color-pf-sp: #43c98a;
   --color-pf-m1: #3fb9d6;
   --color-pf-m2: #8b8ff0;
+  /* f66 Jamendo: orquídea, lejos del rojo de YouTube, del violeta de m2 y de los amarillos de
+     las notas (un chip amarillo se leería como una C). */
+  --color-pf-jm: #e46fbf;
 
   /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
      same step of any role matches the others in visual value. */
@@ -521,6 +524,7 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 .pf-sp{--pf:var(--color-pf-sp)}
 .pf-m1{--pf:var(--color-pf-m1)}
 .pf-m2{--pf:var(--color-pf-m2)}
+.pf-jm{--pf:var(--color-pf-jm)}
 
 /* — result list: one row per track — */
 .results{display:flex;flex-direction:column}
@@ -648,6 +652,17 @@ html{scroll-padding-top:calc(var(--topbar-h) + 42px)}
 button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .hist-open{display:flex;align-items:center;gap:var(--space-2);flex:1;min-width:0;padding:0;border-radius:var(--radius-sm)}
 .hist-time{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-600)}
+/* f66: licencia y origen de cada descarga (tercera línea) */
+.hist-lic{font-size:10.5px;color:var(--color-neutral-500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-lic a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+/* f66: estado de la carpeta vigilada, arriba del historial */
+.vig{display:flex;flex-direction:column;gap:4px;padding:var(--space-2);border-radius:var(--radius-sm);font-size:12px;
+  background:color-mix(in srgb,var(--color-text) 4%,transparent)}
+.vig-head{display:flex;align-items:center;gap:var(--space-2);min-width:0}
+.vig-titulo{flex:1;min-width:0;color:var(--color-neutral-300);overflow-wrap:anywhere}
+.vig-partes{font-family:var(--font-mono);font-size:10.5px;color:var(--color-neutral-500)}
+.vig-aviso{color:var(--color-warn)}
+.vig-msg{color:var(--color-neutral-400)}
 
 /* — states: empty, loading, error — */
 .empty{display:grid;justify-items:center;gap:var(--space-3);padding:var(--space-8) var(--space-4);text-align:center}
@@ -737,6 +752,10 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 /* Station de SoundCloud (f34): tema Go+ (solo 30 s) o sin audio para la barra */
 .mb-warn{color:var(--color-warn);background:color-mix(in srgb,var(--color-warn) 11%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-warn) 28%,transparent)}
 .mb-warn b{color:var(--color-warn)}
+/* f66: licencia declarada por la fuente (Jamendo); sin declarar va atenuada (§6) */
+.mb-lic{max-width:180px}
+.mb-lic b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mb-lic.is-no-declarado{opacity:.62}
 
 /* — toasts: the app's only interruption, bottom-right, self-dismissing — */
 .toasts{position:fixed;right:var(--space-4);bottom:var(--space-4);z-index:80;display:flex;flex-direction:column;gap:var(--space-2);width:min(360px,calc(100vw - var(--space-6)));pointer-events:none}

@@ -85,6 +85,12 @@ class Descarga(Base):
     genero: Mapped[str | None] = mapped_column(String(100), nullable=True)
     thumbnail: Mapped[str | None] = mapped_column(Text, nullable=True)
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=_ahora)
+    # f66 — licencia y origen del tema, tal como los declaró la fuente (hoy solo Jamendo:
+    # `license_ccurl` y la página del tema). Las demás fuentes no los dan: «no declarado», nunca
+    # uno inventado (CLAUDE.md). Columnas agregadas después: en bases viejas las crea `_migrar`
+    # y las filas que ya estaban quedan en NULL, que se lee como «no declarado» (`_declarado`).
+    licencia: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    origen: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class MiPlaylist(Base):
@@ -168,7 +174,20 @@ _COLUMNAS_NUEVAS = (
     ("mi_playlist_items", "homonimos", "INTEGER"),
     ("mi_playlist_items", "genero_editado", "BOOLEAN"),
     ("mi_playlist_items", "import_motivo", "VARCHAR(200)"),
+    ("descargas_hist", "licencia", "VARCHAR(300)"),     # f66
+    ("descargas_hist", "origen", "TEXT"),               # f66
 )
+
+# Lo que se guarda y se muestra cuando la fuente no dice licencia u origen: el mismo literal
+# que `motor.modelos.NO_DECLARADO` y `fuentes.base.NO_DECLARADO` (CLAUDE.md, 2026-10-09).
+NO_DECLARADO = "no declarado"
+
+
+def _declarado(valor, largo: int | None = None) -> str:
+    """Un texto declarado por la fuente, o «no declarado» si no vino (None, vacío, no texto)."""
+    if not isinstance(valor, str) or not valor.strip():
+        return NO_DECLARADO
+    return valor.strip()[:largo] if largo else valor.strip()
 
 
 def _migrar(eng) -> list[str]:
@@ -221,7 +240,9 @@ def guardar_playlist(nombre: str, query: str, groups: list, total: int, encontra
 
 def registrar_descarga(*, titulo="", artista="", fuente="", url="", formato="",
                        archivo="", ruta="", grade=None, color=None, calidad_txt=None,
-                       bpm=None, camelot=None, genero=None, thumbnail=None) -> None:
+                       bpm=None, camelot=None, genero=None, thumbnail=None,
+                       licencia=NO_DECLARADO, origen=NO_DECLARADO) -> None:
+    """`licencia` / `origen`: los que declaró la fuente (f66); sin dato, «no declarado»."""
     try:
         with SessionLocal() as s:
             s.add(Descarga(
@@ -230,6 +251,7 @@ def registrar_descarga(*, titulo="", artista="", fuente="", url="", formato="",
                 archivo=(archivo or "")[:500], ruta=ruta or "", grade=grade, color=color,
                 calidad_txt=(calidad_txt or None), bpm=(int(bpm) if bpm else None),
                 camelot=camelot, genero=genero, thumbnail=thumbnail,
+                licencia=_declarado(licencia, 300), origen=_declarado(origen),
             ))
             s.commit()
     except Exception as e:
@@ -253,6 +275,7 @@ def listar_historial(limite: int = 20) -> dict:
             descargas = [
                 {"id": d.id, "titulo": d.titulo, "artista": d.artista, "fuente": d.fuente,
                  "formato": d.formato, "archivo": d.archivo, "grade": d.grade, "color": d.color,
+                 "licencia": _declarado(d.licencia), "origen": _declarado(d.origen),
                  "creado_en": _iso(d.creado_en)}
                 for d in s.scalars(select(Descarga).order_by(desc(Descarga.id)).limit(limite))
             ]

@@ -18,6 +18,7 @@
 //   descargable   si el flujo de descarga de la app sirve para este tema
 import { audioUrl, radioAudioUrl, sourceAudioUrl } from '../api'
 import { songKey, metaKey } from '../utils'
+import { motivoSinDescarga } from '../licencia'
 import { youtubeId } from '../cover'
 
 const n = (v) => (v === undefined || v === '' ? null : v)
@@ -50,8 +51,9 @@ export function fromResult(c, metaMap, version = null) {
     bpm, bpmMedido: false, camelot: n(c.camelot), tonalidad: null, keyDudosa: false,
     formato: null, grade: null,
     // Un tema Go+ de la Station de SoundCloud (`solo_preview`) solo da 30 s: bajarlo sería
-    // guardar un fragmento como si fuera el tema.
-    raw: c, descargable: !!(c.fuente && c.url) && !c.solo_preview,
+    // guardar un fragmento como si fuera el tema. f66: tampoco uno que la fuente dice que no se
+    // puede bajar (Jamendo, `descargable: false`: el artista no lo habilitó; ver licencia.js).
+    raw: c, descargable: !!(c.fuente && c.url) && !c.solo_preview && !motivoSinDescarga(c),
     paraPlaylist: { ...c, bpm, genero, camelot: c.camelot },
     video_id: c.video_id, url: c.url, stream_url: c.stream_url, preview_url: c.preview_url,
     thumbnail: c.thumbnail, id: c.id,
@@ -171,4 +173,5 @@ export function fmtBpm(t) {
 export const NOMBRE_FUENTE = {
   biblioteca: 'Biblioteca', radio: 'Radio', youtube: 'YouTube', soundcloud: 'SoundCloud',
   spotify: 'Spotify', deezer: 'Deezer', ligaudio: 'MP3', hitplayer: 'MP3',  // f38: sin el nombre del sitio
+  jamendo: 'Jamendo',
 }

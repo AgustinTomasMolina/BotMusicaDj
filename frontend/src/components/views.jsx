@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { getBiblioteca } from '../api'
-import { fmtDur, FUENTE_CORTO, songKey, metaKey } from '../utils'
+import { fmtDur, FUENTE_CORTO, FUENTE_PF as PF, songKey, metaKey } from '../utils'
+import { licenciaTexto, declarado, muestraLicencia, motivoSinDescarga, separarBajables } from '../licencia'
 import { DlButton, PreviewLayer, QualityBadge, gradeClass } from './common'
 import { AddToPlaylist } from './AddToPlaylist'
 import Cover from './Cover'
@@ -9,8 +10,7 @@ import { fromLibrary, fromResult, fmtBpm } from '../player/track'
 import { IconDownload, IconActivity, IconCompare, IconRadioTower, IconLock, IconPlus } from './icons'
 import { ordenVisible, filaMezcla, medidoTexto, medidoTitulos, estadoMedicion, aclaracionOrden } from '../stationMezcla'
 
-// fuente → clase de plataforma de Nocturne (define el color --pf del chip)
-const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2', deezer: 'pf-sp' }
+// fuente → clase de plataforma de Nocturne (define el color --pf del chip): `FUENTE_PF` de utils.js (f66).
 
 /* ---------- Pantalla de inicio ---------- */
 const NoteIcon = () => (
@@ -164,6 +164,8 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
   const bpm = c.bpm || m.bpm
   const genero = c.genero || m.genero
   const key = c.camelot
+  // f66: Jamendo declara la licencia de cada tema y si el artista deja bajarlo.
+  const sinDescarga = motivoSinDescarga(c)
   return (
     <div className={`trk${loadedIdx >= 0 ? ' is-sonando' : ''}`} aria-current={loadedIdx >= 0 ? 'true' : undefined}
       onMouseEnter={() => preview.schedule(thumbKey, c)}
@@ -195,6 +197,7 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
         {/* Station (f36): por qué faltan versiones (una plataforma que no contestó, SoundCloud
             que frenó) y, si el tema es Go+, de dónde sale el tema completo. */}
         {goPlusResuelto && <div className="trk-note">SoundCloud solo da 30 s (Go+): se baja completo de {sourceName(c)}.</div>}
+        {sinDescarga && <div className="trk-note trk-sin-descarga">{sinDescarga}.</div>}
         {g.motivo && <div className="trk-note is-warn" title={g.motivo}>{g.motivo}</div>}
         {/* f45: el "por qué" del motor (`+1.8% BPM | 8A → 9A (vecino)`) o por qué quedó al final. */}
         {mezclaFila?.razon && <div className="trk-note mono trk-razon" title="Por qué va en este lugar">{mezclaFila.razon}</div>}
@@ -215,6 +218,12 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
         {bpm && <span className="mb"><span className="mb-label">{esMedida ? 'BPM meta' : 'BPM'}</span><b>{bpm}</b></span>}
         {key && <span className="mb mb-key"><span className="mb-label">{esMedida ? 'KEY meta' : 'KEY'}</span><b>{key}{c.compat ? ' ' + c.compat : ''}</b></span>}
         {genero && <span className="mb"><b>{genero}</b></span>}
+        {/* f66: la licencia que declara la fuente (hoy Jamendo), con la URL entera en el tooltip;
+            si no la declara, «no declarado» atenuado (§6), nunca una supuesta. */}
+        {muestraLicencia(c) &&
+          <span className={`mb mb-lic${declarado(c.licencia) ? '' : ' is-no-declarado'}`}
+            title={declarado(c.licencia) ? `Licencia declarada por ${sourceName(c)}: ${declarado(c.licencia)}` : `${sourceName(c)} no declara la licencia de este tema`}>
+            <span className="mb-label">Licencia</span><b>{licenciaTexto(c.licencia)}</b></span>}
         {/* Station de SoundCloud: un tema Go+ solo suena 30 s acá; decirlo, no mostrarlo como completo. */}
         {c.solo_preview && <span className="mb mb-warn" title="SoundCloud solo deja escuchar 30 s de este tema (Go+)"><b>Preview 30 s</b></span>}
         {c.reproducible === false && !c.solo_preview &&
@@ -271,6 +280,9 @@ function TrackRow({ g, i, pos = i, sel, formato, metaMap, preview, dl, playing, 
         {c.solo_preview
           ? <button type="button" className="btn btn-secondary btn-dl" disabled title="SoundCloud solo da 30 s de este tema: no se descarga como si fuera el tema"
             aria-label={`Descargar ${c.titulo} (no disponible: SoundCloud solo da un fragmento de 30 s)`}><IconDownload size={16} /></button>
+          : sinDescarga
+          ? <button type="button" className="btn btn-secondary btn-dl" disabled title={sinDescarga}
+            aria-label={`Descargar ${c.titulo} (no disponible: ${sinDescarga.charAt(0).toLowerCase()}${sinDescarga.slice(1)})`}><IconDownload size={16} /></button>
           : <DlButton dl={dl} label={c.titulo} onClick={() => onDownload(c)}><IconDownload size={16} /></DlButton>}
       </div>
     </div>
@@ -393,15 +405,16 @@ export function ListResults({ data, formato, metaMap, preview, dl, onPlay, onSpe
     let ok = 0
     // Una foto de las filas de ahora: las que lleguen mientras baja no entran en esta tanda.
     const filas = groups.map((g, i) => g.opciones[sel[i]])
-    const bajables = filas.filter((c) => !c.solo_preview)   // 30 s de SoundCloud no son el tema
+    // 30 s de SoundCloud no son el tema; f66: uno que el artista no dejó bajar no se intenta.
+    const { bajables, soloPreview, sinPermiso } = separarBajables(filas)
     for (let i = 0; i < bajables.length; i++) {
       setAllLabel(`Bajando ${i + 1}/${bajables.length}…`)
       const good = await onDownload(bajables[i])
       if (good) ok++
     }
     setAllBusy(false)
-    const sinTema = filas.length - bajables.length
-    setAllLabel(`✓ ${ok}/${bajables.length} descargadas${sinTema ? ` · ${sinTema} sin versión completa` : ''}`)
+    setAllLabel(`✓ ${ok}/${bajables.length} descargadas${soloPreview.length ? ` · ${soloPreview.length} sin versión completa` : ''}` +
+      `${sinPermiso.length ? ` · ${sinPermiso.length} sin descarga habilitada` : ''}`)
   }
   const pedirTodas = () => (faltan > 0 ? setAskAll(true) : descargarTodas())
   // "Esperar y bajar todas": arranca sola cuando la última fila llega.

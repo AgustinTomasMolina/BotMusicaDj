@@ -268,7 +268,9 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
     const quien = `${it.titulo}${it.artista ? ` — ${it.artista}` : ''}`
     if (r.exito) {
       const g = r.calidad?.grade ?? r.item?.grade
-      toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''} · ${(r.item?.formato || formato).toUpperCase()}.` })
+      // El formato del archivo que quedó (lo dice el item; "" = desconocido), no el elegido.
+      const fmt = r.item ? r.item.formato : formato
+      toast.ok({ title: quien, body: `Descargado y etiquetado${g && g !== '?' ? ` · nota ${g}` : ''}${fmt ? ` · ${fmt.toUpperCase()}` : ''}.` })
     } else {
       toast.danger({ title: `No se bajó: ${quien}`, body: r.mensaje, actions: [{ label: 'Reintentar', onClick: () => bajarUno(it) }] })
     }

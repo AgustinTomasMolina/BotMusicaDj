@@ -231,6 +231,9 @@ async function main() {
         // Vacía y no ausente: server.py hace load_dotenv(), que NO pisa lo que ya está en el
         // entorno. Así un REDIS_URL del .env no manda nada a una cola real.
         REDIS_URL: '',
+        // f66: tampoco una carpeta vigilada del .env (el server la procesaría al arrancar). El
+        // caso de la carpeta vigilada cuenta con que arranca apagada.
+        MUSIC_WATCH_FOLDER: '',
         PYTHONIOENCODING: 'utf-8',
       },
     })
