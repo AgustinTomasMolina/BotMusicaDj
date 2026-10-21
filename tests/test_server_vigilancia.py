@@ -6,6 +6,7 @@ rutas de la PC). Qué procesa el vigilante lo prueban `pipeline/tests/test_vigil
 """
 import importlib
 import sys
+import time
 
 import pytest
 
@@ -59,8 +60,11 @@ def test_prendida_arranca_el_hilo_y_para_con_el_server(server, tmp_path, monkeyp
 def test_carpeta_inalcanzable_no_impide_arrancar(server, tmp_path, monkeypatch):
     monkeypatch.setenv("MUSIC_WATCH_FOLDER", str(tmp_path / "nas-apagado"))
     with TestClient(server.app) as c:
-        vig = server._vigilante
-        vig.escanear_ahora()
+        # El primer ciclo lo corre el hilo del server al arrancar: se espera a que termine.
+        limite = time.monotonic() + 15
+        while (c.get("/api/vigilancia").json()["estado"]["alcanzable"] is None
+               and time.monotonic() < limite):
+            time.sleep(0.05)
         r = c.get("/api/vigilancia")
         assert r.status_code == 200
         assert r.json()["estado"]["alcanzable"] is False
