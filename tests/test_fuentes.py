@@ -768,7 +768,10 @@ def test_server_descarga_de_jamendo(srv, monkeypatch, tmp_path):
     bajada = Bajada(tmp_path)
     con_registro(monkeypatch, srv, jamendo(stream=bajada))
     res = srv._descargar_jamendo("https://www.jamendo.com/track/1500001", "Campo Abierto - Coro de Niebla")
-    assert res == {"ok": True, "archivo": "Campo Abierto - Coro de Niebla.mp3"}
+    # f66: con la licencia y el origen que declara Jamendo para ese id (van al historial).
+    assert res == {"ok": True, "archivo": "Campo Abierto - Coro de Niebla.mp3",
+                   "licencia": "http://creativecommons.org/licenses/by-sa/3.0/",
+                   "origen": "https://www.jamendo.com/track/1500001"}
     assert (tmp_path / res["archivo"]).read_bytes() == bajada.data
 
 
