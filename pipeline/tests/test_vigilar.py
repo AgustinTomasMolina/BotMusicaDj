@@ -7,11 +7,13 @@ se prueba ahí es QUÉ llega al pipeline, no qué mide. Sin red.
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -424,24 +426,28 @@ def test_cancelar_mata_el_proceso(tmp_path):
     vivo, marca = tmp_path / "arranco.txt", tmp_path / "termino.txt"
     script = ("import time, pathlib\n"
               f"pathlib.Path(r'{vivo}').write_text('si')\n"
-              "time.sleep(4)\n"
+              "time.sleep(12)\n"
               f"pathlib.Path(r'{marca}').write_text('si')\n")
     cancelar = threading.Event()
+    cuando: list[float] = []
 
     def cancelar_cuando_arranque():
-        limite = time.monotonic() + 20
+        limite = time.monotonic() + 60
         while not vivo.exists() and time.monotonic() < limite:
             time.sleep(0.05)
+        cuando.append(time.monotonic())
         cancelar.set()
 
     threading.Thread(target=cancelar_cuando_arranque, daemon=True).start()
-    t0 = time.monotonic()
-    res = vigilar.procesar_aparte([], tmp_path / "stg", tmp_path / "r.html", 60,
+    res = vigilar.procesar_aparte([], tmp_path / "stg", tmp_path / "r.html", 120,
                                   cancelar=cancelar, comando=[sys.executable, "-c", script])
+    fin = time.monotonic()
     assert vivo.exists(), "el hijo nunca arrancó: el test no probó nada"
     assert res.cancelado is True and res.ok is False
-    assert time.monotonic() - t0 < 4, "esperó al proceso en vez de matarlo"
-    time.sleep(4.5)
+    # Se mide desde que el hijo está VIVO (no desde el arranque del intérprete, que en una PC
+    # cargada tarda): 8 s de margen contra los 12 s que seguiría vivo si no se lo mata.
+    assert fin - cuando[0] < 8, "esperó al proceso en vez de matarlo"
+    time.sleep(max(0.0, cuando[0] + 12.5 - time.monotonic()))
     assert not marca.exists(), "el proceso siguió corriendo después de cancelar"
 
 
@@ -911,3 +917,125 @@ def test_un_registro_tomado_no_se_aparta_ni_se_pisa(tmp_path, monkeypatch):
     assert reg.read_bytes() == antes, "el registro se pisó"
     assert list(tmp_path.glob("reg.json.ilegible-*")) == [], "un registro tomado se apartó"
     assert e["ultimo_error"] == "no pude leer el registro de lo ya procesado"
+
+
+# --- re-auditoría f65 --------------------------------------------------------------------
+
+
+def test_un_reintento_pendiente_va_solo_aunque_haya_archivos_nuevos(tmp_path):
+    raiz = tmp_path / "entrada"
+    _escribir(raiz / "a.mp3")
+    lotes = []
+
+    def procesar(rutas, staging, reporte, timeout_s, cancelar=None):
+        nombres = [Path(r).name for r in rutas]
+        lotes.append(nombres)
+        if "a.mp3" in nombres:
+            return ResultadoLote(False, motivo="tope", tipo=vigilar.TIMEOUT)
+        return ResultadoLote(True, filas=[{"ruta_original": r, "bpm": 120.0} for r in rutas],
+                             reporte=str(reporte))
+
+    reloj = _Reloj()
+    vig = _vigilante(tmp_path, raiz, procesar, reloj=reloj)
+    vig.escanear_ahora()
+    _escribir(raiz / "x.mp3")
+    reloj.t += vigilar.REINTENTO_BASE_S + 1
+    vig.escanear_ahora()
+    vig.escanear_ahora()
+    assert lotes == [["a.mp3"], ["a.mp3"], ["x.mp3"]], "el reintento fue junto con lo nuevo"
+    reg = Registro(tmp_path / "reg.json")
+    assert reg.entrada(str(raiz / "x.mp3"))["estado"] == PROCESADO
+    assert reg.entrada(str(raiz / "a.mp3"))["intentos"] == 2
+
+
+def _st(attrs=0, tag=0, modo=stat.S_IFDIR):
+    return SimpleNamespace(st_mode=modo, st_file_attributes=attrs, st_reparse_tag=tag)
+
+
+def test_es_enlace_distingue_junctions_de_carpetas_de_onedrive():
+    rp = stat.FILE_ATTRIBUTE_REPARSE_POINT if hasattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT") else 0x400
+    assert vigilar._es_enlace(_st(rp, 0x9000001A)) is False, "OneDrive (cloud) se recorre"
+    assert vigilar._es_enlace(_st(rp, 0xA0000003)) is True, "junction (mount point)"
+    assert vigilar._es_enlace(_st(rp, 0xA000000C)) is True, "enlace simbólico"
+    assert vigilar._es_enlace(_st(0, 0)) is False, "carpeta común"
+    assert vigilar._es_enlace(_st(0, 0, stat.S_IFLNK)) is True, "symlink de POSIX"
+
+
+def test_identidad_repetida_en_un_share_cae_a_comparar_por_nombre(tmp_path, monkeypatch, caplog):
+    """Un NAS que da el mismo (dev, ino) para todo: sin el respaldo se saltearían TODAS las
+    subcarpetas, porque todas "son" el staging."""
+    raiz = tmp_path / "entrada"
+    _escribir(raiz / "sub" / "a.mp3")
+    _escribir(raiz / "otra" / "b.mp3")
+    _escribir(raiz / "stg" / "copia.mp3")
+    monkeypatch.setattr(vigilar, "_identidad", lambda st: (7, 42))
+    with caplog.at_level("INFO", logger="bot_web"):
+        assert _nombres(descubrir(raiz, excluir=[raiz / "stg"])) == ["a.mp3", "b.mp3"]
+    assert "excluyo solo por nombre" in caplog.text
+
+
+@pytest.mark.skipif(os.name != "nt", reason="nombres 8.3 de Windows")
+def test_excluir_por_identidad_y_no_por_nombre_queda_en_el_log(tmp_path, caplog):
+    raiz = tmp_path / "entrada"
+    stg = raiz / "Staging Con Nombre Largo"
+    _escribir(stg / "copia.mp3")
+    corto = _nombre_corto(stg)
+    if os.path.normcase(corto) == vigilar.clave(stg):
+        pytest.skip("este volumen no genera nombres 8.3 (fsutil 8dot3name): no se puede probar")
+    with caplog.at_level("INFO", logger="bot_web"):
+        descubrir(raiz, excluir=[Path(corto)])
+    assert "«Staging Con Nombre Largo» se excluye por ser la misma carpeta" in caplog.text
+
+
+def test_un_guardado_que_falla_no_deja_el_temporal(tmp_path, monkeypatch):
+    reg = Registro(tmp_path / "reg.json")
+    reg.marcar(vigilar.Foto(str(tmp_path / "a.mp3"), 1, 1), PROCESADO)
+
+    def disco_lleno(*a, **k):
+        raise OSError(28, "No queda espacio en el disco")
+
+    monkeypatch.setattr(vigilar.os, "replace", disco_lleno)
+    with pytest.raises(OSError, match="espacio"):
+        reg.guardar()
+    assert list(tmp_path.glob("reg.json.tmp-*")) == [], "quedó el temporal tirado"
+
+
+def test_un_cerrojo_que_no_se_puede_abrir_no_revienta(tmp_path, monkeypatch, capsys):
+    raiz = tmp_path / "entrada"
+    _escribir(raiz / "a.mp3")
+    datos = tmp_path / "datos"
+    (datos / (vigilar.NOMBRE_REGISTRO + ".lock")).mkdir(parents=True)   # no se abre como archivo
+    proc = _ProcesadorFalso()
+    vig = Vigilante(raiz, staging=tmp_path / "stg",
+                    registro=Registro(datos / vigilar.NOMBRE_REGISTRO), procesar=proc,
+                    espera_estable_s=0, dormir=lambda s: None)
+    e = vig.escanear_ahora()
+    assert e["ocupado"] is True and proc.lotes == []
+    assert "no pude abrir el cerrojo" in e["cerrojo_error"]
+    monkeypatch.setenv("MUSIFLIX_DATA_DIR", str(datos))
+    monkeypatch.setenv(config.VAR_STAGING, str(tmp_path / "stg"))
+    monkeypatch.delenv(config.VAR_ITUNES, raising=False)
+    monkeypatch.setattr(vigilar, "ENV_FILE", tmp_path / "no-existe.env")
+    assert vigilar.main(["--carpeta", str(raiz)]) == vigilar.FALLO
+    salida = capsys.readouterr().out
+    assert "No pude empezar: no pude abrir el cerrojo" in salida
+    assert "Otro proceso" not in salida, "un cerrojo roto no es otro proceso trabajando"
+
+
+@pytest.mark.parametrize("codigo", [0xC0000005, 0xC0000017] if os.name == "nt" else [-9])
+def test_un_hijo_matado_por_el_sistema_es_pasajero(tmp_path, codigo):
+    # ExitProcess con el NTSTATUS tal cual (os._exit no acepta enteros sin signo de 32 bits).
+    script = (f"import ctypes; ctypes.windll.kernel32.ExitProcess(ctypes.c_uint({codigo}))"
+              if codigo >= 0 else
+              "import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+    res = vigilar.procesar_aparte([], tmp_path / "stg", tmp_path / "r.html", 30,
+                                  comando=[sys.executable, "-c", script])
+    assert res.ok is False and res.tipo == vigilar.SISTEMA, res
+    assert vigilar.SISTEMA in vigilar.REINTENTABLES
+    assert "el sistema cortó el proceso" in res.motivo
+
+
+def test_un_hijo_que_sale_con_error_comun_sigue_siendo_del_pipeline(tmp_path):
+    res = vigilar.procesar_aparte([], tmp_path / "stg", tmp_path / "r.html", 30,
+                                  comando=[sys.executable, "-c", "import sys; sys.exit(3)"])
+    assert res.ok is False and res.tipo == vigilar.PIPELINE

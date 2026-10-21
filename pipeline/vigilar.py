@@ -23,7 +23,8 @@ Decisiones:
   uno chico en JSON (`carpeta_vigilada.json`, en MUSIFLIX_DATA_DIR). Un archivo que cambia se
   vuelve a procesar.
 - Fallos: un error del PIPELINE (el audio no se puede analizar) queda fallido hasta que el
-  archivo cambie. Un tope de tiempo o un error de E/S (red que se corta, archivo tomado) es
+  archivo cambie. Un tope de tiempo, un error de E/S (red que se corta, archivo tomado) o un
+  proceso que el sistema mató (sin memoria, violación de acceso) es
   pasajero: se reintenta hasta 3 veces en total, con espera creciente entre ciclos.
 - Un archivo a medio escribir no entra: se ignoran `.part`, `.tmp`, `.crdownload` (también
   como `tema.temp.mp3` / `tema.part.mp3`), ocultos y de sistema, y los que cambian de tamaño o
@@ -55,6 +56,10 @@ Decisiones:
 - Sin dependencias nuevas: polling. `watchdog` evitaría el sondeo, pero sobre SMB los eventos
   no son confiables y el sondeo hace falta igual.
 - Las respuestas del estado no llevan rutas absolutas de la PC: nombres de archivo.
+- Lo que se acumula: cada tanda deja su `tanda_*` en el staging y su `revision_vigilada_*.html`
+  al lado, y nada los borra (tampoco el registro se poda). Limpiar lo ya aplicado o
+  descartado queda como trabajo futuro; mientras tanto se borran a mano sin riesgo: los
+  originales no están ahí.
 """
 from __future__ import annotations
 
@@ -100,7 +105,8 @@ FALLIDO = "fallido"
 
 # Tipos de fallo: los dos primeros son pasajeros y se reintentan.
 TIMEOUT, IO, PIPELINE = "timeout", "io", "pipeline"
-REINTENTABLES = (TIMEOUT, IO)
+SISTEMA = "sistema"         # el SO mató al hijo (sin memoria, violación de acceso, señal)
+REINTENTABLES = (TIMEOUT, IO, SISTEMA)
 MAX_INTENTOS = 3            # intentos en total, contando el primero
 REINTENTO_BASE_S = 120.0    # espera antes del 2do intento; se duplica en cada uno
 
@@ -198,9 +204,14 @@ def _identidad(st: os.stat_result) -> tuple[int, int] | None:
 
 
 class _Exclusiones:
-    """Carpetas que no se recorren, comparadas por identidad y, de respaldo, por texto."""
+    """Carpetas que no se recorren, comparadas por identidad y, de respaldo, por texto.
 
-    def __init__(self, dirs: Iterable[Path]) -> None:
+    Algunos shares de red (SMB viejos, NAS baratos) devuelven el MISMO (dispositivo, inodo)
+    para carpetas distintas. Si la raíz vigilada "es" una excluida por identidad pero no por
+    nombre, la identidad no sirve en esa carpeta: se deja de usar en este ciclo y se excluye
+    solo por texto (si no, se saltearían TODAS las subcarpetas)."""
+
+    def __init__(self, dirs: Iterable[Path], raiz: str | None = None) -> None:
         dirs = list(dirs)
         self._claves = {clave(d) for d in dirs}
         self._ids: set[tuple[int, int]] = set()
@@ -211,10 +222,26 @@ class _Exclusiones:
                 continue
             if i is not None:
                 self._ids.add(i)
+        if raiz is not None and self._ids and clave(raiz) not in self._claves:
+            try:
+                i = _identidad(os.stat(raiz))
+            except OSError:
+                i = None
+            if i is not None and i in self._ids:
+                logger.warning(f"⚠️ Carpeta vigilada: «{_etiqueta(Path(raiz))}» da la misma "
+                               f"identidad que una carpeta excluida sin serlo (¿share de red?): "
+                               f"en este ciclo excluyo solo por nombre.")
+                self._ids = set()
 
     def contiene(self, ruta: str, st: os.stat_result) -> bool:
+        if clave(ruta) in self._claves:
+            return True
         i = _identidad(st)
-        return clave(ruta) in self._claves or (i is not None and i in self._ids)
+        if i is not None and i in self._ids:
+            logger.info(f"📂 Carpeta vigilada: «{Path(ruta).name}» se excluye por ser la misma "
+                        f"carpeta que el staging o iTunes con otro nombre.")
+            return True
+        return False
 
 
 def descubrir(carpeta: Path, excluir: Iterable[Path] = (),
@@ -232,7 +259,7 @@ def descubrir(carpeta: Path, excluir: Iterable[Path] = (),
     if not os.path.isdir(raiz):
         raise CarpetaInalcanzable(
             f"no puedo leer la carpeta vigilada «{_etiqueta(carpeta)}» (¿está montada?)")
-    excluidas = _Exclusiones(excluir)
+    excluidas = _Exclusiones(excluir, raiz)
     errores: list[OSError] = []
     fotos: list[Foto] = []
     for actual, dirs, archivos in os.walk(raiz, onerror=errores.append):
@@ -418,6 +445,10 @@ class Registro:
             proximo = ahora + REINTENTO_BASE_S * 2 ** (intentos - 1)
         self.marcar(f, FALLIDO, motivo=motivo, motivo_tipo=tipo, intentos=intentos,
                     proximo_intento=proximo)
+        if proximo is not None:
+            # El reintento va de a uno: juntarlo con archivos nuevos haría que, si vuelve a
+            # fallar, arrastre a la tanda entera (`marcar` lo había sacado de los solos).
+            self.agregar_solos([f.clave])
 
     def es_solo(self, k: str) -> bool:
         with self._lock:
@@ -435,20 +466,24 @@ class Registro:
         # Temporal propio de este proceso e hilo: dos escritores con el mismo `.tmp` chocan
         # en Windows (PermissionError) aunque el cerrojo del ciclo lo evite en la práctica.
         tmp = self.ruta.with_name(f"{self.ruta.name}.tmp-{os.getpid()}-{threading.get_ident()}")
-        tmp.write_text(texto, encoding="utf-8")
-        # Atómico: un corte a mitad no deja medio JSON. En Windows el reemplazo falla con
-        # PermissionError si en ese instante otro proceso tiene abierto el destino (leyéndolo
-        # o reemplazándolo): se reintenta un rato corto antes de rendirse.
-        for intento in range(40):
-            try:
-                os.replace(tmp, self.ruta)
-                return
-            except PermissionError:
-                if intento == 39:
-                    with contextlib.suppress(OSError):
-                        tmp.unlink()
-                    raise
-                time.sleep(0.025)
+        try:
+            tmp.write_text(texto, encoding="utf-8")
+            # Atómico: un corte a mitad no deja medio JSON. En Windows el reemplazo falla con
+            # PermissionError si en ese instante otro proceso tiene abierto el destino
+            # (leyéndolo o reemplazándolo): se reintenta un rato corto antes de rendirse.
+            for intento in range(40):
+                try:
+                    os.replace(tmp, self.ruta)
+                    return
+                except PermissionError:
+                    if intento == 39:
+                        raise
+                    time.sleep(0.025)
+        except BaseException:
+            # Cualquier fallo (disco lleno, Ctrl+C a mitad): el temporal no queda tirado.
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            raise
 
     def contar(self) -> dict[str, int]:
         with self._lock:
@@ -477,10 +512,16 @@ class CerrojoArchivo:
     def __init__(self, ruta: Path) -> None:
         self.ruta = Path(ruta)
         self._f = None
+        self.motivo: str | None = None   # por qué no se pudo ni intentar (None = estaba tomado)
 
     def tomar(self) -> bool:
-        self.ruta.parent.mkdir(parents=True, exist_ok=True)
-        f = open(self.ruta, "a+b")  # noqa: SIM115 — queda abierto mientras dura el cerrojo
+        self.motivo = None
+        try:
+            self.ruta.parent.mkdir(parents=True, exist_ok=True)
+            f = open(self.ruta, "a+b")  # noqa: SIM115 — queda abierto mientras dura el cerrojo
+        except OSError as e:
+            self.motivo = f"no pude abrir el cerrojo «{self.ruta.name}» ({e.strerror or e})"
+            return False
         try:
             if os.name == "nt":
                 import msvcrt
@@ -585,6 +626,13 @@ def procesar_aparte(rutas: list[str], staging: Path, reporte: Path, timeout_s: f
                     _matar(proc)
                     return ResultadoLote(False, motivo=f"superó el tope de {timeout_s:.0f} s",
                                          tipo=TIMEOUT)
+        if rc < 0 or rc >= 0xC0000000:
+            # Negativo = señal (POSIX); 0xC0000000 en adelante = NTSTATUS de error de Windows
+            # (0xC0000005 violación de acceso, 0xC0000017 sin memoria...). No es el audio: el
+            # SO cortó el proceso, y en una PC con poca memoria eso es pasajero.
+            return ResultadoLote(False, motivo=f"el sistema cortó el proceso (código {rc:#x})"
+                                 if rc >= 0 else f"el sistema cortó el proceso (señal {-rc})",
+                                 tipo=SISTEMA)
         if rc != 0:
             cola = errlog.read_text(encoding="utf-8", errors="replace").strip().splitlines()
             ultima = cola[-1] if cola else f"código {rc}"
@@ -683,6 +731,13 @@ class Vigilante:
             return {**self.estado(), "ocupado": True}
         try:
             if not self._cerrojo.tomar():
+                if self._cerrojo.motivo:
+                    logger.warning(f"⚠️ Carpeta vigilada: {self._cerrojo.motivo}; salteo este "
+                                   f"ciclo.")
+                    with self._lock:
+                        self._ultimo_error = self._cerrojo.motivo
+                    return {**self.estado(), "ocupado": True,
+                            "cerrojo_error": self._cerrojo.motivo}
                 logger.info("📂 Carpeta vigilada: otro proceso la está procesando; "
                             "salteo este ciclo.")
                 return {**self.estado(), "ocupado": True}
@@ -922,6 +977,10 @@ def main(argv: list[str] | None = None) -> int:
               f"pasá --carpeta.")
         return USO
     e = vig.escanear_ahora()
+    if e.get("cerrojo_error"):
+        print(f"No pude empezar: {e['cerrojo_error']}. Revisá los permisos de esa carpeta "
+              f"(MUSIFLIX_DATA_DIR).")
+        return FALLO
     if e["ocupado"]:
         print("Otro proceso (el server u otra terminal) está procesando la carpeta vigilada "
               "ahora mismo. No hice nada: probá de nuevo cuando termine.")
