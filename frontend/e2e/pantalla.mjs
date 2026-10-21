@@ -3357,6 +3357,8 @@ const CASOS = [
     let frenoVig = null       // una promesa: hasta que se cumpla, GET /api/vigilancia no contesta
     let lecturasVig = 0
     let escanearHtml = false  // true: el POST contesta un 500 de HTML (un server roto, un proxy)
+    let escanear409 = null    // si no es null: el POST contesta 409 con este cuerpo (apagada)
+    let frenoEsc = null       // como frenoVig, para el POST
     const escaneos = []
     const bajadas = []        // lo que pidió "Descargar todas" a /api/descargar
     await interceptar(page, async (req) => {
@@ -3374,6 +3376,8 @@ const CASOS = [
       }
       if (u.pathname === '/api/vigilancia/escanear') {
         escaneos.push(req.method())
+        if (frenoEsc) await frenoEsc
+        if (escanear409) { await req.respond({ status: 409, contentType: 'application/json', body: JSON.stringify(escanear409) }); return true }
         if (escanearHtml) { await req.respond({ status: 500, contentType: 'text/html', body: '<html><body><h1>Internal Server Error</h1></body></html>' }); return true }
         return responder({ exito: true, encolado: true, estado: vig.estado })
       }
@@ -3446,19 +3450,43 @@ const CASOS = [
     vig = { exito: true, activa: true, estado: { carpeta: 'Mis Descargas', alcanzable: true, corriendo: true, procesando: [], pendientes: 2,
       creciendo: 0, ignorados: 0, procesados: 14, fallidos: 1, ultimos_fallidos: ['roto.mp3'], ultimo_ciclo: `${new Date().getFullYear()}-10-21T09:05:33`,
       ultimo_error: null, ultimo_reporte: 'revision_vigilada_2026-10-21_090533.html', intervalo_s: 60 } }
-    await page.click('.drawer-right.is-open button[aria-label="Cerrar historial"]')
-    await hasta(() => page.evaluate(() => !!document.querySelector('.drawer-right.is-open')), (v) => !v, 'el historial no se cerró')
-    // Al volver a abrir, mientras el server no contesta: "Leyendo…", no el estado de antes (apagada).
-    let soltarVig
-    frenoVig = new Promise((r) => { soltarVig = r })
-    await abrirHistorial()
-    const leyendo = await page.evaluate(() => {
+    const cerrarHistorial = async () => {
+      await page.click('.drawer-right.is-open button[aria-label="Cerrar historial"]')
+      await hasta(() => page.evaluate(() => !!document.querySelector('.drawer-right.is-open')), (v) => !v, 'el historial no se cerró')
+    }
+    const leerBusy = () => page.evaluate(() => {
       const s = document.querySelector('.drawer-right.is-open .vig')
       return s ? { busy: s.getAttribute('aria-busy'), texto: s.textContent } : null
     })
-    frenoVig = null
-    soltarVig()
-    igual(leyendo, { busy: 'true', texto: 'Leyendo la carpeta vigilada…' }, 'al volver a abrir se vio el estado de la vez anterior')
+    const LEYENDO = { busy: 'true', texto: 'Leyendo la carpeta vigilada…' }
+    await cerrarHistorial()
+    // Al volver a abrir, mientras el server no contesta: "Leyendo…", no el estado de antes (apagada).
+    let soltarVig
+    let soltarViejo = () => {}
+    let leyendo, trasViejo
+    frenoVig = new Promise((r) => { soltarVig = r })
+    try {
+      const lecturasAlAbrir = lecturasVig
+      await abrirHistorial()
+      leyendo = await leerBusy()
+      // Se cierra con ese GET todavía en vuelo (ya llegó, frenado) y se vuelve a abrir (el GET
+      // nuevo, frenado también): cuando contesta el de antes, esta apertura sigue en "Leyendo…".
+      const lecturasEnVuelo = await hasta(() => lecturasVig, (n) => n > lecturasAlAbrir, 'al abrir no se pidió el estado')
+      await cerrarHistorial()
+      soltarViejo = soltarVig
+      frenoVig = new Promise((r) => { soltarVig = r })
+      await abrirHistorial()
+      await hasta(() => lecturasVig, (n) => n > lecturasEnVuelo, 'al volver a abrir no se pidió el estado otra vez')
+      soltarViejo()
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 400)))   // gracia: la página procesa la respuesta vieja
+      trasViejo = await leerBusy()
+    } finally {
+      frenoVig = null
+      soltarViejo()
+      soltarVig()
+    }
+    igual(leyendo, LEYENDO, 'al volver a abrir se vio el estado de la vez anterior')
+    igual(trasViejo, LEYENDO, 'la respuesta de una apertura anterior (cerrada con el GET en vuelo) pisó a la de ahora')
     igual(await hasta(leerVig, (v) => v && v.estado === 'activa', 'al volver a abrir, la carpeta vigilada no se leyó otra vez'),
       { estado: 'activa', titulo: 'Carpeta vigilada «Mis Descargas»',
         partes: ['último escaneo 21/10 09:05 · 2 pendientes · 14 procesados · 1 fallido', 'Último reporte: revision_vigilada_2026-10-21_090533.html'],
@@ -3477,6 +3505,78 @@ const CASOS = [
     await page.click('.drawer-right.is-open .vig button')
     const roto = await hasta(leerVig, (v) => v && v.msg, 'un 500 de HTML al escanear no dijo nada')
     igual([escaneos, roto.msg], [['POST', 'POST'], 'El servidor contestó con un error (HTTP 500).'], '«Escanear ahora» con un 500 de HTML')
+
+    // Lo que sigue prueba que algo NO pasa después de la relectura (4 s en VigilanciaEstado):
+    // la única forma es dejar pasar ese tiempo. `pasadaRelectura` espera 4 s + un margen.
+    const pasadaRelectura = () => page.evaluate(() => new Promise((r) => setTimeout(r, 4000 + 700)))
+    const PEDIDO = 'Escaneo pedido: arranca en unos segundos.'
+    const APAGADA_409 = { exito: false, mensaje: 'La carpeta vigilada está apagada: definí MUSIC_WATCH_FOLDER en el .env y reiniciá el servidor.' }
+    const boton = '.drawer-right.is-open .vig button'
+    escanearHtml = false
+
+    // Un segundo «Escanear ahora» que vuelve con exito:false mientras la relectura del primero
+    // está pendiente: esa relectura ya no corre y el aviso del segundo se queda.
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    escanear409 = APAGADA_409
+    const lecturasPendiente = lecturasVig
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === APAGADA_409.mensaje, 'un 409 al escanear no mostró su mensaje')
+    await pasadaRelectura()
+    igual([(await leerVig())?.msg, lecturasVig - lecturasPendiente], [APAGADA_409.mensaje, 0],
+      'la relectura pendiente del escaneo anterior corrió y borró el aviso del 409')
+
+    // Lo mismo con la relectura YA en vuelo (el GET frenado) cuando se pide el segundo escaneo:
+    // cuando contesta, no borra el aviso del segundo.
+    escanear409 = null
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    const lecturasEnVuelo2 = lecturasVig
+    let soltarRelectura = () => {}
+    let trasRelectura
+    frenoVig = new Promise((r) => { soltarRelectura = r })
+    try {
+      await hasta(() => lecturasVig, (n) => n > lecturasEnVuelo2, 'no se releyó el estado después de «Escanear ahora»', 4000 + ESPERA_MS)
+      escanear409 = APAGADA_409
+      await page.click(boton)
+      await hasta(leerVig, (v) => v && v.msg === APAGADA_409.mensaje, 'un 409 al escanear no mostró su mensaje')
+      frenoVig = null
+      soltarRelectura()
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 400)))   // gracia: la página procesa la relectura
+      trasRelectura = await leerVig()
+    } finally {
+      frenoVig = null
+      soltarRelectura()
+    }
+    igual(trasRelectura?.msg, APAGADA_409.mensaje, 'la relectura del escaneo anterior (en vuelo) borró el aviso del 409')
+
+    // Cerrar el cajón corta todo: ni la relectura que estaba armada ni la de un POST que vuelve
+    // después de cerrar piden el estado con el cajón cerrado.
+    escanear409 = null
+    await page.click(boton)
+    await hasta(leerVig, (v) => v && v.msg === PEDIDO, 'el escaneo que salió bien no dijo «Escaneo pedido»')
+    await cerrarHistorial()                 // con la relectura de ese escaneo armada
+    const lecturasReabrir = lecturasVig
+    await abrirHistorial()
+    await hasta(leerVig, (v) => v && v.estado === 'activa' && lecturasVig > lecturasReabrir, 'al volver a abrir no se leyó el estado')
+    // Desde acá no hay ningún GET legítimo: la relectura armada antes de cerrar (si no se
+    // cancelara) caería dentro de la espera de abajo, y la del POST que vuelve cerrado también.
+    const lecturasCerrado = lecturasVig
+    let soltarEsc = () => {}
+    frenoEsc = new Promise((r) => { soltarEsc = r })
+    try {
+      const escaneosAntes = escaneos.length
+      await page.click(boton)
+      await hasta(() => escaneos.length, (n) => n > escaneosAntes, '«Escanear ahora» no hizo el POST')
+      await cerrarHistorial()               // con el POST en vuelo
+      frenoEsc = null
+      soltarEsc()
+      await pasadaRelectura()
+    } finally {
+      frenoEsc = null
+      soltarEsc()
+    }
+    igual(lecturasVig - lecturasCerrado, 0, 'con el cajón cerrado se volvió a pedir el estado de la carpeta vigilada')
   }],
 
   // ---------------------------------------------------------------------- f53: importar

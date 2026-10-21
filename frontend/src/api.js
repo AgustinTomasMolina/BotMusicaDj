@@ -398,15 +398,24 @@ export async function escanearVigilancia() {
   return jsonOError(r)
 }
 
-// f66: el JSON de la respuesta o, si no es JSON (un 500 de HTML, una página de un proxy), un
-// {exito:false, mensaje} que dice que el server CONTESTÓ con un error y con qué código: no es
-// "no pude conectar". Solo lo usa quien lo pide; `json` sigue tirando para los demás.
+// f66: el JSON de la respuesta o un {exito:false, mensaje} que dice lo que pasó de verdad, nunca
+// "no pude conectar" (el server contestó). Solo lo usa quien lo pide; `json` sigue tirando para
+// los demás.
+//  - error que no es JSON (un 500 de HTML, una página de un proxy): que contestó con un error y
+//    con qué código;
+//  - 2xx que no se puede leer (cuerpo vacío, conexión cortada a mitad): eso, no "un error";
+//  - error JSON sin `mensaje` (el {"detail": …} de FastAPI): el código y el detalle si es texto.
 export async function jsonOError(res) {
+  const http = res?.status ? ` (HTTP ${res.status})` : ''
+  let d
   try {
-    return await res.json()
+    d = await res.json()
   } catch {
-    return { exito: false, mensaje: `El servidor contestó con un error${res?.status ? ` (HTTP ${res.status})` : ''}.` }
+    return { exito: false, mensaje: res?.ok ? 'No pude leer la respuesta del servidor.' : `El servidor contestó con un error${http}.` }
   }
+  if (res?.ok || (d && typeof d === 'object' && d.mensaje)) return d
+  const texto = d && typeof d === 'object' && typeof d.detail === 'string' ? d.detail.trim().replace(/\.$/, '') : ''
+  return { exito: false, mensaje: `El servidor contestó con un error${http}${texto ? `: ${texto}` : ''}.` }
 }
 
 /* ---------- Mis Playlists (crates) ---------- */

@@ -5,47 +5,60 @@
    cae en MUSIC_WATCH_FOLDER), y el cajón se abre desde cualquier pantalla. Muestra solo lo que
    devuelve GET /api/vigilancia (ver src/vigilancia.js); "Escanear ahora" adelanta el próximo
    ciclo del server (POST /api/vigilancia/escanear), que corre en su hilo: el resultado no está
-   en la respuesta, así que se vuelve a pedir el estado unos segundos después. */
+   en la respuesta, así que se vuelve a pedir el estado unos segundos después.
+
+   Está montado SOLO con el cajón abierto (HistorialDrawer): cada apertura arranca de cero
+   ("Leyendo…") y lo que todavía estaba en vuelo al cerrar no puede tocar la próxima. `vivo`
+   cubre lo que vuelve después de desmontar: ni estado ni relectura. */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { vigilancia, escanearVigilancia } from '../api'
 import { resumenVigilancia } from '../vigilancia'
 
 const RELEER_MS = 4000
 
-export default function VigilanciaEstado({ open }) {
+export default function VigilanciaEstado() {
   const [r, setR] = useState(null)              // la respuesta de GET /api/vigilancia
   const [pidiendo, setPidiendo] = useState(false)
   const [aviso, setAviso] = useState('')
   const timer = useRef(null)
+  const vivo = useRef(false)                    // false: desmontado (el cajón se cerró)
+  const tanda = useRef(0)                       // sube con cada «Escanear ahora»
 
   const cargar = useCallback(async () => {
-    try { setR(await vigilancia()) } catch { setR({ error: true }) }
+    let d
+    try { d = await vigilancia() } catch { d = { error: true } }
+    if (vivo.current) setR(d)
   }, [])
   useEffect(() => {
-    // Cerrado: se olvida lo leído, así al volver a abrir se ve "Leyendo…" y no el estado de antes.
-    if (!open) { setR(null); setAviso(''); return undefined }
-    setAviso('')
+    vivo.current = true
     cargar()
-    return () => clearTimeout(timer.current)
-  }, [open, cargar])
+    return () => { vivo.current = false; clearTimeout(timer.current) }
+  }, [cargar])
 
   const escanear = async () => {
+    // Lo primero: la relectura de un escaneo anterior no puede borrar el aviso de este.
+    clearTimeout(timer.current)
+    const mia = ++tanda.current
     setPidiendo(true)
     setAviso('')
     try {
       const d = await escanearVigilancia()
+      if (!vivo.current) return
       if (d && d.exito) {
         setR({ exito: true, activa: true, estado: d.estado })
         setAviso(d.encolado ? 'Escaneo pedido: arranca en unos segundos.' : 'El vigilante no está corriendo: no se pudo adelantar el escaneo.')
-        clearTimeout(timer.current)
-        // Al releer, "Escaneo pedido" ya cumplió: lo que pasó lo dice el estado nuevo.
+        // Al releer, "Escaneo pedido" ya cumplió: lo que pasó lo dice el estado nuevo (salvo
+        // que mientras releía se haya pedido otro escaneo: el aviso es de ese).
         const pedido = d.encolado
-        timer.current = setTimeout(async () => { await cargar(); if (pedido) setAviso('') }, RELEER_MS)
+        timer.current = setTimeout(async () => {
+          await cargar()
+          if (pedido && vivo.current && tanda.current === mia) setAviso('')
+        }, RELEER_MS)
       } else setAviso((d && d.mensaje) || 'No se pudo pedir el escaneo.')
     } catch {
-      setAviso('No pude conectar con el servidor.')
+      if (vivo.current) setAviso('No pude conectar con el servidor.')
     } finally {
-      setPidiendo(false)
+      if (vivo.current) setPidiendo(false)
     }
   }
 

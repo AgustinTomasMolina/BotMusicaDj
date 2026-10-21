@@ -275,3 +275,37 @@ def test_jamendo_con_formato_wav_guarda_mp3_que_es_lo_que_se_bajo(server):
         assert r["exito"] is True, r
         d = c.get("/api/historial").json()["descargas"]
     assert [(x["archivo"], x["formato"]) for x in d] == [("Campo Abierto - Coro de Niebla.mp3", "mp3")]
+
+
+def test_jamendo_a_un_item_de_playlist_con_formato_wav_lo_anota_como_mp3(server, monkeypatch):
+    # El mismo caso bajando desde la playlist (f41): lo que se anota en ESE item
+    # (`db.marcar_item_descargado`) también es el formato del archivo que quedó.
+    monkeypatch.setattr(server.jobs, "queue_disponible", lambda: False)
+    monkeypatch.setattr(server, "_duracion_archivo", lambda ruta: None)          # sin ffprobe
+    monkeypatch.setattr(server, "_resolver_host", lambda host: ["93.184.215.14"])  # sin DNS
+    with TestClient(server.app) as c:
+        pid = c.post("/api/playlists", json={"nombre": "Con Jamendo"}).json()["playlist"]["id"]
+        iid = c.post(f"/api/playlists/{pid}/items", json={"track": JAMENDO_1}).json()["id"]
+        r = c.post(f"/api/playlists/{pid}/items/{iid}/descargar", json={"formato": "wav"})
+        assert r.status_code == 200 and r.json()["exito"] is True, r.json()
+        items = c.get(f"/api/playlists/{pid}").json()["data"]["items"]
+        d = c.get("/api/historial").json()["descargas"]
+    assert [(it["id"], it["nombre_archivo"], it["formato"], it["descargado"]) for it in items] == [
+        (iid, "Campo Abierto - Coro de Niebla.mp3", "mp3", True)]
+    assert r.json()["item"]["formato"] == "mp3"
+    assert [(x["archivo"], x["formato"]) for x in d] == [("Campo Abierto - Coro de Niebla.mp3", "mp3")]
+
+
+def test_descarga_directa_sin_extension_guarda_formato_vacio_no_el_elegido(server, monkeypatch):
+    # Un archivo sin extensión: no se sabe qué formato es, y el elegido (wav) sería mentira.
+    def bajar(url, nombre):
+        (server.DOWNLOADS_DIR / nombre).write_bytes(b"ID3-mp3" * 50)
+        return {"ok": True, "archivo": nombre}
+
+    monkeypatch.setattr(server, "_descargar_directo", bajar)
+    with TestClient(server.app) as c:
+        r = server.procesar_descarga({"titulo": "Sin Ext", "artista": "Artista X", "fuente": "hitplayer",
+                                      "formato": "wav", "url": "https://example.invalid/sin-ext"})
+        assert r["exito"] is True, r
+        d = c.get("/api/historial").json()["descargas"]
+    assert [(x["archivo"], x["formato"]) for x in d] == [("Sin Ext - Artista X", "")]

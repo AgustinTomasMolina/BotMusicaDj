@@ -1653,8 +1653,9 @@ def _procesar_descarga(payload: dict, titulo: str, artista: str, fuente: str, ur
             _log_calidad(calidad)
             _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
             # f66: acá no se convierte nada, así que el formato que se guarda es el del archivo
-            # que quedó (un .mp3), no el que el usuario eligió para las conversiones (wav…).
-            real = Path(res["archivo"]).suffix.lstrip(".").lower() or formato
+            # que quedó (un .mp3), no el que el usuario eligió para las conversiones (wav…). Un
+            # archivo sin extensión queda con formato "" (desconocido), no con el elegido.
+            real = Path(res["archivo"]).suffix.lstrip(".").lower()
             _hist_descarga(res, titulo, artista, fuente, url, real, payload, calidad, destino)
             return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                     "archivo": res["archivo"], "calidad": calidad}

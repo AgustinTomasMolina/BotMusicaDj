@@ -88,8 +88,9 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
         <button type="button" className={`btn btn-icon btn-icon-sm${data && total > 0 ? '' : ' push'}`} aria-label="Cerrar historial" onClick={onClose} data-autofocus><IcoX /></button>
       </div>
       <div className="drawer-body" aria-busy={!data}>
-        {/* f66: la carpeta vigilada es la otra entrada de temas nuevos (ver VigilanciaEstado). */}
-        <VigilanciaEstado open={open} />
+        {/* f66: la carpeta vigilada es la otra entrada de temas nuevos (ver VigilanciaEstado).
+            Montado solo abierto: cada apertura lee de cero y lo de la anterior no la pisa. */}
+        {open && <VigilanciaEstado />}
         {!data ? (
           <div className="cluster" style={{ gap: 9, color: 'var(--color-neutral-500)', fontSize: 13, padding: 'var(--space-3)' }}><span className="spinner" /> Cargando historial…</div>
         ) : data.error ? (
@@ -129,7 +130,7 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
               {descargas.map((d) => (
                 <div key={d.id} className="hist-item" style={{ cursor: 'default' }}>
                   <IcoDown />
-                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} · ${hace(d.creado_en)}`}
+                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={[(d.formato || '').toUpperCase(), FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente, hace(d.creado_en)].filter(Boolean).join(' · ')}
                     extra={<LicenciaOrigen d={d} />} />
                   {d.grade && d.grade !== '?' && <span className={`grade grade-sm ${gradeClass(d.grade)}`}>{d.grade}</span>}
                 </div>
