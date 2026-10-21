@@ -11,6 +11,12 @@ Variables (mismo prefijo que usan `server.py:46` y `db.py:24`):
     MUSIFLIX_ITUNES     La carpeta "Añadir automáticamente a iTunes". SIN default: es la
                         carpeta de otra persona y adivinarla es peor que fallar.
     MUSIFLIX_REKORDBOX_XML  Dónde escribir el XML importable. Default: dentro del staging.
+    MUSIC_WATCH_FOLDER  Carpeta vigilada (f65): lo nuevo que aparece ahí entra solo al
+                        pipeline (`pipeline.vigilar`). Local, disco montado o UNC
+                        (\\\\NAS\\musica). SIN default: vacía o ausente = vigilancia apagada.
+    MUSIC_WATCH_INTERVAL_S  Cada cuántos segundos se mira la carpeta (default 60, mínimo 10).
+    MUSIC_WATCH_TIMEOUT_S   Tope por archivo en segundos (default 300, mínimo 10). Pasado el
+                        tope se mata el proceso que lo analiza y el archivo queda fallido.
 
 Por qué iTunes no tiene default: si `aplicar` inventara una carpeta, copiaría música a un
 lugar que nadie pidió, o peor, al directorio actual. Falla con un mensaje que dice qué
@@ -24,6 +30,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 VAR_STAGING = "MUSIFLIX_STAGING"
 VAR_ITUNES = "MUSIFLIX_ITUNES"
 VAR_REKORDBOX = "MUSIFLIX_REKORDBOX_XML"
+VAR_WATCH = "MUSIC_WATCH_FOLDER"
+VAR_WATCH_INTERVALO = "MUSIC_WATCH_INTERVAL_S"
+VAR_WATCH_TIMEOUT = "MUSIC_WATCH_TIMEOUT_S"
+
+WATCH_INTERVALO_DEFAULT_S = 60.0
+WATCH_INTERVALO_MINIMO_S = 10.0
+WATCH_TIMEOUT_DEFAULT_S = 300.0
+WATCH_TIMEOUT_MINIMO_S = 10.0
 
 
 class DestinoNoConfigurado(RuntimeError):
@@ -77,3 +91,36 @@ def rekordbox_xml(sello: str = "") -> Path:
         return Path(valor)
     sufijo = f"_{sello}" if sello else ""
     return staging_dir().parent / f"rekordbox_musiflix{sufijo}.xml"
+
+
+def watch_folder() -> Path | None:
+    """La carpeta vigilada, o None si la vigilancia está apagada (variable vacía o ausente).
+
+    NO verifica que exista: una carpeta de red puede no estar montada ahora y sí en el próximo
+    ciclo. Eso lo resuelve el vigilante (lo anota y reintenta), no la configuración.
+    """
+    valor = os.getenv(VAR_WATCH, "").strip().strip('"').strip()
+    return Path(valor) if valor else None
+
+
+def _segundos(var: str, default: float, minimo: float) -> float:
+    """Segundos leídos del entorno. Mal escrito = el default; por debajo del mínimo = el
+    mínimo: un typo en el .env no puede dejar al server mirando la red cada 0 s."""
+    texto = os.getenv(var, "").strip()
+    if not texto:
+        return default
+    try:
+        valor = float(texto)
+    except ValueError:
+        return default
+    if valor != valor or valor in (float("inf"), float("-inf")):   # NaN / infinito
+        return default
+    return max(valor, minimo)
+
+
+def watch_interval_s() -> float:
+    return _segundos(VAR_WATCH_INTERVALO, WATCH_INTERVALO_DEFAULT_S, WATCH_INTERVALO_MINIMO_S)
+
+
+def watch_timeout_s() -> float:
+    return _segundos(VAR_WATCH_TIMEOUT, WATCH_TIMEOUT_DEFAULT_S, WATCH_TIMEOUT_MINIMO_S)
