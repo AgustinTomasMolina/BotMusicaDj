@@ -29,8 +29,11 @@ test('apagada: el mensaje del server, que dice cómo prenderla, y nada más', ()
   assert.deepEqual([v.partes, v.aviso, v.procesando, v.reporte], [[], null, [], null])
 })
 
+// El "ahora" de los casos: el mismo año que el último escaneo del fixture (no el reloj de la PC).
+const AHORA = new Date(2026, 9, 21, 12, 0)
+
 test('prendida: carpeta, último escaneo y los contadores que vinieron', () => {
-  const v = resumenVigilancia({ exito: true, activa: true, estado: estado() })
+  const v = resumenVigilancia({ exito: true, activa: true, estado: estado() }, AHORA)
   assert.equal(v.tipo, 'activa')
   assert.equal(v.titulo, 'Carpeta vigilada «Mis Descargas»')
   assert.deepEqual(v.partes, ['último escaneo 21/10 09:05', '2 pendientes', '14 procesados', '1 fallido'])
@@ -60,7 +63,44 @@ test('sin respuesta o con error: no inventa un estado', () => {
 })
 
 test('fechaCiclo: la hora local del server tal cual, sin reinterpretar la zona', () => {
-  assert.equal(fechaCiclo('2026-10-21T23:59:01'), '21/10 23:59')
-  assert.equal(fechaCiclo('ayer'), null)
-  assert.equal(fechaCiclo(null), null)
+  assert.equal(fechaCiclo('2026-10-21T23:59:01', AHORA), '21/10 23:59')
+  assert.equal(fechaCiclo('ayer', AHORA), null)
+  assert.equal(fechaCiclo(null, AHORA), null)
+})
+
+test('fechaCiclo: de otro año, con el año; del mismo año, sin él', () => {
+  // El borde: 31/12 a las 23:59 visto a las 00:05 del 1/1 ya es de otro año y lo dice.
+  const anoNuevo = new Date(2027, 0, 1, 0, 5)
+  assert.equal(fechaCiclo('2026-12-31T23:59:01', anoNuevo), '31/12/2026 23:59')
+  assert.equal(fechaCiclo('2027-01-01T00:01:00', anoNuevo), '01/01 00:01')
+  // Y dentro del resumen, contra el `ahora` que se le pasa (no el reloj de la PC).
+  const r = { exito: true, activa: true, estado: estado({ ultimo_ciclo: '2025-03-02T08:00:00' }) }
+  assert.equal(resumenVigilancia(r, AHORA).partes[0], 'último escaneo 02/03/2025 08:00')
+  assert.equal(resumenVigilancia(r, new Date(2025, 5, 1)).partes[0], 'último escaneo 02/03 08:00')
+})
+
+// escanearVigilancia (src/api.js): `fetch` es uno falso que contesta lo que diga cada caso.
+const api = await import('../src/api.js')
+const conFetch = async (respuesta, fn) => {
+  const antes = globalThis.fetch
+  const pedidos = []
+  globalThis.fetch = async (url, init) => { pedidos.push([url, init?.method ?? 'GET']); return respuesta() }
+  try { return { valor: await fn(), pedidos } } finally { globalThis.fetch = antes }
+}
+
+test('escanear: un error que no es JSON (un 500 de HTML) dice que el server contestó con un error y el código', async () => {
+  const { valor, pedidos } = await conFetch(() => new Response('<html><body>Internal Server Error</body></html>',
+    { status: 500, headers: { 'Content-Type': 'text/html' } }), () => api.escanearVigilancia())
+  assert.deepEqual(pedidos, [['/api/vigilancia/escanear', 'POST']])
+  assert.deepEqual(valor, { exito: false, mensaje: 'El servidor contestó con un error (HTTP 500).' })
+})
+
+test('escanear: el JSON del server pasa tal cual (también el 409 de apagada)', async () => {
+  const cuerpo = { exito: false, mensaje: 'La carpeta vigilada está apagada.' }
+  const { valor } = await conFetch(() => new Response(JSON.stringify(cuerpo), { status: 409 }), () => api.escanearVigilancia())
+  assert.deepEqual(valor, cuerpo)
+})
+
+test('los demás pedidos no cambian: GET /api/vigilancia con HTML sigue tirando (lo muestra como "no pude leer")', async () => {
+  await assert.rejects(conFetch(() => new Response('<html></html>', { status: 502 }), () => api.vigilancia()), SyntaxError)
 })

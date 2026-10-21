@@ -22,7 +22,8 @@ export default function VigilanciaEstado({ open }) {
     try { setR(await vigilancia()) } catch { setR({ error: true }) }
   }, [])
   useEffect(() => {
-    if (!open) return undefined
+    // Cerrado: se olvida lo leído, así al volver a abrir se ve "Leyendo…" y no el estado de antes.
+    if (!open) { setR(null); setAviso(''); return undefined }
     setAviso('')
     cargar()
     return () => clearTimeout(timer.current)
@@ -37,7 +38,9 @@ export default function VigilanciaEstado({ open }) {
         setR({ exito: true, activa: true, estado: d.estado })
         setAviso(d.encolado ? 'Escaneo pedido: arranca en unos segundos.' : 'El vigilante no está corriendo: no se pudo adelantar el escaneo.')
         clearTimeout(timer.current)
-        timer.current = setTimeout(cargar, RELEER_MS)
+        // Al releer, "Escaneo pedido" ya cumplió: lo que pasó lo dice el estado nuevo.
+        const pedido = d.encolado
+        timer.current = setTimeout(async () => { await cargar(); if (pedido) setAviso('') }, RELEER_MS)
       } else setAviso((d && d.mensaje) || 'No se pudo pedir el escaneo.')
     } catch {
       setAviso('No pude conectar con el servidor.')

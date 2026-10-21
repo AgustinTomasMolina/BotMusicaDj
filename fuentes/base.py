@@ -2,7 +2,8 @@
 
 Una fuente es un `ExternalAudioSourceProvider`: busca (`search`), trae el detalle de un tema
 (`get_details`) y, SOLO si la fuente lo permite, lo baja (`download_item`; por defecto no:
-NotImplementedError "no permite descargas"). Lo que devuelve es un `SourceTrack` inmutable.
+NotImplementedError "no permite descargas"). Lo que devuelve es un `SourceTrack` inmutable; la
+descarga, un `DownloadedTrack` (la ruta + el `SourceTrack` con el que se validó el permiso).
 
 Por qué SÍNCRONO y no async: todo lo que va a usar esto ya corre en hilos. La búsqueda de
 `server._mix_fuentes` llama a cada plataforma desde un ThreadPoolExecutor con funciones
@@ -37,6 +38,15 @@ class SourceTrack:
     origin: str = NO_DECLARADO      # de dónde sale: la página del tema en la fuente
     preview_url: str | None = None
     downloadable: bool = False
+
+
+@dataclass(frozen=True)
+class DownloadedTrack:
+    """Lo que devuelve una descarga: el archivo y el tema TAL COMO lo dio la respuesta con la que
+    se validó el permiso de bajarlo (f66). La licencia y el origen que se guardan salen de acá,
+    no de un segundo pedido que podría decir otra cosa."""
+    path: Path
+    track: SourceTrack
 
 
 # ---------------------------------------------------------------- errores con motivo real
@@ -166,6 +176,7 @@ class ExternalAudioSourceProvider(abc.ABC):
         Por defecto, artista + título base como texto libre."""
         return self.search(f"{identity.artist_text} {identity.query_title}".strip(), limit)
 
-    def download_item(self, track_id: str, destination: Path, *, stem: str | None = None) -> Path:
-        """Baja el tema a la carpeta `destination` y devuelve la ruta. Por defecto no se puede."""
+    def download_item(self, track_id: str, destination: Path, *, stem: str | None = None) -> DownloadedTrack:
+        """Baja el tema a la carpeta `destination` y devuelve la ruta junto con el `SourceTrack`
+        con el que se decidió que se podía bajar. Por defecto no se puede."""
         raise NotImplementedError(f"{self.display or self.name} no permite descargas")

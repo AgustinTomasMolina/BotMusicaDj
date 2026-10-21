@@ -3354,7 +3354,11 @@ const CASOS = [
     const vigReal = await api(ctx, '/api/vigilancia')
     afirmar(vigReal.activa === false && vigReal.mensaje, `el server del E2E tenía que arrancar con la carpeta vigilada apagada: ${json(vigReal)}`)
     let vig = null            // null: contesta el server; si no, esta respuesta
+    let frenoVig = null       // una promesa: hasta que se cumpla, GET /api/vigilancia no contesta
+    let lecturasVig = 0
+    let escanearHtml = false  // true: el POST contesta un 500 de HTML (un server roto, un proxy)
     const escaneos = []
+    const bajadas = []        // lo que pidió "Descargar todas" a /api/descargar
     await interceptar(page, async (req) => {
       const u = new URL(req.url())
       const responder = async (body) => { await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }); return true }
@@ -3362,8 +3366,17 @@ const CASOS = [
       if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
       if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
       if (u.pathname === '/api/historial') return responder({ busquedas: [], playlists: [], descargas })
-      if (u.pathname === '/api/vigilancia' && vig) return responder(vig)
-      if (u.pathname === '/api/vigilancia/escanear') { escaneos.push(req.method()); return responder({ exito: true, encolado: true, estado: vig.estado }) }
+      if (u.pathname === '/api/descargar') { bajadas.push(JSON.parse(req.postData()).url); return responder({ exito: true, calidad: { grade: 'A' } }) }
+      if (u.pathname === '/api/vigilancia') {
+        lecturasVig++
+        if (frenoVig) await frenoVig
+        if (vig) return responder(vig)
+      }
+      if (u.pathname === '/api/vigilancia/escanear') {
+        escaneos.push(req.method())
+        if (escanearHtml) { await req.respond({ status: 500, contentType: 'text/html', body: '<html><body><h1>Internal Server Error</h1></body></html>' }); return true }
+        return responder({ exito: true, encolado: true, estado: vig.estado })
+      }
       if (u.origin !== new URL(ctx.url).origin) { await req.abort(); return true }
       return false
     })
@@ -3391,6 +3404,12 @@ const CASOS = [
         atenuada: true, dlDeshabilitado: true, dlTitulo: 'El artista no habilitó la descarga en Jamendo',
         nota: 'El artista no habilitó la descarga en Jamendo.', pastillas: [{ texto: 'Jamendo', color: '#e46fbf' }] },
     ], 'las filas de Jamendo: licencia, color de la plataforma y descarga')
+
+    // "Descargar todas" no intenta la que el artista no dejó bajar, y lo cuenta.
+    await clickTexto(page, 'button', /^Descargar todas/)
+    const finTodas = await hasta(() => botonTodas(page), (t) => /^✓/.test(t || ''), '"Descargar todas" no terminó')
+    igual([bajadas, finTodas], [[grupos[0].opciones[0].url], '✓ 1/1 descargadas · 1 sin descarga habilitada'],
+      '"Descargar todas" con un tema de Jamendo sin permiso de descarga')
 
     // Historial: licencia y origen de cada descarga.
     const abrirHistorial = async () => {
@@ -3423,19 +3442,41 @@ const CASOS = [
       { estado: 'apagada', titulo: vigReal.mensaje, partes: [], aviso: null, boton: null, msg: '' }, 'la carpeta vigilada apagada')
 
     // Prendida: la carpeta, el último escaneo y los contadores; «Escanear ahora» = un POST.
+    // El escaneo es de este año (del año del reloj): uno de otro año se muestra con el año.
     vig = { exito: true, activa: true, estado: { carpeta: 'Mis Descargas', alcanzable: true, corriendo: true, procesando: [], pendientes: 2,
-      creciendo: 0, ignorados: 0, procesados: 14, fallidos: 1, ultimos_fallidos: ['roto.mp3'], ultimo_ciclo: '2026-10-21T09:05:33',
+      creciendo: 0, ignorados: 0, procesados: 14, fallidos: 1, ultimos_fallidos: ['roto.mp3'], ultimo_ciclo: `${new Date().getFullYear()}-10-21T09:05:33`,
       ultimo_error: null, ultimo_reporte: 'revision_vigilada_2026-10-21_090533.html', intervalo_s: 60 } }
     await page.click('.drawer-right.is-open button[aria-label="Cerrar historial"]')
     await hasta(() => page.evaluate(() => !!document.querySelector('.drawer-right.is-open')), (v) => !v, 'el historial no se cerró')
+    // Al volver a abrir, mientras el server no contesta: "Leyendo…", no el estado de antes (apagada).
+    let soltarVig
+    frenoVig = new Promise((r) => { soltarVig = r })
     await abrirHistorial()
+    const leyendo = await page.evaluate(() => {
+      const s = document.querySelector('.drawer-right.is-open .vig')
+      return s ? { busy: s.getAttribute('aria-busy'), texto: s.textContent } : null
+    })
+    frenoVig = null
+    soltarVig()
+    igual(leyendo, { busy: 'true', texto: 'Leyendo la carpeta vigilada…' }, 'al volver a abrir se vio el estado de la vez anterior')
     igual(await hasta(leerVig, (v) => v && v.estado === 'activa', 'al volver a abrir, la carpeta vigilada no se leyó otra vez'),
       { estado: 'activa', titulo: 'Carpeta vigilada «Mis Descargas»',
         partes: ['último escaneo 21/10 09:05 · 2 pendientes · 14 procesados · 1 fallido', 'Último reporte: revision_vigilada_2026-10-21_090533.html'],
         aviso: null, boton: 'Escanear ahora', msg: '' }, 'la carpeta vigilada prendida')
+    const lecturasAntes = lecturasVig
     await page.click('.drawer-right.is-open .vig button')
     const tras = await hasta(leerVig, (v) => v && v.msg, 'tocar «Escanear ahora» no dijo nada')
     igual([escaneos, tras.msg], [['POST'], 'Escaneo pedido: arranca en unos segundos.'], '«Escanear ahora» = un POST a /api/vigilancia/escanear')
+    // Unos segundos después se relee el estado y el aviso ya cumplió: se va.
+    const releido = await hasta(leerVig, (v) => v && lecturasVig > lecturasAntes && v.msg === '',
+      'después de releer el estado, «Escaneo pedido» seguía en pantalla', 4000 + ESPERA_MS)
+    igual([lecturasVig - lecturasAntes, releido.estado], [1, 'activa'], 'la relectura después de «Escanear ahora»')
+
+    // Un POST que vuelve con una página de error (no JSON): el server contestó, no "no pude conectar".
+    escanearHtml = true
+    await page.click('.drawer-right.is-open .vig button')
+    const roto = await hasta(leerVig, (v) => v && v.msg, 'un 500 de HTML al escanear no dijo nada')
+    igual([escaneos, roto.msg], [['POST', 'POST'], 'El servidor contestó con un error (HTTP 500).'], '«Escanear ahora» con un 500 de HTML')
   }],
 
   // ---------------------------------------------------------------------- f53: importar

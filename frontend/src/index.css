@@ -279,7 +279,6 @@ form.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(229
 .src-deezer{background:#a238ff33;color:#c98bff}
 .src-ligaudio{background:#3d7dff33;color:#6fa8ff}
 .src-hitplayer{background:#00b3a433;color:#27d3c4}
-.src-jamendo{background:#e46fbf33;color:#f08ccf}
 
 .seed-banner{background:linear-gradient(90deg,#e5091422,#7c4dff22);border:1px solid #7c4dff44;
   border-radius:14px;padding:14px 18px;margin-bottom:18px;font-size:16px}

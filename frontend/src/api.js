@@ -395,7 +395,18 @@ export async function vigilancia() {
 }
 export async function escanearVigilancia() {
   const r = await fetch('/api/vigilancia/escanear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-  return json(r)
+  return jsonOError(r)
+}
+
+// f66: el JSON de la respuesta o, si no es JSON (un 500 de HTML, una página de un proxy), un
+// {exito:false, mensaje} que dice que el server CONTESTÓ con un error y con qué código: no es
+// "no pude conectar". Solo lo usa quien lo pide; `json` sigue tirando para los demás.
+export async function jsonOError(res) {
+  try {
+    return await res.json()
+  } catch {
+    return { exito: false, mensaje: `El servidor contestó con un error${res?.status ? ` (HTTP ${res.status})` : ''}.` }
+  }
 }
 
 /* ---------- Mis Playlists (crates) ---------- */

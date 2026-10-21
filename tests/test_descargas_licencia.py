@@ -132,23 +132,34 @@ ORIGEN_1 = "https://www.jamendo.com/track/1500001/campo-abierto"   # la página 
 
 
 class _Resp:
-    def __init__(self, body):
-        self.status_code, self._body = 200, body
+    def __init__(self, body, status=200):
+        self.status_code, self._body = status, body
 
     def json(self):
         return self._body
 
 
 class _Jamendo:
-    """El HTTP de la API de Jamendo, de juguete: contesta del fixture por id."""
+    """El HTTP de la API de Jamendo, de juguete: contesta del fixture por id y anota cada pedido.
 
-    def __init__(self):
+    `licencias`: la licencia de 1500001 en el 1.º, 2.º… pedido (para ver de CUÁL respuesta sale
+    la que se guarda). `falla`: la respuesta HTTP con la que contesta en vez del JSON."""
+
+    def __init__(self, licencias=None, falla=None):
         self.body = copy.deepcopy(FX["jamendo_busqueda"])
         # La página del tema distinta de la url canónica: así se ve que el origen sale de la API.
         self.body["results"][0]["shareurl"] = ORIGEN_1
+        self.licencias, self.falla = licencias or [], falla
+        self.pedidos = []
 
     def __call__(self, url, params=None, timeout=None):
-        res = [r for r in self.body["results"] if r["id"] == (params or {}).get("id")]
+        self.pedidos.append((url, dict(params or {})))
+        if self.falla is not None:
+            return self.falla
+        body = copy.deepcopy(self.body)
+        if len(self.pedidos) <= len(self.licencias):
+            body["results"][0]["license_ccurl"] = self.licencias[len(self.pedidos) - 1]
+        res = [r for r in body["results"] if r["id"] == (params or {}).get("id")]
         return _Resp({"headers": {"status": "success", "code": 0}, "results": res})
 
 
@@ -170,10 +181,23 @@ def server(tmp_path, monkeypatch):
     # Sin red, sin ffmpeg y sin tocar tags: lo que se prueba es qué va al historial.
     monkeypatch.setattr(srv, "_calidad_espectral", lambda ruta: {"badge": "?", "calidad": "sin medir", "metodo": "test"})
     monkeypatch.setattr(srv, "_taggear_descarga", lambda *a, **k: None)
-    reg = registro.Registry([JamendoProvider(client_id="clave-de-prueba", http_get=_Jamendo(),
-                                             http_stream=lambda url: iter([b"ID3-audio-de-prueba" * 50]))])
-    monkeypatch.setattr(srv, "_fuentes_externas", lambda: reg)
+    con_jamendo(srv, monkeypatch, _Jamendo())
     return srv
+
+
+def _audio(url):
+    return iter([b"ID3-audio-de-prueba" * 50])
+
+
+def con_jamendo(srv, monkeypatch, http: _Jamendo, stream=_audio) -> _Jamendo:
+    """El registro del server con un Jamendo que contesta con `http` y baja con `stream` (sin red)."""
+    reg = registro.Registry([JamendoProvider(client_id="clave-de-prueba", http_get=http, http_stream=stream)])
+    monkeypatch.setattr(srv, "_fuentes_externas", lambda: reg)
+    return http
+
+
+JAMENDO_1 = {"titulo": "Campo Abierto", "artista": "Coro de Niebla", "fuente": "jamendo",
+             "url": "https://www.jamendo.com/track/1500001"}
 
 
 def test_descarga_de_jamendo_guarda_su_licencia_y_la_api_la_devuelve(server):
@@ -205,3 +229,49 @@ def test_descarga_de_otra_fuente_dice_no_declarado_aunque_el_cliente_mande_una(s
         assert r["exito"] is True, r
         d = c.get("/api/historial").json()["descargas"]
     assert [(x["titulo"], x["licencia"], x["origen"]) for x in d] == [("Tema MP3", "no declarado", "no declarado")]
+
+
+def test_jamendo_un_solo_pedido_y_la_licencia_es_la_de_ese_pedido(server, monkeypatch):
+    # Si Jamendo contestara distinto en un segundo pedido, se vería: la 1.ª respuesta trae la
+    # licencia del fixture y cualquier otra, la de 1500002 (también del fixture).
+    primera = FX["jamendo_busqueda"]["results"][0]["license_ccurl"]
+    otra = FX["jamendo_busqueda"]["results"][1]["license_ccurl"]
+    assert (primera, otra) == ("http://creativecommons.org/licenses/by-sa/3.0/",
+                               "http://creativecommons.org/licenses/by-nc-nd/3.0/")
+    http = con_jamendo(server, monkeypatch, _Jamendo(licencias=[primera, otra, otra]))
+    with TestClient(server.app) as c:
+        r = server.procesar_descarga(dict(JAMENDO_1, formato="mp3"))
+        assert r["exito"] is True, r
+        d = c.get("/api/historial").json()["descargas"]
+    assert http.pedidos == [("https://api.jamendo.com/v3.0/tracks/",
+                             {"client_id": "clave-de-prueba", "format": "json", "id": "1500001"})], \
+        "el permiso y la licencia tienen que salir de UNA respuesta"
+    assert [(x["licencia"], x["origen"]) for x in d] == [(primera, ORIGEN_1)]
+
+
+def _audio_cortado(url):
+    yield b"medio archivo"
+    raise TimeoutError("se cortó")
+
+
+@pytest.mark.parametrize("http_kw, stream, mensaje", [
+    ({"falla": _Resp({}, status=503)}, _audio, "Jamendo bloqueó (HTTP 503)."),
+    ({}, _audio_cortado, "Jamendo no contestó."),
+], ids=["api-503", "audio-cortado"])
+def test_jamendo_que_falla_al_bajar_no_deja_historial_y_dice_por_que(server, monkeypatch, http_kw, stream, mensaje):
+    con_jamendo(server, monkeypatch, _Jamendo(**http_kw), stream)
+    with TestClient(server.app) as c:
+        r = server.procesar_descarga(dict(JAMENDO_1, formato="mp3"))
+        d = c.get("/api/historial").json()["descargas"]
+    assert r == {"exito": False, "mensaje": mensaje}
+    assert d == [], "una descarga que falló quedó en el historial"
+    assert list(server.DOWNLOADS_DIR.iterdir()) == []
+
+
+def test_jamendo_con_formato_wav_guarda_mp3_que_es_lo_que_se_bajo(server):
+    # Jamendo da un MP3 y acá no se convierte: el historial no puede decir «wav».
+    with TestClient(server.app) as c:
+        r = server.procesar_descarga(dict(JAMENDO_1, formato="wav"))
+        assert r["exito"] is True, r
+        d = c.get("/api/historial").json()["descargas"]
+    assert [(x["archivo"], x["formato"]) for x in d] == [("Campo Abierto - Coro de Niebla.mp3", "mp3")]

@@ -8,7 +8,9 @@ La clave viaja en la query (`client_id`), así que ningún mensaje ni log lleva 
 
 Descarga:
 - solo si `audiodownload_allowed` es true, y se vuelve a preguntar a la API justo antes (no se
-  confía en lo que mande el cliente);
+  confía en lo que mande el cliente). Esa MISMA respuesta es la que se devuelve con el archivo
+  (`DownloadedTrack.track`): la licencia y el origen que se guardan son los de la respuesta con
+  la que se habilitó la descarga, sin un segundo pedido (f66);
 - el host del archivo tiene que ser de Jamendo (https, `*.jamendo.com`);
 - se baja a `<nombre>.mp3.part`, creado en EXCLUSIVA (es la reserva del nombre), y al terminar
   se publica con una operación atómica que FALLA si el destino ya existe (`_publicar`): nunca
@@ -28,6 +30,7 @@ from pathlib import Path
 
 from .base import (
     NO_DECLARADO,
+    DownloadedTrack,
     DownloadNotAllowed,
     ExternalAudioSourceProvider,
     MissingKey,
@@ -129,7 +132,7 @@ class JamendoProvider(ExternalAudioSourceProvider):
 
     # ------------------------------------------------------------ descarga
 
-    def download_item(self, track_id: str, destination: Path, *, stem: str | None = None) -> Path:
+    def download_item(self, track_id: str, destination: Path, *, stem: str | None = None) -> DownloadedTrack:
         raw = self._raw(track_id)
         t = map_track(raw)
         if not t.downloadable:
@@ -149,7 +152,7 @@ class JamendoProvider(ExternalAudioSourceProvider):
         finally:
             self._turnos.release()
         logger.info(f"⬇️  Jamendo: bajado «{final.name}» ({t.license}).")
-        return final
+        return DownloadedTrack(final, t)
 
     def _bajar(self, url: str, part: Path, fd: int, dest: Path, base: str, ext: str) -> Path:
         """Baja a `part` (ya creado en exclusiva, abierto en `fd`) y lo publica con nombre libre.

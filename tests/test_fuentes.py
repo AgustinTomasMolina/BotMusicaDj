@@ -344,9 +344,17 @@ def test_jamendo_nunca_muestra_la_clave(caplog):
 
 
 def test_jamendo_baja_a_part_y_renombra(tmp_path):
-    bajada = Bajada(tmp_path)
-    ruta = registro.Registry([jamendo(stream=bajada)]).download("jamendo", "1500001", tmp_path, stem="Campo Abierto - Coro de Niebla")
+    bajada, http = Bajada(tmp_path), FakeJamendo()
+    bajado = registro.Registry([jamendo(http, stream=bajada)]).download(
+        "jamendo", "1500001", tmp_path, stem="Campo Abierto - Coro de Niebla")
+    ruta = bajado.path
     assert ruta == tmp_path / "Campo Abierto - Coro de Niebla.mp3"
+    # f66: con el archivo vuelve el tema de la MISMA respuesta con la que se validó el permiso
+    # (un solo pedido a /tracks/): su licencia y su origen son los que se guardan.
+    assert http.pedidos == [("https://api.jamendo.com/v3.0/tracks/",
+                             {"client_id": CLAVE, "format": "json", "id": "1500001"})]
+    assert (bajado.track.id, bajado.track.license, bajado.track.origin, bajado.track.downloadable) == (
+        "1500001", "http://creativecommons.org/licenses/by-sa/3.0/", "https://www.jamendo.com/track/1500001", True)
     assert ruta.read_bytes() == bajada.data
     assert bajada.urls == ["https://prod-1.storage.jamendo.com/download/track/1500001/mp32/"]
     # Mientras bajaba: SOLO el .part (la reserva del nombre); ningún .mp3 vacío.
@@ -361,7 +369,7 @@ def test_jamendo_un_corte_no_deja_un_mp3_vacio_y_su_resto_no_se_toca(tmp_path):
     resto = tmp_path / "Campo.mp3.part"
     resto.write_bytes(b"resto de una descarga cortada")
     bajada = Bajada(tmp_path)
-    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo")
+    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo").path
     assert ruta.name == "Campo (2).mp3" and ruta.read_bytes() == bajada.data
     assert resto.read_bytes() == b"resto de una descarga cortada"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo (2).mp3", "Campo.mp3.part"]
@@ -377,7 +385,7 @@ def test_jamendo_si_aparece_el_nombre_mientras_baja_no_lo_pisa(tmp_path):
                     (self.dest / "Campo.mp3").write_bytes(b"de otro programa")
                 yield trozo
     bajada = Intrusa(tmp_path)
-    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo")
+    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo").path
     assert (tmp_path / "Campo.mp3").read_bytes() == b"de otro programa"
     assert ruta.name == "Campo (2).mp3" and ruta.read_bytes() == bajada.data
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Campo (2).mp3", "Campo.mp3"]
@@ -387,7 +395,7 @@ def test_jamendo_no_pisa_un_archivo_que_ya_estaba(tmp_path):
     previo = tmp_path / "Campo Abierto.mp3"
     previo.write_bytes(b"el archivo del usuario")
     bajada = Bajada(tmp_path)
-    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo Abierto")
+    ruta = jamendo(stream=bajada).download_item("1500001", tmp_path, stem="Campo Abierto").path
     assert previo.read_bytes() == b"el archivo del usuario"
     assert ruta.name == "Campo Abierto (2).mp3" and ruta.read_bytes() == bajada.data
 
@@ -765,14 +773,16 @@ def test_server_jamendo_bloqueado_cuenta_el_codigo(srv, monkeypatch):
 
 
 def test_server_descarga_de_jamendo(srv, monkeypatch, tmp_path):
-    bajada = Bajada(tmp_path)
-    con_registro(monkeypatch, srv, jamendo(stream=bajada))
+    bajada, http = Bajada(tmp_path), FakeJamendo()
+    con_registro(monkeypatch, srv, jamendo(http, stream=bajada))
     res = srv._descargar_jamendo("https://www.jamendo.com/track/1500001", "Campo Abierto - Coro de Niebla")
     # f66: con la licencia y el origen que declara Jamendo para ese id (van al historial).
     assert res == {"ok": True, "archivo": "Campo Abierto - Coro de Niebla.mp3",
                    "licencia": "http://creativecommons.org/licenses/by-sa/3.0/",
                    "origen": "https://www.jamendo.com/track/1500001"}
     assert (tmp_path / res["archivo"]).read_bytes() == bajada.data
+    # Y salen de la misma respuesta con la que se validó el permiso: un solo pedido a /tracks/.
+    assert [p for _, p in http.pedidos] == [{"client_id": CLAVE, "format": "json", "id": "1500001"}]
 
 
 @pytest.mark.parametrize("url", ["https://evil.example/track/1500001", "https://www.jamendo.com/track/abc",

@@ -39,6 +39,7 @@ from pathlib import Path
 import track_identity
 
 from .base import (
+    DownloadedTrack,
     DownloadNotAllowed,
     ExternalAudioSourceProvider,
     MissingKey,
@@ -189,7 +190,7 @@ class Registry:
         p = self._usable(name, "search")
         return self._run(p, lambda: p.get_details(track_id))
 
-    def download(self, name: str, track_id: str, destination: Path, *, stem: str | None = None) -> Path:
+    def download(self, name: str, track_id: str, destination: Path, *, stem: str | None = None) -> DownloadedTrack:
         p = self._usable(name, "download")
         return self._run(p, lambda: p.download_item(track_id, destination, stem=stem))
 

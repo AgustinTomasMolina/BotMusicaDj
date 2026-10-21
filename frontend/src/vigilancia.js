@@ -9,14 +9,18 @@ const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`
 
 // `ultimo_ciclo` es la hora LOCAL del server sin zona ("2026-10-21T10:05:33", ver
 // pipeline/vigilar.py `_ciclo`): se muestra como "21/10 10:05" leyendo el texto, sin pasarlo por
-// Date (que lo reinterpretaría). Algo que no tiene esa forma: null.
-export function fechaCiclo(iso) {
-  const m = typeof iso === 'string' ? iso.match(/^\d{4}-(\d{2})-(\d{2})T(\d{2}):(\d{2})/) : null
-  return m ? `${m[2]}/${m[1]} ${m[3]}:${m[4]}` : null
+// Date (que lo reinterpretaría). Si es de otro año que `ahora`, con el año ("21/10/2025 10:05"):
+// un escaneo de hace un año no puede parecer de esta semana. Algo que no tiene esa forma: null.
+export function fechaCiclo(iso, ahora = new Date()) {
+  const m = typeof iso === 'string' ? iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/) : null
+  if (!m) return null
+  const anio = Number(m[1]) === ahora.getFullYear() ? '' : `/${m[1]}`
+  return `${m[3]}/${m[2]}${anio} ${m[4]}:${m[5]}`
 }
 
 // {tipo: 'error'|'apagada'|'activa', titulo, partes: [texto], aviso, procesando: [nombre], reporte}
-export function resumenVigilancia(r) {
+// `ahora`: contra qué año se compara el del último escaneo (ver fechaCiclo).
+export function resumenVigilancia(r, ahora = new Date()) {
   const base = { partes: [], aviso: null, procesando: [], reporte: null }
   if (!r || r.error || r.exito === false) {
     return { ...base, tipo: 'error', titulo: 'No pude leer el estado de la carpeta vigilada.' }
@@ -26,7 +30,7 @@ export function resumenVigilancia(r) {
   }
   const e = r.estado || {}
   const partes = []
-  const f = fechaCiclo(e.ultimo_ciclo)
+  const f = fechaCiclo(e.ultimo_ciclo, ahora)
   partes.push(f ? `último escaneo ${f}` : 'todavía sin escanear')
   for (const [k, uno, varios] of [['pendientes', 'pendiente', 'pendientes'], ['procesados', 'procesado', 'procesados'], ['fallidos', 'fallido', 'fallidos']]) {
     const n = cuenta(e[k])

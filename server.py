@@ -1271,22 +1271,22 @@ def _descargar_jamendo(url: str, nombre: str) -> dict:
     {ok: True, archivo, licencia, origen} o {ok: False, mensaje} con el motivo real (sin clave,
     no permite descargar, no contestó, bloqueó).
 
-    f66: `licencia` y `origen` son los que Jamendo declara para ESE id (`get_details`, pedido
-    justo antes de bajar), nunca los que mande el cliente; van al historial de descargas. Si
-    Jamendo no los da, el proveedor ya deja «no declarado»."""
+    f66: `licencia` y `origen` son los que Jamendo declara para ESE id en la MISMA respuesta con
+    la que el proveedor validó que se puede bajar (`DownloadedTrack.track`: un solo pedido a
+    `/tracks/`), nunca los que mande el cliente; van al historial de descargas. Si Jamendo no
+    los da, el proveedor ya deja «no declarado»."""
     from fuentes.base import ProviderError
 
     m = _JAMENDO_URL.fullmatch(url or "")
     if not m:
         return {"ok": False, "mensaje": "No sé qué tema de Jamendo es (link inválido)."}
-    reg = _fuentes_externas()
     try:
-        tema = reg.get_details("jamendo", m.group(1))
-        ruta = reg.download("jamendo", m.group(1), DOWNLOADS_DIR, stem=_safe_name(nombre))
+        bajado = _fuentes_externas().download("jamendo", m.group(1), DOWNLOADS_DIR, stem=_safe_name(nombre))
     except ProviderError as e:
         logger.error(f"❌ Jamendo: {e.motivo}")
         return {"ok": False, "mensaje": f"{e.motivo}."}
-    return {"ok": True, "archivo": ruta.name, "licencia": tema.license, "origen": tema.origin}
+    return {"ok": True, "archivo": bajado.path.name,
+            "licencia": bajado.track.license, "origen": bajado.track.origin}
 
 
 def _tiene_ffmpeg() -> bool:
@@ -1652,7 +1652,10 @@ def _procesar_descarga(payload: dict, titulo: str, artista: str, fuente: str, ur
             calidad.update(_grado(calidad))
             _log_calidad(calidad)
             _taggear_descarga(res["archivo"], titulo, artista, payload, calidad)
-            _hist_descarga(res, titulo, artista, fuente, url, formato, payload, calidad, destino)
+            # f66: acá no se convierte nada, así que el formato que se guarda es el del archivo
+            # que quedó (un .mp3), no el que el usuario eligió para las conversiones (wav…).
+            real = Path(res["archivo"]).suffix.lstrip(".").lower() or formato
+            _hist_descarga(res, titulo, artista, fuente, url, real, payload, calidad, destino)
             return {"exito": True, "mensaje": f"Descargado: {res['archivo']}",
                     "archivo": res["archivo"], "calidad": calidad}
         logger.error("❌ La descarga directa no generó archivo.")
