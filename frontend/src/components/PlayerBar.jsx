@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { usePlayer, usePlayerTime } from '../player/context'
 import { sourceAudioInfo } from '../api'
 import { fmtBpm, hasEmbedFallback, NOMBRE_FUENTE, sourceAudioRef } from '../player/track'
-import { songKey } from '../utils'
+import { songKey, FUENTE_PF as PF } from '../utils'
 import Cover from './Cover'
 import { AddToPlaylist } from './AddToPlaylist'
 import { DlButton, QualityBadge, gradeClass } from './common'
@@ -15,7 +15,7 @@ import { IconDownload, IconPause, IconPlayFill } from './icons'
    compás; sin tonalidad clásica no se "traduce" desde el Camelot; sin duración, la barra de
    progreso queda deshabilitada en vez de inventar un largo. */
 
-const PF = { youtube: 'pf-yt', soundcloud: 'pf-sc', spotify: 'pf-sp', deezer: 'pf-sp', ligaudio: 'pf-m1', hitplayer: 'pf-m2' }
+// PF (fuente → clase de color de la plataforma) vive en utils.js desde f66 (`FUENTE_PF`).
 const LOSSLESS = ['wav', 'flac', 'aiff', 'aif']
 const SALTO = 5  // segundos por flecha en la barra de posición
 

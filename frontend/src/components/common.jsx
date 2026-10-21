@@ -83,7 +83,8 @@ export function Badges({ c, formato, metaMap, calidad }) {
   const bpmDone = c.bpm || m.done
   const genero = c.genero || m.genero
   const genDone = c.genero || m.done
-  const fijoMp3 = src === 'ligaudio' || src === 'hitplayer'
+  // f66: Jamendo también baja siempre el MP3 que publica el artista (no se convierte).
+  const fijoMp3 = src === 'ligaudio' || src === 'hitplayer' || src === 'jamendo'
   const fmt = fijoMp3 ? 'mp3' : (formato || DEFAULT_FORMAT).toLowerCase()
   const fmtVal = fmt.toUpperCase()
   const lossless = _LOSSLESS.includes(fmt)

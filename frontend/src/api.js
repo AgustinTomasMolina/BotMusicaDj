@@ -386,6 +386,18 @@ export async function limpiarHistorial(que = 'todo') {
   return json(r)
 }
 
+/* ---------- Carpeta vigilada (f65; en pantalla desde f66) ---------- */
+// Estado: {exito, activa:false, mensaje} o {exito, activa:true, estado}. Escanear adelanta el
+// próximo ciclo del hilo del server (409 {exito:false, mensaje} si está apagada).
+export async function vigilancia() {
+  const r = await fetch('/api/vigilancia')
+  return json(r)
+}
+export async function escanearVigilancia() {
+  const r = await fetch('/api/vigilancia/escanear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  return json(r)
+}
+
 /* ---------- Mis Playlists (crates) ---------- */
 // Aviso global de "cambiaron las playlists" (el rail de la home lo escucha para refrescarse).
 export const avisarPlaylists = () => { try { window.dispatchEvent(new Event('musiflix:playlists')) } catch { /* sin window */ } }

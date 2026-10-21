@@ -3332,6 +3332,112 @@ const CASOS = [
     }
   }],
 
+  // ---------------------------------------------------------------------- f66: Jamendo y licencias
+  // Las filas tienen la forma de `server._buscar_jamendo`, el historial la de
+  // `db.listar_historial` y la carpeta vigilada la de `server.vigilancia_estado` (apagada: la
+  // respuesta REAL del server del E2E, que arranca sin MUSIC_WATCH_FOLDER).
+  ['jamendo (f66): la fila dice la licencia (o «no declarado») y sin permiso del artista «Descargar» queda deshabilitado con el motivo; el historial muestra licencia y origen; la carpeta vigilada dice lo que da /api/vigilancia', async (page, ctx) => {
+    const opcion = (extra) => ({ titulo: 'Campo Abierto', artista: 'Coro de Niebla', duracion: 254, fuente: 'jamendo', thumbnail: null,
+      url: 'https://www.jamendo.com/track/1500001', id: '1500001', licencia: 'http://creativecommons.org/licenses/by-sa/3.0/',
+      origen: 'https://www.jamendo.com/track/1500001', descargable: true, ...extra })
+    const grupos = [
+      { opciones: [opcion()] },
+      { opciones: [opcion({ titulo: 'Campo Cerrado', url: 'https://www.jamendo.com/track/1500002', id: '1500002', licencia: 'no declarado', descargable: false })] },
+    ]
+    const ahora = new Date().toISOString()
+    const descargas = [
+      { id: 2, titulo: 'Campo Abierto', artista: 'Coro de Niebla', fuente: 'jamendo', formato: 'mp3', archivo: 'Campo Abierto - Coro de Niebla.mp3',
+        grade: null, color: null, licencia: 'http://creativecommons.org/licenses/by-sa/3.0/', origen: 'https://www.jamendo.com/track/1500001', creado_en: ahora },
+      // Como la mandaba la API antes de f66 (sin los campos): la pantalla no dibuja un vacío.
+      { id: 1, titulo: 'Tema YT', artista: 'Artista Y', fuente: 'youtube', formato: 'wav', archivo: 'Tema YT.wav', grade: 'B', color: null, creado_en: ahora },
+    ]
+    const vigReal = await api(ctx, '/api/vigilancia')
+    afirmar(vigReal.activa === false && vigReal.mensaje, `el server del E2E tenía que arrancar con la carpeta vigilada apagada: ${json(vigReal)}`)
+    let vig = null            // null: contesta el server; si no, esta respuesta
+    const escaneos = []
+    await interceptar(page, async (req) => {
+      const u = new URL(req.url())
+      const responder = async (body) => { await req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }); return true }
+      if (u.pathname === '/api/buscar') return responder({ exito: true, grupos })
+      if (u.pathname === '/api/calidad') return responder({ ok: false, grade: '?' })
+      if (u.pathname === '/api/meta') return responder({ bpm: null, genero: null })
+      if (u.pathname === '/api/historial') return responder({ busquedas: [], playlists: [], descargas })
+      if (u.pathname === '/api/vigilancia' && vig) return responder(vig)
+      if (u.pathname === '/api/vigilancia/escanear') { escaneos.push(req.method()); return responder({ exito: true, encolado: true, estado: vig.estado }) }
+      if (u.origin !== new URL(ctx.url).origin) { await req.abort(); return true }
+      return false
+    })
+    await page.goto(`${ctx.url}/`, { waitUntil: 'domcontentloaded' })
+    const caja = 'input[aria-label="Buscar una canción, artista o género"]'
+    await page.waitForSelector(caja, { timeout: ESPERA_MS })
+    await page.type(caja, 'campo')
+    await page.keyboard.press('Enter')
+    const filas = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.trk')].map((r) => {
+      const lic = r.querySelector('.trk-meta .mb-lic')
+      const dl = r.querySelector('.trk-acts .btn-dl')
+      return {
+        titulo: r.querySelector('.trk-title')?.textContent ?? null,
+        licencia: lic?.querySelector('b')?.textContent ?? null, licTitulo: lic?.getAttribute('title') ?? null,
+        atenuada: lic ? lic.classList.contains('is-no-declarado') : null,
+        dlDeshabilitado: dl ? dl.disabled : null, dlTitulo: dl?.getAttribute('title') ?? null,
+        nota: r.querySelector('.trk-sin-descarga')?.textContent ?? null,
+        pastillas: [...r.querySelectorAll('.vchip')].map((b) => ({ texto: b.textContent.trim(), color: getComputedStyle(b).getPropertyValue('--pf').trim() })),
+      }
+    })), (v) => v.length === 2, 'no aparecieron las dos filas de Jamendo')
+    igual(filas, [
+      { titulo: 'Campo Abierto', licencia: 'CC BY-SA 3.0', licTitulo: 'Licencia declarada por Jamendo: http://creativecommons.org/licenses/by-sa/3.0/',
+        atenuada: false, dlDeshabilitado: false, dlTitulo: 'Descargar', nota: null, pastillas: [{ texto: 'Jamendo', color: '#e46fbf' }] },
+      { titulo: 'Campo Cerrado', licencia: 'no declarado', licTitulo: 'Jamendo no declara la licencia de este tema',
+        atenuada: true, dlDeshabilitado: true, dlTitulo: 'El artista no habilitó la descarga en Jamendo',
+        nota: 'El artista no habilitó la descarga en Jamendo.', pastillas: [{ texto: 'Jamendo', color: '#e46fbf' }] },
+    ], 'las filas de Jamendo: licencia, color de la plataforma y descarga')
+
+    // Historial: licencia y origen de cada descarga.
+    const abrirHistorial = async () => {
+      await page.click('button[aria-label="Menú"]')
+      await esperarCajon(page, '.drawer-left.is-open')
+      afirmar(await page.evaluate(() => { const b = [...document.querySelectorAll('.navitem')].find((x) => x.textContent === 'Historial'); b?.click(); return !!b }),
+        'el menú no tiene "Historial"')
+      await esperarCajon(page, '.drawer-right.is-open')
+    }
+    await abrirHistorial()
+    const hist = await hasta(() => page.evaluate(() => [...document.querySelectorAll('.drawer-right.is-open .hist-item')].map((it) => ({
+      tema: it.querySelector('.truncate')?.textContent ?? null, lic: it.querySelector('.hist-lic')?.textContent ?? null,
+      link: it.querySelector('.hist-lic a')?.getAttribute('href') ?? null,
+    }))), (v) => v.length === descargas.length, 'el historial no mostró las dos descargas')
+    igual(hist, [
+      { tema: 'Campo Abierto — Coro de Niebla', lic: 'Licencia: CC BY-SA 3.0 · Origen: jamendo.com', link: 'https://www.jamendo.com/track/1500001' },
+      { tema: 'Tema YT — Artista Y', lic: 'Licencia: no declarado · Origen: no declarado', link: null },
+    ], 'licencia y origen de cada descarga del historial')
+
+    // Carpeta vigilada apagada: el mensaje de la API (dice cómo prenderla) y nada para escanear.
+    const leerVig = () => page.evaluate(() => {
+      const s = document.querySelector('.drawer-right.is-open .vig')
+      return s ? {
+        estado: s.dataset.estado ?? null, titulo: s.querySelector('.vig-titulo')?.textContent ?? null,
+        partes: [...s.querySelectorAll('.vig-partes')].map((p) => p.textContent), aviso: s.querySelector('.vig-aviso')?.textContent ?? null,
+        boton: s.querySelector('button')?.textContent ?? null, msg: s.querySelector('[role=status]')?.textContent ?? null,
+      } : null
+    })
+    igual(await hasta(leerVig, (v) => v && v.estado, 'no apareció el estado de la carpeta vigilada'),
+      { estado: 'apagada', titulo: vigReal.mensaje, partes: [], aviso: null, boton: null, msg: '' }, 'la carpeta vigilada apagada')
+
+    // Prendida: la carpeta, el último escaneo y los contadores; «Escanear ahora» = un POST.
+    vig = { exito: true, activa: true, estado: { carpeta: 'Mis Descargas', alcanzable: true, corriendo: true, procesando: [], pendientes: 2,
+      creciendo: 0, ignorados: 0, procesados: 14, fallidos: 1, ultimos_fallidos: ['roto.mp3'], ultimo_ciclo: '2026-10-21T09:05:33',
+      ultimo_error: null, ultimo_reporte: 'revision_vigilada_2026-10-21_090533.html', intervalo_s: 60 } }
+    await page.click('.drawer-right.is-open button[aria-label="Cerrar historial"]')
+    await hasta(() => page.evaluate(() => !!document.querySelector('.drawer-right.is-open')), (v) => !v, 'el historial no se cerró')
+    await abrirHistorial()
+    igual(await hasta(leerVig, (v) => v && v.estado === 'activa', 'al volver a abrir, la carpeta vigilada no se leyó otra vez'),
+      { estado: 'activa', titulo: 'Carpeta vigilada «Mis Descargas»',
+        partes: ['último escaneo 21/10 09:05 · 2 pendientes · 14 procesados · 1 fallido', 'Último reporte: revision_vigilada_2026-10-21_090533.html'],
+        aviso: null, boton: 'Escanear ahora', msg: '' }, 'la carpeta vigilada prendida')
+    await page.click('.drawer-right.is-open .vig button')
+    const tras = await hasta(leerVig, (v) => v && v.msg, 'tocar «Escanear ahora» no dijo nada')
+    igual([escaneos, tras.msg], [['POST'], 'Escaneo pedido: arranca en unos segundos.'], '«Escanear ahora» = un POST a /api/vigilancia/escanear')
+  }],
+
   // ---------------------------------------------------------------------- f53: importar
   // Al final a propósito: el análisis agrega temas a la base del motor de juguete, y los casos
   // de la radio de arriba comparan contra esa base.

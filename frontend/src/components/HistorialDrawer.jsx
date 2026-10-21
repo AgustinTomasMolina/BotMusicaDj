@@ -3,6 +3,8 @@
 import { useRef } from 'react'
 import { useDialog } from '../hooks'
 import { FUENTE_CORTO } from '../utils'
+import { licenciaTexto, origenTexto, declarado } from '../licencia'
+import VigilanciaEstado from './VigilanciaEstado'
 
 const IcoX = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
 const IcoSearch = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.6-3.6" /></svg>
@@ -27,11 +29,25 @@ function hace(iso) {
 
 const gradeClass = (g) => ({ A: 'grade-a', 'A-': 'grade-am', B: 'grade-b', C: 'grade-c', D: 'grade-d', F: 'grade-f' }[g] || '')
 
-function ItemCol({ title, sub }) {
+function ItemCol({ title, sub, extra }) {
   return (
     <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 }}>
       <span className="truncate">{title}</span>
       <span className="mono" style={{ fontSize: 10.5, color: 'var(--color-neutral-600)' }}>{sub}</span>
+      {extra}
+    </span>
+  )
+}
+
+// f66: licencia y origen de una descarga, como los guardó el server (la fuente los declara o
+// queda «no declarado»; una base vieja sin el campo también se lee así).
+function LicenciaOrigen({ d }) {
+  const o = origenTexto(d.origen)
+  return (
+    <span className="hist-lic" title={`Licencia: ${declarado(d.licencia) || 'no declarado'} · Origen: ${declarado(d.origen) || 'no declarado'}`}>
+      Licencia: {licenciaTexto(d.licencia)} · Origen: {o.href
+        ? <a href={o.href} target="_blank" rel="noreferrer">{o.texto}</a>
+        : o.texto}
     </span>
   )
 }
@@ -72,6 +88,8 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
         <button type="button" className={`btn btn-icon btn-icon-sm${data && total > 0 ? '' : ' push'}`} aria-label="Cerrar historial" onClick={onClose} data-autofocus><IcoX /></button>
       </div>
       <div className="drawer-body" aria-busy={!data}>
+        {/* f66: la carpeta vigilada es la otra entrada de temas nuevos (ver VigilanciaEstado). */}
+        <VigilanciaEstado open={open} />
         {!data ? (
           <div className="cluster" style={{ gap: 9, color: 'var(--color-neutral-500)', fontSize: 13, padding: 'var(--space-3)' }}><span className="spinner" /> Cargando historial…</div>
         ) : data.error ? (
@@ -111,7 +129,8 @@ export default function HistorialDrawer({ open, onClose, data, onRunSearch, onOp
               {descargas.map((d) => (
                 <div key={d.id} className="hist-item" style={{ cursor: 'default' }}>
                   <IcoDown />
-                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} · ${hace(d.creado_en)}`} />
+                  <ItemCol title={`${d.titulo}${d.artista ? ` — ${d.artista}` : ''}`} sub={`${(d.formato || '').toUpperCase()} · ${FUENTE_CORTO[(d.fuente || '').toLowerCase()] || d.fuente} · ${hace(d.creado_en)}`}
+                    extra={<LicenciaOrigen d={d} />} />
                   {d.grade && d.grade !== '?' && <span className={`grade grade-sm ${gradeClass(d.grade)}`}>{d.grade}</span>}
                 </div>
               ))}
