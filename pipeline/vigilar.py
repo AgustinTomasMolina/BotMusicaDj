@@ -319,7 +319,8 @@ def procesar_aparte(rutas: list[str], staging: Path, reporte: Path, timeout_s: f
     """Corre `pipeline.revisar.procesar` + el reporte sobre `rutas` en un proceso nuevo, con
     tope de `timeout_s` (pasado el tope se mata el proceso y su árbol). `cancelar` corta antes
     (apagado del server). `comando` reemplaza el intérprete y el módulo (para los tests)."""
-    with tempfile.TemporaryDirectory(prefix="musiflix-vigilar-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="musiflix-vigilar-",
+                                     ignore_cleanup_errors=True) as tmp:
         entrada, salida = Path(tmp) / "lote.json", Path(tmp) / "resultado.json"
         errlog = Path(tmp) / "stderr.txt"
         entrada.write_text(json.dumps({"rutas": rutas, "staging": str(staging),
