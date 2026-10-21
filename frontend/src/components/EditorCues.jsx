@@ -437,7 +437,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     //   cuadro a cuadro solo (~16 ms entre cuadros) llegaría hasta un cuadro tarde.
     // - Lejos, un sondeo (proximoChequeoMs) que cae un poco antes de la salida; después de cada
     //   salto se re-arma para la salida siguiente.
-    const armar = (ms, esJusto) => { clearTimeout(timer); justo = esJusto; timer = setTimeout(chequear, ms) }
+    // `vence`: cuándo cae el timer pendiente (performance.now). Sin loop, proximoChequeoMs da
+    // null: no se arma nada (un setTimeout con null correría ya).
+    let vence = 0
+    const armar = (ms, esJusto) => {
+      clearTimeout(timer); timer = 0; justo = false
+      if (!Number.isFinite(ms)) return
+      justo = esJusto; vence = performance.now() + ms; timer = setTimeout(chequear, ms)
+    }
     const revisar = (a) => {
       if (!a || a.paused) return
       const L = loopSonando()
@@ -447,8 +454,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
         saltarLoop(a, w.a)
         armar(proximoChequeoMs(w.a, L, ritmo), false)
       } else if (w.accion === 'esperar') {
-        if (!(timer && justo)) armar(Math.max(1, (w.en_s * 1000) / ritmo), true)
-      } else if (L && !timer) armar(proximoChequeoMs(a.currentTime, L, ritmo), false)
+        // Se re-arma si no hay un salto justo pendiente, o si el pendiente cae DESPUÉS de la
+        // salida nueva (se acortó la salida adentro del anticipo).
+        const ms = Math.max(1, (w.en_s * 1000) / ritmo)
+        if (!(timer && justo) || performance.now() + ms < vence - 1) armar(ms, true)
+      } else if (L) {
+        const ms = proximoChequeoMs(a.currentTime, L, ritmo)
+        if (!timer || (Number.isFinite(ms) && performance.now() + ms < vence - 1)) armar(ms, false)
+      }
     }
     function chequear() { timer = 0; justo = false; revisar(audioRef.current) }
     const a0 = audioRef.current
@@ -1334,8 +1347,17 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   const pendientes = vuelo.current.n > 0 || releyendo > 0
   useEffect(() => { if (!sinConfirmar) setCierre(false) }, [sinConfirmar])
   // f63: si el loop activo ya no está en la lista del servidor (se borró, Ctrl+Z deshizo su
-  // creación), no queda nada activo.
-  useEffect(() => { if (track) pasoLoop({ tipo: 'lista', marcas }) }, [marcas]) // eslint-disable-line react-hooks/exhaustive-deps
+  // creación), no queda nada activo. Si quedó demasiado corto (se acortó la salida), sale del
+  // loop y se avisa.
+  useEffect(() => {
+    if (!track) return
+    const antes = loopActRef.current
+    const n = pasoLoop({ tipo: 'lista', marcas })
+    if (antes.activo && !n.activo && n.id === antes.id) {
+      const m = marcas.find((x) => x.id === n.id && x.tipo === 'loop')
+      if (m) avisoMuyCorto(m)
+    }
+  }, [marcas]) // eslint-disable-line react-hooks/exhaustive-deps
   // La marca seleccionada («ya hay una ahí») se trae a la vista en la lista, sin mover el foco.
   useEffect(() => {
     if (sel === null) return

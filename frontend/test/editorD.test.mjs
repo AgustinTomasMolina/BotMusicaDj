@@ -710,6 +710,21 @@ test('loop activo: borrarlo, deshacer su creación, pasar de tema o cerrar lo li
   assert.deepEqual(transicionLoop(e, { tipo: 'limpiar' }), { id: null, activo: false })
 })
 
+test('loop activo que QUEDA demasiado corto (se acortó la salida): sale del loop y conserva el id', () => {
+  const e = { id: 5, activo: true }
+  // 10 ms: el server lo acepta (fin > inicio) pero no hay loop para escuchar.
+  const corto = { id: 5, tipo: 'loop', inicio: 10, fin: 10.01 }
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [corto] }), { id: 5, activo: false },
+    'un loop activo de 10 ms tiene que dejar de estar activo, con el id para el aviso de R')
+  // Salida a 1 ms de la entrada: tampoco.
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [{ ...corto, fin: 10.001 }] }), { id: 5, activo: false })
+  // Inactivo y corto: no cambia (sigue disponible para que R avise «demasiado corto»).
+  const inactivo = { id: 5, activo: false }
+  assert.equal(transicionLoop(inactivo, { tipo: 'lista', marcas: [corto] }), inactivo)
+  // Justo en el mínimo (20 ms) sigue activo.
+  assert.equal(transicionLoop(e, { tipo: 'lista', marcas: [{ ...corto, fin: 10.02 }] }), e)
+})
+
 test('atajo R: activar / salir del loop (sin modificadores)', () => {
   assert.deepEqual(atajoD({ key: 'r' }), { tipo: 'reloop' })
   assert.deepEqual(atajoD({ key: 'R', target: { tagName: 'DIV' } }), { tipo: 'reloop' }, 'con Bloq Mayús')

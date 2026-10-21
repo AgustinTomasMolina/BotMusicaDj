@@ -782,7 +782,8 @@ export const adentroDelLoop = (t, loop) => Boolean(loop) && finito(t) && finito(
 //   { tipo: 'ir', t, loop }    el cursor fue a `t` (clic en la onda, flechas, otro pad): afuera
 //                              del loop (`loop` = {inicio, fin} del activo), sale del loop
 //   { tipo: 'lista', marcas }  la lista del servidor cambió: si el loop ya no está (se borró, o
-//                              Ctrl+Z deshizo su creación), no queda nada activo
+//                              Ctrl+Z deshizo su creación), no queda nada activo; si quedó
+//                              demasiado corto, sale del loop (conserva el id)
 //   { tipo: 'limpiar' }        se pasó de tema o se cerró el editor
 export function transicionLoop(estado, ev) {
   const e = estado && 'id' in estado ? estado : loopInactivo()
@@ -800,8 +801,14 @@ export function transicionLoop(estado, ev) {
     case 'ir': return e.activo && ev.loop && !adentroDelLoop(ev.t, ev.loop) ? { id: e.id, activo: false } : e
     case 'lista': {
       if (e.id === null) return e
-      const sigue = (Array.isArray(ev.marcas) ? ev.marcas : []).some((m) => m.id === e.id && m.tipo === 'loop')
-      return sigue ? e : loopInactivo()
+      const m = (Array.isArray(ev.marcas) ? ev.marcas : []).find((x) => x.id === e.id && x.tipo === 'loop')
+      if (!m) return loopInactivo()
+      // Un loop activo que QUEDÓ demasiado corto (arrastrar la salida, Ctrl+Z / Ctrl+Y de un
+      // movimiento, editar la salida en la fila: el server acepta cualquier fin > inicio) se
+      // desactiva: si no, el salto se repite cada pocos ms. Se conserva el id para que R dé el
+      // aviso de «demasiado corto» y no el de «no hay un loop».
+      if (loopMuyCorto(m)) return e.activo ? { id: e.id, activo: false } : e
+      return e
     }
     case 'limpiar': return loopInactivo()
     default: return e

@@ -4930,6 +4930,71 @@ function casosF54() {
       })
     }],
 
+    ['editor D (f63): un loop de 10 ms no se activa (fila, pad, R) y un loop activo que QUEDA de 10 ms sale del loop y la reproducción sigue', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        // Por la API (el server acepta cualquier salida > entrada): un loop normal, un memory loop
+        // de 10 ms y un hot loop de 10 ms en el pad B.
+        const crear = async (m, que) => {
+          const r = await apiPedir(ctx, rutaMarcas(t.rid), 'POST', m)
+          afirmar(r.status === 201, `no pude crear ${que}: ${json(r)}`)
+          return r.data.marca
+        }
+        const normal = await crear({ tipo: 'loop', inicio: 10, fin: 11.875 }, 'el loop normal')
+        const corto = await crear({ tipo: 'loop', inicio: 30, fin: 30.01 }, 'el loop de 10 ms')
+        const cortoPad = await crear({ tipo: 'loop', inicio: 40, fin: 40.01, num: 1 }, 'el hot loop de 10 ms')
+        await abrirEditorD(page, ctx, t.item.titulo)
+        const boton = () => page.$eval('.edd-reloop', (b) => b.getAttribute('aria-pressed'))
+        const avisoEd = () => page.$eval('.edd-aviso', (e) => e.textContent).catch(() => '')
+        const muyCorto = (que) => hasta(avisoEd, (x) => x.startsWith('⚠ El loop'), `${que}: no avisó que el loop es demasiado corto`)
+        // Otro aviso antes (I: «Entrada del loop en …»), para que el siguiente se vea aunque sea
+        // el mismo texto que el anterior.
+        const otroAviso = async () => {
+          await page.focus('.edd-onda')
+          await page.keyboard.press('i')
+          await hasta(avisoEd, (x) => x.startsWith('Entrada del loop'), 'I no dejó su aviso')
+        }
+        const audioT = () => page.evaluate(() => [...window.__medios].find((m) => !m.paused)?.currentTime ?? null)
+
+        // La fila del loop de 10 ms: no lo activa, avisa.
+        await page.click(`.edd-fila[data-id="${corto.id}"] .edd-tag`)
+        await muyCorto('la fila del loop de 10 ms')
+        igual(await boton(), 'false', 'tocar la fila de un loop de 10 ms lo activó')
+        // El pad del hot loop de 10 ms: tampoco.
+        await otroAviso()
+        await page.click('.edd-pad[data-pad="1"]')
+        await muyCorto('el pad del hot loop de 10 ms')
+        igual(await boton(), 'false', 'tocar el pad de un hot loop de 10 ms lo activó')
+        afirmar(cortoPad.num === 1, `el hot loop de 10 ms no quedó en el pad B: ${json(cortoPad)}`)
+
+        // El loop normal activo y sonando; su salida pasa a 10 ms de la entrada (otra pestaña).
+        await page.click(`.edd-fila[data-id="${normal.id}"] .edd-tag`)
+        igual(await boton(), 'true', 'tocar la fila del loop normal no lo activó')
+        await page.focus('.edd-onda')
+        await page.keyboard.press('Space')
+        await hasta(() => sonando(page), (s) => s.length === 1, 'Espacio no hizo sonar el tema')
+        const fin = ms3(normal.inicio + 0.01)
+        const pr = await apiPedir(ctx, `${rutaMarcas(t.rid)}/${normal.id}`, 'PATCH', { fin })
+        afirmar(pr.status === 200, `el server no aceptó la salida a 10 ms: ${json(pr)}`)
+        // Cualquier escritura del editor trae la lista nueva (una memory donde está el cursor).
+        await page.focus('.edd-onda')
+        const mem = await conTecla(page, ['m'], 'POST')
+        igual(mem.data.marcas.find((m) => m.id === normal.id)?.fin, fin, 'la lista nueva no trae la salida a 10 ms')
+        await hasta(boton, (b) => b === 'false', 'el loop activo que quedó de 10 ms siguió activo')
+        await muyCorto('el loop activo que quedó de 10 ms')
+        // La reproducción sigue de largo (sin la tormenta de saltos a la entrada).
+        const t0 = await audioT()
+        await hasta(audioT, (x) => x !== null && x > fin + 0.2 && x > t0 + 0.5, `con el loop de 10 ms desactivado la reproducción no siguió (desde ${t0})`, 6000)
+        // R: avisa que es demasiado corto (no «No hay un loop») y no lo activa.
+        await otroAviso()
+        await page.keyboard.press('r')
+        await muyCorto('R con el loop que quedó de 10 ms')
+        igual(await boton(), 'false', 'R activó un loop de 10 ms')
+        await page.keyboard.press('Space')
+        await hasta(() => sonando(page), (s) => s.length === 0, 'Espacio no pausó')
+      })
+    }],
+
     ['editor D (f54): se reproduce con el audio local y el cabezal va con el audio; teclado, foco, Esc devuelve el foco, 44 px y 400 px', async (page, ctx) => {
       await conEditor(ctx, async ({ pid, por }) => {
         const t = por['Con grilla']
@@ -5595,12 +5660,21 @@ function casosF54() {
         await hasta(avisoEd, (x) => x.startsWith(`⚠ Ya hay una memory en ${tiempoTabla(mem.inicio)}`), 'la segunda M no avisó')
         const lp = (await conTecla(page, ['l'], 'POST')).data.marca
         desde = escrituras.length
+        // f63: el loop igual que ya está se ACTIVA. Primero R lo saca del loop (el recién creado
+        // queda activo), así la segunda L tiene algo que activar.
+        const reloop = () => page.$eval('.edd-reloop', (b) => b.getAttribute('aria-pressed'))
+        await page.keyboard.press('r')
+        igual(await reloop(), 'false', 'R no sacó del loop recién creado')
         await page.keyboard.press('l')
-        await hasta(avisoEd, (x) => x.startsWith('⚠ Ya hay un loop igual'), 'la segunda L no avisó')
+        await hasta(avisoEd, (x) => x.startsWith('⚠ Ya hay un loop igual') && x.includes('activé ese'), 'la segunda L no avisó (ni dijo que activó el que ya está)')
+        igual(await reloop(), 'true', 'la segunda L no activó el loop igual que ya estaba')
+        await page.keyboard.press('r')
+        igual(await reloop(), 'false', 'R no sacó del loop (antes del I/O)')
         await page.keyboard.press('i')
         for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight')
         await page.keyboard.press('o')                     // la misma entrada y salida que el de L
-        await hasta(avisoEd, (x) => x.startsWith('⚠ Ya hay un loop igual'), 'un I/O igual al loop no avisó')
+        await hasta(avisoEd, (x) => x.startsWith('⚠ Ya hay un loop igual') && x.includes('activé ese'), 'un I/O igual al loop no avisó (ni dijo que activó el que ya está)')
+        igual(await reloop(), 'true', 'un I/O igual al loop no activó el que ya estaba')
         await hasta(sel, (v) => json(v) === json([lp.id]), 'el I/O repetido no seleccionó el loop que ya estaba')
         igual(escrituras.slice(desde), [], 'M, L e I/O repetidos no pueden crear marcas')
         igual((await filasComoApi(page, ctx, t.rid, 'sin duplicados')).length, 3, 'tienen que quedar 3 marcas: el cue, la memory y el loop')
