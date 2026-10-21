@@ -591,6 +591,77 @@ def test_una_cache_con_otra_forma_se_rehace(corto, tmp_path, veneno):
     np.testing.assert_array_equal(b.q, bueno.q)
 
 
+def _mismas_bandas(b, esperado):
+    np.testing.assert_array_equal(b.q, esperado.q)
+    assert (b.referencias, b.duration_s, b.sample_rate, b.channels) == \
+        (esperado.referencias, esperado.duration_s, esperado.sample_rate, esperado.channels)
+
+
+@pytest.mark.parametrize("veces", [1, 10 ** 6])
+def test_con_la_cache_bloqueada_al_reemplazar_devuelve_las_bandas(corto, tmp_path, monkeypatch,
+                                                                    veces):
+    """En Windows, `os.replace` sobre la caché que otro hilo tiene abierta tira PermissionError
+    (era el 409 intermitente de dos previews del mismo tema). Una vez: el reintento la escribe.
+    Siempre: no se escribe, pero las bandas calculadas se devuelven igual y el .tmp no queda."""
+    cache = tmp_path / "peaks"
+    esperado = mb.compute_bandas(corto)
+    real, llamadas = os.replace, []
+
+    def falso(a, b):
+        llamadas.append(b)
+        if len(llamadas) <= veces:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(b))
+        return real(a, b)
+
+    monkeypatch.setattr(os, "replace", falso)
+    monkeypatch.setattr(mb, "REPLACE_ESPERA_S", 0.0)
+    b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is False
+    _mismas_bandas(b, esperado)
+    assert list(cache.glob("*.tmp")) == [], "quedó el .tmp"
+    assert len(llamadas) == (2 if veces == 1 else mb.REPLACE_INTENTOS), llamadas
+    escritas = list(cache.glob("*" + mb.CACHE_SUFIJO))
+    assert len(escritas) == (1 if veces == 1 else 0), escritas
+    otra, de_cache = mb.cached_bandas(corto, cache)
+    # Con un fallo, el reintento escribió la caché; con todos, no hay caché de dónde salir.
+    assert de_cache is (veces == 1)
+    _mismas_bandas(otra, esperado)
+
+
+def test_una_cache_que_no_se_puede_leer_se_recalcula(corto, tmp_path, monkeypatch):
+    """Leer la caché mientras otro hilo la reemplaza puede tirar PermissionError en Windows: es
+    un fallo de la caché, no del audio. Se recalcula y el pedido sale bien."""
+    cache = tmp_path / "peaks"
+    bueno, _ = mb.cached_bandas(corto, cache)
+    real = Path.read_bytes
+
+    def falso(self):
+        if self.suffix == mb.CACHE_SUFIJO:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", falso)
+    b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is False
+    _mismas_bandas(b, bueno)
+    assert list(cache.glob("*.tmp")) == [], "quedó el .tmp"
+
+
+def test_si_no_se_puede_marcar_la_cache_como_usada_igual_sale_de_la_cache(corto, tmp_path,
+                                                                            monkeypatch):
+    """`os.utime` sobre la caché (para la poda) también puede chocar con otro hilo: no cuenta."""
+    cache = tmp_path / "peaks"
+    bueno, _ = mb.cached_bandas(corto, cache)
+
+    def falso(*a, **k):
+        raise PermissionError(13, "El proceso no tiene acceso al archivo")
+
+    monkeypatch.setattr(os, "utime", falso)
+    b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is True
+    _mismas_bandas(b, bueno)
+
+
 def test_la_poda_de_bandas_no_toca_los_picos_y_al_reves(tmp_path):
     """Las dos cachés viven en la misma carpeta con el mismo tope de archivos, cada una
     contando y podando lo suyo."""

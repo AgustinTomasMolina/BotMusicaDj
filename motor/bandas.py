@@ -62,17 +62,28 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import math
 import os
 import struct
 import tempfile
+import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from motor.peaks import CACHE_MAX_ARCHIVOS, UnreadableAudio, _archivo_cache, _podar
+from motor.peaks import (
+    CACHE_MAX_ARCHIVOS,
+    REPLACE_ESPERA_S,
+    REPLACE_INTENTOS,
+    UnreadableAudio,
+    _archivo_cache,
+    _podar,
+)
+
+_log = logging.getLogger(__name__)
 
 BANDAS = ("graves", "medios", "agudos")
 TASA_HZ = 100                    # cuadros por segundo (10 ms)
@@ -365,21 +376,41 @@ def _leer_cache(archivo: Path, firma: dict) -> Bandas | None:
     return Bandas(q, tuple(float(r) for r in refs), float(dur), sr, ch)
 
 
-def _escribir_cache(archivo: Path, firma: dict, b: Bandas) -> None:
+def _escribir_cache(archivo: Path, firma: dict, b: Bandas) -> bool:
+    """Escribe la caché de forma atómica (un lector nunca ve un archivo a medio escribir) y
+    devuelve si quedó escrita. Mismo criterio que la caché de los picos (`motor.peaks`): NUNCA
+    falla hacia afuera por un OSError, porque las bandas ya están calculadas y no guardarlas
+    solo cuesta recalcularlas la próxima vez. En Windows, `os.replace` sobre un archivo que otro
+    hilo tiene abierto (`_leer_cache`, `os.utime`) tira PermissionError: se reintenta un par de
+    veces y, si sigue, se desiste. El `.tmp` no queda tirado en ningún caso."""
     enc = {**firma, "cuadros": b.cuadros, "duration_s": b.duration_s,
            "sample_rate": b.sample_rate, "channels": b.channels,
            "referencias": list(b.referencias)}
     cab = json.dumps(enc).encode("utf-8")
     datos = _MAGIA + struct.pack("<I", len(cab)) + cab + zlib.compress(b.q.tobytes(), 6)
-    # Escritura atómica: un lector a la vez nunca ve un archivo a medio escribir.
-    fd, tmp = tempfile.mkstemp(dir=archivo.parent, suffix=".tmp")
+    try:
+        archivo.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=archivo.parent, suffix=".tmp")
+    except OSError as e:
+        _log.warning("no se pudo guardar la caché de las bandas en %s: %s", archivo, e)
+        return False
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(datos)
-        os.replace(tmp, archivo)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        for _ in range(REPLACE_INTENTOS - 1):
+            try:
+                os.replace(tmp, archivo)
+                return True
+            except PermissionError:
+                time.sleep(REPLACE_ESPERA_S)
+        os.replace(tmp, archivo)          # el último intento: si falla, va al except de abajo
+        return True
+    except OSError as e:
+        _log.warning("no se pudo guardar la caché de las bandas en %s: %s", archivo, e)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            Path(tmp).unlink(missing_ok=True)            # tras un replace exitoso ya no está
 
 
 def cached_bandas(path: Path | str, cache_dir: Path | str,
@@ -401,10 +432,9 @@ def cached_bandas(path: Path | str, cache_dir: Path | str,
         with contextlib.suppress(OSError):
             os.utime(archivo)                            # usada: la poda la deja para el final
         return res, True
-    res = compute_bandas(ruta)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    _escribir_cache(archivo, firma, res)
-    _podar(cache_dir, CACHE_MAX_ARCHIVOS if tope is None else tope, patron=f"*{CACHE_SUFIJO}")
+    res = compute_bandas(ruta)                           # los errores del AUDIO sí suben
+    if _escribir_cache(archivo, firma, res):
+        _podar(cache_dir, CACHE_MAX_ARCHIVOS if tope is None else tope, patron=f"*{CACHE_SUFIJO}")
     return res, False
 
 
