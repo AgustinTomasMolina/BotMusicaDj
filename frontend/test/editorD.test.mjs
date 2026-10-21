@@ -17,7 +17,8 @@ import {
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, descartarPaso, CONFIANZA_BAJA, NITIDEZ_BAJA,
   clasificarFalla, yaHecha, opConId, contarIguales, cerrarPaso,
   marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda, agruparIguales, repetidas, grillaAnclada, rescatarHechas, marcaPropia, etiquetaQuitar, avisoQuitado, avisoNoQuitado,
-  temaVigente, beatsLoop,
+  temaVigente, beatsLoop, envolverLoop, adentroDelLoop, transicionLoop, loopInactivo, LOOP_ANTICIPO_S,
+  loopMuyCorto, proximoChequeoMs, LOOP_MIN_S, LOOP_PISO_MS, LOOP_SONDEO_MS,
 } from '../src/editorD.js'
 
 // Una grilla de /onda3 a 128 BPM con el primer beat en 0,25 s.
@@ -634,4 +635,137 @@ test('la X para quitar: nombre accesible y aviso, con pad, nombre y tiempos (ped
   assert.equal(etiquetaQuitar(loop), 'Quitar loop 0:59.576 a 1:01.231', 'un nombre en blanco no se dice')
   assert.equal(etiquetaQuitar({ ...loop, num: 1, nombre: 'Intro' }), 'Quitar loop del pad B «Intro» 0:59.576 a 1:01.231')
   assert.equal(avisoQuitado({ ...loop, num: 1 }), 'Quité el loop del pad B (0:59.576 a 1:01.231). Ctrl+Z lo vuelve a poner.')
+})
+
+/* ---------- f63: el loop sonando (loop activo, como en un CDJ) ---------- */
+
+// Un loop de 4 beats a 128 BPM: 4 × 0,46875 = 1,875 s, de 10 a 11,875.
+const L4 = { inicio: 10, fin: 11.875 }
+
+test('loop activo: lejos de la salida no se hace nada; cerca, se programa el salto con lo que falta', () => {
+  assert.deepEqual(envolverLoop(10.5, L4), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(11.8, L4), { accion: 'nada' }, '75 ms antes: todavía lo hace el cuadro a cuadro')
+  assert.equal(LOOP_ANTICIPO_S, 0.05)
+  assert.deepEqual(envolverLoop(11.84, L4), { accion: 'esperar', en_s: 0.035 })
+  assert.deepEqual(envolverLoop(11.84, L4, 0), { accion: 'nada' }, 'sin anticipo no se programa nada')
+})
+
+test('loop activo: en la salida vuelve a la entrada, conservando lo que se pasó (el beat no se corre)', () => {
+  assert.deepEqual(envolverLoop(11.875, L4), { accion: 'saltar', a: 10 })
+  assert.deepEqual(envolverLoop(11.8745, L4), { accion: 'saltar', a: 10 }, 'a menos de 1 ms de la salida ya salta')
+  assert.deepEqual(envolverLoop(11.885, L4), { accion: 'saltar', a: 10.01 }, '10 ms tarde: cae 10 ms después de la entrada')
+  // Dos vueltas y 20 ms de más (el loop se creó con el audio sonando y el server tardó).
+  assert.deepEqual(envolverLoop(11.875 + 2 * 1.875 + 0.02, L4), { accion: 'saltar', a: 10.02 })
+})
+
+test('loop activo: antes de la entrada, sin loop o con un loop roto no se salta', () => {
+  assert.deepEqual(envolverLoop(9.5, L4), { accion: 'nada' }, 'antes de la entrada el loop todavía no empezó')
+  assert.deepEqual(envolverLoop(11.9, null), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(11.9, { inicio: 12, fin: 12 }), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(11.9, { inicio: 12, fin: 11 }), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(Number.NaN, L4), { accion: 'nada' })
+  assert.equal(adentroDelLoop(10, L4), true)
+  assert.equal(adentroDelLoop(11.875, L4), true)
+  assert.equal(adentroDelLoop(9.99, L4), false)
+  assert.equal(adentroDelLoop(11.9, L4), false)
+  assert.equal(adentroDelLoop(10.5, null), false)
+})
+
+test('loop activo: crear o elegir un loop lo activa; un cue o una memory no', () => {
+  const loop = { id: 7, tipo: 'loop', inicio: 10, fin: 11.875 }
+  assert.deepEqual(loopInactivo(), { id: null, activo: false })
+  assert.deepEqual(transicionLoop(loopInactivo(), { tipo: 'crear', marca: loop }), { id: 7, activo: true })
+  assert.deepEqual(transicionLoop({ id: 3, activo: false }, { tipo: 'elegir', marca: loop }), { id: 7, activo: true })
+  const e = { id: 7, activo: true }
+  assert.equal(transicionLoop(e, { tipo: 'elegir', marca: { id: 8, tipo: 'cue', inicio: 1, num: 0 } }), e)
+  assert.equal(transicionLoop(e, { tipo: 'crear', marca: { id: 9, tipo: 'memory', inicio: 1 } }), e)
+})
+
+test('loop activo: R alterna (salir deja el loop para volver a activarlo); sin loop no hace nada', () => {
+  assert.deepEqual(transicionLoop({ id: 7, activo: true }, { tipo: 'alternar' }), { id: 7, activo: false })
+  assert.deepEqual(transicionLoop({ id: 7, activo: false }, { tipo: 'alternar' }), { id: 7, activo: true })
+  assert.deepEqual(transicionLoop(loopInactivo(), { tipo: 'alternar' }), { id: null, activo: false })
+  assert.deepEqual(transicionLoop({ id: 7, activo: true }, { tipo: 'salir' }), { id: 7, activo: false })
+})
+
+test('loop activo: llevar el cursor afuera del loop sale; adentro, sigue', () => {
+  const e = { id: 7, activo: true }
+  assert.equal(transicionLoop(e, { tipo: 'ir', t: 10.9, loop: L4 }), e)
+  assert.equal(transicionLoop(e, { tipo: 'ir', t: 11.875, loop: L4 }), e, 'la salida misma es del loop')
+  assert.deepEqual(transicionLoop(e, { tipo: 'ir', t: 30, loop: L4 }), { id: 7, activo: false })
+  assert.deepEqual(transicionLoop(e, { tipo: 'ir', t: 9.5, loop: L4 }), { id: 7, activo: false })
+  const off = { id: 7, activo: false }
+  assert.equal(transicionLoop(off, { tipo: 'ir', t: 30, loop: L4 }), off)
+})
+
+test('loop activo: borrarlo, deshacer su creación, pasar de tema o cerrar lo limpia', () => {
+  const e = { id: 7, activo: true }
+  const lista = [{ id: 7, tipo: 'loop', inicio: 10, fin: 11.875 }, { id: 8, tipo: 'cue', inicio: 1, num: 0 }]
+  assert.equal(transicionLoop(e, { tipo: 'lista', marcas: lista }), e, 'sigue en la lista: no cambia')
+  // Borrado (o Ctrl+Z de su creación): la lista del servidor ya no lo tiene.
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [lista[1]] }), { id: null, activo: false })
+  assert.deepEqual(transicionLoop({ id: 7, activo: false }, { tipo: 'lista', marcas: [] }), { id: null, activo: false }, 'tampoco queda para el reloop')
+  // Pasó a hot cue (mismo id, otro tipo): ya no es un loop.
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [{ id: 7, tipo: 'cue', inicio: 10, num: 1 }] }), { id: null, activo: false })
+  assert.deepEqual(transicionLoop(e, { tipo: 'limpiar' }), { id: null, activo: false })
+})
+
+test('loop activo que QUEDA demasiado corto (se acortó la salida): sale del loop y conserva el id', () => {
+  const e = { id: 5, activo: true }
+  // 10 ms: el server lo acepta (fin > inicio) pero no hay loop para escuchar.
+  const corto = { id: 5, tipo: 'loop', inicio: 10, fin: 10.01 }
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [corto] }), { id: 5, activo: false },
+    'un loop activo de 10 ms tiene que dejar de estar activo, con el id para el aviso de R')
+  // Salida a 1 ms de la entrada: tampoco.
+  assert.deepEqual(transicionLoop(e, { tipo: 'lista', marcas: [{ ...corto, fin: 10.001 }] }), { id: 5, activo: false })
+  // Inactivo y corto: no cambia (sigue disponible para que R avise «demasiado corto»).
+  const inactivo = { id: 5, activo: false }
+  assert.equal(transicionLoop(inactivo, { tipo: 'lista', marcas: [corto] }), inactivo)
+  // Justo en el mínimo (20 ms) sigue activo.
+  assert.equal(transicionLoop(e, { tipo: 'lista', marcas: [{ ...corto, fin: 10.02 }] }), e)
+})
+
+test('atajo R: activar / salir del loop (sin modificadores)', () => {
+  assert.deepEqual(atajoD({ key: 'r' }), { tipo: 'reloop' })
+  assert.deepEqual(atajoD({ key: 'R', target: { tagName: 'DIV' } }), { tipo: 'reloop' }, 'con Bloq Mayús')
+  assert.equal(atajoD({ key: 'r', ctrlKey: true }), null, 'Ctrl+R es del navegador')
+  assert.equal(atajoD({ key: 'r', target: { tagName: 'INPUT', type: 'text' } }), null, 'escribiendo un nombre')
+})
+
+/* ---------- f63 (auditoría): loops cortísimos y el ciclo sin requestAnimationFrame ---------- */
+
+test('loop de 1 ms: envolverLoop no salta (con la tolerancia, «llegó a la salida» sería siempre cierto)', () => {
+  assert.deepEqual(envolverLoop(10, { inicio: 10, fin: 10.001 }), { accion: 'nada' })
+  assert.deepEqual(envolverLoop(10.001, { inicio: 10, fin: 10.001 }), { accion: 'nada' })
+})
+
+test('loop de 10 ms: envolverLoop salta, pero es demasiado corto para activarse (mínimo 20 ms)', () => {
+  assert.deepEqual(envolverLoop(10.01, { inicio: 10, fin: 10.01 }), { accion: 'saltar', a: 10 })
+  assert.equal(LOOP_MIN_S, 0.02)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.01 }), true)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.001 }), true)
+  assert.equal(loopMuyCorto({ inicio: 10, fin: 10.02 }), false, '20 ms justos ya suenan')
+  assert.equal(loopMuyCorto({ inicio: 10, fin: null }), true)
+  const corto = { id: 5, tipo: 'loop', inicio: 10, fin: 10.01 }
+  assert.deepEqual(transicionLoop(loopInactivo(), { tipo: 'crear', marca: corto }), { id: null, activo: false })
+  assert.deepEqual(transicionLoop({ id: 3, activo: true }, { tipo: 'elegir', marca: corto }), { id: 3, activo: true }, 'elegir uno corto no cambia el activo')
+  // R sobre un loop que quedó corto (se le movió la salida): no se activa; salir sí se puede.
+  assert.deepEqual(transicionLoop({ id: 5, activo: false }, { tipo: 'alternar', marca: corto }), { id: 5, activo: false })
+  assert.deepEqual(transicionLoop({ id: 5, activo: true }, { tipo: 'alternar', marca: corto }), { id: 5, activo: false })
+  assert.deepEqual(transicionLoop({ id: 7, activo: false }, { tipo: 'alternar', marca: { id: 7, tipo: 'loop', inicio: 10, fin: 11.875 } }), { id: 7, activo: true })
+})
+
+test('sin requestAnimationFrame: el próximo chequeo cae 25 ms antes de la salida, entre 10 y 250 ms', () => {
+  assert.equal(LOOP_PISO_MS, 10)
+  assert.equal(LOOP_SONDEO_MS, 250)
+  // Recién saltado a la entrada de un loop de 1,875 s: falta mucho → sondeo de 250 ms.
+  assert.equal(proximoChequeoMs(10, L4), 250)
+  // Faltan 125 ms: vuelve a mirar en 100 ms (adentro de los 50 ms del anticipo, donde se programa el salto justo).
+  assert.equal(proximoChequeoMs(11.75, L4), 100)
+  assert.equal(proximoChequeoMs(11.75, L4, 2), 50, 'a doble velocidad, la mitad')
+  // Ya adentro del anticipo, o pasado: el piso.
+  assert.equal(proximoChequeoMs(11.86, L4), 10)
+  assert.equal(proximoChequeoMs(12.5, L4), 10)
+  assert.equal(proximoChequeoMs(11.75, null), null)
+  assert.equal(proximoChequeoMs(Number.NaN, L4), null)
 })

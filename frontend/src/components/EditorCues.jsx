@@ -9,6 +9,7 @@ import {
   contarIguales, cerrarPaso, marcaCercana, filasBanderas, detectarGolpesGraves, alturaBanda,
   agruparIguales, repetidas, grillaAnclada, rescatarHechas, etiquetaQuitar, avisoQuitado, avisoNoQuitado,
   atajoD, fmtBpmMedido, letraPad, rotuloMarca, compasDe, nombreD, temaVigente, beatsLoop,
+  envolverLoop, transicionLoop, loopInactivo, loopMuyCorto, proximoChequeoMs, LOOP_MIN_S,
 } from '../editorD'
 import { usePlayer } from '../player/context'
 import { useVolumenEn } from '../hooks'
@@ -181,6 +182,23 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   // La última lista que mandó el servidor, al instante (sin esperar el render): con esta se
   // decide «ya hay una ahí» y el pad libre.
   const listaServidor = useRef([])
+  // f63: el loop activo (como en un CDJ): mientras suena, al llegar a la salida vuelve a la
+  // entrada. El ref es lo que mira el cuadro a cuadro (sin esperar el render); el estado, lo que
+  // se dibuja.
+  const [loopAct, setLoopAct] = useState(loopInactivo)
+  const loopActRef = useRef(loopInactivo())
+  const pasoLoop = (ev) => {
+    const n = transicionLoop(loopActRef.current, ev)
+    if (n !== loopActRef.current) { loopActRef.current = n; setLoopAct(n) }
+    return n
+  }
+  // Los tiempos del loop activo según la ÚLTIMA lista del servidor, o null si no hay loop activo.
+  const loopSonando = () => {
+    const e = loopActRef.current
+    if (!e.activo) return null
+    const m = listaServidor.current.find((x) => x.id === e.id && x.tipo === 'loop')
+    return m ? { inicio: m.inicio, fin: m.fin } : null
+  }
   // El editor se cerró: lo que vuelva después y falle se avisa por `onFallaTardia` (la playlist).
   const cerrado = useRef(false)
   const tardia = useRef(onFallaTardia)
@@ -240,6 +258,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     setDetalle(null)
     setHistorial(historialVacio())
     setLoopIn(null)
+    pasoLoop({ tipo: 'limpiar' })
     setSel(null)
     setAbierta(null)
     setConfirmaRep(false)
@@ -398,13 +417,62 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     if (t < vv.desde || t > vv.hasta - w * 0.02) setCentro(t + w * 0.4)
   }, [])
 
+  // El salto del loop activo (f63): directo al <audio>, sin pasar por `irA` (que saca del loop
+  // a un cursor que va afuera). `x` ya trae lo que se pasó de la salida (ver envolverLoop).
+  const saltarLoop = (a, x) => {
+    try { a.currentTime = x } catch { /* sin metadata */ }
+    cursorRef.current = x
+  }
   useEffect(() => {
     if (!sonando) return undefined
     let raf = 0
     let ultimo = 0
+    let timer = 0
+    let justo = false              // el timer pendiente es el del salto justo (no un sondeo)
+    // El loop activo, mirado desde el cuadro a cuadro, desde los timers y desde `timeupdate`
+    // (ver el comentario de envolverLoop: sin requestAnimationFrame — pestaña oculta — el ciclo
+    // sigue con los timers; Chrome en segundo plano los frena a ~1/s y el salto llega tarde, con
+    // el beat conservado por el módulo).
+    // - Cerca de la salida (≤ LOOP_ANTICIPO_S) el salto va con un timer al instante justo: el
+    //   cuadro a cuadro solo (~16 ms entre cuadros) llegaría hasta un cuadro tarde.
+    // - Lejos, un sondeo (proximoChequeoMs) que cae un poco antes de la salida; después de cada
+    //   salto se re-arma para la salida siguiente.
+    // `vence`: cuándo cae el timer pendiente (performance.now). Sin loop, proximoChequeoMs da
+    // null: no se arma nada (un setTimeout con null correría ya).
+    let vence = 0
+    const armar = (ms, esJusto) => {
+      clearTimeout(timer); timer = 0; justo = false
+      if (!Number.isFinite(ms)) return
+      justo = esJusto; vence = performance.now() + ms; timer = setTimeout(chequear, ms)
+    }
+    const revisar = (a) => {
+      if (!a || a.paused) return
+      const L = loopSonando()
+      const w = envolverLoop(a.currentTime, L)
+      const ritmo = a.playbackRate || 1
+      if (w.accion === 'saltar') {
+        saltarLoop(a, w.a)
+        armar(proximoChequeoMs(w.a, L, ritmo), false)
+      } else if (w.accion === 'esperar') {
+        // Se re-arma si no hay un salto justo pendiente, o si el pendiente cae DESPUÉS de la
+        // salida nueva (se acortó la salida adentro del anticipo).
+        const ms = Math.max(1, (w.en_s * 1000) / ritmo)
+        if (!(timer && justo) || performance.now() + ms < vence - 1) armar(ms, true)
+      } else if (L) {
+        const ms = proximoChequeoMs(a.currentTime, L, ritmo)
+        if (!timer || (Number.isFinite(ms) && performance.now() + ms < vence - 1)) armar(ms, false)
+      }
+    }
+    function chequear() { timer = 0; justo = false; revisar(audioRef.current) }
+    const a0 = audioRef.current
+    const enTimeupdate = () => revisar(audioRef.current)
+    const enVisibilidad = () => revisar(audioRef.current)
+    a0?.addEventListener('timeupdate', enTimeupdate)
+    document.addEventListener('visibilitychange', enVisibilidad)
     const tick = (ahora) => {
       const a = audioRef.current
       if (a) {
+        revisar(a)
         cursorRef.current = a.currentTime
         pintarCursor(a.currentTime)
         seguir(a.currentTime)
@@ -413,8 +481,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [sonando, pintarCursor, seguir])
+    revisar(a0)
+    return () => {
+      cancelAnimationFrame(raf); clearTimeout(timer)
+      a0?.removeEventListener('timeupdate', enTimeupdate)
+      document.removeEventListener('visibilitychange', enVisibilidad)
+    }
+  }, [sonando, pintarCursor, seguir]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const posActual = () => {
     const a = audioRef.current
@@ -423,6 +496,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
 
   const irA = (t, { centrar = false } = {}) => {
     const x = ms3(acotar(t, dur))
+    // Llevar el cursor afuera del loop activo (clic en la onda, flechas, otro pad) sale del loop.
+    const L = loopSonando()
+    if (L) pasoLoop({ tipo: 'ir', t: x, loop: L })
     cursorRef.current = x
     setCursor(x)
     const a = audioRef.current
@@ -449,6 +525,42 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     const a = audioRef.current
     document.querySelectorAll('audio,video').forEach((m) => { if (m !== a && !m.paused) m.pause() })
     setSonando(true)
+  }
+  // Un loop cuya salida es el final del tema: el <audio> termina antes de que llegue el salto.
+  const alTerminar = () => {
+    const a = audioRef.current
+    const L = loopSonando()
+    if (a && L) {
+      saltarLoop(a, L.inicio)
+      a.play().catch((e) => {
+        // Si el navegador no deja volver a arrancar, no queda «sonando» un audio parado.
+        alParar()
+        if (!(e && e.name === 'AbortError')) setAviso('⚠ El loop llegó al final del tema y el navegador no dejó volver a reproducirlo: apretá Espacio.')
+      })
+      return
+    }
+    alParar()
+  }
+  const avisoMuyCorto = (m) => setAviso(`⚠ El loop ${fmtTiempo(m.inicio)} → ${fmtTiempo(m.fin)} es demasiado corto para sonar (menos de ${Math.round(LOOP_MIN_S * 1000)} ms): no lo activé. Alargá la salida.`)
+  // Elegir un loop (su pad, su bandera, su fila) lo activa y lleva el cursor a su entrada.
+  const activarLoop = (m) => {
+    if (loopMuyCorto(m)) avisoMuyCorto(m)
+    else pasoLoop({ tipo: 'elegir', marca: m })
+    irA(m.inicio, { centrar: !sonando })
+  }
+  // R / el botón «Loop activo»: salir del loop (sigue sonando después de la salida) o volver a
+  // activarlo (como el reloop de un CDJ: vuelve a la entrada).
+  const reloop = () => {
+    if (!track) return
+    const e = loopActRef.current
+    const m = e.id === null ? null : listaServidor.current.find((x) => x.id === e.id && x.tipo === 'loop')
+    if (!m) { setAviso('No hay un loop para activar: marcá uno (I y O, o L) o tocá uno en la lista.'); return }
+    if (!e.activo && loopMuyCorto(m)) { avisoMuyCorto(m); return }
+    const n = pasoLoop({ tipo: 'alternar', marca: m })
+    if (n.activo) {
+      irA(m.inicio, { centrar: !sonando })
+      setAviso(`Loop activo: ${fmtTiempo(m.inicio)} → ${fmtTiempo(m.fin)}. Suena solo el loop; R sale.`)
+    } else setAviso('Saliste del loop: la reproducción sigue después de la salida. R lo vuelve a activar.')
   }
   const alParar = () => {
     const a = audioRef.current
@@ -865,8 +977,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     const m = marcaCercana(listaServidor.current, tipo, inicio, fin)
     if (!m) return false
     setSel(m.id)
+    // Un loop igual que ya existe se activa (como elegirlo), y el aviso lo dice.
+    const activo = tipo === 'loop' && !loopMuyCorto(m) && pasoLoop({ tipo: 'elegir', marca: m }).activo
     const que = tipo === 'cue' ? `un hot cue (pad ${letraPad(m.num)})` : tipo === 'memory' ? 'una memory' : 'un loop igual'
-    setAviso(`⚠ Ya hay ${que} en ${fmtTiempo(m.inicio)}${tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}. No creé otro: mové el cursor para marcar otro.`)
+    setAviso(`⚠ Ya hay ${que} en ${fmtTiempo(m.inicio)}${tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}. No creé otro${activo ? ': activé ese (R sale del loop).' : ': mové el cursor para marcar otro.'}`)
     return true
   }
 
@@ -922,6 +1036,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       return crearAvisando({ tipo: 'memory', inicio: t }, `Memory cue en ${fmtTiempo(t)}`)
     }, 'la memory')
   }
+  // Un loop recién creado queda activo. Sonando, el salto lo hace el cuadro a cuadro (el cabezal
+  // ya pasó la salida: vuelve a la entrada conservando el beat); en pausa, el cursor va a la entrada.
+  const loopCreado = (m) => {
+    if (loopMuyCorto(m)) { avisoMuyCorto(m); return }
+    pasoLoop({ tipo: 'crear', marca: m })
+    const a = audioRef.current
+    if (!a || a.paused) irA(m.inicio)
+  }
   const ponerLoopIn = () => {
     if (!track) return
     const t = aqui()
@@ -952,8 +1074,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (yaHay('loop', entrada, t)) { setLoopIn(null); return null }
       const c = cuerpoLoop(entrada, t)
       if (c.error) { setAviso(c.error); return null }
+      const ep = epoca.current
       const d = await crearAvisando(c, `Loop ${fmtTiempo(entrada)} → ${fmtTiempo(t)}`)
       if (d) setLoopIn((x) => (x === entrada ? null : x))
+      if (d && ep === epoca.current) loopCreado(d.marca)
       return d
     }, 'el loop')
   }
@@ -968,7 +1092,10 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (yaHay('loop', t, fin)) return null
       const c = cuerpoLoop(t, fin)
       if (c.error) { setAviso(c.error); return null }
-      return crearAvisando(c, `Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
+      const ep = epoca.current
+      const d = await crearAvisando(c, `Loop de ${loopBeats} beat${loopBeats === 1 ? '' : 's'} en ${fmtTiempo(t)}`)
+      if (d && ep === epoca.current) loopCreado(d.marca)
+      return d
     }, 'el loop')
   }
   const tocarPad = (num, { borrarlo = false } = {}) => {
@@ -978,7 +1105,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       borrar(m)
       return
     }
-    if (m) { setAviso(''); irA(m.inicio, { centrar: !sonando }); return }
+    if (m) { setAviso(''); if (m.tipo === 'loop') activarLoop(m); else irA(m.inicio, { centrar: !sonando }); return }
     ponerCue(num)
   }
 
@@ -1042,6 +1169,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     fin: () => track && irA(dur, { centrar: true }),
     tema: (a) => irTema(idx + a.dir),
     cerrar: () => cerrar(),
+    reloop,
   }
 
   // Cerrar con cambios sin confirmar (no se pudo releer el servidor) pide una segunda vez, y al
@@ -1059,6 +1187,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     if (k < 0 || k >= temas.length || k === idx) return
     epoca.current += 1          // ya: una respuesta que llegue antes del render no es del tema nuevo
     audioRef.current?.pause()
+    // f63: el loop activo es del tema que se deja; se limpia ya (no en el efecto, un render después).
+    pasoLoop({ tipo: 'limpiar' })
     setIdx(k)
   }
 
@@ -1161,7 +1291,13 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     if (!a) return false
     arrastreRef.current = null
     const m = marcas.find((x) => x.id === a.id)
-    if (!m || !a.movio) { setArrastre(null); if (m) irA(a.t0); return true }
+    if (!m || !a.movio) {
+      setArrastre(null)
+      // Un clic en la bandera de un loop lo activa (y el cursor va a su entrada).
+      if (m && m.tipo === 'loop' && a.borde === 'inicio') activarLoop(m)
+      else if (m) irA(a.t0)
+      return true
+    }
     const campo = a.borde === 'fin' ? 'fin' : 'inicio'
     await cambiar(m, { [campo]: a.t }, `Mover ${nombreD(m)} a ${fmtTiempo(a.t)}`)
     setArrastre(null)
@@ -1193,6 +1329,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   // tiene 32 loops iguales encimados.
   const gruposVis = agruparIguales(visibles)
   const loopsVis = gruposVis.filter((x) => x.marca.tipo === 'loop')
+  // f63: el grupo (de loops idénticos) que tiene el loop activo se dibuja resaltado.
+  const esActivo = (ids) => loopAct.activo && Array.isArray(ids) && ids.includes(loopAct.id)
+  // El rótulo de la fila: un loop se ACTIVA (y dice si es el activo); el resto, «Ir a…».
+  const etiquetaFila = (m) => (m.tipo === 'loop'
+    ? `Activar ${nombreD(m)}${loopAct.activo && loopAct.id === m.id ? ' · loop activo' : ''}` : `Ir a ${nombreD(m)}`)
   const compas = compasDe(cursor, grillaVisible ? g : null, ajuste.offset)
   const bpmTxt = track ? fmtBpmMedido(track.bpm) : null
   const desfasada = track && durAudio ? avisoDuracion(durAudio, durEje) : null
@@ -1205,6 +1346,18 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   // del servidor (auditoría f54).
   const pendientes = vuelo.current.n > 0 || releyendo > 0
   useEffect(() => { if (!sinConfirmar) setCierre(false) }, [sinConfirmar])
+  // f63: si el loop activo ya no está en la lista del servidor (se borró, Ctrl+Z deshizo su
+  // creación), no queda nada activo. Si quedó demasiado corto (se acortó la salida), sale del
+  // loop y se avisa.
+  useEffect(() => {
+    if (!track) return
+    const antes = loopActRef.current
+    const n = pasoLoop({ tipo: 'lista', marcas })
+    if (antes.activo && !n.activo && n.id === antes.id) {
+      const m = marcas.find((x) => x.id === n.id && x.tipo === 'loop')
+      if (m) avisoMuyCorto(m)
+    }
+  }, [marcas]) // eslint-disable-line react-hooks/exhaustive-deps
   // La marca seleccionada («ya hay una ahí») se trae a la vista en la lista, sin mover el foco.
   useEffect(() => {
     if (sel === null) return
@@ -1280,7 +1433,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   // Lo que va DETRÁS de la onda en el canvas: un relleno por grupo de loops idénticos y el tramo
   // del loop a medio marcar (de la entrada al cursor).
   const fondos = [
-    ...loopsVis.map(({ marca: m }) => ({ desde: posDe(m, 'inicio'), hasta: posDe(m, 'fin'), color: '--edd-loop-fondo' })),
+    ...loopsVis.map(({ marca: m, ids }) => ({ desde: posDe(m, 'inicio'), hasta: posDe(m, 'fin'), color: esActivo(ids) ? '--edd-loop-activo-fondo' : '--edd-loop-fondo' })),
     ...(loopIn !== null && cursor > loopIn ? [{ desde: loopIn, hasta: cursor, color: '--edd-loop-pend' }] : []),
   ]
   const claveFondos = JSON.stringify(fondos)
@@ -1315,7 +1468,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   return (
     <div className="edd-fondo">
       <div className="edd" ref={rootRef} role="dialog" aria-modal="true" aria-labelledby="edd-titulo" aria-describedby="edd-ayuda">
-        <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alParar}
+        <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alTerminar}
           onError={() => setSonando(false)}
           onLoadedMetadata={(e) => { if (cursorRef.current > 0) { try { e.currentTarget.currentTime = cursorRef.current } catch { /* nada */ } } }} />
 
@@ -1360,11 +1513,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
           {/* Sin aria-hidden en el contenedor: adentro van las X (botones). El texto de cada
               bandera sí va oculto al lector (la misma información está en la lista). */}
           <div className="edd-flags">
-            {banderas.map(({ id: bid, m, n, der, ancho, anchoMin, fila, corta, tapadas }) => {
+            {banderas.map(({ id: bid, m, ids, n, der, ancho, anchoMin, fila, corta, tapadas }) => {
               const conX = m.tipo !== 'pend' && n === 1
               return (
                 <span key={bid} data-id={m.tipo === 'pend' ? undefined : m.id} data-fila={fila} data-n={n}
-                  className={`edd-flag ${m.tipo === 'pend' ? 'cue-loop' : claseMarca(m)} is-${m.tipo}${der ? ' is-der' : ''}${m.id === sel ? ' is-sel' : ''}${conX ? ' con-x' : ''}`}
+                  className={`edd-flag ${m.tipo === 'pend' ? 'cue-loop' : claseMarca(m)} is-${m.tipo}${der ? ' is-der' : ''}${m.id === sel ? ' is-sel' : ''}${m.tipo === 'loop' && esActivo(ids) ? ' is-activo' : ''}${conX ? ' con-x' : ''}`}
                   style={{ left: `${Math.max(0, Math.min(100, pct(posDe(m, 'inicio'))))}%`, top: `${fila * 25}px`, maxWidth: `${corta ? anchoMin : ancho}px` }}
                   title={m.tipo === 'pend' ? 'Entrada del loop marcada: falta la salida (O)'
                     : `${marcaAria(m)}${n > 1 ? ` · ${n} iguales encimadas (se quitan desde la lista o con «Borrar repetidos»)` : ''}${tapadas.length ? ` · y ${tapadas.length} más acá: ${tapadas.map((x) => textoBandera(x.m)).join(', ')} (la X quita solo esta)` : ''} (arrastrá para moverla)`}
@@ -1403,8 +1556,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
               ))}
             </div>
             {/* Un borde por grupo de loops idénticos (el relleno va en el canvas, detrás). */}
-            {loopsVis.map(({ marca: m, n }) => (
-              <div key={m.id} className={`edd-mk-loop${m.id === sel ? ' is-sel' : ''}`} data-id={m.id} data-n={n} aria-hidden="true"
+            {loopsVis.map(({ marca: m, n, ids }) => (
+              <div key={m.id} className={`edd-mk-loop${m.id === sel ? ' is-sel' : ''}${esActivo(ids) ? ' is-activo' : ''}`} data-id={m.id} data-n={n} aria-hidden="true"
                 style={{ left: `${pct(posDe(m, 'inicio'))}%`, width: `${pct(posDe(m, 'fin')) - pct(posDe(m, 'inicio'))}%` }}>
                 <span className="edd-loop-fin" title="Salida del loop (arrastrá para moverla)" onPointerDown={(e) => empezarArrastre(e, m, 'fin')} />
               </div>
@@ -1501,6 +1654,12 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
               {LOOP_BEATS.map((b) => <option key={b} value={b}>{b} beat{b === 1 ? '' : 's'}</option>)}
             </select>
           </label>
+          {/* f63: el loop activo (reloop / salir). El nombre no cambia; el estado va en aria-pressed. */}
+          <button type="button" className={`btn ${loopAct.activo ? 'btn-primary' : 'btn-secondary'} edd-btn edd-reloop${loopAct.activo ? ' is-activo' : ''}`}
+            aria-pressed={loopAct.activo} aria-keyshortcuts="R" aria-disabled={!track || loopAct.id === null || undefined}
+            title={loopAct.activo ? 'Suena solo el loop. Salir del loop (R): la reproducción sigue después de la salida'
+              : loopAct.id === null ? 'Marcá un loop o tocá uno para activarlo' : 'Volver a activar el loop (R): vuelve a su entrada'}
+            onClick={() => acciones.current.reloop()}><span aria-hidden="true">⟲</span> Loop activo <Kbd>R</Kbd></button>
           <button type="button" className="btn btn-secondary edd-btn edd-ico" onClick={() => correrHistorial(-1)} disabled={!historial.pasado.length} aria-keyshortcuts="Control+Z" aria-label="Deshacer (Ctrl Z)" title="Deshacer (Ctrl Z)">↶<span className="edd-ico-txt"> Deshacer</span></button>
           <button type="button" className="btn btn-secondary edd-btn edd-ico" onClick={() => correrHistorial(1)} disabled={!historial.futuro.length} aria-keyshortcuts="Control+Y" aria-label="Rehacer (Ctrl Y)" title="Rehacer (Ctrl Y)">↷<span className="edd-ico-txt"> Rehacer</span></button>
         </div>
@@ -1586,14 +1745,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
                 const m = marcaDelPad(marcas, n)
                 const loop = m && m.tipo === 'loop'
                 const etiqueta = !m ? `Pad ${letra} vacío: fijar un hot cue en el cursor`
-                  : loop ? `Pad ${letra}: loop de ${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}${m.nombre ? `, ${m.nombre}` : ''}. Ir al loop`
+                  : loop ? `Pad ${letra}: loop de ${fmtTiempo(m.inicio)} a ${fmtTiempo(m.fin)}${m.nombre ? `, ${m.nombre}` : ''}. Activar el loop${loopAct.activo && loopAct.id === m.id ? ' · loop activo' : ''}`
                     : `Pad ${letra}: hot cue en ${fmtTiempo(m.inicio)}${m.nombre ? `, ${m.nombre}` : ', sin nombre'}. Ir al cue`
                 // Cada pad en un contenedor: la X (quitar) es un botón HERMANO del pad (un botón no
                 // puede ir adentro de otro), en la esquina de arriba a la derecha.
                 return (
                   <div key={letra} className={`edd-pad-w${m ? ' is-lleno' : ''}`}>
                   <button type="button" data-pad={n} aria-keyshortcuts={String(n + 1)}
-                    className={`edd-pad ${m ? `is-lleno ${claseMarca(m)}` : `is-vacio cue-c${n + 1}`}${loop ? ' is-loop' : ''}${m && m.id === sel ? ' is-sel' : ''}`}
+                    className={`edd-pad ${m ? `is-lleno ${claseMarca(m)}` : `is-vacio cue-c${n + 1}`}${loop ? ' is-loop' : ''}${m && m.id === sel ? ' is-sel' : ''}${loop && loopAct.activo && loopAct.id === m.id ? ' is-activo' : ''}`}
                     aria-label={etiqueta} title={etiqueta}
                     onClick={(e) => tocarPad(n, { borrarlo: e.shiftKey })}>
                     <span className={`edd-pad-n ${m ? claseMarca(m) : `cue-c${n + 1}`}`} aria-hidden="true">{letra}</span>
@@ -1628,8 +1787,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
                   <li key={m.id} className={`edd-fila${m.fuera_del_track ? ' is-fuera' : ''}${m.id === sel ? ' is-sel' : ''}${abiertaEsta ? ' is-abierta' : ''}`}
                     data-id={m.id} data-tipo={m.tipo} data-nombre={m.nombre || ''} aria-current={m.id === sel ? 'true' : undefined}>
                     <div className="edd-fila-c">
-                      <button type="button" className={`edd-tag ${claseMarca(m)} is-${m.tipo}`} onClick={() => irA(m.inicio, { centrar: true })}
-                        aria-label={`Ir a ${nombreD(m)}`} title={`Ir a ${nombreD(m)}`}>{rotuloMarca(m)}</button>
+                      <button type="button" className={`edd-tag ${claseMarca(m)} is-${m.tipo}${m.tipo === 'loop' && loopAct.activo && loopAct.id === m.id ? ' is-activo' : ''}`}
+                        onClick={() => (m.tipo === 'loop' ? activarLoop(m) : irA(m.inicio, { centrar: true }))}
+                        aria-label={etiquetaFila(m)} title={etiquetaFila(m)}>{rotuloMarca(m)}</button>
                       <span className="edd-fila-t mono">{fmtTiempo(m.inicio)}{m.tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}</span>
                       <span className={`edd-fila-n${m.nombre ? '' : ' edd-sin-nombre'}`}>{m.nombre || 'sin nombre'}</span>
                       <button type="button" className="btn btn-secondary edd-btn edd-editar" aria-expanded={abiertaEsta}
@@ -1686,7 +1846,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
 
         <p className="edd-nota edd-ayuda" id="edd-ayuda">
           Atajos con el foco en el editor: <Kbd>Espacio</Kbd> reproduce · <Kbd>←</Kbd> <Kbd>→</Kbd> ±1 beat (Mayús: ±10 ms) · <Kbd>1</Kbd>…<Kbd>8</Kbd> pads ·
-          {' '}<Kbd>C</Kbd> <Kbd>M</Kbd> <Kbd>I</Kbd> <Kbd>O</Kbd> <Kbd>L</Kbd> marcas · <Kbd>K</Kbd> marcar un kick · <Kbd>B</Kbd> solo graves · <Kbd>+</Kbd> <Kbd>−</Kbd> zoom · <Kbd>G</Kbd> grilla · <Kbd>H</Kbd> ½ beat · <Kbd>Q</Kbd> pegar a la grilla ·
+          {' '}<Kbd>C</Kbd> <Kbd>M</Kbd> <Kbd>I</Kbd> <Kbd>O</Kbd> <Kbd>L</Kbd> marcas · <Kbd>K</Kbd> marcar un kick · <Kbd>B</Kbd> solo graves · <Kbd>+</Kbd> <Kbd>−</Kbd> zoom · <Kbd>G</Kbd> grilla · <Kbd>H</Kbd> ½ beat · <Kbd>Q</Kbd> pegar a la grilla · <Kbd>R</Kbd> loop activo / salir ·
           {' '}<Kbd>Ctrl Z</Kbd> deshacer · <Kbd>RePág</Kbd> <Kbd>AvPág</Kbd> tema · <Kbd>Inicio</Kbd> <Kbd>Fin</Kbd> · <Kbd>Esc</Kbd> cierra.
           {' '}{noGuarda ? 'Este navegador no deja guardar: el ajuste y el ancla de la grilla duran hasta que cierres esta pantalla.' : 'El ajuste y el ancla de la grilla quedan guardados solo en este navegador.'} Loops siempre en naranja; memory: ▼ con borde y sin relleno.
         </p>

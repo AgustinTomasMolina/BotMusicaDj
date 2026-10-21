@@ -396,7 +396,7 @@ function activable(target) {
 // La acción de una tecla en el editor D, o null. `e`: KeyboardEvent (o algo con key, code...).
 //   play · beat(dir) · fino(dir) · pad(num) · borrarPad(num) · cue · memory · loopIn · loopOut ·
 //   loopBeats · zoom(dir) · grilla · medioBeat · snap · ancla (K: marcar un kick) · soloGraves (B) ·
-//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar
+//   deshacer · rehacer · inicio · fin · tema(dir) · cerrar · reloop (R: activar / salir del loop, f63)
 export function atajoD(e) {
   if (!e || e.isComposing) return null
   const k = e.key
@@ -435,6 +435,7 @@ export function atajoD(e) {
     case 'q': return { tipo: 'snap' }
     case 'k': return { tipo: 'ancla' }
     case 'b': return { tipo: 'soloGraves' }
+    case 'r': return { tipo: 'reloop' }
     default: return null
   }
 }
@@ -700,4 +701,116 @@ export function grillaAnclada(g, bpm, ancla) {
   const fase = ((ancla % p) + p) % p
   return { estimada: false, anclada: true, periodo_s: p, primer_beat_s: Math.round(fase * 1e6) / 1e6, compas_ref: ancla,
     beats_por_compas: 4, confianza: 1, concentracion: 1, motivo: null }
+}
+
+// ---------------------------------------------------------------- el loop sonando (f63)
+// Pedido del dueño: con un loop marcado, apretar play y escuchar SOLO ese loop repitiéndose,
+// para juzgarlo de oído. Como un CDJ: hay un «loop activo»; mientras suena, al llegar a la
+// salida el cabezal vuelve a la entrada. Es solo reproducción: no toca las marcas ni el server.
+//
+// El editor reproduce con un <audio> (no hay Web Audio ni buffer decodificado), así que el salto
+// es un `currentTime = entrada`. `timeupdate` llega cada ~250 ms (un loop de 1 beat a 128 BPM
+// dura 469 ms): no sirve. El editor mira `currentTime` en cada cuadro (requestAnimationFrame) y,
+// cuando falta menos de LOOP_ANTICIPO_S para la salida, programa el salto con un timer para el
+// instante justo. El salto conserva lo que se pasó (`a` = entrada + lo que se pasó de la
+// salida): el beat no se corre aunque el salto llegue unos ms tarde.
+//
+// Con la pestaña oculta o la ventana minimizada el navegador NO corre requestAnimationFrame
+// (auditoría f63): el ciclo vive también con timers solos (cada salto re-arma el timer de la
+// próxima salida, y mientras tanto se sondea cada LOOP_SONDEO_MS) y con un `timeupdate` del
+// <audio> como red. Chrome en segundo plano frena los timers a ~1 por segundo: el salto llega
+// tarde (lo que se pasó de la salida se conserva con el módulo, el beat no se corre), pero el
+// audio no sigue de largo.
+
+export const LOOP_TOLERANCIA_S = 0.001
+export const LOOP_ANTICIPO_S = 0.05
+// El loop más corto que se activa: debajo de 20 ms no hay un loop para escuchar (es un zumbido
+// de saltos) y el <audio> no llega a sonar entre salto y salto.
+export const LOOP_MIN_S = 0.02
+export const LOOP_PISO_MS = 10
+export const LOOP_SONDEO_MS = 250
+
+export const loopInactivo = () => ({ id: null, activo: false })
+
+// ¿El loop es demasiado corto para sonar (menos de LOOP_MIN_S)? Sin tiempos válidos, también.
+export const loopMuyCorto = (m) => !m || !finito(m.inicio) || !finito(m.fin) || m.fin - m.inicio < LOOP_MIN_S - 1e-9
+
+// En cuántos ms volver a mirar el loop activo cuando no hay requestAnimationFrame: para caer
+// un poco antes de la salida (adentro del anticipo, donde se programa el salto justo), nunca
+// antes de LOOP_PISO_MS ni más tarde que LOOP_SONDEO_MS (si el dueño mueve la salida mientras
+// tanto, el sondeo la ve). `ritmo`: playbackRate. null sin loop.
+export function proximoChequeoMs(t, loop, ritmo = 1) {
+  if (!loop || !finito(t) || !finito(loop.fin)) return null
+  const r = finito(ritmo) && ritmo > 0 ? ritmo : 1
+  const ms = ((loop.fin - t - LOOP_ANTICIPO_S / 2) * 1000) / r
+  return Math.round(Math.min(LOOP_SONDEO_MS, Math.max(LOOP_PISO_MS, ms)))
+}
+
+// Qué hacer con el cabezal en `t` y el loop activo `loop` ({inicio, fin}, o null):
+//   { accion: 'saltar', a }     llegó (o se pasó de) la salida: ir a `a`
+//   { accion: 'esperar', en_s } falta `en_s` (≤ anticipo) para la salida: programar el salto
+//   { accion: 'nada' }          lejos de la salida, antes de la entrada, o sin loop
+export function envolverLoop(t, loop, anticipo = LOOP_ANTICIPO_S) {
+  const nada = { accion: 'nada' }
+  if (!loop || !finito(t) || !finito(loop.inicio) || !finito(loop.fin)) return nada
+  const largo = loop.fin - loop.inicio
+  // Más corto que la tolerancia de los dos lados, «llegó a la salida» sería siempre cierto.
+  if (!(largo >= 2 * LOOP_TOLERANCIA_S)) return nada
+  // Antes de la entrada el loop todavía no empezó (como en un CDJ: engancha al entrar).
+  if (t < loop.inicio - LOOP_TOLERANCIA_S) return nada
+  if (t >= loop.fin - LOOP_TOLERANCIA_S) {
+    const pasado = Math.max(0, t - loop.fin)
+    return { accion: 'saltar', a: Math.round((loop.inicio + (pasado % largo)) * 1e6) / 1e6 }
+  }
+  const falta = loop.fin - t
+  return finito(anticipo) && falta <= anticipo ? { accion: 'esperar', en_s: Math.round(falta * 1e6) / 1e6 } : nada
+}
+
+// ¿`t` está adentro del loop (entrada y salida incluidas)?
+export const adentroDelLoop = (t, loop) => Boolean(loop) && finito(t) && finito(loop.inicio) && finito(loop.fin)
+  && t >= loop.inicio - LOOP_TOLERANCIA_S && t <= loop.fin + LOOP_TOLERANCIA_S
+
+// El loop activo después de un evento. `estado`: { id, activo } (`id` = la marca del último loop
+// activado: salir del loop lo deja, para volver a activarlo con R como el «reloop» de un CDJ).
+//   { tipo: 'crear', marca }   se creó un loop (I/O o L): queda activo
+//   { tipo: 'elegir', marca }  se eligió una marca (su pad, su bandera, su fila): si es un loop,
+//                              queda activo (el editor lleva el cursor a su entrada)
+//   { tipo: 'alternar', marca } el botón «Loop activo» / R: salir, o volver a activarlo (`marca`:
+//                              el loop, para no activar uno demasiado corto)
+//   { tipo: 'salir' }
+// Un loop de menos de LOOP_MIN_S (`loopMuyCorto`) nunca se activa: el editor lo avisa.
+//   { tipo: 'ir', t, loop }    el cursor fue a `t` (clic en la onda, flechas, otro pad): afuera
+//                              del loop (`loop` = {inicio, fin} del activo), sale del loop
+//   { tipo: 'lista', marcas }  la lista del servidor cambió: si el loop ya no está (se borró, o
+//                              Ctrl+Z deshizo su creación), no queda nada activo; si quedó
+//                              demasiado corto, sale del loop (conserva el id)
+//   { tipo: 'limpiar' }        se pasó de tema o se cerró el editor
+export function transicionLoop(estado, ev) {
+  const e = estado && 'id' in estado ? estado : loopInactivo()
+  if (!ev) return e
+  switch (ev.tipo) {
+    case 'crear':
+    case 'elegir':
+      return ev.marca && ev.marca.tipo === 'loop' && ev.marca.id !== undefined && ev.marca.id !== null && !loopMuyCorto(ev.marca)
+        ? { id: ev.marca.id, activo: true } : e
+    case 'alternar':
+      if (e.id === null) return e
+      if (!e.activo && ev.marca && loopMuyCorto(ev.marca)) return e
+      return { id: e.id, activo: !e.activo }
+    case 'salir': return e.activo ? { id: e.id, activo: false } : e
+    case 'ir': return e.activo && ev.loop && !adentroDelLoop(ev.t, ev.loop) ? { id: e.id, activo: false } : e
+    case 'lista': {
+      if (e.id === null) return e
+      const m = (Array.isArray(ev.marcas) ? ev.marcas : []).find((x) => x.id === e.id && x.tipo === 'loop')
+      if (!m) return loopInactivo()
+      // Un loop activo que QUEDÓ demasiado corto (arrastrar la salida, Ctrl+Z / Ctrl+Y de un
+      // movimiento, editar la salida en la fila: el server acepta cualquier fin > inicio) se
+      // desactiva: si no, el salto se repite cada pocos ms. Se conserva el id para que R dé el
+      // aviso de «demasiado corto» y no el de «no hay un loop».
+      if (loopMuyCorto(m)) return e.activo ? { id: e.id, activo: false } : e
+      return e
+    }
+    case 'limpiar': return loopInactivo()
+    default: return e
+  }
 }

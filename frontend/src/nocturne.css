@@ -2063,3 +2063,17 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   .edd-x-pad{top:50%;right:4px;width:44px;height:44px;transform:translateY(-50%);border-radius:8px}
   .edd-pad-w.is-lleno>.edd-pad{padding-right:54px}
 }
+/* ---- f63: el loop activo (suena solo el loop): naranja más fuerte en la banda, su bandera, ---- */
+/* ---- su pad, su fila y el botón «Loop activo». ---- */
+:root{--cue-loop-activo:#ff7a00;--edd-loop-activo-fondo:rgba(255,122,0,.34);--edd-activo-borde:var(--color-text)}
+.edd-mk-loop.is-activo{box-shadow:inset 4px 0 0 var(--cue-loop-activo),inset -4px 0 0 var(--cue-loop-activo),-1px 0 0 var(--edd-halo),1px 0 0 var(--edd-halo)}
+.edd-mk-loop.is-activo::before{height:8px;background:var(--cue-loop-activo)}
+.edd-flag.is-loop.is-activo{background:var(--cue-loop-activo);outline:2px solid var(--edd-activo-borde);outline-offset:1px}
+.edd-pad.is-activo{box-shadow:0 0 0 3px var(--cue-loop-activo)}
+/* En la lista el rótulo sigue en el naranja de los loops (el color de la tabla del motor): el activo lleva un anillo. */
+.edd-tag.is-loop.is-activo{box-shadow:0 0 0 2px var(--color-bg),0 0 0 4px var(--cue-loop-activo)}
+.edd-reloop.is-activo{background:var(--cue-loop-activo);border-color:var(--cue-loop-activo);color:var(--color-bg)}
+@media (max-width:640px){
+  /* En el celular, en su propia fila debajo (Deshacer y Rehacer siguen en sus columnas de 44 px). */
+  .edd-dock .edd-marcar .edd-reloop{grid-column:1/-1;order:1}
+}
