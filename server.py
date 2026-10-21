@@ -82,9 +82,16 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(db.init_db)  # crea las tablas del historial si faltan
     logger.info("🌐 Servidor web iniciado. Buscador listo.")
     threading.Thread(target=_calentar_librosa, name="calentar-librosa", daemon=True).start()
+    global _vigilante
+    _vigilante = await asyncio.to_thread(_crear_vigilante)
+    if _vigilante is not None:
+        _vigilante.iniciar()
     yield
     # f53: el análisis de playlists en segundo plano corta después del archivo en curso.
     _analizador.detener()
+    # f65: la carpeta vigilada corta ya (el proceso de la tanda en curso se mata).
+    if _vigilante is not None:
+        await asyncio.to_thread(_vigilante.detener)
 
 
 def _calentar_librosa() -> None:
@@ -4926,6 +4933,55 @@ async def playlists_rekordbox_exportar(pid: str, request: Request):
                              "X-MusiFlix-Omitidos": str(len(plan["omitidos"])),
                              "X-MusiFlix-Marcas": str(sum(m.values())),
                              "X-MusiFlix-Grillas": str(plan["grillas"])})
+
+
+# ============================================================
+#  Carpeta vigilada (f65): MUSIC_WATCH_FOLDER entra sola al pipeline (`pipeline/vigilar.py`)
+# ============================================================
+#   GET   /api/vigilancia            estado: apagada, o carpeta (solo el nombre), si se alcanza,
+#                                    qué se procesa, contadores y el último reporte
+#   POST  /api/vigilancia/escanear   {} → adelanta el próximo ciclo (409 si está apagada)
+# Las respuestas no llevan rutas absolutas de la PC.
+
+_vigilante = None
+
+
+def _crear_vigilante():
+    """El vigilante del entorno, o None. Nunca levanta: una carpeta mal configurada no puede
+    impedir que arranque el server (se anota y la vigilancia queda apagada)."""
+    try:
+        from pipeline import vigilar
+        return vigilar.desde_entorno()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⚠️ Carpeta vigilada: no pude configurarla ({type(e).__name__}: {e}); "
+                       f"queda apagada.")
+        return None
+
+
+_VIGILANCIA_APAGADA = ("La carpeta vigilada está apagada: definí MUSIC_WATCH_FOLDER en el .env "
+                       "(una carpeta local, un disco montado o \\\\NAS\\carpeta) y reiniciá el "
+                       "servidor.")
+
+
+@app.get("/api/vigilancia")
+async def vigilancia_estado():
+    vig = _vigilante
+    if vig is None:
+        return {"exito": True, "activa": False, "mensaje": _VIGILANCIA_APAGADA}
+    return {"exito": True, "activa": True, "estado": vig.estado()}
+
+
+@app.post("/api/vigilancia/escanear")
+async def vigilancia_escanear(request: Request):
+    """Adelanta el próximo ciclo del hilo (no lo corre en el pedido: un ciclo puede tardar
+    minutos). Mismas defensas que el resto de los POST propios (`_cuerpo_json_propio`)."""
+    _, rechazo = await _cuerpo_json_propio(request)
+    if rechazo:
+        return rechazo
+    vig = _vigilante
+    if vig is None:
+        return JSONResponse({"exito": False, "mensaje": _VIGILANCIA_APAGADA}, status_code=409)
+    return {"exito": True, "encolado": vig.pedir_escaneo(), "estado": vig.estado()}
 
 
 # ============================================================
