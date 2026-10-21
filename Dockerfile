@@ -39,6 +39,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Código de la app y el front ya buildeado
 COPY --chown=app:app *.py ./
 COPY --chown=app:app web ./web
+# Fuentes externas enchufables (f64): Deezer (preview para medir) y Jamendo (solo con clave).
+COPY --chown=app:app fuentes ./fuentes
 
 # El motor de radio (/api/radio/*). Estos tres paquetes son el CIERRE de imports real, no
 # una lista a ojo: `motor` importa `calidad.tags` (EXTS, leer_tags) y, perezosamente,

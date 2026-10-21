@@ -108,3 +108,15 @@ export function medidoTexto(a) {
   const key = a.key ? `${a.key}${a.key_dudosa ? '?' : ''}` : '?'
   return { bpm, key }
 }
+
+// Los tooltips del BPM medido y de la pastilla "Medido en preview". f64: si el preview es de
+// OTRA fuente (Deezer, porque SoundCloud no dio un audio medible), lo dicen con su nombre y el
+// motivo que manda el backend (`motivo_preview`): no es el audio de SoundCloud.
+export function medidoTitulos(a) {
+  if (!a || !a.ok) return { bpm: a?.motivo || 'No se pudo analizar', preview: undefined }
+  const de = a.preview_fuente ? ` de ${a.preview_fuente}` : ''
+  const bpm = a.preview
+    ? (a.motivo_preview || `Medido sobre el preview de 30 s${de} (no se sabe si vale para el tema entero)`)
+    : `Medido sobre ${Math.round(a.tramo_s || 0)} s del audio`
+  return { bpm, preview: a.preview ? `El BPM y la key salen del preview de 30 s${de}` : undefined }
+}
