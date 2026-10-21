@@ -58,3 +58,5 @@ pipeline/revision_*.html
 # indice con rutas personales y los veredictos a oido
 escucha/
 .engram/
+# Registro de la carpeta vigilada (pipeline/vigilar.py): nombres de archivos de la biblioteca
+carpeta_vigilada.json*
