@@ -591,6 +591,120 @@ def test_una_cache_con_otra_forma_se_rehace(corto, tmp_path, veneno):
     np.testing.assert_array_equal(b.q, bueno.q)
 
 
+def _mismas_bandas(b, esperado):
+    np.testing.assert_array_equal(b.q, esperado.q)
+    assert (b.referencias, b.duration_s, b.sample_rate, b.channels) == \
+        (esperado.referencias, esperado.duration_s, esperado.sample_rate, esperado.channels)
+
+
+def _avisos_de_cache(caplog) -> list:
+    """Los avisos de "no se pudo guardar la caché" que dejó `motor.bandas`."""
+    return [r for r in caplog.records
+            if r.name == "motor.bandas" and "no se pudo guardar la caché" in r.getMessage()]
+
+
+def _aviso_de_cache(caplog, cache: Path):
+    """El ÚNICO aviso de "no se pudo guardar la caché" que dejó `motor.bandas`, y que nombra el
+    archivo de la caché (dentro de `cache`). No fallar hacia afuera no puede ser callarse."""
+    avisos = _avisos_de_cache(caplog)
+    assert len(avisos) == 1, [r.getMessage() for r in caplog.records]
+    assert avisos[0].levelname == "WARNING" and str(cache) in avisos[0].getMessage()
+    return avisos[0]
+
+
+@pytest.mark.parametrize("veces", [1, 10 ** 6])
+def test_con_la_cache_bloqueada_al_reemplazar_devuelve_las_bandas(corto, tmp_path, monkeypatch,
+                                                                    caplog, veces):
+    """En Windows, `os.replace` sobre la caché que otro hilo tiene abierta tira PermissionError
+    (era el 409 intermitente de dos previews del mismo tema). Una vez: el reintento la escribe
+    y no ensucia el log. Siempre: no se escribe, pero las bandas calculadas se devuelven igual,
+    el .tmp no queda y el log lo dice una vez, con el error del sistema."""
+    import logging
+
+    cache = tmp_path / "peaks"
+    esperado = mb.compute_bandas(corto)
+    real, llamadas = os.replace, []
+
+    def falso(a, b):
+        llamadas.append(b)
+        if len(llamadas) <= veces:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(b))
+        return real(a, b)
+
+    monkeypatch.setattr(os, "replace", falso)
+    monkeypatch.setattr(mb, "REPLACE_ESPERA_S", 0.0)
+    with caplog.at_level(logging.WARNING, logger="motor.bandas"):
+        b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is False
+    _mismas_bandas(b, esperado)
+    assert list(cache.glob("*.tmp")) == [], "quedó el .tmp"
+    assert len(llamadas) == (2 if veces == 1 else mb.REPLACE_INTENTOS), llamadas
+    escritas = list(cache.glob("*" + mb.CACHE_SUFIJO))
+    assert len(escritas) == (1 if veces == 1 else 0), escritas
+    if veces == 1:
+        assert _avisos_de_cache(caplog) == [], "el reintento que sale bien avisó como fallo"
+    else:
+        aviso = _aviso_de_cache(caplog, cache)
+        assert "El proceso no tiene acceso al archivo" in aviso.getMessage()
+    otra, de_cache = mb.cached_bandas(corto, cache)
+    # Con un fallo, el reintento escribió la caché; con todos, no hay caché de dónde salir.
+    assert de_cache is (veces == 1)
+    _mismas_bandas(otra, esperado)
+
+
+def test_carpeta_de_cache_imposible_igual_devuelve_las_bandas(corto, tmp_path, caplog):
+    """Si ni se puede crear la carpeta de la caché (acá es un archivo), las bandas salen igual,
+    no queda ningún .tmp tirado y el log lo dice."""
+    import logging
+
+    cache = tmp_path / "peaks"
+    cache.write_text("no soy una carpeta", encoding="utf-8")
+    esperado = mb.compute_bandas(corto)
+    with caplog.at_level(logging.WARNING, logger="motor.bandas"):
+        b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is False
+    _mismas_bandas(b, esperado)
+    assert cache.read_text(encoding="utf-8") == "no soy una carpeta"
+    assert list(tmp_path.rglob("*.tmp")) == [], "quedó el .tmp"
+    _aviso_de_cache(caplog, cache)
+
+
+def test_una_cache_que_no_se_puede_leer_se_recalcula(corto, tmp_path, monkeypatch):
+    """Leer la caché mientras otro hilo la reemplaza puede tirar PermissionError en Windows: es
+    un fallo de la caché, no del audio. Se recalcula y el pedido sale bien.
+    Cuida un comportamiento previo (la lectura fallida es un miss), no el reintento del replace."""
+    cache = tmp_path / "peaks"
+    bueno, _ = mb.cached_bandas(corto, cache)
+    real = Path.read_bytes
+
+    def falso(self):
+        if self.suffix == mb.CACHE_SUFIJO:
+            raise PermissionError(13, "El proceso no tiene acceso al archivo", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", falso)
+    b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is False
+    _mismas_bandas(b, bueno)
+    assert list(cache.glob("*.tmp")) == [], "quedó el .tmp"
+
+
+def test_si_no_se_puede_marcar_la_cache_como_usada_igual_sale_de_la_cache(corto, tmp_path,
+                                                                            monkeypatch):
+    """`os.utime` sobre la caché (para la poda) también puede chocar con otro hilo: no cuenta.
+    Cuida un comportamiento previo (el utime fallido se ignora), no el reintento del replace."""
+    cache = tmp_path / "peaks"
+    bueno, _ = mb.cached_bandas(corto, cache)
+
+    def falso(*a, **k):
+        raise PermissionError(13, "El proceso no tiene acceso al archivo")
+
+    monkeypatch.setattr(os, "utime", falso)
+    b, de_cache = mb.cached_bandas(corto, cache)
+    assert de_cache is True
+    _mismas_bandas(b, bueno)
+
+
 def test_la_poda_de_bandas_no_toca_los_picos_y_al_reves(tmp_path):
     """Las dos cachés viven en la misma carpeta con el mismo tope de archivos, cada una
     contando y podando lo suyo."""
