@@ -3683,38 +3683,12 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
         # Estaba en el índice pero ya no en la base (un scan entre medio).
         return JSONResponse({"error": "track no encontrado en la biblioteca del motor"},
                             status_code=404)
-    from motor.bandas import (
-        BANDAS,
-        TASA_HZ,
-        UnreadableAudio,
-        cached_bandas,
-        grilla,
-        normalizacion,
-        tramo,
-    )
+    from motor.bandas import BANDAS, TASA_HZ, grilla, normalizacion, tramo
 
-    try:
-        b, de_cache = await asyncio.to_thread(cached_bandas, ruta, Path(db.DATA_DIR) / "peaks")
-    except FileNotFoundError:
-        return JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
-                                      f"base lo tiene en {ruta}. Se movió, o la base se escaneó "
-                                      f"en otro sistema."}, status_code=404)
-    except UnreadableAudio as e:
-        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: {e}"},
-                            status_code=422)
-    except OSError as e:
-        return JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
-                            status_code=409)
-    except (RuntimeError, ValueError, ArithmeticError) as e:
-        # Cinturón, como en /onda: `motor.bandas` convierte en UnreadableAudio lo que falla AL
-        # DECODIFICAR, así que lo que llega acá es casi seguro un error del cálculo propio. No
-        # se culpa al archivo ni es un 500; la traza queda en el log.
-        logger.warning(f"⚠️ Onda3: {type(e).__name__} calculando la onda de {ruta}: {e}",
-                       exc_info=True)
-        return JSONResponse({"error": f"no pude leer el audio para dibujar la onda: falló el "
-                                      f"cálculo ({type(e).__name__}), no necesariamente el "
-                                      f"archivo; el detalle quedó en el log del servidor"},
-                            status_code=422)
+    leidas, error = await _onda3_bandas(ruta)
+    if error is not None:
+        return error
+    b, de_cache = leidas
     rango, motivo = _onda3_rango(d, h, b.duration_s)
     if motivo is not None:
         return JSONResponse({"error": motivo}, status_code=400)
@@ -3728,6 +3702,111 @@ async def radio_onda3(track_id: str, desde: str | None = None, hasta: str | None
             "bandas": {nombre: [_ONDA3_VALOR[v] for v in q[i].tolist()]
                        for i, nombre in enumerate(BANDAS)},
             "grilla": g, "cache": de_cache}
+
+
+# f62 (auditoría): como mucho 2 lecturas de bandas a la vez para las vistas previas de las
+# filas (/preview). La primera lectura de un tema decodifica el archivo entero; en la PC del
+# dueño, con poca memoria, la pantalla ya pide de a dos, pero nada impedía que otra pestaña
+# sumara más. /onda3 (el editor D) NO pasa por el turno: el tema que el dueño abrió no espera
+# detrás de dos filas. Es un semáforo de HILOS y no de asyncio: la espera pasa adentro del hilo
+# de `to_thread`, así sirve igual con cualquier event loop (uvicorn, cada TestClient).
+# Límite conocido: una lectura de /preview que sale de la caché también espera turno detrás de
+# dos decodificaciones largas.
+_BANDAS_A_LA_VEZ = 2
+_bandas_turno = threading.BoundedSemaphore(_BANDAS_A_LA_VEZ)
+
+
+def _bandas_con_turno(ruta: str, carpeta: Path):
+    from motor.bandas import cached_bandas
+
+    with _bandas_turno:
+        return cached_bandas(ruta, carpeta)
+
+
+def _bandas_sin_turno(ruta: str, carpeta: Path):
+    from motor.bandas import cached_bandas
+
+    return cached_bandas(ruta, carpeta)
+
+
+async def _onda3_bandas(ruta: str, con_turno: bool = False) -> tuple[tuple | None, JSONResponse | None]:
+    """`((bandas, de_cache), None)` o `(None, respuesta de error)`: la lectura (cacheada) de las
+    3 bandas y sus errores, compartida por /onda3 y /preview. Con `con_turno` (/preview), de a
+    `_BANDAS_A_LA_VEZ`; /onda3 lee sin esperar turno."""
+    from motor.bandas import UnreadableAudio
+
+    leer = _bandas_con_turno if con_turno else _bandas_sin_turno
+    try:
+        return await asyncio.to_thread(leer, ruta, Path(db.DATA_DIR) / "peaks"), None
+    except FileNotFoundError:
+        return None, JSONResponse({"error": f"el archivo de este track no está en esta máquina: la "
+                                            f"base lo tiene en {ruta}. Se movió, o la base se escaneó "
+                                            f"en otro sistema."}, status_code=404)
+    except UnreadableAudio as e:
+        return None, JSONResponse({"error": f"no pude leer el audio para dibujar la onda: {e}"},
+                                  status_code=422)
+    except OSError as e:
+        return None, JSONResponse({"error": f"no pude leer el archivo ({type(e).__name__})"},
+                                  status_code=409)
+    except (RuntimeError, ValueError, ArithmeticError) as e:
+        # Cinturón, como en /onda: `motor.bandas` convierte en UnreadableAudio lo que falla AL
+        # DECODIFICAR, así que lo que llega acá es casi seguro un error del cálculo propio. No
+        # se culpa al archivo ni es un 500; la traza queda en el log.
+        logger.warning(f"⚠️ Onda3: {type(e).__name__} calculando la onda de {ruta}: {e}",
+                       exc_info=True)
+        return None, JSONResponse({"error": f"no pude leer el audio para dibujar la onda: falló el "
+                                            f"cálculo ({type(e).__name__}), no necesariamente el "
+                                            f"archivo; el detalle quedó en el log del servidor"},
+                                  status_code=422)
+
+
+# --- Vista previa de la onda para las filas de Mis playlists (f62) ------------------------
+#
+#   GET /api/radio/tracks/{id}/preview?puntos=<n>
+#
+# Las MISMAS 3 bandas que /onda3 (misma caché en `<MUSIFLIX_DATA_DIR>/peaks`), del tema entero
+# y a baja resolución (por defecto 160 puntos, como mucho 400), SIN la grilla: estimarla cuesta
+# del orden de 0,1 s por tema y una fila de 160 px no la dibuja. Tampoco toca la base (no hace
+# falta el BPM), así que no hay 409 por base ocupada. Mismos 404 / 422 que /onda3 y 400 con el
+# motivo si `puntos` no sirve. Nunca 500.
+
+_PREVIEW_PUNTOS_MAX = 400
+_PREVIEW_PUNTOS_DEFECTO = 160
+
+
+@app.get("/api/radio/tracks/{track_id}/preview")
+async def radio_preview(track_id: str, puntos: str | None = None):
+    """`bandas` trae `puntos` valores por banda (0..1, relativos dentro del track, como /onda3)
+    del audio entero; con menos cuadros de 10 ms que puntos, vienen los cuadros tal cual y
+    `puntos` dice cuántos. `duracion_audio` es la del audio DECODIFICADO: la pantalla ubica las
+    marcas con la duración de la base y la onda con esta, sin estirar ninguna.
+
+    Pendiente (auditoría f62, punto 4): la ruta sale solo del índice `_radio_audio`
+    (`_marcas_ruta`); a diferencia de /onda3, no se confirma que el track siga en la base del
+    motor (un scan que lo sacó entre medio). No inventa nada (lee el archivo que el índice
+    tiene), pero puede dibujar la onda de un track que la base ya no lista."""
+    if puntos is None:
+        n = _PREVIEW_PUNTOS_DEFECTO
+    elif _RE_ONDA3_PUNTOS.fullmatch(puntos) and 1 <= int(puntos) <= _PREVIEW_PUNTOS_MAX:
+        n = int(puntos)
+    else:
+        return JSONResponse({"error": f"`puntos` tiene que ser un entero de 1 a "
+                                      f"{_PREVIEW_PUNTOS_MAX}; llegó {puntos[:40]!r}"},
+                            status_code=400)
+    ruta, error = await _marcas_ruta(track_id)
+    if error is not None:
+        return error
+    from motor.bandas import BANDAS, tramo
+
+    leidas, error = await _onda3_bandas(ruta, con_turno=True)
+    if error is not None:
+        return error
+    b, de_cache = leidas
+    _, _, q = tramo(b, 0.0, b.duration_s, n)
+    return {"duracion_audio": round(b.duration_s, 3), "puntos": int(q.shape[1]),
+            "bandas": {nombre: [_ONDA3_VALOR[v] for v in q[i].tolist()]
+                       for i, nombre in enumerate(BANDAS)},
+            "cache": de_cache}
 
 
 @app.get("/api/historial")

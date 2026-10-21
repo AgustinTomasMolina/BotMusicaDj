@@ -42,7 +42,10 @@ export function reducirPicos(picos, n) {
 // - Lo que `pedir` RESUELVE (también un 404 o un 422 con su motivo) se guarda; si `pedir`
 //   TIRA (sin red), no: el próximo intento vuelve a pedir.
 // - `max`: cuántas respuestas se guardan; se descarta la que se usó hace más tiempo.
-export function crearCargador({ pedir, concurrencia = 2, max = 48 }) {
+// - `guardarSi(r)` (f62): si devuelve false, la respuesta se entrega pero NO se guarda (un 409
+//   «base ocupada» o un 5xx pasajeros): el próximo `cargar` del mismo id vuelve a pedir. Sin
+//   `guardarSi`, se guarda todo lo que `pedir` resuelve (como hasta f61).
+export function crearCargador({ pedir, concurrencia = 2, max = 48, guardarSi = () => true }) {
   const cache = new Map()      // id → respuesta (el orden de inserción es el de uso)
   const cola = []              // [{id, esperan: Set}] en espera de turno
   const enVuelo = new Map()    // id → {esperan: Set}
@@ -62,7 +65,7 @@ export function crearCargador({ pedir, concurrencia = 2, max = 48 }) {
       Promise.resolve()
         .then(() => pedir(item.id))
         .then(
-          (r) => { guardar(item.id, r); for (const e of item.esperan) e.ok(r) },
+          (r) => { if (guardarSi(r)) guardar(item.id, r); for (const e of item.esperan) e.ok(r) },
           (err) => { for (const e of item.esperan) e.mal(err) },
         )
         .finally(() => { enVuelo.delete(item.id); bombear() })

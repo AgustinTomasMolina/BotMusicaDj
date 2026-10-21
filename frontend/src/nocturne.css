@@ -1626,8 +1626,6 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .cue-puntos{display:inline-flex;align-items:center;gap:6px;padding:0 2px;font-size:11px;color:var(--color-neutral-300)}
 .cue-puntos>span[aria-hidden]{display:inline-flex;align-items:center;gap:3px}
 .cue-puntos>span>i{width:8px;height:8px;border-radius:50%;background:var(--cue-c)}
-.trk-cues{white-space:nowrap}
-.results-crate .trk-acts .trk-cues{width:auto;padding:0 8px;font-size:12px}
 /* Las filas de una playlist con BPM/KEY/marcas/género: los metadatos pueden ocupar dos renglones. */
 .results-crate .trk-meta{flex-wrap:wrap;row-gap:4px;padding:4px 0}
 /* Diálogo «Importar…» */
@@ -2077,3 +2075,24 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
   /* En el celular, en su propia fila debajo (Deshacer y Rehacer siguen en sus columnas de 44 px). */
   .edd-dock .edd-marcar .edd-reloop{grid-column:1/-1;order:1}
 }
+/* ---------- f62: la vista previa de la onda en cada fila de Mis playlists ----------
+   Como la columna «Preview» de Rekordbox: la onda de 3 bandas (los colores --edd-* del editor D)
+   con las marcas encima, cada una con SU color (--cue-*): el hot cue una línea del color de su
+   pad, la memory una línea punteada neutra y el loop un tramo naranja (relleno suave y borde
+   arriba). El botón mide 44 px de alto (objetivo táctil, pedido del dueño) con la caja de 24 px
+   adentro, como el género: la fila no engorda. */
+.pv-vacio{gap:6px}
+.pv,.pv-vacio{flex:none;display:inline-flex;align-items:center;min-height:44px;min-width:44px;padding:0;border:0;background:transparent;font:inherit;color:inherit}
+.pv{cursor:pointer}
+.pv-caja{position:relative;display:block;width:140px;height:24px;border-radius:4px;overflow:hidden;background:var(--edd-fondo-onda);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 9%,transparent)}
+.pv:hover .pv-caja{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-text) 24%,transparent)}
+.pv:focus-visible{outline:none}
+.pv:focus-visible .pv-caja{outline:2px solid var(--color-accent);outline-offset:2px}
+.pv-onda{position:absolute;left:0;top:0;height:100%;display:block}
+.pv-graves{fill:var(--edd-graves)}.pv-medios{fill:var(--edd-medios)}.pv-agudos{fill:var(--edd-agudos)}
+.pv-mk{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--cue-c);box-shadow:0 0 0 1px rgba(13,15,23,.55);pointer-events:none}
+.pv-mk.is-memory{width:0;margin-left:0;background:none;box-shadow:none;border-left:2px dotted var(--cue-c)}
+.pv-mk.is-loop{margin-left:0;min-width:2px;box-sizing:border-box;background:color-mix(in srgb,var(--cue-c) 30%,transparent);border-top:3px solid var(--cue-c);box-shadow:none}
+.pv-txt{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--color-neutral-300);white-space:nowrap}
+.pv-vacio .pv-caja{display:flex;align-items:center;justify-content:center;box-sizing:border-box;font-size:10.5px;color:var(--color-neutral-300);white-space:nowrap;background:transparent;box-shadow:none;border:1px dashed color-mix(in srgb,var(--color-text) 16%,transparent)}
+.pv.is-error .pv-caja{background:transparent;border:1px dashed color-mix(in srgb,var(--color-warn) 40%,transparent);box-shadow:none;box-sizing:border-box}

@@ -340,6 +340,10 @@ export const getOnda3 = (id, desde, hasta, puntos) => {
   const q = qs.toString()
   return pedirSets(`/api/radio/tracks/${encodeURIComponent(id)}/onda3${q ? `?${q}` : ''}`)
 }
+// f62: la vista previa de la onda de una fila de Mis playlists: las 3 bandas del tema entero a
+// baja resolución (`puntos` por banda, 1..400), sin grilla. Mismos errores que /onda3.
+export const getPreview = (id, puntos) =>
+  pedirSets(`/api/radio/tracks/${encodeURIComponent(id)}/preview${puntos !== undefined && puntos !== null ? `?puntos=${encodeURIComponent(String(puntos))}` : ''}`)
 export const contarMarcas = (ids) => pedirSets(`/api/radio/marcas/conteo?ids=${encodeURIComponent(ids.join(','))}`)
 
 export const radioAudioUrl = (id) => `/api/radio/audio/${encodeURIComponent(id)}`

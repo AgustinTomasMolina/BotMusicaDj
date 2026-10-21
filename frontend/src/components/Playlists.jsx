@@ -13,10 +13,12 @@ import { fromCrateItem } from '../player/track'
 import { descargas, faltantes, textoLote } from '../playlistDescarga'
 import { analizarPlaylist, progresoAnalisis, editarGeneroItem, generoALosSinGenero, getRadioPlaylist } from '../api'
 import {
-  estadoTema, textoArchivo, datosTema, puntosMarcas, textoMarcas, resumenPlaylist, textoProgreso,
+  estadoTema, textoArchivo, datosTema, textoMarcas, resumenPlaylist, textoProgreso,
   origenTexto, motivoDe, metricaBpm,
 } from '../playlistImport'
 import EditorCues from './EditorCues'
+import PreviewOnda, { PreviewVacia } from './PreviewOnda'
+import { textoSinOnda } from '../previewOnda'
 import ExportRekordbox from './ExportRekordbox'
 
 /* Iconos inline (Phosphor-ish) */
@@ -138,6 +140,12 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
   // f53: el análisis con el motor (progreso que da el server) y el diálogo de cues.
   const [prog, setProg] = useState(null)
   const [cuesDe, setCuesDe] = useState(undefined)   // undefined = cerrado; el radio_id inicial
+  // f62: la versión de las marcas de la vista previa de cada fila. `todas` sube al cerrar el
+  // editor D (pudo tocar cualquier tema de la playlist); `por[radio_id]`, con un cambio que el
+  // editor confirma DESPUÉS de cerrarse (`onCambioTardio`). Con otra versión, la fila relee
+  // las marcas de la API (la onda no se vuelve a pedir).
+  const [verMarcas, setVerMarcas] = useState({ todas: 0, por: {} })
+  const versionDe = (rid) => `${verMarcas.todas}.${verMarcas.por[rid] || 0}`
   const [generoTodos, setGeneroTodos] = useState('')
   const player = usePlayer()
   // Cola de la barra: los temas de esta playlist, en su orden.
@@ -546,7 +554,6 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                 // f53: estado del tema (archivo + análisis), en texto; BPM/key y de dónde salen.
                 const st = estadoTema(it)
                 const dt = datosTema(it)
-                const puntos = puntosMarcas(it.analisis?.marcas)
                 const conArchivo = it.archivo_estado === 'ok'
                 // Un tema propio sin archivo (importado y no encontrado) no se "baja": su motivo es
                 // el del archivo, no "sin link".
@@ -574,26 +581,25 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                     <span className="mb" title={dt.bpm === null ? 'sin BPM' : dt.fuente ? `BPM ${dt.fuente}` : 'BPM medido por el motor'}><span className="mb-label">BPM</span><b>{dt.bpm ?? '?'}</b></span>
                     <span className="mb mb-key" title={dt.dudosa ? 'Key dudosa: los tramos del tema no votaron todos lo mismo' : undefined}><span className="mb-label">KEY</span><b>{dt.key ?? '?'}</b></span>
                     {dt.fuente && (dt.bpm || dt.key) && <span className="mb mb-fuente">{dt.fuente}</span>}
-                    {/* El tipo de marca no va solo por color: el texto dice cuántas de cada una. */}
-                    {puntos.length > 0 && (
-                      <span className="cue-puntos">
-                        <span aria-hidden="true">{puntos.map((p, i) => <i key={i} className={p.clase} />)}</span>
-                        <span className="cue-puntos-txt">{textoMarcas(it.analisis?.marcas)}</span>
-                      </span>
-                    )}
+                    {/* f62: la onda del tema con sus marcas, cada una con su color (como la columna
+                        «Preview» de Rekordbox); tocarla abre el editor D en este tema. Sin archivo o
+                        sin analizar, el lugar lo dice: no se dibuja una onda que no se midió. */}
+                    {st.clave === 'analizado' && conArchivo && it.analisis?.radio_id
+                      ? <PreviewOnda id={it.analisis.radio_id} titulo={it.titulo} version={versionDe(it.analisis.radio_id)}
+                        resumenBase={textoMarcas(it.analisis?.marcas)} onAbrir={() => setCuesDe(it.analisis.radio_id)} />
+                      : <PreviewVacia texto={textoSinOnda(st.clave, conArchivo)} marcas={it.analisis?.marcas} />}
                     {it.formato && !it.local && <span className="mb"><b>{it.formato.toUpperCase()}</b></span>}
                     <GeneroTema it={it} onGuardar={(g) => guardarGenero(it, g)} />
                   </div>
                   <div className="trk-grade">{it.grade && it.grade !== '?' && <span className={`grade ${gradeClass(it.grade)}`}>{it.grade}</span>}</div>
                   <div className="trk-status">
-                    {/* f53: con archivo, la acción es del motor: marcar cues si está analizado,
-                        analizar si falta; sin archivo propio, el motivo (no hay nada que bajar). */}
-                    {/* Un tema BAJADO por MusiFlix conserva su «Descargado» acá (f41); su botón de
-                        cues va al lado de «Quitar». */}
+                    {/* f53: con archivo, la acción es del motor: analizar si falta; sin archivo
+                        propio, el motivo (no hay nada que bajar). f62: los cues de un tema analizado
+                        se abren desde la vista previa de la onda (ya no hay botón «Cues»). */}
+                    {/* Un tema BAJADO por MusiFlix conserva su «Descargado» acá (f41). */}
                     {conArchivo && it.local
                       ? (st.clave === 'analizado'
-                        ? <button type="button" className="btn btn-secondary btn-sm trk-cues" aria-label={`Marcar cues de «${it.titulo}»`}
-                          onClick={() => setCuesDe(it.analisis.radio_id)}>Cues</button>
+                        ? null   // f62: los cues se abren desde la vista previa de la onda
                         : st.clave === 'analizando' || st.clave === 'en-cola'
                           ? <span className="status status-need"><span className="spinner" aria-hidden="true" /> {st.clave === 'analizando' ? 'Analizando' : 'En cola'}</span>
                           : <button type="button" className="btn btn-secondary btn-sm" aria-label={`Analizar «${it.titulo}»`}
@@ -623,10 +629,6 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
                         })()}
                   </div>
                   <div className="trk-acts">
-                    {conArchivo && !it.local && st.clave === 'analizado' && (
-                      <button type="button" className="btn btn-icon-sm trk-cues" aria-label={`Marcar cues de «${it.titulo}»`} title="Marcar cues"
-                        onClick={() => setCuesDe(it.analisis.radio_id)}>Cues</button>
-                    )}
                     <button type="button" className="btn btn-icon-sm" aria-label={`Quitar ${it.titulo} de la playlist`} title="Quitar" onClick={() => quitar(it.id)}><IcoX /></button>
                   </div>
                 </div>
@@ -643,8 +645,11 @@ export default function Playlists({ activePlaylist, setActivePlaylist, toast, on
         <EditorCues temas={analizados} inicial={cuesDe}
           // Una escritura que vuelve con error DESPUÉS de cerrar el editor: si no, nadie se entera.
           onFallaTardia={(texto) => toast.danger({ title: 'Un cambio de cues no se guardó', body: `${texto} Abrí «Marcar cues» de nuevo para ver lo que quedó.` })}
+          // f62: un cambio que el servidor confirma con el editor ya cerrado: esa fila relee sus marcas.
+          onCambioTardio={(tid) => setVerMarcas((v) => ({ ...v, por: { ...v.por, [tid]: (v.por[tid] || 0) + 1 } }))}
           onClose={(r) => {
             setCuesDe(undefined)
+            setVerMarcas((v) => ({ ...v, todas: v.todas + 1 }))
             cargarCrate(crate.id)
             // Cerró con cambios sin confirmar: el aviso no se pierde con el editor (f54).
             if (r && r.sinConfirmar) {
