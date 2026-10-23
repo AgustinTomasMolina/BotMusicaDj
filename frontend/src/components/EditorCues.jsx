@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getMarcas, crearMarca, cambiarMarca, borrarMarca, getOnda3, radioAudioUrl, radioAudioMotivo } from '../api'
 import { fmtTiempo, parseTiempo, padLibre, marcaDelPad, errorLoop, claseMarca, acotar, avisoDuracion } from '../cues'
 import {
@@ -158,6 +159,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   const [anchoPx, setAnchoPx] = useState(0)
 
   const rootRef = useRef(null)
+  const fondoRef = useRef(null)
+  const cabRef = useRef(null)
+  const dockRef = useRef(null)
   const audioRef = useRef(null)
   const ondaRef = useRef(null)
   const canvasRef = useRef(null)
@@ -330,6 +334,37 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     const ro = new ResizeObserver(medir)
     ro.observe(el)
     return () => ro.disconnect()
+  }, [])
+
+  // f67: alto real de la cabecera pegada en --edd-cab-h (lo usa el scroll-padding de .edd-fondo
+  // para que el foco no quede debajo de ella). Cambia con el contenido: a ~760 px son 3 renglones.
+  useLayoutEffect(() => {
+    const cab = cabRef.current, fondo = fondoRef.current
+    if (!cab || !fondo) return undefined
+    const medir = () => fondo.style.setProperty('--edd-cab-h', `${Math.ceil(cab.getBoundingClientRect().height)}px`)
+    medir()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(medir)
+    ro.observe(cab)
+    return () => ro.disconnect()
+  }, [])
+
+  // f67: alto del dock de abajo en --edd-dock-h (en :root, como --player-h de PlayerBar): con el
+  // editor abierto los avisos se apoyan arriba de él y no tapan sus botones. Solo cuenta cuando
+  // está pegado (≤ 640 px de ancho); en la compu es display:contents y vale 0.
+  useLayoutEffect(() => {
+    const dock = dockRef.current
+    const root = document.documentElement
+    if (!dock) return undefined
+    const medir = () => root.style.setProperty('--edd-dock-h',
+      getComputedStyle(dock).position === 'sticky' ? `${Math.ceil(dock.getBoundingClientRect().height)}px` : '0px')
+    medir()
+    // Además del tamaño, el cruce de los 640 px (cuando el dock pasa a pegado o deja de estarlo).
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width:640px)') : null
+    mq?.addEventListener('change', medir)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(medir)
+    ro?.observe(dock)
+    return () => { ro?.disconnect(); mq?.removeEventListener('change', medir); root.style.removeProperty('--edd-dock-h') }
   }, [])
 
   /* ---------- el tramo a la vista: se pide cuando lo que hay no alcanza ---------- */
@@ -1199,7 +1234,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (!root) return
       // Tab no se escapa de la pantalla completa (Escape siempre cierra).
       if (e.key === 'Tab') {
-        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
+        // Mismo selector que ENFOCABLES_EDD en e2e/pantalla.mjs (el E2E del foco): si cambia uno,
+        // cambiar el otro.
+        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),details > summary:first-of-type:not([tabindex="-1"]),[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
         if (!f.length) return
         const primero = f[0], ultimo = f[f.length - 1]
         if (!root.contains(document.activeElement)) { e.preventDefault(); primero.focus() }
@@ -1465,15 +1502,19 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
 
   const marcaAria = (m) => `${NOMBRE_TIPO[m.tipo]} ${rotuloMarca(m)}${m.nombre ? ` «${m.nombre}»` : ''} · ${fmtTiempo(m.inicio)}${m.tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}`
 
-  return (
-    <div className="edd-fondo">
+  // f67: el editor se monta en <body> y no donde lo pide quien lo abre. Abierto desde el detalle
+  // de la Radio quedaba adentro de .rdet, que es position:sticky (nocturne.css, @container main
+  // min-width:960px) y por eso arma su propio contexto de apilamiento: el z-index:300 de
+  // .edd-fondo valía solo ahí adentro y la barra de arriba (.topbar-stack, z-index:40) lo tapaba.
+  return createPortal(
+    <div className="edd-fondo" ref={fondoRef}>
       <div className="edd" ref={rootRef} role="dialog" aria-modal="true" aria-labelledby="edd-titulo" aria-describedby="edd-ayuda">
         <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alTerminar}
           onError={() => setSonando(false)}
           onLoadedMetadata={(e) => { if (cursorRef.current > 0) { try { e.currentTarget.currentTime = cursorRef.current } catch { /* nada */ } } }} />
 
         {/* ---- cabecera, en una línea ---- */}
-        <header className="edd-cab">
+        <header className="edd-cab" ref={cabRef}>
           <div className="edd-cab-t">
             <span className="eyebrow">Editor de cues y loops · tema {idx + 1} de {temas.length}</span>
             <h2 id="edd-titulo" className="edd-h" title={tema ? etiquetaTema(tema) : ''}>{tema ? tema.titulo : '—'}{tema && tema.artista && <span className="edd-artista"> · {tema.artista}</span>}</h2>
@@ -1638,7 +1679,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
         </div>
         {/* Marcar + el loop a medio marcar + el aviso: en el celular (≤ 640 px) quedan pegados abajo
             de la pantalla, a la vista sin scroll (auditoría f54, M-3); en la compu, en su lugar. */}
-        <div className="edd-dock">
+        <div className="edd-dock" ref={dockRef}>
         <div className="edd-marcar" role="group" aria-label="Marcar">
           <button type="button" className="btn btn-primary edd-btn" onClick={() => ponerCue()} aria-keyshortcuts="C" aria-disabled={!track || undefined} title="Hot cue en el primer pad libre">Hot cue <Kbd>C</Kbd></button>
           <button type="button" className="btn btn-secondary edd-btn" onClick={ponerMemory} aria-keyshortcuts="M" aria-disabled={!track || undefined}>Memory cue <Kbd>M</Kbd></button>
@@ -1851,6 +1892,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
           {' '}{noGuarda ? 'Este navegador no deja guardar: el ajuste y el ancla de la grilla duran hasta que cierres esta pantalla.' : 'El ajuste y el ancla de la grilla quedan guardados solo en este navegador.'} Loops siempre en naranja; memory: ▼ con borde y sin relleno.
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
