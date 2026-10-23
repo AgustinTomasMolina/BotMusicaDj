@@ -971,16 +971,24 @@ async function cerrarEditorD(page) {
   await page.keyboard.press('Escape')
   await hasta(() => page.$('.edd').then((e) => e === null), (v) => v, 'Escape no cerró el editor D')
 }
-// f67: [ancho, alto, con scroll]. 1440×900 es el tamaño en el que el editor entra sin scroll
-// (f54): ahí solo se mira «arriba de todo». Las otras son bajas o angostas y tienen scroll seguro;
-// 760 es el ancho intermedio en el que la cabecera se arma en varios renglones.
-const VENTANAS_F67 = [[1440, 900, false], [1440, 600, true], [1280, 640, true], [760, 600, true], [400, 800, true]]
+// f67: [ancho, alto, modo]. Modos:
+//  · 'arriba': 1440×900, donde se marca sin desplazar (f54: transporte, marcar y aviso a la
+//    vista, lo prueba su caso). El editor NO entra entero (medido: 25-51 px de scroll según el
+//    tema), así que no se exige «sin scroll»; como el scroll es chico, solo se mira «arriba de todo».
+//  · 'scroll': ventanas bajas o angostas con scroll seguro (≥ 100 px): la cabecera pegada, la ✕
+//    al alcance desplazado al fondo y el foco con Tab que no queda debajo de la cabecera. 760 es
+//    el ancho intermedio en el que la cabecera se arma en varios renglones; 844×390 un teléfono
+//    apaisado (más de 640 de ancho: el dock no está pegado y la cabecera sí).
+//  · 'baja': ≤ 640 × ≤ 560, la cabecera NO está pegada (dos franjas no entran) y Escape cierra.
+const VENTANAS_F67 = [[1440, 900, 'arriba'], [1440, 600, 'scroll'], [1280, 640, 'scroll'], [760, 600, 'scroll'], [844, 390, 'scroll'], [400, 800, 'scroll'], [400, 500, 'baja']]
+// Los enfocables, como los cuenta la trampa de foco del editor (EditorCues, Tab).
+const ENFOCABLES_EDD = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'
 // f67: con el editor D abierto, su encabezado (título) y la ✕ de cerrar están dentro de la
 // ventana y el punto del medio de cada uno es de ESE elemento (ni la barra de arriba ni el
-// reproductor de abajo los tapan): arriba de todo y con el contenido del editor desplazado al
-// fondo (con `scroll`: solo en ventanas donde el editor no entra entero, y ahí exige que haya
-// scroll de verdad). Después cierra con un clic de mouse real en el centro de la ✕.
-async function cerrarEditorDConLaX(page, que, { scroll = true } = {}) {
+// reproductor de abajo los tapan): arriba de todo y, según el `modo` (ver VENTANAS_F67), con el
+// contenido del editor desplazado al fondo. Después cierra con un clic de mouse real en el
+// centro de la ✕ (o con Escape en el modo 'baja').
+async function cerrarEditorDConLaX(page, que, modo) {
   const alAlcance = () => page.evaluate(() => [document.querySelector('.edd-cerrar'), document.querySelector('#edd-titulo')].map((e) => {
     if (!e) return { falta: true }
     const r = e.getBoundingClientRect()
@@ -1000,13 +1008,27 @@ async function cerrarEditorDConLaX(page, que, { scroll = true } = {}) {
     afirmar(t.dentro && t.tapa === null, `${que} (${cuando}): el título del editor no se ve (dentro de la ventana: ${t.dentro}; en su centro hay: ${t.tapa})`)
     return x
   }
+  afirmar(['arriba', 'scroll', 'baja'].includes(modo), `${que}: modo desconocido ${json(modo)}`)
   let x = await revisar('arriba de todo')
-  if (scroll) {
+  const medidas = await page.evaluate(() => {
+    const f = document.querySelector('.edd-fondo')
+    return { alto: f.scrollHeight, vista: f.clientHeight, cab: getComputedStyle(document.querySelector('.edd-cab')).position }
+  })
+  if (modo === 'arriba') {
+    igual(medidas.cab, 'sticky', `${que}: la cabecera tiene que ser pegada`)
+  } else if (modo === 'baja') {
+    igual(medidas.cab, 'static', `${que}: en una ventana angosta y baja la cabecera no tiene que quedar pegada`)
+    await page.keyboard.press('Escape')
+    await hasta(() => page.$('.edd').then((e) => e === null), (v) => v, `${que}: Escape no cerró el editor D`)
+    return
+  } else {
+    // Tiene que haber scroll de verdad (≥ 100 px) antes de todo, si no estos pasos no prueban nada.
+    afirmar(medidas.alto - medidas.vista >= 100, `${que}: el editor no tiene scroll suficiente (${json(medidas)}): el caso desplazado no probaría nada`)
+    igual(medidas.cab, 'sticky', `${que}: la cabecera tiene que ser pegada`)
     await focoNoQuedaBajoLaCabecera(page, que)
-    // Desplazado al fondo: tiene que haber scroll de verdad (≥ 100 px), si no este paso no prueba
-    // nada, y la cabecera tiene que estar pegada arriba (no solo a la vista por un scroll chico).
+    // Desplazado al fondo: la cabecera tiene que estar pegada arriba (no solo a la vista).
     const fondo = await page.evaluate(() => { const f = document.querySelector('.edd-fondo'); f.scrollTop = f.scrollHeight; return { top: f.scrollTop, alto: f.scrollHeight, vista: f.clientHeight } })
-    afirmar(fondo.top >= 100 && fondo.alto > fondo.vista, `${que}: el editor no tiene scroll suficiente (${json(fondo)}): el caso desplazado no probaría nada`)
+    afirmar(fondo.top >= 100, `${que}: no se desplazó al fondo (${json(fondo)})`)
     await page.evaluate(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res))))
     const cabTop = await page.$eval('.edd-cab', (c) => c.getBoundingClientRect().top)
     afirmar(Math.abs(cabTop) <= 1, `${que}: desplazado ${fondo.top} px la cabecera no quedó pegada arriba (top = ${cabTop})`)
@@ -1022,12 +1044,11 @@ async function cerrarEditorDConLaX(page, que, { scroll = true } = {}) {
 // sin mover el scroll y Tab lleva el foco a ese control: el navegador tiene que desplazarlo
 // hasta que quede entero debajo de la cabecera.
 async function focoNoQuedaBajoLaCabecera(page, que) {
-  const prep = await page.evaluate(() => {
+  const prep = await page.evaluate((sel) => {
     const f = document.querySelector('.edd-fondo'), cab = document.querySelector('.edd-cab'), root = document.querySelector('.edd')
     f.scrollTop = 50                                   // la cabecera ya pegada (top 0)
     const cabBottom = cab.getBoundingClientRect().bottom
     const resto = f.scrollHeight - f.clientHeight - f.scrollTop
-    const sel = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
     const lista = [...root.querySelectorAll(sel)].filter((el) => el.getClientRects().length)
     const pads = lista.filter((el) => el.classList.contains('edd-pad'))
     const libres = lista.filter((el) => !el.closest('.edd-cab, .edd-dock, .edd-lista'))
@@ -1044,7 +1065,7 @@ async function focoNoQuedaBajoLaCabecera(page, que) {
     window.__f67meta = meta
     const c = cab.getBoundingClientRect(), p = meta.getBoundingClientRect()
     return { meta: `${meta.tagName.toLowerCase()}.${(meta.getAttribute('class') || '').split(' ')[0]}`, cabTop: c.top, cabBottom: c.bottom, top: p.top, bottom: p.bottom }
-  })
+  }, ENFOCABLES_EDD)
   afirmar(!prep.error, `${que}: ${prep.error}`)
   // Si el control no quedó metido debajo de la cabecera pegada, el caso no prueba nada.
   afirmar(Math.abs(prep.cabTop) <= 1 && prep.top < prep.cabBottom && prep.bottom > prep.cabBottom,
@@ -1528,12 +1549,12 @@ const CASOS_F50 = [
   ['radio (f67): el editor D abierto desde el detalle queda por encima de la barra de arriba: el título y la ✕ se ven, se clickean (también con scroll) y la ✕ cierra', async (page, ctx) => {
     await semillaUno(ctx)
     await abrirDetalle(page, ctx, 'Uno')
-    // A 1440 y 1280 el detalle va al costado de la lista (pegado arriba con position:sticky); a
-    // 760 y 400 va debajo. A 1440×900 el editor entra sin scroll (f54): solo «arriba de todo».
-    for (const [ancho, alto, scroll] of VENTANAS_F67) {
+    // A 1440 y 1280 el detalle va al costado de la lista (pegado arriba con position:sticky); más
+    // angosto va debajo. Cada ventana con su modo (ver VENTANAS_F67).
+    for (const [ancho, alto, modo] of VENTANAS_F67) {
       await page.setViewport({ width: ancho, height: alto })
       await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
-      await cerrarEditorDConLaX(page, `«Editar cues y loops» a ${ancho}×${alto}`, { scroll })
+      await cerrarEditorDConLaX(page, `«Editar cues y loops» a ${ancho}×${alto}`, modo)
     }
   }],
 
@@ -4791,11 +4812,61 @@ function casosF54() {
     ['editor D (f67): abierto desde Mis playlists, el título y la ✕ se ven y se clickean por encima de la barra de arriba (también con scroll) y la ✕ cierra', async (page, ctx) => {
       await conEditor(ctx, async ({ por }) => {
         const t = por['Con grilla']
-        for (const [ancho, alto, scroll] of VENTANAS_F67) {
+        for (const [ancho, alto, modo] of VENTANAS_F67) {
           await page.setViewport({ width: ancho, height: alto })
           await abrirEditorD(page, ctx, t.item.titulo)
-          await cerrarEditorDConLaX(page, `«Marcar cues» de Mis playlists a ${ancho}×${alto}`, { scroll })
+          await cerrarEditorDConLaX(page, `«Marcar cues» de Mis playlists a ${ancho}×${alto}`, modo)
         }
+      })
+    }],
+    // El aviso se dispara de verdad: una escritura que falla DESPUÉS de cerrar el editor deja en la
+    // playlist un toast de error (que no se va solo), y el editor se vuelve a abrir encima de él.
+    ['editor D (f67): a 400×800 un aviso con el editor abierto queda arriba del dock de abajo y no tapa sus botones ni la ✕', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        let fallar = false
+        await interceptar(page, async (req) => {
+          if (!fallar || req.method() !== 'POST' || !/\/marcas$/.test(new URL(req.url()).pathname)) return false
+          fallar = false
+          await new Promise((r) => setTimeout(r, 800))
+          await req.respond({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'falla simulada para el aviso' }) })
+          return true
+        })
+        await page.setViewport({ width: 400, height: 800 })
+        await abrirEditorD(page, ctx, t.item.titulo)
+        await page.focus('.edd-onda')
+        fallar = true
+        await page.keyboard.press('m')
+        await page.keyboard.press('Escape')
+        await hasta(() => page.$('.edd'), (v) => !v, 'Esc tenía que cerrar (la escritura todavía no falló)')
+        await hasta(() => page.$$eval('.toast-danger', (ts) => ts.length), (n) => n > 0, 'la falla de después de cerrar no dejó un aviso')
+        // Volver a abrir el editor desde la fila, sin recargar (recargar se lleva el aviso).
+        const etiqueta = `Marcar cues de «${t.item.titulo}»`
+        await page.evaluate((l) => [...document.querySelectorAll('button')].find((b) => {
+          const a = b.getAttribute('aria-label') || ''
+          return (a === l || a.startsWith(`${l} (`)) && window.__visible(b)
+        }).click(), etiqueta)
+        await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
+        await esperarOnda(page, t.item.titulo)
+        const m = await hasta(() => page.evaluate(() => {
+          const caja = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right } }
+          const dock = document.querySelector('.edd-dock')
+          return {
+            toasts: [...document.querySelectorAll('.toast')].map(caja),
+            dock: caja(dock), dockPegado: dock ? getComputedStyle(dock).position === 'sticky' : false,
+            x: caja(document.querySelector('.edd-cerrar')),
+            dockH: getComputedStyle(document.documentElement).getPropertyValue('--edd-dock-h').trim(),
+          }
+        }), (v) => v.toasts.length > 0 && v.dock && v.x, 'con el editor abierto no está el aviso, el dock o la ✕')
+        afirmar(m.dockPegado && m.dock.bottom - m.dock.top > 40, `a 400×800 el dock tenía que estar pegado abajo: ${json(m)}`)
+        const choca = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom)
+        for (const ts of m.toasts) {
+          afirmar(!choca(ts, m.dock), `el aviso tapa el dock del editor (aviso ${json(ts)}, dock ${json(m.dock)}, --edd-dock-h = ${m.dockH})`)
+          afirmar(!choca(ts, m.x), `el aviso tapa la ✕ del editor (aviso ${json(ts)}, ✕ ${json(m.x)})`)
+        }
+        // Al cerrar el editor, --edd-dock-h se limpia de :root.
+        await cerrarEditorD(page)
+        igual(await page.evaluate(() => document.documentElement.style.getPropertyValue('--edd-dock-h')), '', 'al cerrar el editor --edd-dock-h quedó puesto en :root')
       })
     }],
     /* f62: la vista previa de la onda en cada fila de Mis playlists. Lo esperado sale de la API

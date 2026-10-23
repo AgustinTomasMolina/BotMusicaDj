@@ -161,6 +161,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   const rootRef = useRef(null)
   const fondoRef = useRef(null)
   const cabRef = useRef(null)
+  const dockRef = useRef(null)
   const audioRef = useRef(null)
   const ondaRef = useRef(null)
   const canvasRef = useRef(null)
@@ -346,6 +347,22 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     const ro = new ResizeObserver(medir)
     ro.observe(cab)
     return () => ro.disconnect()
+  }, [])
+
+  // f67: alto del dock de abajo en --edd-dock-h (en :root, como --player-h de PlayerBar): con el
+  // editor abierto los avisos se apoyan arriba de él y no tapan sus botones. Solo cuenta cuando
+  // está pegado (≤ 640 px de ancho); en la compu es display:contents y vale 0.
+  useLayoutEffect(() => {
+    const dock = dockRef.current
+    const root = document.documentElement
+    if (!dock) return undefined
+    const medir = () => root.style.setProperty('--edd-dock-h',
+      getComputedStyle(dock).position === 'sticky' ? `${Math.ceil(dock.getBoundingClientRect().height)}px` : '0px')
+    medir()
+    if (typeof ResizeObserver === 'undefined') return () => root.style.removeProperty('--edd-dock-h')
+    const ro = new ResizeObserver(medir)
+    ro.observe(dock)
+    return () => { ro.disconnect(); root.style.removeProperty('--edd-dock-h') }
   }, [])
 
   /* ---------- el tramo a la vista: se pide cuando lo que hay no alcanza ---------- */
@@ -1215,7 +1232,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (!root) return
       // Tab no se escapa de la pantalla completa (Escape siempre cierra).
       if (e.key === 'Tab') {
-        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
+        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
         if (!f.length) return
         const primero = f[0], ultimo = f[f.length - 1]
         if (!root.contains(document.activeElement)) { e.preventDefault(); primero.focus() }
@@ -1658,7 +1675,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
         </div>
         {/* Marcar + el loop a medio marcar + el aviso: en el celular (≤ 640 px) quedan pegados abajo
             de la pantalla, a la vista sin scroll (auditoría f54, M-3); en la compu, en su lugar. */}
-        <div className="edd-dock">
+        <div className="edd-dock" ref={dockRef}>
         <div className="edd-marcar" role="group" aria-label="Marcar">
           <button type="button" className="btn btn-primary edd-btn" onClick={() => ponerCue()} aria-keyshortcuts="C" aria-disabled={!track || undefined} title="Hot cue en el primer pad libre">Hot cue <Kbd>C</Kbd></button>
           <button type="button" className="btn btn-secondary edd-btn" onClick={ponerMemory} aria-keyshortcuts="M" aria-disabled={!track || undefined}>Memory cue <Kbd>M</Kbd></button>
