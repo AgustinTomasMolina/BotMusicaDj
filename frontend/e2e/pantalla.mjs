@@ -971,6 +971,39 @@ async function cerrarEditorD(page) {
   await page.keyboard.press('Escape')
   await hasta(() => page.$('.edd').then((e) => e === null), (v) => v, 'Escape no cerró el editor D')
 }
+// f67: con el editor D abierto, su encabezado (título) y la ✕ de cerrar están dentro de la
+// ventana y el punto del medio de cada uno es de ESE elemento (ni la barra de arriba ni el
+// reproductor de abajo los tapan): arriba de todo y con el contenido del editor desplazado al
+// fondo. Después cierra con un clic de mouse real en el centro de la ✕.
+async function cerrarEditorDConLaX(page, que) {
+  const alAlcance = () => page.evaluate(() => [document.querySelector('.edd-cerrar'), document.querySelector('#edd-titulo')].map((e) => {
+    if (!e) return { falta: true }
+    const r = e.getBoundingClientRect()
+    const x = r.left + r.width / 2, y = r.top + r.height / 2
+    const h = r.width > 0 && r.height > 0 ? document.elementFromPoint(x, y) : null
+    return {
+      x, y,
+      dentro: r.width > 0 && r.height > 0 && r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth,
+      tapa: h && (h === e || e.contains(h)) ? null
+        : (h ? `${h.tagName.toLowerCase()}.${(h.getAttribute('class') || '').split(' ')[0]} (${h.closest('.edd-fondo') ? 'del editor' : 'de la app, fuera del editor'})` : 'nada'),
+    }
+  }))
+  const revisar = async (cuando) => {
+    const [x, t] = await alAlcance()
+    afirmar(!x.falta && !t.falta, `${que} (${cuando}): el editor D no tiene la ✕ o el título`)
+    afirmar(x.dentro && x.tapa === null, `${que} (${cuando}): la ✕ de cerrar no está al alcance (dentro de la ventana: ${x.dentro}; en su centro hay: ${x.tapa})`)
+    afirmar(t.dentro && t.tapa === null, `${que} (${cuando}): el título del editor no se ve (dentro de la ventana: ${t.dentro}; en su centro hay: ${t.tapa})`)
+    return x
+  }
+  await revisar('arriba de todo')
+  // Desplazado al fondo: tiene que haber scroll de verdad, si no este paso no prueba nada.
+  const fondo = await page.evaluate(() => { const f = document.querySelector('.edd-fondo'); f.scrollTop = f.scrollHeight; return { top: f.scrollTop, alto: f.scrollHeight, vista: f.clientHeight } })
+  afirmar(fondo.top > 0 && fondo.alto > fondo.vista, `${que}: el editor no tiene scroll (${json(fondo)}): el caso desplazado no probaría nada`)
+  await page.evaluate(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res))))
+  const x = await revisar('desplazado al fondo')
+  await page.mouse.click(x.x, x.y)
+  await hasta(() => page.$('.edd').then((e) => e === null), (v) => v, `${que}: el clic en la ✕ no cerró el editor D`)
+}
 
 // Aprieta una tecla y espera la escritura que tiene que disparar (POST/PATCH/DELETE).
 async function teclaQueGuarda(page, tecla, metodo = 'POST') {
@@ -1437,6 +1470,18 @@ const CASOS_F50 = [
       afirmar(!v.boton, 'con Flecha abajo el foco se fue al editor')
     } finally {
       await limpiarMarcas(ctx, p2.track.id)
+    }
+  }],
+
+  ['radio (f67): el editor D abierto desde el detalle queda por encima de la barra de arriba: el título y la ✕ se ven, se clickean (también con scroll) y la ✕ cierra', async (page, ctx) => {
+    await semillaUno(ctx)
+    await abrirDetalle(page, ctx, 'Uno')
+    // A 1440 y 1280 el detalle va al costado de la lista (pegado arriba con position:sticky); a
+    // 400 va debajo.
+    for (const [ancho, alto] of [[1440, 900], [1280, 640], [400, 800]]) {
+      await page.setViewport({ width: ancho, height: alto })
+      await abrirEditorDDesde(page, '#r-panel-cues .rdet-abrir', 'Uno')
+      await cerrarEditorDConLaX(page, `«Editar cues y loops» a ${ancho}×${alto}`)
     }
   }],
 
@@ -4691,6 +4736,16 @@ function casosF54() {
   }, tiempos)
 
   return [
+    ['editor D (f67): abierto desde Mis playlists, el título y la ✕ se ven y se clickean por encima de la barra de arriba (también con scroll) y la ✕ cierra', async (page, ctx) => {
+      await conEditor(ctx, async ({ por }) => {
+        const t = por['Con grilla']
+        for (const [ancho, alto] of [[1440, 900], [1280, 640], [1000, 700], [400, 800]]) {
+          await page.setViewport({ width: ancho, height: alto })
+          await abrirEditorD(page, ctx, t.item.titulo)
+          await cerrarEditorDConLaX(page, `«Marcar cues» de Mis playlists a ${ancho}×${alto}`)
+        }
+      })
+    }],
     /* f62: la vista previa de la onda en cada fila de Mis playlists. Lo esperado sale de la API
        (/marcas: tiempos, tipo y pad; track.dur: el eje; /preview: las bandas) y de los colores
        --cue-* de la tabla única (los lee el navegador de :root, no del código del front). */

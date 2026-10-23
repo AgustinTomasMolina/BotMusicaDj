@@ -1703,6 +1703,14 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
 .edd-btn[aria-disabled=true],.edd-btn:disabled{opacity:.5;cursor:not-allowed}
 .edd :focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
 .edd-cab{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+/* f67: la cabecera (título, temas y ✕ de cerrar) queda pegada arriba aunque se desplace el
+   editor; la sombra sin difuminar tapa los márgenes de los costados con el fondo. */
+.edd-cab{position:sticky;top:0;z-index:7;padding-block:6px;background:var(--color-bg);box-shadow:-24px 0 0 var(--color-bg),24px 0 0 var(--color-bg)}
+/* Lo que se desplaza solo para mostrarse (el foco con Tab, la fila elegida) no queda debajo de
+   la cabecera pegada: su alto medido es 56 px en una línea, 109 hasta 1100 y 147 a 400 px. */
+.edd-fondo{scroll-padding-top:72px}
+@media (max-width:1100px){.edd-fondo{scroll-padding-top:125px}}
+@media (max-width:640px){.edd-fondo{scroll-padding-top:163px}}
 .edd-cab-t{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 280px}
 .edd-h{margin:0;font-size:22px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
 .edd-artista{font-weight:400;color:var(--color-neutral-300)}

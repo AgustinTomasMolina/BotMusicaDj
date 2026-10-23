@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getMarcas, crearMarca, cambiarMarca, borrarMarca, getOnda3, radioAudioUrl, radioAudioMotivo } from '../api'
 import { fmtTiempo, parseTiempo, padLibre, marcaDelPad, errorLoop, claseMarca, acotar, avisoDuracion } from '../cues'
 import {
@@ -1465,7 +1466,11 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
 
   const marcaAria = (m) => `${NOMBRE_TIPO[m.tipo]} ${rotuloMarca(m)}${m.nombre ? ` «${m.nombre}»` : ''} · ${fmtTiempo(m.inicio)}${m.tipo === 'loop' ? ` → ${fmtTiempo(m.fin)}` : ''}`
 
-  return (
+  // f67: el editor se monta en <body> y no donde lo pide quien lo abre. Abierto desde el detalle
+  // de la Radio quedaba adentro de .rdet, que es position:sticky (nocturne.css, @container main
+  // min-width:960px) y por eso arma su propio contexto de apilamiento: el z-index:300 de
+  // .edd-fondo valía solo ahí adentro y la barra de arriba (.topbar-stack, z-index:40) lo tapaba.
+  return createPortal(
     <div className="edd-fondo">
       <div className="edd" ref={rootRef} role="dialog" aria-modal="true" aria-labelledby="edd-titulo" aria-describedby="edd-ayuda">
         <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alTerminar}
@@ -1851,6 +1856,7 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
           {' '}{noGuarda ? 'Este navegador no deja guardar: el ajuste y el ancla de la grilla duran hasta que cierres esta pantalla.' : 'El ajuste y el ancla de la grilla quedan guardados solo en este navegador.'} Loops siempre en naranja; memory: ▼ con borde y sin relleno.
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
