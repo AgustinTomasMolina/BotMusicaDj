@@ -981,8 +981,9 @@ async function cerrarEditorD(page) {
 //    apaisado (más de 640 de ancho: el dock no está pegado y la cabecera sí).
 //  · 'baja': ≤ 640 × ≤ 560, la cabecera NO está pegada (dos franjas no entran) y Escape cierra.
 const VENTANAS_F67 = [[1440, 900, 'arriba'], [1440, 600, 'scroll'], [1280, 640, 'scroll'], [760, 600, 'scroll'], [844, 390, 'scroll'], [400, 800, 'scroll'], [400, 500, 'baja']]
-// Los enfocables, como los cuenta la trampa de foco del editor (EditorCues, Tab).
-const ENFOCABLES_EDD = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])'
+// Los enfocables, como los cuenta la trampa de foco del editor (el selector del Tab en el
+// onKey de src/components/EditorCues.jsx): si cambia uno, cambiar el otro.
+const ENFOCABLES_EDD = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),details > summary:first-of-type:not([tabindex="-1"]),[tabindex]:not([tabindex="-1"])'
 // f67: con el editor D abierto, su encabezado (título) y la ✕ de cerrar están dentro de la
 // ventana y el punto del medio de cada uno es de ESE elemento (ni la barra de arriba ni el
 // reproductor de abajo los tapan): arriba de todo y, según el `modo` (ver VENTANAS_F67), con el
@@ -4848,7 +4849,12 @@ function casosF54() {
         }).click(), etiqueta)
         await page.waitForSelector('.edd[role="dialog"]', { timeout: ESPERA_MS })
         await esperarOnda(page, t.item.titulo)
-        const m = await hasta(() => page.evaluate(() => {
+        // Cada lectura espera dos frames (el ResizeObserver que escribe --edd-dock-h corre antes del
+        // pintado) y tiene que dar bien dos veces seguidas: no vale un frame suelto.
+        const choca = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom)
+        let seguidas = 0
+        await hasta(() => page.evaluate(async () => {
+          await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)))
           const caja = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right } }
           const dock = document.querySelector('.edd-dock')
           return {
@@ -4857,13 +4863,12 @@ function casosF54() {
             x: caja(document.querySelector('.edd-cerrar')),
             dockH: getComputedStyle(document.documentElement).getPropertyValue('--edd-dock-h').trim(),
           }
-        }), (v) => v.toasts.length > 0 && v.dock && v.x, 'con el editor abierto no está el aviso, el dock o la ✕')
-        afirmar(m.dockPegado && m.dock.bottom - m.dock.top > 40, `a 400×800 el dock tenía que estar pegado abajo: ${json(m)}`)
-        const choca = (a, b) => !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom)
-        for (const ts of m.toasts) {
-          afirmar(!choca(ts, m.dock), `el aviso tapa el dock del editor (aviso ${json(ts)}, dock ${json(m.dock)}, --edd-dock-h = ${m.dockH})`)
-          afirmar(!choca(ts, m.x), `el aviso tapa la ✕ del editor (aviso ${json(ts)}, ✕ ${json(m.x)})`)
-        }
+        }), (v) => {
+          const ok = v.toasts.length > 0 && v.dock && v.x && v.dockPegado && v.dock.bottom - v.dock.top > 40
+            && v.toasts.every((ts) => !choca(ts, v.dock) && !choca(ts, v.x))
+          seguidas = ok ? seguidas + 1 : 0
+          return seguidas >= 2
+        }, 'a 400×800 con el editor abierto el aviso tapa el dock pegado o la ✕ (o falta el aviso, el dock o la ✕)')
         // Al cerrar el editor, --edd-dock-h se limpia de :root.
         await cerrarEditorD(page)
         igual(await page.evaluate(() => document.documentElement.style.getPropertyValue('--edd-dock-h')), '', 'al cerrar el editor --edd-dock-h quedó puesto en :root')

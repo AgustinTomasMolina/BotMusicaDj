@@ -359,10 +359,12 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     const medir = () => root.style.setProperty('--edd-dock-h',
       getComputedStyle(dock).position === 'sticky' ? `${Math.ceil(dock.getBoundingClientRect().height)}px` : '0px')
     medir()
-    if (typeof ResizeObserver === 'undefined') return () => root.style.removeProperty('--edd-dock-h')
-    const ro = new ResizeObserver(medir)
-    ro.observe(dock)
-    return () => { ro.disconnect(); root.style.removeProperty('--edd-dock-h') }
+    // Además del tamaño, el cruce de los 640 px (cuando el dock pasa a pegado o deja de estarlo).
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width:640px)') : null
+    mq?.addEventListener('change', medir)
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(medir)
+    ro?.observe(dock)
+    return () => { ro?.disconnect(); mq?.removeEventListener('change', medir); root.style.removeProperty('--edd-dock-h') }
   }, [])
 
   /* ---------- el tramo a la vista: se pide cuando lo que hay no alcanza ---------- */
@@ -1232,7 +1234,9 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
       if (!root) return
       // Tab no se escapa de la pantalla completa (Escape siempre cierra).
       if (e.key === 'Tab') {
-        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
+        // Mismo selector que ENFOCABLES_EDD en e2e/pantalla.mjs (el E2E del foco): si cambia uno,
+        // cambiar el otro.
+        const f = [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),details > summary:first-of-type:not([tabindex="-1"]),[tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length)
         if (!f.length) return
         const primero = f[0], ultimo = f[f.length - 1]
         if (!root.contains(document.activeElement)) { e.preventDefault(); primero.focus() }
