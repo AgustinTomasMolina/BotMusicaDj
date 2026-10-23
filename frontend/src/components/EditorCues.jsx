@@ -159,6 +159,8 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   const [anchoPx, setAnchoPx] = useState(0)
 
   const rootRef = useRef(null)
+  const fondoRef = useRef(null)
+  const cabRef = useRef(null)
   const audioRef = useRef(null)
   const ondaRef = useRef(null)
   const canvasRef = useRef(null)
@@ -330,6 +332,19 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
     if (typeof ResizeObserver === 'undefined') return undefined
     const ro = new ResizeObserver(medir)
     ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // f67: alto real de la cabecera pegada en --edd-cab-h (lo usa el scroll-padding de .edd-fondo
+  // para que el foco no quede debajo de ella). Cambia con el contenido: a ~760 px son 3 renglones.
+  useLayoutEffect(() => {
+    const cab = cabRef.current, fondo = fondoRef.current
+    if (!cab || !fondo) return undefined
+    const medir = () => fondo.style.setProperty('--edd-cab-h', `${Math.ceil(cab.getBoundingClientRect().height)}px`)
+    medir()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(medir)
+    ro.observe(cab)
     return () => ro.disconnect()
   }, [])
 
@@ -1471,14 +1486,14 @@ export default function EditorCues({ temas, inicial, onClose, onFallaTardia, onC
   // min-width:960px) y por eso arma su propio contexto de apilamiento: el z-index:300 de
   // .edd-fondo valía solo ahí adentro y la barra de arriba (.topbar-stack, z-index:40) lo tapaba.
   return createPortal(
-    <div className="edd-fondo">
+    <div className="edd-fondo" ref={fondoRef}>
       <div className="edd" ref={rootRef} role="dialog" aria-modal="true" aria-labelledby="edd-titulo" aria-describedby="edd-ayuda">
         <audio ref={audioRef} preload="metadata" onPlay={alArrancar} onPause={alParar} onEnded={alTerminar}
           onError={() => setSonando(false)}
           onLoadedMetadata={(e) => { if (cursorRef.current > 0) { try { e.currentTarget.currentTime = cursorRef.current } catch { /* nada */ } } }} />
 
         {/* ---- cabecera, en una línea ---- */}
-        <header className="edd-cab">
+        <header className="edd-cab" ref={cabRef}>
           <div className="edd-cab-t">
             <span className="eyebrow">Editor de cues y loops · tema {idx + 1} de {temas.length}</span>
             <h2 id="edd-titulo" className="edd-h" title={tema ? etiquetaTema(tema) : ''}>{tema ? tema.titulo : '—'}{tema && tema.artista && <span className="edd-artista"> · {tema.artista}</span>}</h2>

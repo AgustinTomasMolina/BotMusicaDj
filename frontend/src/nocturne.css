@@ -758,7 +758,9 @@ button.hist-item,.hist-open{width:100%;border:0;background:transparent;color:inh
 .mb-lic.is-no-declarado{opacity:.62}
 
 /* — toasts: the app's only interruption, bottom-right, self-dismissing — */
-.toasts{position:fixed;right:var(--space-4);bottom:var(--space-4);z-index:80;display:flex;flex-direction:column;gap:var(--space-2);width:min(360px,calc(100vw - var(--space-6)));pointer-events:none}
+/* z-index 310: por encima del editor D (.edd-fondo, 300), para que un aviso no quede tapado
+   con el editor abierto (f67). El contenedor no recibe clics (pointer-events:none). */
+.toasts{position:fixed;right:var(--space-4);bottom:var(--space-4);z-index:310;display:flex;flex-direction:column;gap:var(--space-2);width:min(360px,calc(100vw - var(--space-6)));pointer-events:none}
 .toast{--tc:var(--color-accent);position:relative;display:flex;gap:var(--space-2);padding:var(--space-3);padding-left:calc(var(--space-3) + 3px);border-radius:var(--radius-md);background:var(--color-raise);box-shadow:var(--shadow-md);overflow:hidden;pointer-events:auto;animation:mf-toast .28s var(--ease) both}
 .toast::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tc)}
 .toast>svg:first-child{flex:none;margin-top:1px;color:var(--tc)}
@@ -1707,10 +1709,15 @@ html{scroll-padding-bottom:calc(var(--player-h) + var(--monitor-h) + 8px)}
    editor; la sombra sin difuminar tapa los márgenes de los costados con el fondo. */
 .edd-cab{position:sticky;top:0;z-index:7;padding-block:6px;background:var(--color-bg);box-shadow:-24px 0 0 var(--color-bg),24px 0 0 var(--color-bg)}
 /* Lo que se desplaza solo para mostrarse (el foco con Tab, la fila elegida) no queda debajo de
-   la cabecera pegada: su alto medido es 56 px en una línea, 109 hasta 1100 y 147 a 400 px. */
-.edd-fondo{scroll-padding-top:72px}
-@media (max-width:1100px){.edd-fondo{scroll-padding-top:125px}}
-@media (max-width:640px){.edd-fondo{scroll-padding-top:163px}}
+   la cabecera pegada: --edd-cab-h es su alto real, lo mide EditorCues (cambia con el contenido). */
+.edd-fondo{scroll-padding-top:calc(var(--edd-cab-h, 72px) + 4px)}
+/* Pantalla baja (un teléfono apaisado): dos franjas pegadas (cabecera + .edd-dock) no dejan
+   lugar para la onda, así que la cabecera vuelve a desplazarse con el resto. A esta altura la ✕
+   puede quedar fuera de la vista al bajar; Escape sigue cerrando el editor. */
+@media (max-height:560px){
+  .edd-cab{position:static}
+  .edd-fondo{scroll-padding-top:0}
+}
 .edd-cab-t{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 280px}
 .edd-h{margin:0;font-size:22px;font-weight:600;line-height:1.25;overflow-wrap:anywhere}
 .edd-artista{font-weight:400;color:var(--color-neutral-300)}
